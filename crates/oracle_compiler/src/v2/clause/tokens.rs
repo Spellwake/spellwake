@@ -1,8 +1,6 @@
 //! Strictly-typed token creation parser (predefined, creature, X/X, and copy tokens) for `v2`.
 
-use crate::FaceInput;
 use crate::ast::{CardTypeMask, ColorMask};
-use crate::v2::card::compile_face_v2;
 use crate::v2::filter::{parse_keyword_list, parse_subject_ref};
 use crate::v2::ir::{
     CopyException, EntryModifiers, PredefinedToken, TokenSpec, ValueExpr, VarName,
@@ -11,6 +9,8 @@ use crate::v2::lexer::TokenKind;
 use crate::v2::parser::{PResult, TokenStream, opt};
 use crate::v2::value::{parse_for_each_expr, parse_value_expr};
 use crate::vocab::{lookup_card_type, lookup_color};
+
+use super::{compile_quoted_face, compile_quoted_permanent};
 
 pub(crate) fn parse_token_creation(
     ts: &mut TokenStream<'_>,
@@ -38,45 +38,40 @@ fn finalize_token_count(
 
 fn parse_token_combat_mods(ts: &mut TokenStream<'_>, mods: &mut EntryModifiers) {
     let eat_atk_target = |s: &mut TokenStream<'_>| {
-        let _ = [
-            &["that", "opponent"][..],
-            &["that", "player"][..],
-            &["the", "defending", "player"][..],
-            &["defending", "player"][..],
-            &["them"][..],
-        ]
-        .iter()
-        .any(|p| s.eat_phrase(p));
-        let _ = s.eat_phrase(&["or", "a", "planeswalker", "they", "control"])
-            || s.eat_phrase(&["or", "a", "planeswalker", "that", "player", "controls"]);
+        let _ = s.eat_any_phrase(&[
+            &["that", "opponent"],
+            &["that", "player"],
+            &["the", "defending", "player"],
+            &["defending", "player"],
+            &["them"],
+        ]);
+        let _ = s.eat_any_phrase(&[
+            &["or", "a", "planeswalker", "they", "control"],
+            &["or", "a", "planeswalker", "that", "player", "controls"],
+        ]);
     };
-    if [
-        &["and", "that's", "tapped", "and", "attacking"][..],
-        &["and", "that", "are", "tapped", "and", "attacking"][..],
-        &["that's", "tapped", "and", "attacking"][..],
-        &["that", "are", "tapped", "and", "attacking"][..],
-        &["tapped", "and", "attacking"][..],
-    ]
-    .iter()
-    .any(|p| ts.eat_phrase(p))
-    {
+    if ts.eat_any_phrase(&[
+        &["and", "that's", "tapped", "and", "attacking"],
+        &["and", "that", "are", "tapped", "and", "attacking"],
+        &["that's", "tapped", "and", "attacking"],
+        &["that", "are", "tapped", "and", "attacking"],
+        &["tapped", "and", "attacking"],
+    ]) {
         mods.tapped = true;
         mods.attacking = true;
         eat_atk_target(ts);
-    } else if [
-        &["and", "that's", "blocking"][..],
-        &["and", "that", "are", "blocking"][..],
-        &["that's", "blocking"][..],
-        &["blocking"][..],
-    ]
-    .iter()
-    .any(|p| ts.eat_phrase(p))
-    {
+    } else if ts.eat_any_phrase(&[
+        &["and", "that's", "blocking"],
+        &["and", "that", "are", "blocking"],
+        &["that's", "blocking"],
+        &["blocking"],
+    ]) {
         let _ = crate::v2::parser::try_parse(ts, parse_subject_ref);
-    } else if ts.eat_phrase(&["that's", "attacking"])
-        || ts.eat_phrase(&["that", "are", "attacking"])
-        || ts.eat_word("attacking")
-    {
+    } else if ts.eat_any_phrase(&[
+        &["that's", "attacking"],
+        &["that", "are", "attacking"],
+        &["attacking"],
+    ]) {
         mods.attacking = true;
         eat_atk_target(ts);
     } else if ts.eat_word("tapped") {
@@ -254,17 +249,7 @@ fn parse_token_creation_named(
             if ts.eat_phrase(&["attached", "to"]) {
                 mods.attached_to = Some(Box::new(parse_subject_ref(ts)?));
             }
-            let final_count = if deferred_equal_to && ts.eat_phrase(&["equal", "to"]) {
-                parse_value_expr(ts)?
-            } else if let Some(fe) = opt(ts, parse_for_each_expr) {
-                if count == ValueExpr::Const(1) {
-                    fe
-                } else {
-                    ValueExpr::Mul(Box::new(count), Box::new(fe))
-                }
-            } else {
-                count
-            };
+            let final_count = finalize_token_count(ts, count, deferred_equal_to)?;
             return Ok((final_count, TokenSpec::Predefined(pt), mods));
         }
         ts.restore(cp);
@@ -455,21 +440,12 @@ fn parse_token_creation_named(
             loop {
                 let wcp = ts.checkpoint();
                 if let Some(quoted) = ts.next_quoted() {
-                    let compiled = compile_face_v2(
-                        FaceInput {
-                            name: token_face_name,
-                            type_line: "Creature",
-                            oracle_text: quoted.trim_end_matches(','),
-                        },
-                        ts.vocab,
-                    );
-                    if !compiled.is_ok() {
-                        return Err(compiled
-                            .errors
-                            .into_iter()
-                            .next()
-                            .unwrap_or_else(|| ts.err("failed to compile token ability text")));
-                    }
+                    let compiled = compile_quoted_face(
+                        ts,
+                        token_face_name,
+                        "Creature",
+                        quoted.trim_end_matches(','),
+                    )?;
                     abilities.push(compiled);
                 } else if let Ok((kws, _)) = crate::v2::parser::try_parse(ts, parse_keyword_list) {
                     keywords.extend(kws);
@@ -544,17 +520,7 @@ fn parse_token_creation_named(
     if ts.eat_phrase(&["attached", "to"]) {
         mods.attached_to = Some(Box::new(parse_subject_ref(ts)?));
     }
-    let final_count = if deferred_equal_to && ts.eat_phrase(&["equal", "to"]) {
-        parse_value_expr(ts)?
-    } else if let Some(fe) = opt(ts, parse_for_each_expr) {
-        if count == ValueExpr::Const(1) {
-            fe
-        } else {
-            ValueExpr::Mul(Box::new(count), Box::new(fe))
-        }
-    } else {
-        count
-    };
+    let final_count = finalize_token_count(ts, count, deferred_equal_to)?;
 
     Ok((
         final_count,
@@ -582,36 +548,83 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
         return exceptions;
     }
     let _ = ts.eat_word("that");
+    const HAS_THIS_AB: &[&[&str]] = &[
+        &["it", "has", "this", "ability"],
+        &["they", "have", "this", "ability"],
+        &["has", "this", "ability"],
+        &["have", "this", "ability"],
+    ];
+    const ENTERS_WITH: &[&[&str]] = &[
+        &["it", "enters", "with"],
+        &["they", "enter", "with"],
+        &["the", "token", "enters", "with"],
+    ];
+    const HAS_PREFIXES: &[&[&str]] = &[
+        &["it", "has"],
+        &["they", "have"],
+        &["the", "token", "has"],
+        &["the", "tokens", "have"],
+        &["the", "copy", "has"],
+        &["the", "copies", "have"],
+        &["has"],
+        &["have"],
+    ];
+    const NOT_LEGENDARY: &[&[&str]] = &[
+        &["it", "isn't", "legendary"],
+        &["it's", "not", "legendary"],
+        &["they", "aren't", "legendary"],
+        &["they're", "not", "legendary"],
+        &["those", "creatures", "aren't", "legendary"],
+        &["those", "permanents", "aren't", "legendary"],
+        &["the", "copy", "isn't", "legendary"],
+        &["the", "token", "isn't", "legendary"],
+        &["the", "tokens", "aren't", "legendary"],
+        &["the", "copies", "aren't", "legendary"],
+    ];
+    const STAT_IS: &[&[&str]] = &[
+        &["its", "power", "is"],
+        &["their", "power", "is"],
+        &["its", "toughness", "is"],
+        &["their", "toughness", "is"],
+    ];
+    const IS_TYPE_PREFIXES: &[&[&str]] = &[
+        &["it's", "an"],
+        &["it's", "a"],
+        &["it's"],
+        &["they're"],
+        &["is", "an"],
+        &["is", "a"],
+        &["the", "token", "is", "an"],
+        &["the", "token", "is", "a"],
+        &["the", "token", "is"],
+        &["the", "copy", "is", "an"],
+        &["the", "copy", "is", "a"],
+        &["the", "copy", "is"],
+        &["the", "tokens", "are"],
+        &["the", "copies", "are"],
+    ];
     loop {
         let item_cp = ts.checkpoint();
-        if ts.eat_phrase(&["it", "has", "this", "ability"])
-            || ts.eat_phrase(&["they", "have", "this", "ability"])
-            || ts.eat_phrase(&["has", "this", "ability"])
-            || ts.eat_phrase(&["have", "this", "ability"])
-        {
+        if ts.eat_any_phrase(HAS_THIS_AB) {
             exceptions.push(CopyException::HasThisAbility);
         } else if ((ts.eat_tilde() && ts.eat_phrase(&["'s", "name", "is"]))
             || ts.eat_phrase(&["its", "name", "is"]))
             && ts.eat_tilde()
         {
             exceptions.push(CopyException::KeepOwnName);
-        } else if ts.eat_phrase(&["it", "enters", "with"])
-            || ts.eat_phrase(&["they", "enter", "with"])
-            || ts.eat_phrase(&["the", "token", "enters", "with"])
-        {
-            let count =
-                if ts.eat_phrase(&["an", "additional"]) || ts.eat_word("a") || ts.eat_word("an") {
-                    ValueExpr::Const(1)
-                } else {
-                    let c = crate::v2::parser::try_parse(ts, parse_value_expr)
-                        .unwrap_or(ValueExpr::Const(1));
-                    let _ = ts.eat_word("additional");
-                    c
-                };
+        } else if ts.eat_any_phrase(ENTERS_WITH) {
+            let count = if ts.eat_phrase(&["an", "additional"]) || ts.eat_any_word(&["a", "an"]) {
+                ValueExpr::Const(1)
+            } else {
+                let c = crate::v2::parser::try_parse(ts, parse_value_expr)
+                    .unwrap_or(ValueExpr::Const(1));
+                let _ = ts.eat_word("additional");
+                c
+            };
             if let Ok(kind) =
                 crate::v2::parser::try_parse(ts, crate::v2::filter::parse_counter_kind)
-                && (ts.eat_word("counter") || ts.eat_word("counters"))
-                && (ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]))
+                && ts.eat_any_word(&["counter", "counters"])
+                && ts.eat_any_phrase(&[&["on", "it"], &["on", "them"]])
             {
                 let cond = if ts.eat_word("if") {
                     opt(ts, crate::v2::condition::parse_condition)
@@ -627,27 +640,11 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                 ts.restore(item_cp);
                 break;
             }
-        } else if ts.eat_phrase(&["it", "has"])
-            || ts.eat_phrase(&["they", "have"])
-            || ts.eat_phrase(&["the", "token", "has"])
-            || ts.eat_phrase(&["the", "tokens", "have"])
-            || ts.eat_phrase(&["the", "copy", "has"])
-            || ts.eat_phrase(&["the", "copies", "have"])
-            || ts.eat_word("has")
-            || ts.eat_word("have")
-        {
+        } else if ts.eat_any_phrase(HAS_PREFIXES) {
             if ts.eat_tilde() && ts.eat_phrase(&["'s", "other", "abilities"]) {
                 exceptions.push(CopyException::KeepOwnOtherAbilities);
             } else if let Some(quoted) = ts.next_quoted() {
-                let compiled = compile_face_v2(
-                    FaceInput {
-                        name: "~",
-                        type_line: "Permanent",
-                        oracle_text: quoted,
-                    },
-                    ts.vocab,
-                );
-                if compiled.is_ok() {
+                if let Ok(compiled) = compile_quoted_permanent(ts, quoted) {
                     exceptions.push(CopyException::AddAbility(Box::new(compiled)));
                 } else {
                     ts.restore(item_cp);
@@ -675,27 +672,12 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                 ts.restore(item_cp);
                 break;
             }
-        } else if ts.eat_phrase(&["it", "isn't", "legendary"])
-            || ts.eat_phrase(&["it's", "not", "legendary"])
-            || ts.eat_phrase(&["they", "aren't", "legendary"])
-            || ts.eat_phrase(&["they're", "not", "legendary"])
-            || ts.eat_phrase(&["those", "creatures", "aren't", "legendary"])
-            || ts.eat_phrase(&["those", "permanents", "aren't", "legendary"])
-            || ts.eat_phrase(&["the", "copy", "isn't", "legendary"])
-            || ts.eat_phrase(&["the", "token", "isn't", "legendary"])
-            || ts.eat_phrase(&["the", "tokens", "aren't", "legendary"])
-            || ts.eat_phrase(&["the", "copies", "aren't", "legendary"])
-        {
+        } else if ts.eat_any_phrase(NOT_LEGENDARY) {
             exceptions.push(CopyException::NotLegendary);
-        } else if (ts.eat_phrase(&["its", "power", "is"])
-            || ts.eat_phrase(&["their", "power", "is"])
-            || ts.eat_phrase(&["its", "toughness", "is"])
-            || ts.eat_phrase(&["their", "toughness", "is"]))
-            && {
-                let _ = ts.eat_phrase(&["equal", "to"]);
-                crate::v2::parser::try_parse(ts, parse_value_expr).is_ok()
-            }
-        {
+        } else if ts.eat_any_phrase(STAT_IS) && {
+            let _ = ts.eat_phrase(&["equal", "to"]);
+            crate::v2::parser::try_parse(ts, parse_value_expr).is_ok()
+        } {
             exceptions.push(CopyException::SetBasePTAndTypes {
                 power: None,
                 toughness: None,
@@ -703,21 +685,7 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                 types: CardTypeMask::EMPTY,
                 keep_existing_types: true,
             });
-        } else if ts.eat_phrase(&["it's", "an"])
-            || ts.eat_phrase(&["it's", "a"])
-            || ts.eat_word("it's")
-            || ts.eat_word("they're")
-            || ts.eat_phrase(&["is", "an"])
-            || ts.eat_phrase(&["is", "a"])
-            || ts.eat_phrase(&["the", "token", "is", "an"])
-            || ts.eat_phrase(&["the", "token", "is", "a"])
-            || ts.eat_phrase(&["the", "token", "is"])
-            || ts.eat_phrase(&["the", "copy", "is", "an"])
-            || ts.eat_phrase(&["the", "copy", "is", "a"])
-            || ts.eat_phrase(&["the", "copy", "is"])
-            || ts.eat_phrase(&["the", "tokens", "are"])
-            || ts.eat_phrase(&["the", "copies", "are"])
-        {
+        } else if ts.eat_any_phrase(IS_TYPE_PREFIXES) {
             let pt = ts.next_base_pt();
             let mut colors = ColorMask::EMPTY;
             let mut supertypes = crate::ast::SupertypeMask::EMPTY;
@@ -764,14 +732,10 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                     ts.restore(wcp);
                 }
             }
-            let keep_existing_types = ts
-                .eat_phrase(&["in", "addition", "to", "its", "other", "types"])
-                || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"])
-                || ts.eat_phrase(&["in", "addition", "to", "his", "other", "types"])
-                || ts.eat_phrase(&["in", "addition", "to", "her", "other", "types"])
-                || ts.eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
-                || ts.eat_phrase(&[
-                    "in", "addition", "to", "its", "other", "colors", "and", "types",
+            let keep_existing_types = ts.eat_in_addition_to_other_types()
+                || ts.eat_any_phrase(&[
+                    &["in", "addition", "to", "his", "other", "types"],
+                    &["in", "addition", "to", "her", "other", "types"],
                 ]);
             if pt.is_some() || !subtypes.is_empty() || !types.is_empty() {
                 exceptions.push(CopyException::SetBasePTAndTypes {
@@ -796,15 +760,7 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                 break;
             }
         } else if let Some(quoted) = ts.next_quoted() {
-            let compiled = compile_face_v2(
-                FaceInput {
-                    name: "~",
-                    type_line: "Permanent",
-                    oracle_text: quoted,
-                },
-                ts.vocab,
-            );
-            if compiled.is_ok() {
+            if let Ok(compiled) = compile_quoted_permanent(ts, quoted) {
                 exceptions.push(CopyException::AddAbility(Box::new(compiled)));
             } else {
                 ts.restore(item_cp);

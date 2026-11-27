@@ -369,6 +369,108 @@ impl<'a> TokenStream<'a> {
             stage,
         }
     }
+
+    /// Consume the first matching phrase from a structured slice of word slices.
+    pub fn eat_any_phrase(&mut self, phrases: &[&[&str]]) -> bool {
+        phrases.iter().any(|p| self.eat_phrase(p))
+    }
+
+    /// Consume the first matching word from a structured slice of words.
+    pub fn eat_any_word(&mut self, words: &[&str]) -> bool {
+        words.iter().any(|w| self.eat_word(w))
+    }
+
+    /// Consume an optional `in addition to <poss> other [colors and | creature | land | artifact | enchantment] types` suffix.
+    pub fn eat_in_addition_to_other_types(&mut self) -> bool {
+        const PHRASES: &[&[&str]] = &[
+            &[
+                "in", "addition", "to", "its", "other", "colors", "and", "types",
+            ],
+            &[
+                "in", "addition", "to", "their", "other", "colors", "and", "types",
+            ],
+            &["in", "addition", "to", "its", "other", "creature", "types"],
+            &[
+                "in", "addition", "to", "their", "other", "creature", "types",
+            ],
+            &["in", "addition", "to", "its", "other", "land", "types"],
+            &["in", "addition", "to", "their", "other", "land", "types"],
+            &["in", "addition", "to", "its", "other", "artifact", "types"],
+            &[
+                "in", "addition", "to", "their", "other", "artifact", "types",
+            ],
+            &[
+                "in",
+                "addition",
+                "to",
+                "its",
+                "other",
+                "enchantment",
+                "types",
+            ],
+            &[
+                "in",
+                "addition",
+                "to",
+                "their",
+                "other",
+                "enchantment",
+                "types",
+            ],
+            &["in", "addition", "to", "its", "other", "types"],
+            &["in", "addition", "to", "their", "other", "types"],
+        ];
+        self.eat_any_phrase(PHRASES)
+    }
+
+    /// Consume an optional `[,] rounded up` (`Some(true)`) or `[,] rounded down` (`Some(false)`).
+    pub fn eat_rounded_modifier(&mut self) -> Option<bool> {
+        let cp = self.checkpoint();
+        let _ = self.eat_comma();
+        if self.eat_phrase(&["rounded", "up"]) {
+            Some(true)
+        } else if self.eat_phrase(&["rounded", "down"]) {
+            Some(false)
+        } else {
+            self.restore(cp);
+            None
+        }
+    }
+
+    /// Consume `in addition to [paying] (its|their) other costs`.
+    pub fn eat_in_addition_to_other_costs(&mut self) -> bool {
+        const PHRASES: &[&[&str]] = &[
+            &["in", "addition", "to", "paying", "their", "other", "costs"],
+            &["in", "addition", "to", "their", "other", "costs"],
+            &["in", "addition", "to", "paying", "its", "other", "costs"],
+            &["in", "addition", "to", "its", "other", "costs"],
+        ];
+        self.eat_any_phrase(PHRASES)
+    }
+
+    /// Compile quoted granted ability text using `compile_face_v2` against `"Permanent"`.
+    pub fn compile_quoted_permanent_ability(
+        &self,
+        quoted: &str,
+    ) -> Result<crate::v2::ir::CompiledFaceV2, ParseError> {
+        let compiled = crate::v2::card::compile_face_v2(
+            crate::FaceInput {
+                name: "~",
+                type_line: "Permanent",
+                oracle_text: quoted,
+            },
+            self.vocab,
+        );
+        if compiled.is_ok() {
+            Ok(compiled)
+        } else {
+            Err(compiled
+                .errors
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| self.err("failed to compile quoted ability text")))
+        }
+    }
 }
 
 /// Run a parser transactionally: if it returns `Err`, restore the cursor to its prior position.

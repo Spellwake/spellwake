@@ -16,85 +16,57 @@ use crate::vocab::{lookup_card_type, lookup_color};
 
 /// Parse a typed [`KeywordKind`] (multi-word and single-word CR 702 keywords).
 pub fn parse_keyword_kind(ts: &mut TokenStream<'_>) -> PResult<KeywordKind> {
+    const MULTI_WORD_KEYWORDS: &[(&[&str], KeywordKind)] = &[
+        (&["first", "strike"], KeywordKind::FirstStrike),
+        (&["double", "strike"], KeywordKind::DoubleStrike),
+        (&["split", "second"], KeywordKind::SplitSecond),
+        (&["cumulative", "upkeep"], KeywordKind::CumulativeUpkeep),
+        (&["basic", "landcycling"], KeywordKind::BasicLandcycling),
+        (&["battle", "cry"], KeywordKind::BattleCry),
+        (&["living", "weapon"], KeywordKind::LivingWeapon),
+        (&["umbra", "armor"], KeywordKind::UmbraArmor),
+        (&["totem", "armor"], KeywordKind::UmbraArmor),
+        (&["level", "up"], KeywordKind::LevelUp),
+        (&["aura", "swap"], KeywordKind::AuraSwap),
+        (&["hidden", "agenda"], KeywordKind::HiddenAgenda),
+        (&["read", "ahead"], KeywordKind::ReadAhead),
+        (&["commander", "ninjutsu"], KeywordKind::NinjutsuCommander),
+        (
+            &["choose", "a", "background"],
+            KeywordKind::ChooseABackground,
+        ),
+        (&["doctor's", "companion"], KeywordKind::DoctorsCompanion),
+        (&["friends", "forever"], KeywordKind::FriendsForever),
+        (&["job", "select"], KeywordKind::JobSelect),
+        (
+            &["more", "than", "meets", "the", "eye"],
+            KeywordKind::MoreThanMeetsTheEye,
+        ),
+        (&["living", "metal"], KeywordKind::LivingMetal),
+    ];
+    const BANG_KEYWORDS: &[(&[&str], KeywordKind)] = &[
+        (&["for", "mirrodin"], KeywordKind::ForMirrodin),
+        (&["start", "your", "engines"], KeywordKind::StartYourEngines),
+    ];
     // Multi-word keywords first (longest match)
-    if ts.eat_phrase(&["first", "strike"]) {
-        return Ok(KeywordKind::FirstStrike);
-    }
-    if ts.eat_phrase(&["double", "strike"]) {
-        return Ok(KeywordKind::DoubleStrike);
-    }
-    if ts.eat_phrase(&["split", "second"]) {
-        return Ok(KeywordKind::SplitSecond);
-    }
-    if ts.eat_phrase(&["cumulative", "upkeep"]) {
-        return Ok(KeywordKind::CumulativeUpkeep);
-    }
-    if ts.eat_phrase(&["basic", "landcycling"]) {
-        return Ok(KeywordKind::BasicLandcycling);
-    }
-    if ts.eat_phrase(&["battle", "cry"]) {
-        return Ok(KeywordKind::BattleCry);
-    }
-    if ts.eat_phrase(&["living", "weapon"]) {
-        return Ok(KeywordKind::LivingWeapon);
-    }
-    if ts.eat_phrase(&["umbra", "armor"]) || ts.eat_phrase(&["totem", "armor"]) {
-        return Ok(KeywordKind::UmbraArmor);
-    }
-    if ts.eat_phrase(&["level", "up"]) {
-        return Ok(KeywordKind::LevelUp);
-    }
-    if ts.eat_phrase(&["aura", "swap"]) {
-        return Ok(KeywordKind::AuraSwap);
-    }
-    if ts.eat_phrase(&["hidden", "agenda"]) {
-        return Ok(KeywordKind::HiddenAgenda);
-    }
-    if ts.eat_phrase(&["read", "ahead"]) {
-        return Ok(KeywordKind::ReadAhead);
-    }
-    if ts.eat_phrase(&["commander", "ninjutsu"]) {
-        return Ok(KeywordKind::NinjutsuCommander);
-    }
-    if ts.eat_phrase(&["choose", "a", "background"]) {
-        return Ok(KeywordKind::ChooseABackground);
-    }
-    if ts.eat_phrase(&["doctor's", "companion"]) {
-        return Ok(KeywordKind::DoctorsCompanion);
-    }
-    if ts.eat_phrase(&["friends", "forever"]) {
-        return Ok(KeywordKind::FriendsForever);
-    }
-    if ts.eat_phrase(&["job", "select"]) {
-        return Ok(KeywordKind::JobSelect);
-    }
-    if ts.eat_phrase(&["more", "than", "meets", "the", "eye"]) {
-        return Ok(KeywordKind::MoreThanMeetsTheEye);
-    }
-    if ts.eat_phrase(&["living", "metal"]) {
-        return Ok(KeywordKind::LivingMetal);
-    }
-    if ts.eat_phrase(&["for", "mirrodin"]) {
-        if matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Bang)) {
-            ts.next_tok();
+    for &(phrase, kind) in MULTI_WORD_KEYWORDS {
+        if ts.eat_phrase(phrase) {
+            return Ok(kind);
         }
-        return Ok(KeywordKind::ForMirrodin);
     }
-    if ts.eat_phrase(&["start", "your", "engines"]) {
-        if matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Bang)) {
-            ts.next_tok();
+    for &(phrase, kind) in BANG_KEYWORDS {
+        if ts.eat_phrase(phrase) {
+            if matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Bang)) {
+                ts.next_tok();
+            }
+            return Ok(kind);
         }
-        return Ok(KeywordKind::StartYourEngines);
     }
     // Multi-word landwalk variants (`snow forestwalk`, `snow swampwalk`, `snow landwalk`,
     // `nonbasic landwalk`, `legendary landwalk`, `artifact landwalk`, `basic landwalk`)
     {
         let lw_cp = ts.checkpoint();
-        if (ts.eat_word("snow")
-            || ts.eat_word("nonbasic")
-            || ts.eat_word("legendary")
-            || ts.eat_word("artifact")
-            || ts.eat_word("basic"))
+        if ts.eat_any_word(&["snow", "nonbasic", "legendary", "artifact", "basic"])
             && let Some(nw) = ts.peek_word()
             && nw.to_ascii_lowercase().ends_with("walk")
             && nw.len() > "walk".len()
@@ -418,19 +390,8 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
         }
         KeywordKind::Devour => {
             // `Devour 2`, `Devour artifact 1`, `Devour Food 3`, `Devour land 3`, `Devour X, where X is ...`
-            if ts.eat_word("x") {
-                let wcp = ts.checkpoint();
-                if ts.eat_comma()
-                    && ts.eat_phrase(&["where", "x", "is"])
-                    && let Ok(expr) = try_parse(ts, crate::v2::value::parse_value_expr)
-                {
-                    Some(KeywordParam::VariableXBound(Box::new(expr)))
-                } else {
-                    ts.restore(wcp);
-                    Some(KeywordParam::VariableX)
-                }
-            } else if let Some(n) = ts.next_number(false).and_then(|v| u16::try_from(v).ok()) {
-                Some(KeywordParam::Number(n))
+            if let Some(p) = parse_x_bound_or_number(ts) {
+                Some(p)
             } else {
                 let dcp = ts.checkpoint();
                 if let Ok(flt) = try_parse(ts, parse_object_filter) {
@@ -534,24 +495,20 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
         }
         KeywordKind::Gift => {
             use crate::v2::ir::GiftKind;
-            if ts.eat_phrase(&["a", "card"]) {
-                Some(KeywordParam::Gift(GiftKind::Card))
-            } else if ts.eat_phrase(&["a", "treasure"]) {
-                Some(KeywordParam::Gift(GiftKind::Treasure))
-            } else if ts.eat_phrase(&["a", "food"]) {
-                Some(KeywordParam::Gift(GiftKind::Food))
-            } else if ts.eat_phrase(&["a", "tapped", "fish"]) {
-                Some(KeywordParam::Gift(GiftKind::TappedFish))
-            } else if ts.eat_phrase(&["an", "octopus"]) {
-                Some(KeywordParam::Gift(GiftKind::Octopus))
-            } else if ts.eat_phrase(&["an", "extra", "turn"]) {
-                Some(KeywordParam::Gift(GiftKind::ExtraTurn))
-            } else {
-                None
-            }
+            const GIFT_PHRASES: &[(&[&str], GiftKind)] = &[
+                (&["a", "card"], GiftKind::Card),
+                (&["a", "treasure"], GiftKind::Treasure),
+                (&["a", "food"], GiftKind::Food),
+                (&["a", "tapped", "fish"], GiftKind::TappedFish),
+                (&["an", "octopus"], GiftKind::Octopus),
+                (&["an", "extra", "turn"], GiftKind::ExtraTurn),
+            ];
+            GIFT_PHRASES
+                .iter()
+                .find_map(|&(p, g)| ts.eat_phrase(p).then_some(KeywordParam::Gift(g)))
         }
         KeywordKind::Prototype => {
-            // `Prototype {1}{B} — 1/1`
+            // `Prototype {1}{B} - 1/1`
             let costs = opt(ts, parse_cost_list).unwrap_or_default();
             let _ = ts.eat_em_dash();
             if let Some((p, t)) = ts.next_base_pt() {
@@ -583,8 +540,10 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
                     ts.restore(ccp);
                     break;
                 }
-                let _ = ts.eat_phrase(&["that", "share", "a", "card", "type"])
-                    || ts.eat_phrase(&["with", "different", "names"]);
+                let _ = ts.eat_any_phrase(&[
+                    &["that", "share", "a", "card", "type"],
+                    &["with", "different", "names"],
+                ]);
                 let costs = opt(ts, parse_cost_list).unwrap_or_default();
                 let flt = if flts.len() == 1 {
                     flts.remove(0)
@@ -627,24 +586,7 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
         | KeywordKind::Soulshift
         | KeywordKind::Firebending
         | KeywordKind::Teamwork
-        | KeywordKind::Amplify => {
-            if ts.eat_word("x") {
-                let wcp = ts.checkpoint();
-                if ts.eat_comma()
-                    && ts.eat_phrase(&["where", "x", "is"])
-                    && let Ok(expr) = try_parse(ts, crate::v2::value::parse_value_expr)
-                {
-                    Some(KeywordParam::VariableXBound(Box::new(expr)))
-                } else {
-                    ts.restore(wcp);
-                    Some(KeywordParam::VariableX)
-                }
-            } else {
-                ts.next_number(false)
-                    .and_then(|n| u16::try_from(n).ok())
-                    .map(KeywordParam::Number)
-            }
-        }
+        | KeywordKind::Amplify => parse_x_bound_or_number(ts),
         KeywordKind::Splice => {
             if ts.eat_word("onto")
                 && let Ok(flt) = try_parse(ts, parse_object_filter)
@@ -664,47 +606,76 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
         }
         KeywordKind::Protection | KeywordKind::Hexproof => parse_from_clause(ts),
         KeywordKind::Enchant => {
-            if ts.eat_word("player") || ts.eat_word("opponent") {
+            if ts.eat_any_word(&["player", "opponent"]) {
                 None
             } else {
                 opt(ts, parse_object_filter).map(|f| KeywordParam::Filter(Box::new(f)))
             }
         }
         KeywordKind::Champion => {
-            let _ = ts.eat_word("a") || ts.eat_word("an");
+            let _ = ts.eat_any_word(&["a", "an"]);
             opt(ts, parse_object_filter).map(|f| KeywordParam::Filter(Box::new(f)))
         }
         KeywordKind::Partner => {
-            if ts.eat_em_dash() {
-                let mut parts = Vec::new();
-                while let Some(w) = ts.next_word() {
-                    parts.push(w);
-                }
-                if parts.is_empty() {
-                    None
-                } else {
-                    Some(KeywordParam::PartnerName(parts.join(" ")))
-                }
+            let allow_commas = if ts.eat_em_dash() {
+                Some(false)
             } else if ts.eat_word("with") {
+                Some(true)
+            } else {
+                None
+            };
+            allow_commas.and_then(|commas| {
                 let mut parts = Vec::new();
                 while let Some(w) = ts.next_word() {
                     parts.push(w);
-                    if ts.eat_comma() {
+                    if commas && ts.eat_comma() {
                         parts.push(",");
                     }
                 }
-                if parts.is_empty() {
-                    None
-                } else {
-                    Some(KeywordParam::PartnerName(parts.join(" ")))
-                }
-            } else {
-                None
-            }
+                (!parts.is_empty()).then(|| KeywordParam::PartnerName(parts.join(" ")))
+            })
         }
         _ => None,
     };
     Ok(KeywordSpec { kind, param })
+}
+
+fn parse_x_bound_or_number(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
+    if ts.eat_word("x") {
+        let wcp = ts.checkpoint();
+        if ts.eat_comma()
+            && ts.eat_phrase(&["where", "x", "is"])
+            && let Ok(expr) = try_parse(ts, crate::v2::value::parse_value_expr)
+        {
+            Some(KeywordParam::VariableXBound(Box::new(expr)))
+        } else {
+            ts.restore(wcp);
+            Some(KeywordParam::VariableX)
+        }
+    } else {
+        ts.next_number(false)
+            .and_then(|n| u16::try_from(n).ok())
+            .map(KeywordParam::Number)
+    }
+}
+
+fn all_colors() -> ColorMask {
+    ColorMask::WHITE
+        .union(ColorMask::BLUE)
+        .union(ColorMask::BLACK)
+        .union(ColorMask::RED)
+        .union(ColorMask::GREEN)
+}
+
+fn mana_value_filter_param(op: CompareOp, value: ValueExpr) -> KeywordParam {
+    KeywordParam::Filter(Box::new(ObjectFilter {
+        stat_bounds: vec![StatBound {
+            stat: StatKind::ManaValue,
+            op,
+            value: Box::new(value),
+        }],
+        ..Default::default()
+    }))
 }
 
 fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
@@ -732,29 +703,20 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
         ]) {
             return Some(KeywordParam::ChosenColor);
         }
-        let all_colors = ColorMask::WHITE
-            .union(ColorMask::BLUE)
-            .union(ColorMask::BLACK)
-            .union(ColorMask::RED)
-            .union(ColorMask::GREEN);
-        return Some(KeywordParam::Color(all_colors));
+        return Some(KeywordParam::Color(all_colors()));
     }
-    if ts.eat_phrase(&["all", "colors"]) || ts.eat_phrase(&["any", "color"]) {
-        let all_colors = ColorMask::WHITE
-            .union(ColorMask::BLUE)
-            .union(ColorMask::BLACK)
-            .union(ColorMask::RED)
-            .union(ColorMask::GREEN);
-        return Some(KeywordParam::Color(all_colors));
+    if ts.eat_any_phrase(&[&["all", "colors"], &["any", "color"]]) {
+        return Some(KeywordParam::Color(all_colors()));
     }
-    if ts.eat_phrase(&["the", "color", "of", "your", "choice"])
-        || ts.eat_phrase(&["a", "color", "of", "your", "choice"])
-        || ts.eat_phrase(&["the", "color", "of", "its", "controller's", "choice"])
-        || ts.eat_phrase(&["a", "color", "of", "its", "controller's", "choice"])
-        || ts.eat_phrase(&["the", "last", "chosen", "color"])
-        || ts.eat_phrase(&["the", "chosen", "color"])
-        || ts.eat_phrase(&["that", "color"])
-        || ts.eat_phrase(&[
+    if ts.eat_any_phrase(&[
+        &["the", "color", "of", "your", "choice"],
+        &["a", "color", "of", "your", "choice"],
+        &["the", "color", "of", "its", "controller's", "choice"],
+        &["a", "color", "of", "its", "controller's", "choice"],
+        &["the", "last", "chosen", "color"],
+        &["the", "chosen", "color"],
+        &["that", "color"],
+        &[
             "colorless",
             "or",
             "from",
@@ -763,8 +725,8 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
             "of",
             "your",
             "choice",
-        ])
-        || ts.eat_phrase(&[
+        ],
+        &[
             "colorless",
             "or",
             "from",
@@ -773,34 +735,37 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
             "of",
             "your",
             "choice",
-        ])
-    {
+        ],
+    ]) {
         return Some(KeywordParam::ChosenColor);
     }
-    if ts.eat_phrase(&["the", "chosen", "player"])
-        || ts.eat_phrase(&["that", "player"])
-        || ts.eat_phrase(&["that", "opponent"])
-        || ts.eat_phrase(&["target", "player"])
-        || ts.eat_phrase(&["target", "opponent"])
-    {
+    if ts.eat_any_phrase(&[
+        &["the", "chosen", "player"],
+        &["that", "player"],
+        &["that", "opponent"],
+        &["target", "player"],
+        &["target", "opponent"],
+    ]) {
         return Some(KeywordParam::ChosenPlayer);
     }
-    if ts.eat_phrase(&["the", "chosen", "card", "name"])
-        || ts.eat_phrase(&["the", "chosen", "name"])
-    {
+    if ts.eat_any_phrase(&[
+        &["the", "chosen", "card", "name"],
+        &["the", "chosen", "name"],
+    ]) {
         return Some(KeywordParam::ChosenCardName);
     }
-    if ts.eat_phrase(&["the", "chosen", "card", "type"])
-        || ts.eat_phrase(&["the", "chosen", "creature", "type"])
-        || ts.eat_phrase(&["the", "chosen", "type"])
-    {
+    if ts.eat_any_phrase(&[
+        &["the", "chosen", "card", "type"],
+        &["the", "chosen", "creature", "type"],
+        &["the", "chosen", "type"],
+    ]) {
         return Some(KeywordParam::Filter(Box::new(ObjectFilter {
             predicates: vec![FilterPredicate::OfChosenCreatureType],
             ..Default::default()
         })));
     }
     // `from each of your opponents`
-    if ts.eat_phrase(&["each", "of", "your", "opponents"]) || ts.eat_phrase(&["each", "opponent"]) {
+    if ts.eat_any_phrase(&[&["each", "of", "your", "opponents"], &["each", "opponent"]]) {
         return Some(KeywordParam::Filter(Box::new(ObjectFilter {
             controller: Some(ControllerRelation::Opponents),
             ..Default::default()
@@ -810,36 +775,32 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
     {
         let ecp = ts.checkpoint();
         if ts.eat_phrase(&["each", "of"]) {
-            let subj_opt = if ts.eat_word("its") || ts.eat_word("their") {
+            const EACH_OF_ANAPHORA: &[(&[&str], AnaphoraRef)] = &[
+                (&["that", "creature's"], AnaphoraRef::ThatCreature),
+                (&["that", "permanent's"], AnaphoraRef::ThatPermanent),
+                (&["that", "spell's"], AnaphoraRef::ThatSpell),
+                (&["the", "exiled", "card's"], AnaphoraRef::TheExiledCard),
+                (&["that", "card's"], AnaphoraRef::TheExiledCard),
+            ];
+            let subj_opt = if ts.eat_any_word(&["its", "their"]) {
                 Some(SubjectRef::SelfObject)
-            } else if ts.eat_phrase(&["that", "creature's"]) {
-                Some(SubjectRef::Anaphora(AnaphoraRef::ThatCreature))
-            } else if ts.eat_phrase(&["that", "permanent's"]) {
-                Some(SubjectRef::Anaphora(AnaphoraRef::ThatPermanent))
-            } else if ts.eat_phrase(&["that", "spell's"]) {
-                Some(SubjectRef::Anaphora(AnaphoraRef::ThatSpell))
-            } else if ts.eat_phrase(&["the", "exiled", "card's"])
-                || ts.eat_phrase(&["that", "card's"])
-            {
-                Some(SubjectRef::Anaphora(AnaphoraRef::TheExiledCard))
             } else {
-                None
+                EACH_OF_ANAPHORA
+                    .iter()
+                    .find_map(|&(p, a)| ts.eat_phrase(p).then_some(SubjectRef::Anaphora(a)))
             };
             if let Some(reference) = subj_opt {
-                if ts.eat_word("colors") || ts.eat_word("color") {
+                let property = if ts.eat_any_word(&["colors", "color"]) {
+                    Some(SharedProperty::Color)
+                } else if ts.eat_any_phrase(&[&["card", "types"], &["card", "type"]]) {
+                    Some(SharedProperty::CardType)
+                } else {
+                    None
+                };
+                if let Some(property) = property {
                     return Some(KeywordParam::Filter(Box::new(ObjectFilter {
                         predicates: vec![FilterPredicate::SharesPropertyWith {
-                            property: SharedProperty::Color,
-                            reference: Box::new(reference),
-                            negated: false,
-                        }],
-                        ..Default::default()
-                    })));
-                }
-                if ts.eat_phrase(&["card", "types"]) || ts.eat_phrase(&["card", "type"]) {
-                    return Some(KeywordParam::Filter(Box::new(ObjectFilter {
-                        predicates: vec![FilterPredicate::SharesPropertyWith {
-                            property: SharedProperty::CardType,
+                            property,
                             reference: Box::new(reference),
                             negated: false,
                         }],
@@ -859,41 +820,21 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
             {
                 return Some(KeywordParam::Filter(Box::new(flt)));
             }
-            if ts.eat_phrase(&["of", "the", "chosen", "quality"])
-                || ts.eat_phrase(&["other", "than", "the", "chosen", "number"])
-            {
-                return Some(KeywordParam::Filter(Box::new(ObjectFilter {
-                    stat_bounds: vec![StatBound {
-                        stat: StatKind::ManaValue,
-                        op: CompareOp::Eq,
-                        value: Box::new(ValueExpr::Const(0)),
-                    }],
-                    ..Default::default()
-                })));
+            if ts.eat_any_phrase(&[
+                &["of", "the", "chosen", "quality"],
+                &["other", "than", "the", "chosen", "number"],
+            ]) {
+                return Some(mana_value_filter_param(CompareOp::Eq, ValueExpr::Const(0)));
             }
         }
         ts.restore(mv_cp);
     }
     // `from even mana values` / `from odd mana values` / `from mana value <N> or less|greater`
-    if ts.eat_phrase(&["even", "mana", "values"]) || ts.eat_phrase(&["even", "mana", "value"]) {
-        return Some(KeywordParam::Filter(Box::new(ObjectFilter {
-            stat_bounds: vec![StatBound {
-                stat: StatKind::ManaValue,
-                op: CompareOp::Eq,
-                value: Box::new(ValueExpr::Const(0)),
-            }],
-            ..Default::default()
-        })));
+    if ts.eat_any_phrase(&[&["even", "mana", "values"], &["even", "mana", "value"]]) {
+        return Some(mana_value_filter_param(CompareOp::Eq, ValueExpr::Const(0)));
     }
-    if ts.eat_phrase(&["odd", "mana", "values"]) || ts.eat_phrase(&["odd", "mana", "value"]) {
-        return Some(KeywordParam::Filter(Box::new(ObjectFilter {
-            stat_bounds: vec![StatBound {
-                stat: StatKind::ManaValue,
-                op: CompareOp::Eq,
-                value: Box::new(ValueExpr::Const(1)),
-            }],
-            ..Default::default()
-        })));
+    if ts.eat_any_phrase(&[&["odd", "mana", "values"], &["odd", "mana", "value"]]) {
+        return Some(mana_value_filter_param(CompareOp::Eq, ValueExpr::Const(1)));
     }
     {
         let mv_cp = ts.checkpoint();
@@ -907,18 +848,11 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
             } else {
                 CompareOp::Eq
             };
-            return Some(KeywordParam::Filter(Box::new(ObjectFilter {
-                stat_bounds: vec![StatBound {
-                    stat: StatKind::ManaValue,
-                    op,
-                    value: Box::new(val),
-                }],
-                ..Default::default()
-            })));
+            return Some(mana_value_filter_param(op, val));
         }
         ts.restore(mv_cp);
     }
-    if ts.eat_word("ring-bearers") || ts.eat_word("ring-bearer") {
+    if ts.eat_any_word(&["ring-bearers", "ring-bearer"]) {
         return Some(KeywordParam::Filter(Box::new(ObjectFilter {
             any_types: CardTypeMask::CREATURE,
             flags: FilterFlags::MODIFIED,
@@ -932,7 +866,7 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
             ts.next_word();
             colors = colors.union(c);
             let _ = ts.eat_comma();
-            if ts.eat_phrase(&["and", "from"]) || ts.eat_word("from") || ts.eat_word("and") {
+            if ts.eat_any_phrase(&[&["and", "from"], &["from"], &["and"]]) {
                 continue;
             }
             break;
@@ -948,15 +882,10 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
     loop {
         let fcp = ts.checkpoint();
         let _ = ts.eat_comma();
-        if ts.eat_phrase(&["and", "from"]) || ts.eat_word("from") {
-            if ts.eat_phrase(&["each", "color"]) || ts.eat_phrase(&["all", "colors"]) {
-                let all_colors = ColorMask::WHITE
-                    .union(ColorMask::BLUE)
-                    .union(ColorMask::BLACK)
-                    .union(ColorMask::RED)
-                    .union(ColorMask::GREEN);
+        if ts.eat_any_phrase(&[&["and", "from"], &["from"]]) {
+            if ts.eat_any_phrase(&[&["each", "color"], &["all", "colors"]]) {
                 filters.push(ObjectFilter {
-                    any_colors: all_colors,
+                    any_colors: all_colors(),
                     ..Default::default()
                 });
                 continue;
@@ -967,9 +896,10 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
             }
         }
         ts.restore(fcp);
-        if ts.eat_phrase(&["or", "from", "the", "color", "of", "your", "choice"])
-            || ts.eat_phrase(&["or", "from", "a", "color", "of", "your", "choice"])
-        {
+        if ts.eat_any_phrase(&[
+            &["or", "from", "the", "color", "of", "your", "choice"],
+            &["or", "from", "a", "color", "of", "your", "choice"],
+        ]) {
             return Some(KeywordParam::ChosenColor);
         }
         ts.restore(fcp);

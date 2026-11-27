@@ -17,29 +17,48 @@ use crate::v2::ir::{
 use crate::v2::parser::{PResult, TokenStream, try_parse};
 use crate::v2::value::parse_value_expr;
 
+use super::{
+    all_zone_cards_subject, counted_zone_op, eat_rounding, exact_count, exile_zone_op,
+    move_zone_op, mutate_obj, prompt_choice, shuffled_zone_dest, simple_zone_dest, simple_zone_op,
+    zone_cards_subject,
+};
+
 /// Parse trailing `under <owner> control` qualifiers that `parse_zone_dest` may leave unconsumed.
 pub(super) fn parse_trailing_under_control(ts: &mut TokenStream<'_>, dest: &mut ZoneDest) {
-    let cp = ts.checkpoint();
-    if ts.eat_phrase(&["under", "their", "control"])
-        || ts.eat_phrase(&["under", "that", "player's", "control"])
+    const TABLE: &[(&[&str], ZoneOwner)] = &[
+        (&["under", "their", "control"], ZoneOwner::ThatPlayer),
+        (
+            &["under", "that", "player's", "control"],
+            ZoneOwner::ThatPlayer,
+        ),
+        (
+            &["under", "an", "opponent's", "control"],
+            ZoneOwner::Opponent,
+        ),
+        (
+            &["under", "target", "player's", "control"],
+            ZoneOwner::TargetPlayer,
+        ),
+        (
+            &["under", "target", "opponent's", "control"],
+            ZoneOwner::TargetOpponent,
+        ),
+        (
+            &["under", "the", "control", "of", "that", "card's", "owner"],
+            ZoneOwner::ItsOwner,
+        ),
+        (&["under", "its", "owner's", "control"], ZoneOwner::ItsOwner),
+        (
+            &["under", "their", "owners'", "control"],
+            ZoneOwner::TheirOwners,
+        ),
+        (&["under", "your", "control"], ZoneOwner::You),
+    ];
+    if let Some(owner) = TABLE
+        .iter()
+        .find_map(|&(phrase, owner)| ts.eat_phrase(phrase).then_some(owner))
     {
-        dest.under_control = Some(ZoneOwner::ThatPlayer);
-    } else if ts.eat_phrase(&["under", "an", "opponent's", "control"]) {
-        dest.under_control = Some(ZoneOwner::Opponent);
-    } else if ts.eat_phrase(&["under", "target", "player's", "control"]) {
-        dest.under_control = Some(ZoneOwner::TargetPlayer);
-    } else if ts.eat_phrase(&["under", "target", "opponent's", "control"]) {
-        dest.under_control = Some(ZoneOwner::TargetOpponent);
-    } else if ts.eat_phrase(&["under", "the", "control", "of", "that", "card's", "owner"])
-        || ts.eat_phrase(&["under", "its", "owner's", "control"])
-    {
-        dest.under_control = Some(ZoneOwner::ItsOwner);
-    } else if ts.eat_phrase(&["under", "their", "owners'", "control"]) {
-        dest.under_control = Some(ZoneOwner::TheirOwners);
-    } else if ts.eat_phrase(&["under", "your", "control"]) {
-        dest.under_control = Some(ZoneOwner::You);
-    } else {
-        ts.restore(cp);
+        dest.under_control = Some(owner);
     }
 }
 
@@ -55,16 +74,16 @@ pub(super) fn try_parse_put_ext(
             && let Ok(to) = try_parse(ts, parse_subject_ref)
         {
             return Some(Ok((
-                vec![Effect::MutateObject {
-                    subject: SubjectRef::SelfObject,
-                    mutation: ObjectMutation::MoveCounters {
+                vec![mutate_obj(
+                    SubjectRef::SelfObject,
+                    ObjectMutation::MoveCounters {
                         from: Box::new(SubjectRef::SelfObject),
                         to: Box::new(to),
                         kind: CounterKind::Any,
                         count: ValueExpr::PriorActionCount(PriorActionKind::ThatMany),
                     },
-                    duration: Duration::Instant,
-                }],
+                    Duration::Instant,
+                )],
                 (),
             )));
         }
@@ -76,19 +95,19 @@ pub(super) fn try_parse_put_ext(
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["that", "number", "of"])
             && let Ok(kind) = try_parse(ts, parse_counter_kind)
-            && (ts.eat_word("counters") || ts.eat_word("counter"))
+            && ts.eat_any_word(&["counters", "counter"])
             && ts.eat_word("on")
             && let Ok(subject) = try_parse(ts, parse_subject_ref)
         {
             return Some(Ok((
-                vec![Effect::MutateObject {
+                vec![mutate_obj(
                     subject,
-                    mutation: ObjectMutation::PutCounters {
+                    ObjectMutation::PutCounters {
                         kind,
                         count: ValueExpr::PriorActionCount(PriorActionKind::ThatMany),
                     },
-                    duration: Duration::Instant,
-                }],
+                    Duration::Instant,
+                )],
                 (),
             )));
         }
@@ -98,35 +117,35 @@ pub(super) fn try_parse_put_ext(
     // 3. `put(s) the rest of [the [exiled|revealed] | those [exiled|revealed]] cards [revealed/exiled this way] <dest>`
     {
         let cp = ts.checkpoint();
-        if ts.eat_phrase(&["the", "rest", "of"]) {
-            let matched = ts.eat_phrase(&["the", "cards", "revealed", "this", "way"])
-                || ts.eat_phrase(&["the", "cards", "exiled", "this", "way"])
-                || ts.eat_phrase(&["the", "revealed", "cards"])
-                || ts.eat_phrase(&["the", "exiled", "cards"])
-                || ts.eat_phrase(&["those", "revealed", "cards"])
-                || ts.eat_phrase(&["those", "exiled", "cards"])
-                || ts.eat_phrase(&["those", "cards"]);
-            if matched && let Ok((mut dest, modifiers)) = try_parse(ts, parse_zone_dest) {
-                parse_trailing_under_control(ts, &mut dest);
-                return Some(Ok((
-                    vec![Effect::ZoneOp {
-                        actor,
-                        op: ZoneOpKind::Move,
-                        subject: SubjectRef::Anaphora(AnaphoraRef::TheRest),
-                        from: Vec::new(),
-                        to: Some(dest),
-                        modifiers,
-                        except: None,
-                        count: None,
-                    }],
-                    (),
-                )));
-            }
+        if ts.eat_phrase(&["the", "rest", "of"])
+            && ts.eat_any_phrase(&[
+                &["the", "cards", "revealed", "this", "way"],
+                &["the", "cards", "exiled", "this", "way"],
+                &["the", "revealed", "cards"],
+                &["the", "exiled", "cards"],
+                &["those", "revealed", "cards"],
+                &["those", "exiled", "cards"],
+                &["those", "cards"],
+            ])
+            && let Ok((mut dest, modifiers)) = try_parse(ts, parse_zone_dest)
+        {
+            parse_trailing_under_control(ts, &mut dest);
+            return Some(Ok((
+                vec![move_zone_op(
+                    actor,
+                    SubjectRef::Anaphora(AnaphoraRef::TheRest),
+                    Vec::new(),
+                    dest,
+                    modifiers,
+                    None,
+                )],
+                (),
+            )));
         }
         ts.restore(cp);
     }
 
-    // 4. `put(s) all [the] [revealed | nonland | land] cards [not cast this way | chosen this way | from the pile of your choice | from <zone>] <dest> [and the rest <dest2>]`
+    // 4. `put(s) all [the] [revealed | nonland | land] cards [...] <dest> [and the rest <dest2>]`
     {
         let cp = ts.checkpoint();
         if ts.eat_word("all") {
@@ -140,9 +159,10 @@ pub(super) fn try_parse_put_ext(
                     )],
                     ..Default::default()
                 })))
-            } else if ts.eat_phrase(&["cards", "from", "the", "pile", "of", "your", "choice"])
-                || ts.eat_phrase(&["cards", "from", "the", "pile", "of", "their", "choice"])
-            {
+            } else if ts.eat_any_phrase(&[
+                &["cards", "from", "the", "pile", "of", "your", "choice"],
+                &["cards", "from", "the", "pile", "of", "their", "choice"],
+            ]) {
                 Some(SubjectRef::Anaphora(AnaphoraRef::OnePile))
             } else if ts.eat_phrase(&["nonland", "cards", "chosen", "this", "way"]) {
                 Some(SubjectRef::All(Box::new(ObjectFilter {
@@ -159,11 +179,7 @@ pub(super) fn try_parse_put_ext(
                 && let Ok(zr) = try_parse(ts, parse_zone_ref)
             {
                 from.push(zr);
-                Some(SubjectRef::All(Box::new(ObjectFilter {
-                    any_card: true,
-                    zones: vec![zr],
-                    ..Default::default()
-                })))
+                Some(all_zone_cards_subject(zr))
             } else {
                 None
             };
@@ -171,16 +187,7 @@ pub(super) fn try_parse_put_ext(
                 && let Ok((mut dest, modifiers)) = try_parse(ts, parse_zone_dest)
             {
                 parse_trailing_under_control(ts, &mut dest);
-                let mut out = vec![Effect::ZoneOp {
-                    actor,
-                    op: ZoneOpKind::Move,
-                    subject,
-                    from,
-                    to: Some(dest),
-                    modifiers,
-                    except: None,
-                    count: None,
-                }];
+                let mut out = vec![move_zone_op(actor, subject, from, dest, modifiers, None)];
                 append_optional_and_the_rest(ts, actor, &mut out);
                 return Some(Ok((out, ())));
             }
@@ -196,53 +203,41 @@ pub(super) fn try_parse_put_ext(
             && let Ok((mut dest, modifiers)) = try_parse(ts, parse_zone_dest)
         {
             parse_trailing_under_control(ts, &mut dest);
-            let mut out = vec![Effect::ZoneOp {
+            let mut out = vec![move_zone_op(
                 actor,
-                op: ZoneOpKind::Move,
-                subject: SubjectRef::Group(Box::new(flt)),
-                from: Vec::new(),
-                to: Some(dest),
+                SubjectRef::Group(Box::new(flt)),
+                Vec::new(),
+                dest,
                 modifiers,
-                except: None,
-                count: None,
-            }];
+                None,
+            )];
             append_optional_and_the_rest(ts, actor, &mut out);
             return Some(Ok((out, ())));
         }
         ts.restore(cp);
     }
 
-    // 6. `put(s) the top <flt> of <zone> <dest>` AND `put(s) the top <val> cards of <zone> <dest>` (`Cybership`)
+    // 6. `put(s) the top <flt> of <zone> <dest>` AND `put(s) the top <val> cards of <zone> <dest>`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["the", "top"]) {
             let num_cp = ts.checkpoint();
             if let Ok(cnt) = try_parse(ts, parse_value_expr)
-                && (ts.eat_word("cards") || ts.eat_word("card"))
+                && ts.eat_any_word(&["cards", "card"])
                 && ts.eat_word("of")
                 && let Ok(zr) = try_parse(ts, parse_zone_ref)
                 && let Ok((mut dest, modifiers)) = try_parse(ts, parse_zone_dest)
             {
                 parse_trailing_under_control(ts, &mut dest);
                 return Some(Ok((
-                    vec![Effect::ZoneOp {
+                    vec![move_zone_op(
                         actor,
-                        op: ZoneOpKind::Move,
-                        subject: SubjectRef::Group(Box::new(ObjectFilter {
-                            any_card: true,
-                            zones: vec![zr],
-                            ..Default::default()
-                        })),
-                        from: vec![zr],
-                        to: Some(dest),
+                        zone_cards_subject(zr),
+                        vec![zr],
+                        dest,
                         modifiers,
-                        except: None,
-                        count: Some(CountSpec {
-                            count: cnt,
-                            up_to: false,
-                            any_number: false,
-                        }),
-                    }],
+                        Some(exact_count(cnt)),
+                    )],
                     (),
                 )));
             }
@@ -254,20 +249,14 @@ pub(super) fn try_parse_put_ext(
             {
                 parse_trailing_under_control(ts, &mut dest);
                 return Some(Ok((
-                    vec![Effect::ZoneOp {
+                    vec![move_zone_op(
                         actor,
-                        op: ZoneOpKind::Move,
-                        subject: SubjectRef::Group(Box::new(flt)),
-                        from: vec![zr],
-                        to: Some(dest),
+                        SubjectRef::Group(Box::new(flt)),
+                        vec![zr],
+                        dest,
                         modifiers,
-                        except: None,
-                        count: Some(CountSpec {
-                            count: ValueExpr::Const(1),
-                            up_to: false,
-                            any_number: false,
-                        }),
-                    }],
+                        Some(exact_count(ValueExpr::Const(1))),
+                    )],
                     (),
                 )));
             }
@@ -275,39 +264,34 @@ pub(super) fn try_parse_put_ext(
         ts.restore(cp);
     }
 
-    // 7. `put(s) that pile <dest> [and the other <dest2>]` (`Steam Augury`, `Epiphany at the Drownyard`, `Split the Spoils`, `Riddles in the Dark`, `Curator of Destinies`, `Hostile Negotiations`, `Abstract Performance`, `The Celestial Toymaker`, `Intrude on the Mind`)
+    // 7. `put(s) that pile <dest> [and the other <dest2>]`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["that", "pile"])
             && let Ok((mut d1, m1)) = try_parse(ts, parse_zone_dest)
         {
             parse_trailing_under_control(ts, &mut d1);
-            let mut out = vec![Effect::ZoneOp {
+            let mut out = vec![move_zone_op(
                 actor,
-                op: ZoneOpKind::Move,
-                subject: SubjectRef::Anaphora(AnaphoraRef::OnePile),
-                from: Vec::new(),
-                to: Some(d1),
-                modifiers: m1,
-                except: None,
-                count: None,
-            }];
+                SubjectRef::Anaphora(AnaphoraRef::OnePile),
+                Vec::new(),
+                d1,
+                m1,
+                None,
+            )];
             let ocp = ts.checkpoint();
-            if (ts.eat_phrase(&["and", "the", "other", "pile"])
-                || ts.eat_phrase(&["and", "the", "other"]))
+            if ts.eat_any_phrase(&[&["and", "the", "other", "pile"], &["and", "the", "other"]])
                 && let Ok((mut d2, m2)) = try_parse(ts, parse_zone_dest)
             {
                 parse_trailing_under_control(ts, &mut d2);
-                out.push(Effect::ZoneOp {
+                out.push(move_zone_op(
                     actor,
-                    op: ZoneOpKind::Move,
-                    subject: SubjectRef::Anaphora(AnaphoraRef::OtherPile),
-                    from: Vec::new(),
-                    to: Some(d2),
-                    modifiers: m2,
-                    except: None,
-                    count: None,
-                });
+                    SubjectRef::Anaphora(AnaphoraRef::OtherPile),
+                    Vec::new(),
+                    d2,
+                    m2,
+                    None,
+                ));
             } else {
                 ts.restore(ocp);
             }
@@ -316,7 +300,7 @@ pub(super) fn try_parse_put_ext(
         ts.restore(cp);
     }
 
-    // 8. `put(s) a card from the chosen pile <dest>` (`Truth or Tale`)
+    // 8. `put(s) a card from the chosen pile <dest>`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["a", "card", "from", "the", "chosen", "pile"])
@@ -324,67 +308,58 @@ pub(super) fn try_parse_put_ext(
         {
             parse_trailing_under_control(ts, &mut dest);
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![move_zone_op(
                     actor,
-                    op: ZoneOpKind::Move,
-                    subject: SubjectRef::Anaphora(AnaphoraRef::OnePile),
-                    from: Vec::new(),
-                    to: Some(dest),
+                    SubjectRef::Anaphora(AnaphoraRef::OnePile),
+                    Vec::new(),
+                    dest,
                     modifiers,
-                    except: None,
-                    count: Some(CountSpec {
-                        count: ValueExpr::Const(1),
-                        up_to: false,
-                        any_number: false,
-                    }),
-                }],
+                    Some(exact_count(ValueExpr::Const(1))),
+                )],
                 (),
             )));
         }
         ts.restore(cp);
     }
 
-    // 9. `put(s) the same number (and kind of counters | of each kind of counter) on <subj>` (`Captain Marvel`, `Bold Plagiarist`, `Denry Klin`)
+    // 9. `put(s) the same number (and kind of counters | of each kind of counter) on <subj>`
     {
         let cp = ts.checkpoint();
-        if (ts.eat_phrase(&[
-            "the", "same", "number", "and", "kind", "of", "counters", "on",
-        ]) || ts.eat_phrase(&[
-            "the", "same", "number", "of", "each", "kind", "of", "counter", "on",
-        ])) && let Ok(subject) = try_parse(ts, parse_subject_ref)
+        if ts.eat_any_phrase(&[
+            &[
+                "the", "same", "number", "and", "kind", "of", "counters", "on",
+            ],
+            &[
+                "the", "same", "number", "of", "each", "kind", "of", "counter", "on",
+            ],
+        ]) && let Ok(subject) = try_parse(ts, parse_subject_ref)
         {
             return Some(Ok((
-                vec![Effect::MutateObject {
+                vec![mutate_obj(
                     subject,
-                    mutation: ObjectMutation::PutCounters {
+                    ObjectMutation::PutCounters {
                         kind: CounterKind::Any,
                         count: ValueExpr::PriorActionCount(PriorActionKind::ThatMany),
                     },
-                    duration: Duration::Instant,
-                }],
+                    Duration::Instant,
+                )],
                 (),
             )));
         }
         ts.restore(cp);
     }
 
-    // 10. `put(s) (an additional | a) counter of that kind on (either of those tokens | <subj>)`
-    //     OR `put(s) your choice of a +1/+1 counter or a counter of that kind on <subj>` (`Bribe Taker`)
-    //     OR `put(s) one of each of those kinds of counters on <subj>` (`Aragorn, Company Leader`)
-    //     OR `put(s) an additional <kind> counter on <subj>` (`Toph`, `Cursed Wombat`)
-    //     OR `put(s) up to <val> <kind> counter(s) on <subj>` (`Clockwork Steed/Avian/Swarm/Beast`, `Terra`)
-    //     OR `put(s) <kind> counters on <subj> equal to <val>` (`Experiment Twelve`)
-    //     OR `put(s) that many <k1> counters or <k2> counters on <subj>` (`Dismantle`)
-    //     OR `put(s) a <k1>, <k2>, or <k3> counter on <subj>` (`Reluctant Role Model`)
-    //     OR `put(s) [~'s | its] <kind> counters on <subj>` (`Zack Fair`, `Selfless Police Captain`)
+    // 10. Extended counter-placement `put(s)` forms
     {
         let cp = ts.checkpoint();
-        if ts.eat_phrase(&["an", "additional", "counter", "of", "that", "kind", "on"])
-            || ts.eat_phrase(&["a", "counter", "of", "that", "kind", "on"])
-        {
-            let subj = if ts.eat_phrase(&["either", "of", "those", "tokens"])
-                || ts.eat_phrase(&["either", "of", "them"])
-            {
+        if ts.eat_any_phrase(&[
+            &["an", "additional", "counter", "of", "that", "kind", "on"],
+            &["a", "counter", "of", "that", "kind", "on"],
+        ]) {
+            let subj = if ts.eat_any_phrase(&[
+                &["either", "of", "those", "tokens"],
+                &["either", "of", "them"],
+            ]) {
                 SubjectRef::Anaphora(AnaphoraRef::Them)
             } else if let Ok(s) = try_parse(ts, parse_subject_ref) {
                 s
@@ -393,46 +368,46 @@ pub(super) fn try_parse_put_ext(
                 return None;
             };
             return Some(Ok((
-                vec![Effect::MutateObject {
-                    subject: subj,
-                    mutation: ObjectMutation::PutCounters {
+                vec![mutate_obj(
+                    subj,
+                    ObjectMutation::PutCounters {
                         kind: CounterKind::Any,
                         count: ValueExpr::Const(1),
                     },
-                    duration: Duration::Instant,
-                }],
+                    Duration::Instant,
+                )],
                 (),
             )));
         }
         ts.restore(cp);
-        if (ts.eat_phrase(&["your", "choice", "of"]) || ts.eat_phrase(&["their", "choice", "of"]))
-            && (ts.eat_word("a") || ts.eat_word("an"))
+        if ts.eat_any_phrase(&[&["your", "choice", "of"], &["their", "choice", "of"]])
+            && ts.eat_any_word(&["a", "an"])
             && let Ok(k1) = try_parse(ts, parse_counter_kind)
             && ts.eat_phrase(&["counter", "or", "a", "counter", "of", "that", "kind", "on"])
             && let Ok(subject) = try_parse(ts, parse_subject_ref)
         {
             return Some(Ok((
-                vec![Effect::PromptChoice {
-                    chooser: actor,
-                    kind: ChoiceKind::ChooseBranch(vec![
-                        vec![Effect::MutateObject {
-                            subject: subject.clone(),
-                            mutation: ObjectMutation::PutCounters {
+                vec![prompt_choice(
+                    actor,
+                    ChoiceKind::ChooseBranch(vec![
+                        vec![mutate_obj(
+                            subject.clone(),
+                            ObjectMutation::PutCounters {
                                 kind: k1,
                                 count: ValueExpr::Const(1),
                             },
-                            duration: Duration::Instant,
-                        }],
-                        vec![Effect::MutateObject {
+                            Duration::Instant,
+                        )],
+                        vec![mutate_obj(
                             subject,
-                            mutation: ObjectMutation::PutCounters {
+                            ObjectMutation::PutCounters {
                                 kind: CounterKind::Any,
                                 count: ValueExpr::Const(1),
                             },
-                            duration: Duration::Instant,
-                        }],
+                            Duration::Instant,
+                        )],
                     ]),
-                }],
+                )],
                 (),
             )));
         }
@@ -442,33 +417,33 @@ pub(super) fn try_parse_put_ext(
         ]) && let Ok(subject) = try_parse(ts, parse_subject_ref)
         {
             return Some(Ok((
-                vec![Effect::MutateObject {
+                vec![mutate_obj(
                     subject,
-                    mutation: ObjectMutation::PutCounters {
+                    ObjectMutation::PutCounters {
                         kind: CounterKind::Any,
                         count: ValueExpr::Const(1),
                     },
-                    duration: Duration::Instant,
-                }],
+                    Duration::Instant,
+                )],
                 (),
             )));
         }
         ts.restore(cp);
         if ts.eat_phrase(&["an", "additional"])
             && let Ok(kind) = try_parse(ts, parse_counter_kind)
-            && (ts.eat_word("counter") || ts.eat_word("counters"))
+            && ts.eat_any_word(&["counter", "counters"])
             && ts.eat_word("on")
             && let Ok(subject) = try_parse(ts, parse_subject_ref)
         {
             return Some(Ok((
-                vec![Effect::MutateObject {
+                vec![mutate_obj(
                     subject,
-                    mutation: ObjectMutation::PutCounters {
+                    ObjectMutation::PutCounters {
                         kind,
                         count: ValueExpr::Const(1),
                     },
-                    duration: Duration::Instant,
-                }],
+                    Duration::Instant,
+                )],
                 (),
             )));
         }
@@ -476,33 +451,33 @@ pub(super) fn try_parse_put_ext(
         if ts.eat_phrase(&["up", "to"])
             && let Ok(count) = try_parse(ts, parse_value_expr)
             && let Ok(kind) = try_parse(ts, parse_counter_kind)
-            && (ts.eat_word("counters") || ts.eat_word("counter"))
+            && ts.eat_any_word(&["counters", "counter"])
             && ts.eat_word("on")
             && let Ok(subject) = try_parse(ts, parse_subject_ref)
         {
             return Some(Ok((
-                vec![Effect::MutateObject {
+                vec![mutate_obj(
                     subject,
-                    mutation: ObjectMutation::PutCounters { kind, count },
-                    duration: Duration::Instant,
-                }],
+                    ObjectMutation::PutCounters { kind, count },
+                    Duration::Instant,
+                )],
                 (),
             )));
         }
         ts.restore(cp);
         if let Ok(kind) = try_parse(ts, parse_counter_kind)
-            && (ts.eat_word("counters") || ts.eat_word("counter"))
+            && ts.eat_any_word(&["counters", "counter"])
             && ts.eat_word("on")
             && let Ok(subject) = try_parse(ts, parse_subject_ref)
             && ts.eat_phrase(&["equal", "to"])
             && let Ok(count) = try_parse(ts, parse_value_expr)
         {
             return Some(Ok((
-                vec![Effect::MutateObject {
+                vec![mutate_obj(
                     subject,
-                    mutation: ObjectMutation::PutCounters { kind, count },
-                    duration: Duration::Instant,
-                }],
+                    ObjectMutation::PutCounters { kind, count },
+                    Duration::Instant,
+                )],
                 (),
             )));
         }
@@ -516,44 +491,44 @@ pub(super) fn try_parse_put_ext(
         {
             let cnt = ValueExpr::PriorActionCount(PriorActionKind::ThatMany);
             return Some(Ok((
-                vec![Effect::PromptChoice {
-                    chooser: actor,
-                    kind: ChoiceKind::ChooseBranch(vec![
-                        vec![Effect::MutateObject {
-                            subject: subject.clone(),
-                            mutation: ObjectMutation::PutCounters {
+                vec![prompt_choice(
+                    actor,
+                    ChoiceKind::ChooseBranch(vec![
+                        vec![mutate_obj(
+                            subject.clone(),
+                            ObjectMutation::PutCounters {
                                 kind: k1,
                                 count: cnt.clone(),
                             },
-                            duration: Duration::Instant,
-                        }],
-                        vec![Effect::MutateObject {
+                            Duration::Instant,
+                        )],
+                        vec![mutate_obj(
                             subject,
-                            mutation: ObjectMutation::PutCounters {
+                            ObjectMutation::PutCounters {
                                 kind: k2,
                                 count: cnt,
                             },
-                            duration: Duration::Instant,
-                        }],
+                            Duration::Instant,
+                        )],
                     ]),
-                }],
+                )],
                 (),
             )));
         }
         ts.restore(cp);
-        if (ts.eat_word("a") || ts.eat_word("an"))
+        if ts.eat_any_word(&["a", "an"])
             && let Ok(first_k) = try_parse(ts, parse_counter_kind)
         {
             if ts.eat_phrase(&["counter", "on", "either", "of", "them"]) {
                 return Some(Ok((
-                    vec![Effect::MutateObject {
-                        subject: SubjectRef::Anaphora(AnaphoraRef::Them),
-                        mutation: ObjectMutation::PutCounters {
+                    vec![mutate_obj(
+                        SubjectRef::Anaphora(AnaphoraRef::Them),
+                        ObjectMutation::PutCounters {
                             kind: first_k,
                             count: ValueExpr::Const(1),
                         },
-                        duration: Duration::Instant,
-                    }],
+                        Duration::Instant,
+                    )],
                     (),
                 )));
             }
@@ -567,28 +542,25 @@ pub(super) fn try_parse_put_ext(
                 }
             }
             if kinds.len() >= 2
-                && (ts.eat_word("counter") || ts.eat_word("counters"))
+                && ts.eat_any_word(&["counter", "counters"])
                 && ts.eat_word("on")
                 && let Ok(subject) = try_parse(ts, parse_subject_ref)
             {
                 let branches = kinds
                     .into_iter()
                     .map(|kind| {
-                        vec![Effect::MutateObject {
-                            subject: subject.clone(),
-                            mutation: ObjectMutation::PutCounters {
+                        vec![mutate_obj(
+                            subject.clone(),
+                            ObjectMutation::PutCounters {
                                 kind,
                                 count: ValueExpr::Const(1),
                             },
-                            duration: Duration::Instant,
-                        }]
+                            Duration::Instant,
+                        )]
                     })
                     .collect();
                 return Some(Ok((
-                    vec![Effect::PromptChoice {
-                        chooser: actor,
-                        kind: ChoiceKind::ChooseBranch(branches),
-                    }],
+                    vec![prompt_choice(actor, ChoiceKind::ChooseBranch(branches))],
                     (),
                 )));
             }
@@ -596,21 +568,21 @@ pub(super) fn try_parse_put_ext(
         ts.restore(cp);
         if (ts.eat_tilde() && ts.eat_word("'s")) || ts.eat_word("its") {
             let kind = try_parse(ts, parse_counter_kind).unwrap_or(CounterKind::Any);
-            if (ts.eat_word("counters") || ts.eat_word("counter"))
+            if ts.eat_any_word(&["counters", "counter"])
                 && ts.eat_word("on")
                 && let Ok(to) = try_parse(ts, parse_subject_ref)
             {
                 return Some(Ok((
-                    vec![Effect::MutateObject {
-                        subject: SubjectRef::SelfObject,
-                        mutation: ObjectMutation::MoveCounters {
+                    vec![mutate_obj(
+                        SubjectRef::SelfObject,
+                        ObjectMutation::MoveCounters {
                             from: Box::new(SubjectRef::SelfObject),
                             to: Box::new(to),
                             kind,
                             count: ValueExpr::Var(crate::v2::ir::VarName::X),
                         },
-                        duration: Duration::Instant,
-                    }],
+                        Duration::Instant,
+                    )],
                     (),
                 )));
             }
@@ -624,25 +596,24 @@ pub(super) fn try_parse_put_ext(
         if (ts.eat_phrase(&["a", "power", "and", "toughness", "sticker", "on"])
             || (ts.eat_phrase(&["up", "to"])
                 && ts.next_number(false).is_some()
-                && (ts.eat_phrase(&["name", "stickers", "on"])
-                    || ts.eat_phrase(&["ability", "stickers", "on"])
-                    || ts.eat_phrase(&["art", "stickers", "on"])
-                    || ts.eat_phrase(&["stickers", "on"]))))
+                && ts.eat_any_phrase(&[
+                    &["name", "stickers", "on"],
+                    &["ability", "stickers", "on"],
+                    &["art", "stickers", "on"],
+                    &["stickers", "on"],
+                ])))
             && let Ok(subject) = try_parse(ts, parse_subject_ref)
         {
             return Some(Ok((
-                vec![Effect::MutateObject {
+                vec![mutate_obj(
                     subject,
-                    mutation: ObjectMutation::StateAction(
-                        crate::v2::ir::ObjectStateAction::PutSticker,
-                    ),
-                    duration: Duration::Permanent,
-                }],
+                    ObjectMutation::StateAction(crate::v2::ir::ObjectStateAction::PutSticker),
+                    Duration::Permanent,
+                )],
                 (),
             )));
         }
         ts.restore(cp);
-        // `put(s) one of those cards (with mana value <N> or less | with that name) <dest> [instead of putting it into <zone>]`
         if ts.eat_phrase(&["one", "of", "those", "cards", "with"]) {
             let matched = (ts.eat_phrase(&["mana", "value"])
                 && ts.next_number(false).is_some()
@@ -652,16 +623,14 @@ pub(super) fn try_parse_put_ext(
                 parse_trailing_under_control(ts, &mut dest);
                 let _ = ts.eat_phrase(&["instead", "of", "putting", "it", "into", "your", "hand"]);
                 return Some(Ok((
-                    vec![Effect::ZoneOp {
+                    vec![move_zone_op(
                         actor,
-                        op: ZoneOpKind::Move,
-                        subject: SubjectRef::OneOfThem(ValueExpr::Const(1)),
-                        from: Vec::new(),
-                        to: Some(dest),
+                        SubjectRef::OneOfThem(ValueExpr::Const(1)),
+                        Vec::new(),
+                        dest,
                         modifiers,
-                        except: None,
-                        count: None,
-                    }],
+                        None,
+                    )],
                     (),
                 )));
             }
@@ -669,8 +638,7 @@ pub(super) fn try_parse_put_ext(
         ts.restore(cp);
     }
 
-    // 12. Destination-first `put(s) onto the battlefield [under your control | attached to <subj>] <subj>`
-    //     (`Thrilling Encore`, `Supper for Spiders`, `Myojin of Grim Betrayal`, `Bruna`)
+    // 12. Destination-first `put(s) onto the battlefield [...] <subj>`
     {
         let cp = ts.checkpoint();
         if ts.peek_phrase(&["onto", "the", "battlefield"])
@@ -685,7 +653,7 @@ pub(super) fn try_parse_put_ext(
                 {
                     from.push(z1);
                     let zcp = ts.checkpoint();
-                    if (ts.eat_word("and/or") || ts.eat_word("or") || ts.eat_word("and"))
+                    if ts.eat_any_word(&["and/or", "or", "and"])
                         && let Some(wk) = ts.peek_word().map(|w| w.to_ascii_lowercase())
                         && matches!(wk.as_str(), "hand" | "graveyard" | "library")
                     {
@@ -695,16 +663,7 @@ pub(super) fn try_parse_put_ext(
                     }
                 }
                 return Some(Ok((
-                    vec![Effect::ZoneOp {
-                        actor,
-                        op: ZoneOpKind::Move,
-                        subject,
-                        from,
-                        to: Some(dest),
-                        modifiers,
-                        except: None,
-                        count: None,
-                    }],
+                    vec![move_zone_op(actor, subject, from, dest, modifiers, None)],
                     (),
                 )));
             }
@@ -713,7 +672,6 @@ pub(super) fn try_parse_put_ext(
     }
 
     // 13. `put(s) any number of (them | those <flt> | <flt> [from among them]) <dest> [and the rest <dest2>]`
-    //     (`Ransack`, `Blex`, `Gishath`, `Aurora Awakener`)
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["any", "number", "of"]) {
@@ -733,20 +691,18 @@ pub(super) fn try_parse_put_ext(
                 && let Ok((mut dest, modifiers)) = try_parse(ts, parse_zone_dest)
             {
                 parse_trailing_under_control(ts, &mut dest);
-                let mut out = vec![Effect::ZoneOp {
+                let mut out = vec![move_zone_op(
                     actor,
-                    op: ZoneOpKind::Move,
                     subject,
-                    from: Vec::new(),
-                    to: Some(dest),
+                    Vec::new(),
+                    dest,
                     modifiers,
-                    except: None,
-                    count: Some(CountSpec {
+                    Some(CountSpec {
                         count: ValueExpr::Const(0),
                         up_to: false,
                         any_number: true,
                     }),
-                }];
+                )];
                 append_optional_and_the_rest(ts, actor, &mut out);
                 return Some(Ok((out, ())));
             }
@@ -754,11 +710,11 @@ pub(super) fn try_parse_put_ext(
         ts.restore(cp);
     }
 
-    // 14. `put(s) <val> cards from (among them | the top of <zone>) <dest> [and the rest <dest2>]` (`Stargaze`, `Scroll Rack`)
+    // 14. `put(s) <val> cards from (among them | the top of <zone>) <dest> [and the rest <dest2>]`
     {
         let cp = ts.checkpoint();
         if let Ok(count) = try_parse(ts, parse_value_expr)
-            && (ts.eat_word("cards") || ts.eat_word("card"))
+            && ts.eat_any_word(&["cards", "card"])
         {
             let mut from = Vec::new();
             let src_ok = if ts.eat_phrase(&["from", "among", "them"]) {
@@ -773,20 +729,14 @@ pub(super) fn try_parse_put_ext(
             };
             if src_ok && let Ok((mut dest, modifiers)) = try_parse(ts, parse_zone_dest) {
                 parse_trailing_under_control(ts, &mut dest);
-                let mut out = vec![Effect::ZoneOp {
+                let mut out = vec![move_zone_op(
                     actor,
-                    op: ZoneOpKind::Move,
-                    subject: SubjectRef::Anaphora(AnaphoraRef::Them),
+                    SubjectRef::Anaphora(AnaphoraRef::Them),
                     from,
-                    to: Some(dest),
+                    dest,
                     modifiers,
-                    except: None,
-                    count: Some(CountSpec {
-                        count,
-                        up_to: false,
-                        any_number: false,
-                    }),
-                }];
+                    Some(exact_count(count)),
+                )];
                 append_optional_and_the_rest(ts, actor, &mut out);
                 return Some(Ok((out, ())));
             }
@@ -794,17 +744,17 @@ pub(super) fn try_parse_put_ext(
         ts.restore(cp);
     }
 
-    // 15. `put(s) (the exiled cards not cast this way | the cards you revealed this way | the bottom card of <zone> | both cards | the last chosen card | any of those cards you didn't play) <dest>`
-    //     (`Ryan Sinclair`, `Collected Conjuring`, `Sanity Grinding`, `Grenzo`, `Sword of Hearth and Home`, `Forgotten Lore`, `Shrouded Lore`, `Three Wishes`)
+    // 15. `put(s) (the exiled cards not cast this way | ... | the bottom card of <zone>) <dest>`
     {
         let cp = ts.checkpoint();
         let mut from = Vec::new();
-        let subj_opt = if ts.eat_phrase(&["the", "exiled", "cards", "not", "cast", "this", "way"])
-            || ts.eat_phrase(&["the", "revealed", "cards", "not", "cast", "this", "way"])
-            || ts.eat_phrase(&["the", "cards", "you", "revealed", "this", "way"])
-            || ts.eat_phrase(&["any", "of", "those", "cards", "you", "didn't", "play"])
-            || ts.eat_phrase(&["both", "cards"])
-        {
+        let subj_opt = if ts.eat_any_phrase(&[
+            &["the", "exiled", "cards", "not", "cast", "this", "way"],
+            &["the", "revealed", "cards", "not", "cast", "this", "way"],
+            &["the", "cards", "you", "revealed", "this", "way"],
+            &["any", "of", "those", "cards", "you", "didn't", "play"],
+            &["both", "cards"],
+        ]) {
             Some(SubjectRef::Anaphora(AnaphoraRef::Them))
         } else if ts.eat_phrase(&["the", "last", "chosen", "card"]) {
             Some(SubjectRef::Anaphora(AnaphoraRef::ThatCard))
@@ -812,11 +762,7 @@ pub(super) fn try_parse_put_ext(
             && let Ok(zr) = try_parse(ts, parse_zone_ref)
         {
             from.push(zr);
-            Some(SubjectRef::Group(Box::new(ObjectFilter {
-                any_card: true,
-                zones: vec![zr],
-                ..Default::default()
-            })))
+            Some(zone_cards_subject(zr))
         } else {
             None
         };
@@ -825,42 +771,30 @@ pub(super) fn try_parse_put_ext(
         {
             parse_trailing_under_control(ts, &mut dest);
             return Some(Ok((
-                vec![Effect::ZoneOp {
-                    actor,
-                    op: ZoneOpKind::Move,
-                    subject,
-                    from,
-                    to: Some(dest),
-                    modifiers,
-                    except: None,
-                    count: None,
-                }],
+                vec![move_zone_op(actor, subject, from, dest, modifiers, None)],
                 (),
             )));
         }
         ts.restore(cp);
     }
 
-    // 16. `put(s) one back and the rest <dest>` (`Dimir Charm`) / `put(s) it back on top of <zone>` (`Triumph of Saint Katherine`) / `put(s) one of the chosen cards <d1>, the other chosen cards <d2>, and the rest <d3>` (`Selective Adaptation`)
+    // 16. `put(s) one back and the rest <dest>` / `put(s) it back on top of <zone>` / `put(s) one of the chosen cards <d1>, ...`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["one", "back"]) {
-            let mut out = vec![Effect::ZoneOp {
+            let mut out = vec![simple_zone_op(
                 actor,
-                op: ZoneOpKind::Move,
-                subject: SubjectRef::OneOfThem(ValueExpr::Const(1)),
-                from: Vec::new(),
-                to: Some(ZoneDest {
+                ZoneOpKind::Move,
+                SubjectRef::OneOfThem(ValueExpr::Const(1)),
+                Vec::new(),
+                Some(ZoneDest {
                     zone: ZoneKind::Library,
                     owner: ZoneOwner::Default,
                     library_position: Some(crate::v2::ir::LibraryPosition::Top),
                     library_order: None,
                     under_control: None,
                 }),
-                modifiers: EntryModifiers::default(),
-                except: None,
-                count: None,
-            }];
+            )];
             append_optional_and_the_rest(ts, actor, &mut out);
             return Some(Ok((out, ())));
         }
@@ -869,22 +803,19 @@ pub(super) fn try_parse_put_ext(
             && let Ok(zr) = try_parse(ts, parse_zone_ref)
         {
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![simple_zone_op(
                     actor,
-                    op: ZoneOpKind::Move,
-                    subject: SubjectRef::Anaphora(AnaphoraRef::It),
-                    from: Vec::new(),
-                    to: Some(ZoneDest {
+                    ZoneOpKind::Move,
+                    SubjectRef::Anaphora(AnaphoraRef::It),
+                    Vec::new(),
+                    Some(ZoneDest {
                         zone: zr.zone,
                         owner: zr.owner,
                         library_position: Some(crate::v2::ir::LibraryPosition::Top),
                         library_order: None,
                         under_control: None,
                     }),
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: None,
-                }],
+                )],
                 (),
             )));
         }
@@ -897,26 +828,22 @@ pub(super) fn try_parse_put_ext(
             && ts.eat_comma()
         {
             let mut out = vec![
-                Effect::ZoneOp {
+                move_zone_op(
                     actor,
-                    op: ZoneOpKind::Move,
-                    subject: SubjectRef::OneOfThem(ValueExpr::Const(1)),
-                    from: Vec::new(),
-                    to: Some(d1),
-                    modifiers: m1,
-                    except: None,
-                    count: None,
-                },
-                Effect::ZoneOp {
+                    SubjectRef::OneOfThem(ValueExpr::Const(1)),
+                    Vec::new(),
+                    d1,
+                    m1,
+                    None,
+                ),
+                move_zone_op(
                     actor,
-                    op: ZoneOpKind::Move,
-                    subject: SubjectRef::Anaphora(AnaphoraRef::Them),
-                    from: Vec::new(),
-                    to: Some(d2),
-                    modifiers: m2,
-                    except: None,
-                    count: None,
-                },
+                    SubjectRef::Anaphora(AnaphoraRef::Them),
+                    Vec::new(),
+                    d2,
+                    m2,
+                    None,
+                ),
             ];
             append_optional_and_the_rest(ts, actor, &mut out);
             return Some(Ok((out, ())));
@@ -938,16 +865,14 @@ pub(super) fn append_optional_and_the_rest(
         && let Ok((mut d2, m2)) = try_parse(ts, parse_zone_dest)
     {
         parse_trailing_under_control(ts, &mut d2);
-        out.push(Effect::ZoneOp {
+        out.push(move_zone_op(
             actor,
-            op: ZoneOpKind::Move,
-            subject: SubjectRef::Anaphora(AnaphoraRef::TheRest),
-            from: Vec::new(),
-            to: Some(d2),
-            modifiers: m2,
-            except: None,
-            count: None,
-        });
+            SubjectRef::Anaphora(AnaphoraRef::TheRest),
+            Vec::new(),
+            d2,
+            m2,
+            None,
+        ));
     } else {
         ts.restore(cp);
     }
@@ -967,20 +892,18 @@ pub(super) fn maybe_wrap_put_or_dest(
         && let Ok((mut d2, m2)) = try_parse(ts, parse_zone_dest)
     {
         parse_trailing_under_control(ts, &mut d2);
-        let second_eff = Effect::ZoneOp {
+        let second_eff = move_zone_op(
             actor,
-            op: ZoneOpKind::Move,
-            subject: subject.clone(),
-            from: from.to_vec(),
-            to: Some(d2),
-            modifiers: m2,
-            except: None,
-            count: put_count.clone(),
-        };
-        let mut out = vec![Effect::PromptChoice {
-            chooser: actor,
-            kind: ChoiceKind::ChooseBranch(vec![vec![first_eff], vec![second_eff]]),
-        }];
+            subject.clone(),
+            from.to_vec(),
+            d2,
+            m2,
+            put_count.clone(),
+        );
+        let mut out = vec![prompt_choice(
+            actor,
+            ChoiceKind::ChooseBranch(vec![vec![first_eff], vec![second_eff]]),
+        )];
         append_optional_and_the_rest(ts, actor, &mut out);
         return out;
     }
@@ -997,38 +920,25 @@ pub(super) fn try_parse_sacrifice_half(
     if ts.eat_phrase(&["half", "the"])
         && let Ok(flt) = try_parse(ts, parse_object_filter)
     {
-        let _ =
-            ts.eat_phrase(&["of", "their", "choice"]) || ts.eat_phrase(&["of", "your", "choice"]);
-        let _ = ts.eat_comma();
-        let rounding = if ts.eat_phrase(&["rounded", "up"]) {
-            Rounding::Up
-        } else {
-            let _ = ts.eat_phrase(&["rounded", "down"]);
-            Rounding::Down
-        };
+        let _ = ts.eat_any_phrase(&[&["of", "their", "choice"], &["of", "your", "choice"]]);
+        let rounding = eat_rounding(ts, Rounding::Down);
         let count = ValueExpr::Div {
             expr: Box::new(ValueExpr::Count(Box::new(flt.clone()))),
             denom: 2,
             rounding,
         };
         return Some(Ok((
-            vec![Effect::ZoneOp {
+            vec![counted_zone_op(
                 actor,
-                op: ZoneOpKind::Sacrifice,
-                subject: SubjectRef::Group(Box::new(flt)),
-                from: vec![ZoneRef {
+                ZoneOpKind::Sacrifice,
+                SubjectRef::Group(Box::new(flt)),
+                vec![ZoneRef {
                     zone: ZoneKind::Battlefield,
                     owner: ZoneOwner::Default,
                 }],
-                to: None,
-                modifiers: EntryModifiers::default(),
-                except: None,
-                count: Some(CountSpec {
-                    count,
-                    up_to: false,
-                    any_number: false,
-                }),
-            }],
+                None,
+                Some(exact_count(count)),
+            )],
             (),
         )));
     }
@@ -1036,13 +946,12 @@ pub(super) fn try_parse_sacrifice_half(
     None
 }
 
-/// Parse extended `move(s)` counter clauses:
-/// `move [all | any number of | a/an | <val>] [<kind>] counter(s) from [among] <src> onto/to [a second target <flt> | <dst>]`.
+/// Parse extended `move(s)` counter clauses.
 pub(super) fn try_parse_move_ext(ts: &mut TokenStream<'_>) -> Option<PResult<(Vec<Effect>, ())>> {
     let cp = ts.checkpoint();
     let count = if ts.eat_word("all") || ts.eat_phrase(&["any", "number", "of"]) {
         ValueExpr::Const(0)
-    } else if ts.eat_word("a") || ts.eat_word("an") {
+    } else if ts.eat_any_word(&["a", "an"]) {
         ValueExpr::Const(1)
     } else if let Ok(v) = try_parse(ts, parse_value_expr) {
         v
@@ -1050,10 +959,10 @@ pub(super) fn try_parse_move_ext(ts: &mut TokenStream<'_>) -> Option<PResult<(Ve
         ts.restore(cp);
         return None;
     };
-    let kind = if ts.eat_word("counter") || ts.eat_word("counters") {
+    let kind = if ts.eat_any_word(&["counter", "counters"]) {
         CounterKind::Any
     } else if let Ok(ck) = try_parse(ts, parse_counter_kind)
-        && (ts.eat_word("counter") || ts.eat_word("counters"))
+        && ts.eat_any_word(&["counter", "counters"])
     {
         ck
     } else {
@@ -1069,7 +978,7 @@ pub(super) fn try_parse_move_ext(ts: &mut TokenStream<'_>) -> Option<PResult<(Ve
         ts.restore(cp);
         return None;
     };
-    if !(ts.eat_word("onto") || ts.eat_word("to")) {
+    if !ts.eat_any_word(&["onto", "to"]) {
         ts.restore(cp);
         return None;
     }
@@ -1090,16 +999,16 @@ pub(super) fn try_parse_move_ext(ts: &mut TokenStream<'_>) -> Option<PResult<(Ve
         return None;
     };
     Some(Ok((
-        vec![Effect::MutateObject {
-            subject: from.clone(),
-            mutation: ObjectMutation::MoveCounters {
+        vec![mutate_obj(
+            from.clone(),
+            ObjectMutation::MoveCounters {
                 from: Box::new(from),
                 to: Box::new(to),
                 kind,
                 count,
             },
-            duration: Duration::Instant,
-        }],
+            Duration::Instant,
+        )],
         (),
     )))
 }
@@ -1116,27 +1025,14 @@ pub(super) fn try_parse_exile_ext(
             && let Ok(zref) = try_parse(ts, parse_zone_ref)
         {
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![exile_zone_op(
                     actor,
-                    op: ZoneOpKind::Exile {
-                        face_down: false,
-                        counters: None,
-                    },
-                    subject: SubjectRef::Group(Box::new(ObjectFilter {
-                        any_card: true,
-                        zones: vec![zref],
-                        ..Default::default()
-                    })),
-                    from: vec![zref],
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: Some(CountSpec {
-                        count: ValueExpr::Const(1),
-                        up_to: false,
-                        any_number: false,
-                    }),
-                }],
+                    zone_cards_subject(zref),
+                    vec![zref],
+                    false,
+                    None,
+                    Some(exact_count(ValueExpr::Const(1))),
+                )],
                 (),
             )));
         }
@@ -1150,7 +1046,7 @@ pub(super) fn try_parse_exile_ext(
             let cnt_opt = if ts.eat_word("card") {
                 Some(ValueExpr::Const(1))
             } else if let Ok(n) = try_parse(ts, parse_value_expr)
-                && (ts.eat_word("cards") || ts.eat_word("card"))
+                && ts.eat_any_word(&["cards", "card"])
             {
                 Some(n)
             } else {
@@ -1165,30 +1061,14 @@ pub(super) fn try_parse_exile_ext(
                 };
                 let face_down = ts.eat_phrase(&["face", "down"]);
                 return Some(Ok((
-                    vec![Effect::ZoneOp {
+                    vec![exile_zone_op(
                         actor,
-                        op: ZoneOpKind::Exile {
-                            face_down,
-                            counters: None,
-                        },
-                        subject: SubjectRef::Group(Box::new(ObjectFilter {
-                            any_card: true,
-                            zones: vec![zref],
-                            ..Default::default()
-                        })),
-                        from: vec![zref],
-                        to: None,
-                        modifiers: EntryModifiers {
-                            face_down,
-                            ..EntryModifiers::default()
-                        },
-                        except: None,
-                        count: Some(CountSpec {
-                            count,
-                            up_to: false,
-                            any_number: false,
-                        }),
-                    }],
+                        zone_cards_subject(zref),
+                        vec![zref],
+                        face_down,
+                        None,
+                        Some(exact_count(count)),
+                    )],
                     (),
                 )));
             }
@@ -1206,27 +1086,14 @@ pub(super) fn try_parse_exile_ext(
                 && let Ok(count) = try_parse(ts, parse_value_expr)
             {
                 return Some(Ok((
-                    vec![Effect::ZoneOp {
+                    vec![exile_zone_op(
                         actor,
-                        op: ZoneOpKind::Exile {
-                            face_down: false,
-                            counters: None,
-                        },
-                        subject: SubjectRef::Group(Box::new(ObjectFilter {
-                            any_card: true,
-                            zones: vec![zref],
-                            ..Default::default()
-                        })),
-                        from: vec![zref],
-                        to: None,
-                        modifiers: EntryModifiers::default(),
-                        except: None,
-                        count: Some(CountSpec {
-                            count,
-                            up_to: false,
-                            any_number: false,
-                        }),
-                    }],
+                        zone_cards_subject(zref),
+                        vec![zref],
+                        false,
+                        None,
+                        Some(exact_count(count)),
+                    )],
                     (),
                 )));
             }
@@ -1237,45 +1104,33 @@ pub(super) fn try_parse_exile_ext(
     // 4. `exile(s) the pile of an opponent's/your/their choice`
     {
         let cp = ts.checkpoint();
-        if ts.eat_phrase(&["the", "pile", "of", "an", "opponent's", "choice"])
-            || ts.eat_phrase(&["the", "pile", "of", "your", "choice"])
-            || ts.eat_phrase(&["the", "pile", "of", "their", "choice"])
-        {
+        if ts.eat_any_phrase(&[
+            &["the", "pile", "of", "an", "opponent's", "choice"],
+            &["the", "pile", "of", "your", "choice"],
+            &["the", "pile", "of", "their", "choice"],
+        ]) {
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![exile_zone_op(
                     actor,
-                    op: ZoneOpKind::Exile {
-                        face_down: false,
-                        counters: None,
-                    },
-                    subject: SubjectRef::Anaphora(AnaphoraRef::OnePile),
-                    from: Vec::new(),
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: None,
-                }],
+                    SubjectRef::Anaphora(AnaphoraRef::OnePile),
+                    Vec::new(),
+                    false,
+                    None,
+                    None,
+                )],
                 (),
             )));
         }
         ts.restore(cp);
     }
 
-    // 5. `exile(s) the top half of their/your library [, rounded up/down]` (`Ulamog, the Defiler`)
+    // 5. `exile(s) the top half of their/your library [, rounded up/down]`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["the", "top", "half", "of"])
             && let Ok(zref) = try_parse(ts, parse_zone_ref)
         {
-            let rcp = ts.checkpoint();
-            let rounding = if ts.eat_comma() && ts.eat_phrase(&["rounded", "up"]) {
-                Rounding::Up
-            } else if ts.eat_comma() && ts.eat_phrase(&["rounded", "down"]) {
-                Rounding::Down
-            } else {
-                ts.restore(rcp);
-                Rounding::Up
-            };
+            let rounding = eat_rounding(ts, Rounding::Up);
             let count = ValueExpr::Div {
                 expr: Box::new(ValueExpr::PlayerStat {
                     player: actor,
@@ -1285,64 +1140,42 @@ pub(super) fn try_parse_exile_ext(
                 rounding,
             };
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![exile_zone_op(
                     actor,
-                    op: ZoneOpKind::Exile {
-                        face_down: false,
-                        counters: None,
-                    },
-                    subject: SubjectRef::Group(Box::new(ObjectFilter {
-                        any_card: true,
-                        zones: vec![zref],
-                        ..Default::default()
-                    })),
-                    from: vec![zref],
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: Some(CountSpec {
-                        count,
-                        up_to: false,
-                        any_number: false,
-                    }),
-                }],
+                    zone_cards_subject(zref),
+                    vec![zref],
+                    false,
+                    None,
+                    Some(exact_count(count)),
+                )],
                 (),
             )));
         }
         ts.restore(cp);
     }
 
-    // 6. `exile(s) all but the bottom card of <zone>` (`Nicol Bolas, the Arisen`)
+    // 6. `exile(s) all but the bottom card of <zone>`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["all", "but", "the", "bottom", "card", "of"])
             && let Ok(zref) = try_parse(ts, parse_zone_ref)
         {
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![exile_zone_op(
                     actor,
-                    op: ZoneOpKind::Exile {
-                        face_down: false,
-                        counters: None,
-                    },
-                    subject: SubjectRef::All(Box::new(ObjectFilter {
-                        any_card: true,
-                        zones: vec![zref],
-                        ..Default::default()
-                    })),
-                    from: vec![zref],
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: None,
-                }],
+                    all_zone_cards_subject(zref),
+                    vec![zref],
+                    false,
+                    None,
+                    None,
+                )],
                 (),
             )));
         }
         ts.restore(cp);
     }
 
-    // 7. `exile(s) the top <N> <flt> of <zone>` (`Spinning Darkness`: `the top three black cards of your graveyard`)
+    // 7. `exile(s) the top <N> <flt> of <zone>`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["the", "top"])
@@ -1355,23 +1188,14 @@ pub(super) fn try_parse_exile_ext(
             && let Ok(zref) = try_parse(ts, parse_zone_ref)
         {
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![exile_zone_op(
                     actor,
-                    op: ZoneOpKind::Exile {
-                        face_down: false,
-                        counters: None,
-                    },
-                    subject: SubjectRef::Group(Box::new(flt)),
-                    from: vec![zref],
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: Some(CountSpec {
-                        count,
-                        up_to: false,
-                        any_number: false,
-                    }),
-                }],
+                    SubjectRef::Group(Box::new(flt)),
+                    vec![zref],
+                    false,
+                    None,
+                    Some(exact_count(count)),
+                )],
                 (),
             )));
         }
@@ -1382,7 +1206,7 @@ pub(super) fn try_parse_exile_ext(
     {
         let cp = ts.checkpoint();
         if let Ok(count) = try_parse(ts, parse_value_expr)
-            && (ts.eat_word("cards") || ts.eat_word("card"))
+            && ts.eat_any_word(&["cards", "card"])
             && ts.eat_phrase(&["from", "the", "top"])
             && !ts.peek_word().is_some_and(|w| w.eq_ignore_ascii_case("of"))
         {
@@ -1391,27 +1215,14 @@ pub(super) fn try_parse_exile_ext(
                 owner: ZoneOwner::Default,
             };
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![exile_zone_op(
                     actor,
-                    op: ZoneOpKind::Exile {
-                        face_down: false,
-                        counters: None,
-                    },
-                    subject: SubjectRef::Group(Box::new(ObjectFilter {
-                        any_card: true,
-                        zones: vec![zr],
-                        ..Default::default()
-                    })),
-                    from: vec![zr],
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: Some(CountSpec {
-                        count,
-                        up_to: false,
-                        any_number: false,
-                    }),
-                }],
+                    zone_cards_subject(zr),
+                    vec![zr],
+                    false,
+                    None,
+                    Some(exact_count(count)),
+                )],
                 (),
             )));
         }
@@ -1423,28 +1234,28 @@ pub(super) fn try_parse_exile_ext(
 
 /// Consume optional trailing `in [a|another] face-down/face-up pile [and the rest in a face-up pile]` on `exile`.
 pub(super) fn eat_exile_pile_suffix(ts: &mut TokenStream<'_>) -> bool {
-    let cp = ts.checkpoint();
-    if ts.eat_phrase(&["in", "a", "face-down", "pile"])
-        || ts.eat_phrase(&["in", "another", "face-down", "pile"])
-        || ts.eat_phrase(&["in", "a", "face-up", "pile"])
-    {
-        let _ = ts.eat_phrase(&["and", "the", "rest", "in", "a", "face-up", "pile"])
-            || ts.eat_phrase(&["and", "the", "rest", "in", "a", "face-down", "pile"]);
+    if ts.eat_any_phrase(&[
+        &["in", "a", "face-down", "pile"],
+        &["in", "another", "face-down", "pile"],
+        &["in", "a", "face-up", "pile"],
+    ]) {
+        let _ = ts.eat_any_phrase(&[
+            &["and", "the", "rest", "in", "a", "face-up", "pile"],
+            &["and", "the", "rest", "in", "a", "face-down", "pile"],
+        ]);
         return true;
     }
-    ts.restore(cp);
     false
 }
 
-/// Consume optional trailing `and the top [<val>] card(s) of <zone>` on `exile` or `reveal`
-/// (`Psychotic Episode`, `Jeskai Infiltrator`, `Triumph of Saint Katherine`, `Suspend Aggression`, `Become Anonymous`).
+/// Consume optional trailing `and the top [<val>] card(s) of <zone>` on `exile` or `reveal`.
 pub(super) fn try_eat_and_top_cards(ts: &mut TokenStream<'_>) -> Option<(ZoneRef, ValueExpr)> {
     let cp = ts.checkpoint();
     if ts.eat_phrase(&["and", "the", "top"]) {
         let count = if ts.eat_word("card") {
             Some(ValueExpr::Const(1))
         } else if let Ok(v) = try_parse(ts, parse_value_expr)
-            && (ts.eat_word("cards") || ts.eat_word("card"))
+            && ts.eat_any_word(&["cards", "card"])
         {
             Some(v)
         } else {
@@ -1461,14 +1272,22 @@ pub(super) fn try_eat_and_top_cards(ts: &mut TokenStream<'_>) -> Option<(ZoneRef
     None
 }
 
-/// Parse extended `discard(s)` clauses (`discard half the cards in their/your hand [, rounded up/down]`,
-/// `discard a third of the cards in their/your hand`, `discard one or more <flt>`).
+/// Parse extended `discard(s)` clauses.
 pub(super) fn try_parse_discard_ext(
     ts: &mut TokenStream<'_>,
     actor: PlayerRef,
 ) -> Option<PResult<(Vec<Effect>, ())>> {
+    let default_hand = || {
+        vec![ZoneRef {
+            zone: ZoneKind::Hand,
+            owner: ZoneOwner::Default,
+        }]
+    };
+    let disc_op = ZoneOpKind::Discard {
+        hand: false,
+        random: false,
+    };
     // 1. `discard(s) (half | a third of) the cards in their/your hand [, rounded up/down]`
-    //    (`Rush of Dread`, `Fraying Omnipotence`, `Pox Plague`, `Lord Xander`, `Pox`)
     {
         let cp = ts.checkpoint();
         let denom = if ts.eat_phrase(&["half", "the", "cards", "in"]) {
@@ -1479,17 +1298,9 @@ pub(super) fn try_parse_discard_ext(
             None
         };
         if let Some(d) = denom
-            && (ts.eat_phrase(&["their", "hand"]) || ts.eat_phrase(&["your", "hand"]))
+            && ts.eat_any_phrase(&[&["their", "hand"], &["your", "hand"]])
         {
-            let rcp = ts.checkpoint();
-            let rounding = if ts.eat_comma() && ts.eat_phrase(&["rounded", "up"]) {
-                Rounding::Up
-            } else if ts.eat_comma() && ts.eat_phrase(&["rounded", "down"]) {
-                Rounding::Down
-            } else {
-                ts.restore(rcp);
-                Rounding::Up
-            };
+            let rounding = eat_rounding(ts, Rounding::Up);
             let count = ValueExpr::Div {
                 expr: Box::new(ValueExpr::PlayerStat {
                     player: actor,
@@ -1499,59 +1310,39 @@ pub(super) fn try_parse_discard_ext(
                 rounding,
             };
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![counted_zone_op(
                     actor,
-                    op: ZoneOpKind::Discard {
-                        hand: false,
-                        random: false,
-                    },
-                    subject: SubjectRef::Player(actor),
-                    from: vec![ZoneRef {
-                        zone: ZoneKind::Hand,
-                        owner: ZoneOwner::Default,
-                    }],
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: Some(CountSpec {
-                        count,
-                        up_to: false,
-                        any_number: false,
-                    }),
-                }],
+                    disc_op,
+                    SubjectRef::Player(actor),
+                    default_hand(),
+                    None,
+                    Some(exact_count(count)),
+                )],
                 (),
             )));
         }
         ts.restore(cp);
     }
 
-    // 2. `discard(s) one or more <flt>` (`Loamcrafter Faun`)
+    // 2. `discard(s) one or more <flt>`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["one", "or", "more"])
             && let Ok(flt) = try_parse(ts, parse_object_filter)
         {
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![counted_zone_op(
                     actor,
-                    op: ZoneOpKind::Discard {
-                        hand: false,
-                        random: false,
-                    },
-                    subject: SubjectRef::Group(Box::new(flt)),
-                    from: vec![ZoneRef {
-                        zone: ZoneKind::Hand,
-                        owner: ZoneOwner::Default,
-                    }],
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: Some(CountSpec {
+                    disc_op,
+                    SubjectRef::Group(Box::new(flt)),
+                    default_hand(),
+                    None,
+                    Some(CountSpec {
                         count: ValueExpr::Const(1),
                         up_to: false,
                         any_number: true,
                     }),
-                }],
+                )],
                 (),
             )));
         }
@@ -1565,26 +1356,14 @@ pub(super) fn try_parse_discard_ext(
             && let Ok(count) = try_parse(ts, parse_value_expr)
         {
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![counted_zone_op(
                     actor,
-                    op: ZoneOpKind::Discard {
-                        hand: false,
-                        random: false,
-                    },
-                    subject: SubjectRef::Player(actor),
-                    from: vec![ZoneRef {
-                        zone: ZoneKind::Hand,
-                        owner: ZoneOwner::Default,
-                    }],
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: Some(CountSpec {
-                        count,
-                        up_to: false,
-                        any_number: false,
-                    }),
-                }],
+                    disc_op,
+                    SubjectRef::Player(actor),
+                    default_hand(),
+                    None,
+                    Some(exact_count(count)),
+                )],
                 (),
             )));
         }
@@ -1594,8 +1373,7 @@ pub(super) fn try_parse_discard_ext(
     None
 }
 
-/// Parse extended `return(s)` clauses (`return the top <flt> of <zone> to <dest>`,
-/// `return half the <flt> <dest> [, rounded up/down]`, `return that card under your control [with a <kind> counter on it]`).
+/// Parse extended `return(s)` clauses.
 pub(super) fn try_parse_return_ext(
     ts: &mut TokenStream<'_>,
     actor: PlayerRef,
@@ -1611,27 +1389,21 @@ pub(super) fn try_parse_return_ext(
         {
             parse_trailing_under_control(ts, &mut dest);
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![move_zone_op(
                     actor,
-                    op: ZoneOpKind::Move,
-                    subject: SubjectRef::Group(Box::new(flt)),
-                    from: vec![zr],
-                    to: Some(dest),
+                    SubjectRef::Group(Box::new(flt)),
+                    vec![zr],
+                    dest,
                     modifiers,
-                    except: None,
-                    count: Some(CountSpec {
-                        count: ValueExpr::Const(1),
-                        up_to: false,
-                        any_number: false,
-                    }),
-                }],
+                    Some(exact_count(ValueExpr::Const(1))),
+                )],
                 (),
             )));
         }
         ts.restore(cp);
     }
 
-    // 2. `return(s) half the <flt> <dest> [, rounded up/down]` (`Split the Party`)
+    // 2. `return(s) half the <flt> <dest> [, rounded up/down]`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["half", "the"])
@@ -1639,42 +1411,28 @@ pub(super) fn try_parse_return_ext(
             && let Ok((mut dest, modifiers)) = try_parse(ts, parse_zone_dest)
         {
             parse_trailing_under_control(ts, &mut dest);
-            let rcp = ts.checkpoint();
-            let rounding = if ts.eat_comma() && ts.eat_phrase(&["rounded", "up"]) {
-                Rounding::Up
-            } else if ts.eat_comma() && ts.eat_phrase(&["rounded", "down"]) {
-                Rounding::Down
-            } else {
-                ts.restore(rcp);
-                Rounding::Up
-            };
+            let rounding = eat_rounding(ts, Rounding::Up);
             let count = ValueExpr::Div {
                 expr: Box::new(ValueExpr::Count(Box::new(flt.clone()))),
                 denom: 2,
                 rounding,
             };
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![move_zone_op(
                     actor,
-                    op: ZoneOpKind::Move,
-                    subject: SubjectRef::Group(Box::new(flt)),
-                    from: Vec::new(),
-                    to: Some(dest),
+                    SubjectRef::Group(Box::new(flt)),
+                    Vec::new(),
+                    dest,
                     modifiers,
-                    except: None,
-                    count: Some(CountSpec {
-                        count,
-                        up_to: false,
-                        any_number: false,
-                    }),
-                }],
+                    Some(exact_count(count)),
+                )],
                 (),
             )));
         }
         ts.restore(cp);
     }
 
-    // 3. `return(s) <subj> under your control [with a <kind> counter on it]` (missing `to the battlefield`, e.g. `Meathook Massacre II`)
+    // 3. `return(s) <subj> under your control [with a <kind> counter on it]`
     {
         let cp = ts.checkpoint();
         if let Ok(subject) = try_parse(ts, parse_subject_ref)
@@ -1682,30 +1440,28 @@ pub(super) fn try_parse_return_ext(
         {
             let mut modifiers = EntryModifiers::default();
             if ts.eat_word("with")
-                && (ts.eat_word("a") || ts.eat_word("an"))
+                && ts.eat_any_word(&["a", "an"])
                 && let Ok(ck) = try_parse(ts, parse_counter_kind)
-                && (ts.eat_word("counter") || ts.eat_word("counters"))
+                && ts.eat_any_word(&["counter", "counters"])
                 && ts.eat_phrase(&["on", "it"])
             {
                 modifiers.with_counter = Some((ck, 1));
             }
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![move_zone_op(
                     actor,
-                    op: ZoneOpKind::Move,
                     subject,
-                    from: Vec::new(),
-                    to: Some(ZoneDest {
+                    Vec::new(),
+                    ZoneDest {
                         zone: ZoneKind::Battlefield,
                         owner: ZoneOwner::You,
                         library_position: None,
                         library_order: None,
                         under_control: Some(ZoneOwner::You),
-                    }),
+                    },
                     modifiers,
-                    except: None,
-                    count: None,
-                }],
+                    None,
+                )],
                 (),
             )));
         }
@@ -1750,16 +1506,14 @@ pub(super) fn try_parse_return_ext(
         {
             parse_trailing_under_control(ts, &mut dest);
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![move_zone_op(
                     actor,
-                    op: ZoneOpKind::Move,
                     subject,
-                    from: Vec::new(),
-                    to: Some(dest),
+                    Vec::new(),
+                    dest,
                     modifiers,
-                    except: None,
-                    count: None,
-                }],
+                    None,
+                )],
                 (),
             )));
         }
@@ -1769,7 +1523,7 @@ pub(super) fn try_parse_return_ext(
     None
 }
 
-/// Parse extended `shuffle(s)` clauses (`shuffle that pile`, `shuffle the rest of that pile into <zone>`).
+/// Parse extended `shuffle(s)` clauses.
 pub(super) fn try_parse_shuffle_ext(
     ts: &mut TokenStream<'_>,
     actor: PlayerRef,
@@ -1777,16 +1531,13 @@ pub(super) fn try_parse_shuffle_ext(
     let cp = ts.checkpoint();
     if ts.eat_phrase(&["that", "pile"]) {
         return Some(Ok((
-            vec![Effect::ZoneOp {
+            vec![simple_zone_op(
                 actor,
-                op: ZoneOpKind::Shuffle,
-                subject: SubjectRef::Anaphora(AnaphoraRef::OnePile),
-                from: Vec::new(),
-                to: None,
-                modifiers: EntryModifiers::default(),
-                except: None,
-                count: None,
-            }],
+                ZoneOpKind::Shuffle,
+                SubjectRef::Anaphora(AnaphoraRef::OnePile),
+                Vec::new(),
+                None,
+            )],
             (),
         )));
     }
@@ -1794,22 +1545,13 @@ pub(super) fn try_parse_shuffle_ext(
         && let Ok(zref) = try_parse(ts, parse_zone_ref)
     {
         return Some(Ok((
-            vec![Effect::ZoneOp {
+            vec![simple_zone_op(
                 actor,
-                op: ZoneOpKind::Shuffle,
-                subject: SubjectRef::Anaphora(AnaphoraRef::TheRest),
-                from: Vec::new(),
-                to: Some(ZoneDest {
-                    zone: zref.zone,
-                    owner: zref.owner,
-                    library_position: Some(crate::v2::ir::LibraryPosition::Shuffled),
-                    library_order: None,
-                    under_control: None,
-                }),
-                modifiers: EntryModifiers::default(),
-                except: None,
-                count: None,
-            }],
+                ZoneOpKind::Shuffle,
+                SubjectRef::Anaphora(AnaphoraRef::TheRest),
+                Vec::new(),
+                Some(shuffled_zone_dest(zref.zone, zref.owner)),
+            )],
             (),
         )));
     }
@@ -1828,21 +1570,18 @@ pub(super) fn try_parse_separate_piles_ext(
         && let Some(n) = ts.next_number(false).and_then(|v| u8::try_from(v).ok())
     {
         let face_down = ts.eat_word("face-down");
-        if ts.eat_word("piles") || ts.eat_word("pile") {
+        if ts.eat_any_word(&["piles", "pile"]) {
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![simple_zone_op(
                     actor,
-                    op: ZoneOpKind::SeparateIntoPiles {
+                    ZoneOpKind::SeparateIntoPiles {
                         pile_count: n,
                         face_down_piles: if face_down { n } else { 0 },
                     },
                     subject,
-                    from: Vec::new(),
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: None,
-                }],
+                    Vec::new(),
+                    None,
+                )],
                 (),
             )));
         }
@@ -1859,30 +1598,14 @@ pub(super) fn push_extra_top_exile(
     extra: Option<(ZoneRef, ValueExpr)>,
 ) {
     if let Some((zr, cnt)) = extra {
-        out.push(Effect::ZoneOp {
+        out.push(exile_zone_op(
             actor,
-            op: ZoneOpKind::Exile {
-                face_down,
-                counters: None,
-            },
-            subject: SubjectRef::Group(Box::new(ObjectFilter {
-                any_card: true,
-                zones: vec![zr],
-                ..Default::default()
-            })),
-            from: vec![zr],
-            to: None,
-            modifiers: EntryModifiers {
-                face_down,
-                ..EntryModifiers::default()
-            },
-            except: None,
-            count: Some(CountSpec {
-                count: cnt,
-                up_to: false,
-                any_number: false,
-            }),
-        });
+            zone_cards_subject(zr),
+            vec![zr],
+            face_down,
+            None,
+            Some(exact_count(cnt)),
+        ));
     }
 }
 
@@ -1893,20 +1616,14 @@ pub(super) fn push_extra_top_reveal(
     extra: Option<(ZoneRef, ValueExpr)>,
 ) {
     if let Some((zr, cnt)) = extra {
-        out.push(Effect::ZoneOp {
+        out.push(counted_zone_op(
             actor,
-            op: ZoneOpKind::LookTop { reveal: true },
-            subject: SubjectRef::Player(actor),
-            from: vec![zr],
-            to: None,
-            modifiers: EntryModifiers::default(),
-            except: None,
-            count: Some(CountSpec {
-                count: cnt,
-                up_to: false,
-                any_number: false,
-            }),
-        });
+            ZoneOpKind::LookTop { reveal: true },
+            SubjectRef::Player(actor),
+            vec![zr],
+            None,
+            Some(exact_count(cnt)),
+        ));
     }
 }
 
@@ -1916,20 +1633,18 @@ pub(super) fn try_parse_look_ext(
     actor: PlayerRef,
 ) -> Option<PResult<(Vec<Effect>, ())>> {
     let cp = ts.checkpoint();
-    if ts.eat_phrase(&["the", "cards", "in", "the", "other", "pile"])
-        || ts.eat_phrase(&["the", "cards", "in", "each", "pile"])
-    {
+    if ts.eat_any_phrase(&[
+        &["the", "cards", "in", "the", "other", "pile"],
+        &["the", "cards", "in", "each", "pile"],
+    ]) {
         return Some(Ok((
-            vec![Effect::ZoneOp {
+            vec![simple_zone_op(
                 actor,
-                op: ZoneOpKind::LookAt,
-                subject: SubjectRef::Anaphora(AnaphoraRef::OtherPile),
-                from: Vec::new(),
-                to: None,
-                modifiers: EntryModifiers::default(),
-                except: None,
-                count: None,
-            }],
+                ZoneOpKind::LookAt,
+                SubjectRef::Anaphora(AnaphoraRef::OtherPile),
+                Vec::new(),
+                None,
+            )],
             (),
         )));
     }
@@ -1937,7 +1652,7 @@ pub(super) fn try_parse_look_ext(
     None
 }
 
-/// Extended `draw(s)` clauses (`up to <val> cards`, `another card`, `as many cards as they discarded this way`, `cards equal to its total toxic value`).
+/// Extended `draw(s)` clauses.
 pub(super) fn try_parse_draw_ext(
     ts: &mut TokenStream<'_>,
     actor: PlayerRef,
@@ -1945,29 +1660,32 @@ pub(super) fn try_parse_draw_ext(
     let cp = ts.checkpoint();
     let (count, up_to) = if ts.eat_phrase(&["up", "to"])
         && let Ok(v) = try_parse(ts, parse_value_expr)
-        && (ts.eat_word("cards") || ts.eat_word("card"))
+        && ts.eat_any_word(&["cards", "card"])
     {
         (v, true)
     } else if ts.eat_phrase(&["another", "card"]) {
         (ValueExpr::Const(1), false)
-    } else if ts.eat_phrase(&[
-        "as",
-        "many",
-        "cards",
-        "as",
-        "they",
-        "discarded",
-        "this",
-        "way",
-    ]) || ts.eat_phrase(&[
-        "as",
-        "many",
-        "cards",
-        "as",
-        "you",
-        "discarded",
-        "this",
-        "way",
+    } else if ts.eat_any_phrase(&[
+        &[
+            "as",
+            "many",
+            "cards",
+            "as",
+            "they",
+            "discarded",
+            "this",
+            "way",
+        ],
+        &[
+            "as",
+            "many",
+            "cards",
+            "as",
+            "you",
+            "discarded",
+            "this",
+            "way",
+        ],
     ]) {
         (
             ValueExpr::PriorActionCount(PriorActionKind::DiscardedThisWay),
@@ -1983,34 +1701,26 @@ pub(super) fn try_parse_draw_ext(
         return None;
     };
     Some(Ok((
-        vec![Effect::ZoneOp {
+        vec![counted_zone_op(
             actor,
-            op: ZoneOpKind::Draw,
-            subject: SubjectRef::Player(actor),
-            from: vec![ZoneRef {
+            ZoneOpKind::Draw,
+            SubjectRef::Player(actor),
+            vec![ZoneRef {
                 zone: ZoneKind::Library,
                 owner: ZoneOwner::Default,
             }],
-            to: Some(ZoneDest {
-                zone: ZoneKind::Hand,
-                owner: ZoneOwner::Default,
-                library_position: None,
-                library_order: None,
-                under_control: None,
-            }),
-            modifiers: EntryModifiers::default(),
-            except: None,
-            count: Some(CountSpec {
+            Some(simple_zone_dest(ZoneKind::Hand, ZoneOwner::Default)),
+            Some(CountSpec {
                 count,
                 up_to,
                 any_number: false,
             }),
-        }],
+        )],
         (),
     )))
 }
 
-/// Extended `reveal(s)` clauses (`reveal their/your library`, `reveal <val> cards from the top of <zone>`, `reveal <val> cards at random from <zone>`).
+/// Extended `reveal(s)` clauses.
 pub(super) fn try_parse_reveal_ext(
     ts: &mut TokenStream<'_>,
     actor: PlayerRef,
@@ -2020,22 +1730,19 @@ pub(super) fn try_parse_reveal_ext(
         && zr.zone == ZoneKind::Library
     {
         return Some(Ok((
-            vec![Effect::ZoneOp {
+            vec![simple_zone_op(
                 actor,
-                op: ZoneOpKind::Reveal,
-                subject: SubjectRef::Player(actor),
-                from: vec![zr],
-                to: None,
-                modifiers: EntryModifiers::default(),
-                except: None,
-                count: None,
-            }],
+                ZoneOpKind::Reveal,
+                SubjectRef::Player(actor),
+                vec![zr],
+                None,
+            )],
             (),
         )));
     }
     ts.restore(cp);
     if let Ok(count) = try_parse(ts, parse_value_expr)
-        && (ts.eat_word("cards") || ts.eat_word("card"))
+        && ts.eat_any_word(&["cards", "card"])
     {
         let top = ts.eat_phrase(&["from", "the", "top", "of"]);
         let rand = !top && ts.eat_phrase(&["at", "random", "from"]);
@@ -2043,24 +1750,18 @@ pub(super) fn try_parse_reveal_ext(
             && let Ok(zr) = try_parse(ts, parse_zone_ref)
         {
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![counted_zone_op(
                     actor,
-                    op: if top {
+                    if top {
                         ZoneOpKind::LookTop { reveal: true }
                     } else {
                         ZoneOpKind::Reveal
                     },
-                    subject: SubjectRef::Player(actor),
-                    from: vec![zr],
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: Some(CountSpec {
-                        count,
-                        up_to: false,
-                        any_number: false,
-                    }),
-                }],
+                    SubjectRef::Player(actor),
+                    vec![zr],
+                    None,
+                    Some(exact_count(count)),
+                )],
                 (),
             )));
         }
@@ -2082,8 +1783,7 @@ pub(super) fn try_parse_search_for_ext(
         let up_to = ts.eat_phrase(&["less", "than", "or", "equal", "to"]);
         let eq = !up_to && ts.eat_phrase(&["equal", "to"]);
         if up_to || eq {
-            let count = if ts.eat_phrase(&["the", "difference"])
-                || ts.eat_phrase(&["the", "other", "result"])
+            let count = if ts.eat_any_phrase(&[&["the", "difference"], &["the", "other", "result"]])
             {
                 ValueExpr::PriorActionCount(PriorActionKind::ThatMany)
             } else if let Ok(v) = try_parse(ts, parse_value_expr) {
@@ -2093,24 +1793,22 @@ pub(super) fn try_parse_search_for_ext(
                 return None;
             };
             return Some(Ok((
-                vec![Effect::ZoneOp {
+                vec![counted_zone_op(
                     actor,
-                    op: ZoneOpKind::SearchLibrary {
+                    ZoneOpKind::SearchLibrary {
                         reveal: false,
                         shuffle: false,
                         exact: false,
                     },
-                    subject: SubjectRef::Group(Box::new(flt)),
-                    from: libs.to_vec(),
-                    to: None,
-                    modifiers: EntryModifiers::default(),
-                    except: None,
-                    count: Some(CountSpec {
+                    SubjectRef::Group(Box::new(flt)),
+                    libs.to_vec(),
+                    None,
+                    Some(CountSpec {
                         count,
                         up_to,
                         any_number: false,
                     }),
-                }],
+                )],
                 (),
             )));
         }

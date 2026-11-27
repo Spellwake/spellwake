@@ -13,6 +13,25 @@ use crate::v2::ir::{
 };
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
 
+fn grant_self_keywords(
+    keywords: Vec<KeywordSpec>,
+    condition: Option<ConditionExpr>,
+) -> StaticAbility {
+    StaticAbility::GrantKeywords {
+        subject: SubjectRef::SelfObject,
+        keywords,
+        condition,
+    }
+}
+
+fn grant_self_keyword(
+    kind: KeywordKind,
+    param: Option<KeywordParam>,
+    condition: Option<ConditionExpr>,
+) -> StaticAbility {
+    grant_self_keywords(vec![KeywordSpec { kind, param }], condition)
+}
+
 /// Parse global, deckbuilding (Companion), voting, combat-rule, and extended standalone keyword
 /// static abilities that do not follow the standard `<subject> <predicate>` shape.
 pub(super) fn parse_global_static_ability(
@@ -42,52 +61,20 @@ pub(super) fn parse_global_static_ability(
     // 2. `While voting, you get an additional vote / you may vote an additional time`
     if ts.eat_phrase(&["while", "voting"])
         && ts.eat_comma()
-        && (ts.eat_phrase(&["you", "get", "an", "additional", "vote"])
-            || ts.eat_phrase(&["you", "may", "vote", "an", "additional", "time"]))
+        && ts.eat_any_phrase(&[
+            &["you", "get", "an", "additional", "vote"],
+            &["you", "may", "vote", "an", "additional", "time"],
+        ])
     {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
     }
     ts.restore(cp);
 
     // 3. `While an opponent is choosing targets as part of casting a spell they control or activating an ability they control, that player must choose at least one Flagbearer on the battlefield if able.`
-    if ts.eat_phrase(&[
-        "while",
-        "an",
-        "opponent",
-        "is",
-        "choosing",
-        "targets",
-        "as",
-        "part",
-        "of",
-        "casting",
-        "a",
-        "spell",
-        "they",
-        "control",
-        "or",
-        "activating",
-        "an",
-        "ability",
-        "they",
-        "control",
-    ]) && ts.eat_comma()
-        && ts.eat_phrase(&[
-            "that",
-            "player",
-            "must",
-            "choose",
-            "at",
-            "least",
-            "one",
-            "flagbearer",
-            "on",
-            "the",
-            "battlefield",
-            "if",
-            "able",
-        ])
-    {
+    if eat_seq(
+        ts,
+        "while an opponent is choosing targets as part of casting a spell they control or activating an ability they control , that player must choose at least one flagbearer on the battlefield if able",
+    ) {
         return Ok(StaticAbility::FilterRule {
             filter: ObjectFilter {
                 subtypes: vec!["Flagbearer".to_string()],
@@ -99,12 +86,10 @@ pub(super) fn parse_global_static_ability(
     ts.restore(cp);
 
     // 4. `While you're searching your library, you may cast ~ from your library.`
-    if ts.eat_phrase(&["while", "you're", "searching", "your", "library"])
-        && ts.eat_comma()
-        && ts.eat_phrase(&["you", "may", "cast"])
-        && ts.eat_tilde()
-        && ts.eat_phrase(&["from", "your", "library"])
-    {
+    if eat_seq(
+        ts,
+        "while you're searching your library , you may cast ~ from your library",
+    ) {
         return Ok(StaticAbility::ZoneCastPermission {
             player: PlayerRef::You,
             filter: None,
@@ -119,17 +104,16 @@ pub(super) fn parse_global_static_ability(
     }
     ts.restore(cp);
 
-    // 5. `For each ...` static abilities (`Zilortha`, `Ruxa`, `Siege Behemoth`, `Blue, Loyal Raptor`, `K'rrik`, `Magnigoth Treefolk`)
+    // 5. `For each ...` static abilities
     if ts.eat_phrase(&["for", "each"]) {
         // `For each <flt>, you may have that creature assign its combat damage as though it weren't blocked`
         {
             let fcp = ts.checkpoint();
             if let Ok(flt) = try_parse(ts, parse_object_filter)
-                && ts.eat_comma()
-                && ts.eat_phrase(&[
-                    "you", "may", "have", "that", "creature", "assign", "its", "combat", "damage",
-                    "as", "though", "it", "weren't", "blocked",
-                ])
+                && eat_seq(
+                    ts,
+                    ", you may have that creature assign its combat damage as though it weren't blocked",
+                )
             {
                 return Ok(StaticAbility::SubjectRule {
                     subject: SubjectRef::Each(Box::new(flt)),
@@ -140,15 +124,16 @@ pub(super) fn parse_global_static_ability(
             ts.restore(fcp);
         }
         // `For each kind of counter on ~, <subj> enters with a counter of that kind on it`
-        if ts.eat_phrase(&["kind", "of", "counter", "on"])
-            && ts.eat_tilde()
-            && ts.eat_comma()
+        if eat_seq(ts, "kind of counter on ~ ,")
             && let Ok(subject) = try_parse(ts, parse_subject_ref)
-            && (ts.eat_phrase(&[
-                "enters", "with", "a", "counter", "of", "that", "kind", "on", "it",
-            ]) || ts.eat_phrase(&[
-                "enter", "with", "a", "counter", "of", "that", "kind", "on", "them",
-            ]))
+            && ts.eat_any_phrase(&[
+                &[
+                    "enters", "with", "a", "counter", "of", "that", "kind", "on", "it",
+                ],
+                &[
+                    "enter", "with", "a", "counter", "of", "that", "kind", "on", "them",
+                ],
+            ])
         {
             return Ok(StaticAbility::EntersWithCountersStatic {
                 subject,
@@ -162,9 +147,7 @@ pub(super) fn parse_global_static_ability(
         let _ = ts.eat_phrase(&["for", "each"]);
         // `For each {B} in a cost, you may pay 2 life rather than pay that mana`
         if ts.eat_mana_cost().is_some()
-            && ts.eat_phrase(&["in", "a", "cost"])
-            && ts.eat_comma()
-            && ts.eat_phrase(&["you", "may"])
+            && eat_seq(ts, "in a cost , you may")
             && let Ok(costs) = try_parse(ts, parse_cost_list)
             && ts.eat_phrase(&["rather", "than", "pay", "that", "mana"])
         {
@@ -173,31 +156,20 @@ pub(super) fn parse_global_static_ability(
         ts.restore(cp);
         let _ = ts.eat_phrase(&["for", "each"]);
         // `For each basic land type among lands you control, ~ has landwalk of that type`
-        if ts.eat_phrase(&["basic", "land", "type", "among", "lands", "you", "control"])
-            && ts.eat_comma()
-            && ts.eat_tilde()
-            && ts.eat_phrase(&["has", "landwalk", "of", "that", "type"])
-        {
-            return Ok(StaticAbility::GrantKeywords {
-                subject: SubjectRef::SelfObject,
-                keywords: vec![KeywordSpec {
-                    kind: KeywordKind::Landwalk,
-                    param: None,
-                }],
-                condition,
-            });
+        if eat_seq(
+            ts,
+            "basic land type among lands you control , ~ has landwalk of that type",
+        ) {
+            return Ok(grant_self_keyword(KeywordKind::Landwalk, None, condition));
         }
     }
     ts.restore(cp);
 
     // 6. `Counters remain on ~ as it moves to any zone other than a player's hand or library`
-    if ts.eat_phrase(&["counters", "remain", "on"])
-        && ts.eat_tilde()
-        && ts.eat_phrase(&[
-            "as", "it", "moves", "to", "any", "zone", "other", "than", "a", "player's", "hand",
-            "or", "library",
-        ])
-    {
+    if eat_seq(
+        ts,
+        "counters remain on ~ as it moves to any zone other than a player's hand or library",
+    ) {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
     }
     ts.restore(cp);
@@ -218,10 +190,10 @@ pub(super) fn parse_global_static_ability(
         ts.restore(cp);
         if ts.eat_phrase(&["spend", "only", "colored", "mana", "on", "x"]) {
             let _ = ts.eat_period();
-            let _ = ts.eat_phrase(&[
-                "no", "more", "than", "one", "mana", "of", "each", "color", "may", "be", "spent",
-                "this", "way",
-            ]);
+            let _ = eat_seq(
+                ts,
+                "no more than one mana of each color may be spent this way",
+            );
             return Ok(StaticAbility::GlobalFlag(StaticFlagKind::CostReductionRule));
         }
     }
@@ -229,13 +201,10 @@ pub(super) fn parse_global_static_ability(
 
     // 8. `[If ~ is your commander,] choose a color before the game begins. ~ is the chosen color.`
     {
-        let _ = ts.eat_word("if")
-            && ts.eat_tilde()
-            && ts.eat_phrase(&["is", "your", "commander"])
-            && ts.eat_comma();
-        if ts.eat_phrase(&["choose", "a", "color", "before", "the", "game", "begins"]) {
+        let _ = eat_seq(ts, "if ~ is your commander ,");
+        if eat_seq(ts, "choose a color before the game begins") {
             let _ = ts.eat_period();
-            let _ = ts.eat_tilde() && ts.eat_phrase(&["is", "the", "chosen", "color"]);
+            let _ = eat_seq(ts, "~ is the chosen color");
             return Ok(StaticAbility::SubjectRule {
                 subject: SubjectRef::SelfObject,
                 rule: SubjectStaticRule::IsChosenColor,
@@ -246,20 +215,15 @@ pub(super) fn parse_global_static_ability(
     ts.restore(cp);
 
     // 9. Life/damage/cleanup/monarch global rules
-    if ts.eat_phrase(&["your", "life", "total", "can't", "change"]) {
+    if ts.eat_any_phrase(&[
+        &["your", "life", "total", "can't", "change"],
+        &["damage", "doesn't", "cause", "you", "to", "lose", "life"],
+    ]) {
         return Ok(StaticAbility::GlobalFlag(
             StaticFlagKind::DontLoseForZeroLife,
         ));
     }
-    if ts.eat_phrase(&["damage", "doesn't", "cause", "you", "to", "lose", "life"]) {
-        return Ok(StaticAbility::GlobalFlag(
-            StaticFlagKind::DontLoseForZeroLife,
-        ));
-    }
-    if ts.eat_phrase(&["damage", "isn't", "removed", "from"])
-        && ts.eat_tilde()
-        && ts.eat_phrase(&["during", "cleanup", "steps"])
-    {
+    if eat_seq(ts, "damage isn't removed from ~ during cleanup steps") {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
     }
     ts.restore(cp);
@@ -268,35 +232,14 @@ pub(super) fn parse_global_static_ability(
         if ts.eat_phrase(&["as", "though", "its", "source", "had"])
             && let Ok(kw) = try_parse(ts, crate::v2::filter::parse_keyword_kind)
         {
-            return Ok(StaticAbility::GrantKeywords {
-                subject: SubjectRef::SelfObject,
-                keywords: vec![KeywordSpec {
-                    kind: kw,
-                    param: None,
-                }],
-                condition,
-            });
+            return Ok(grant_self_keyword(kw, None, condition));
         }
     }
     ts.restore(cp);
-    if ts.eat_phrase(&[
-        "lethal",
-        "damage",
-        "dealt",
-        "to",
-        "creatures",
-        "you",
-        "control",
-        "is",
-        "determined",
-        "by",
-        "their",
-        "power",
-        "rather",
-        "than",
-        "their",
-        "toughness",
-    ]) {
+    if eat_seq(
+        ts,
+        "lethal damage dealt to creatures you control is determined by their power rather than their toughness",
+    ) {
         return Ok(StaticAbility::SubjectRule {
             subject: SubjectRef::Group(Box::new(ObjectFilter {
                 any_types: CardTypeMask::CREATURE,
@@ -312,26 +255,14 @@ pub(super) fn parse_global_static_ability(
             controller: PlayerRef::ThatPlayer,
         });
     }
-    if ts.eat_phrase(&[
-        "your",
-        "devotion",
-        "to",
-        "each",
-        "color",
-        "and",
-        "each",
-        "combination",
-        "of",
-        "colors",
-        "is",
-        "increased",
-        "by",
-        "one",
-    ]) {
+    if eat_seq(
+        ts,
+        "your devotion to each color and each combination of colors is increased by one",
+    ) {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
     }
 
-    // 10. Counter placement / removal restrictions (`Solemnity`, `Fear of Sleep Paralysis`)
+    // 10. Counter placement / removal restrictions
     if ts.eat_phrase(&["counters", "can't", "be", "put", "on"]) {
         let mut flts = Vec::new();
         while let Ok(f) = try_parse(ts, parse_object_filter) {
@@ -377,16 +308,8 @@ pub(super) fn parse_global_static_ability(
     }
     ts.restore(cp);
 
-    // 11. `Ward abilities of those creatures don't trigger` (`Nowhere to Run`)
-    if ts.eat_phrase(&[
-        "ward",
-        "abilities",
-        "of",
-        "those",
-        "creatures",
-        "don't",
-        "trigger",
-    ]) {
+    // 11. `Ward abilities of those creatures don't trigger`
+    if eat_seq(ts, "ward abilities of those creatures don't trigger") {
         return Ok(StaticAbility::TriggerModifier {
             kind: TriggerModifierKind::EntersDontTrigger,
             filter: ObjectFilter {
@@ -398,11 +321,11 @@ pub(super) fn parse_global_static_ability(
         });
     }
 
-    // 12. `Each spell that would cost less than three mana to cast costs three mana to cast` (`Trinisphere`)
-    if ts.eat_phrase(&[
-        "each", "spell", "that", "would", "cost", "less", "than", "three", "mana", "to", "cast",
-        "costs", "three", "mana", "to", "cast",
-    ]) {
+    // 12. `Each spell that would cost less than three mana to cast costs three mana to cast`
+    if eat_seq(
+        ts,
+        "each spell that would cost less than three mana to cast costs three mana to cast",
+    ) {
         return Ok(StaticAbility::CostModifier {
             subject: ObjectFilter {
                 any_spell: true,
@@ -418,7 +341,7 @@ pub(super) fn parse_global_static_ability(
         });
     }
 
-    // 13. `Except for <flt1> and <flt2>, <flt3> can't attack` (`Akron Legionnaire`)
+    // 13. `Except for <flt1> and <flt2>, <flt3> can't attack`
     if ts.eat_phrase(&["except", "for"]) && try_parse(ts, parse_object_filter).is_ok() {
         if ts.eat_word("and") {
             let _ = opt(ts, parse_object_filter);
@@ -436,10 +359,9 @@ pub(super) fn parse_global_static_ability(
     }
     ts.restore(cp);
 
-    // 14. `The first card you foretell each turn costs {0} to foretell` (`Ranar`)
-    if ts.eat_phrase(&[
-        "the", "first", "card", "you", "foretell", "each", "turn", "costs",
-    ]) && let Some(delta) = ts.eat_mana_cost()
+    // 14. `The first card you foretell each turn costs {0} to foretell`
+    if eat_seq(ts, "the first card you foretell each turn costs")
+        && let Some(delta) = ts.eat_mana_cost()
         && ts.eat_phrase(&["to", "foretell"])
     {
         return Ok(StaticAbility::ActivationCostModifier {
@@ -452,39 +374,20 @@ pub(super) fn parse_global_static_ability(
     ts.restore(cp);
 
     // 15. `All instances of color words in the text of spells and permanents are changed to the chosen color word`
-    if ts.eat_phrase(&[
-        "all",
-        "instances",
-        "of",
-        "color",
-        "words",
-        "in",
-        "the",
-        "text",
-        "of",
-        "spells",
-        "and",
-        "permanents",
-        "are",
-        "changed",
-        "to",
-        "the",
-        "chosen",
-        "color",
-        "word",
-    ]) {
+    if eat_seq(
+        ts,
+        "all instances of color words in the text of spells and permanents are changed to the chosen color word",
+    ) {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
     }
 
-    // 16. `Rather than ...` (`Liesa`, `Dream Halls`, `Defensive Formation`)
+    // 16. `Rather than ...`
     if ts.eat_phrase(&["rather", "than"]) {
         if ts.eat_word("pay")
             && ts.eat_mana_cost().is_some()
-            && ts.eat_phrase(&["for", "each", "previous", "time", "you've", "cast"])
+            && eat_seq(ts, "for each previous time you've cast")
             && (ts.eat_tilde() || ts.eat_phrase(&["this", "spell"]))
-            && ts.eat_phrase(&["from", "the", "command", "zone", "this", "game"])
-            && ts.eat_comma()
-            && ts.eat_word("pay")
+            && eat_seq(ts, "from the command zone this game , pay")
             && let Some(n) = ts.next_number(false)
             && ts.eat_phrase(&["life", "that", "many", "times"])
         {
@@ -493,11 +396,10 @@ pub(super) fn parse_global_static_ability(
             )]));
         }
         ts.restore(cp);
-        if ts.eat_phrase(&[
-            "rather", "than", "pay", "the", "mana", "cost", "for", "a", "spell",
-        ]) && ts.eat_comma()
-            && ts.eat_phrase(&["its", "controller", "may"])
-            && let Ok(costs) = try_parse(ts, parse_cost_list)
+        if eat_seq(
+            ts,
+            "rather than pay the mana cost for a spell , its controller may",
+        ) && let Ok(costs) = try_parse(ts, parse_cost_list)
         {
             return Ok(StaticAbility::ZoneCastPermission {
                 player: PlayerRef::EachPlayer,
@@ -512,60 +414,28 @@ pub(super) fn parse_global_static_ability(
             });
         }
         ts.restore(cp);
-        if ts.eat_phrase(&["rather", "than", "the", "attacking", "player"])
-            && ts.eat_comma()
-            && ts.eat_phrase(&[
-                "you",
-                "assign",
-                "the",
-                "combat",
-                "damage",
-                "of",
-                "each",
-                "creature",
-                "attacking",
-                "you",
-            ])
-        {
+        if eat_seq(
+            ts,
+            "rather than the attacking player , you assign the combat damage of each creature attacking you",
+        ) {
             let _ = ts.eat_period();
-            let _ = ts.eat_phrase(&[
-                "you",
-                "can",
-                "divide",
-                "that",
-                "creature's",
-                "combat",
-                "damage",
-                "as",
-                "you",
-                "choose",
-                "among",
-                "any",
-                "of",
-                "the",
-                "creatures",
-                "blocking",
-                "it",
-            ]);
+            let _ = eat_seq(
+                ts,
+                "you can divide that creature's combat damage as you choose among any of the creatures blocking it",
+            );
             return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
         }
     }
     ts.restore(cp);
 
-    // 17. Combat direction / blocking / untap choice rules (`Pramikon`, `Mystic Barrier`, `Invasion Plans`, `Storage Matrix`)
-    if ts.eat_phrase(&[
-        "each", "player", "may", "attack", "only", "the", "nearest", "opponent", "in", "the",
-    ]) {
+    // 17. Combat direction / blocking / untap choice rules
+    if eat_seq(
+        ts,
+        "each player may attack only the nearest opponent in the",
+    ) {
         let _ = ts.eat_word("last");
         if ts.eat_phrase(&["chosen", "direction"]) {
-            let _ = ts.eat_phrase(&[
-                "and",
-                "planeswalkers",
-                "controlled",
-                "by",
-                "that",
-                "opponent",
-            ]);
+            let _ = eat_seq(ts, "and planeswalkers controlled by that opponent");
             return Ok(StaticAbility::RuleRestriction {
                 subject: None,
                 rule: RuleRestrictionKind::CantAttack,
@@ -574,41 +444,21 @@ pub(super) fn parse_global_static_ability(
         }
     }
     ts.restore(cp);
-    if ts.eat_phrase(&[
-        "the",
-        "attacking",
-        "player",
-        "chooses",
-        "how",
-        "each",
-        "creature",
-        "blocks",
-        "each",
-        "combat",
-    ]) {
+    if eat_seq(
+        ts,
+        "the attacking player chooses how each creature blocks each combat",
+    ) {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
     }
-    if ts.eat_phrase(&["each", "player", "chooses", "artifact"])
-        && ts.eat_comma()
-        && ts.eat_word("creature")
-        && ts.eat_comma()
-        && ts.eat_phrase(&["or", "land", "during", "their", "untap", "step"])
-    {
+    if eat_seq(
+        ts,
+        "each player chooses artifact , creature , or land during their untap step",
+    ) {
         let _ = ts.eat_period();
-        let _ = ts.eat_phrase(&[
-            "that",
-            "player",
-            "can",
-            "untap",
-            "only",
-            "permanents",
-            "of",
-            "the",
-            "chosen",
-            "type",
-            "this",
-            "step",
-        ]);
+        let _ = eat_seq(
+            ts,
+            "that player can untap only permanents of the chosen type this step",
+        );
         return Ok(StaticAbility::PlayerRestriction {
             player: PlayerRef::EachPlayer,
             restriction: PlayerRestrictionKind::CantUntapMoreThan(1),
@@ -617,30 +467,19 @@ pub(super) fn parse_global_static_ability(
     }
     ts.restore(cp);
 
-    // 18. `A player losing unspent mana causes that player to lose that much life` (`Yurlok`)
-    if ts.eat_phrase(&[
-        "a", "player", "losing", "unspent", "mana", "causes", "that", "player", "to", "lose",
-        "that", "much", "life",
-    ]) {
+    // 18. `A player losing unspent mana causes that player to lose that much life`
+    if eat_seq(
+        ts,
+        "a player losing unspent mana causes that player to lose that much life",
+    ) {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
     }
 
-    // 19. `Each power-up ability of permanents you control can be activated an additional time` (`Wonder Man`)
-    if ts.eat_phrase(&[
-        "each",
-        "power-up",
-        "ability",
-        "of",
-        "permanents",
-        "you",
-        "control",
-        "can",
-        "be",
-        "activated",
-        "an",
-        "additional",
-        "time",
-    ]) {
+    // 19. `Each power-up ability of permanents you control can be activated an additional time`
+    if eat_seq(
+        ts,
+        "each power-up ability of permanents you control can be activated an additional time",
+    ) {
         return Ok(StaticAbility::TriggerModifier {
             kind: TriggerModifierKind::AdditionalOnAbility,
             filter: ObjectFilter::default(),
@@ -650,16 +489,10 @@ pub(super) fn parse_global_static_ability(
     }
 
     // 20. `Planeswalkers' loyalty abilities you activate cost an additional +1 to activate`
-    if ts.eat_phrase(&[
-        "planeswalkers'",
-        "loyalty",
-        "abilities",
-        "you",
-        "activate",
-        "cost",
-        "an",
-        "additional",
-    ]) && matches!(
+    if eat_seq(
+        ts,
+        "planeswalkers' loyalty abilities you activate cost an additional",
+    ) && matches!(
         ts.peek().map(|t| &t.kind),
         Some(crate::v2::lexer::TokenKind::Plus)
     ) && ts.next_tok().is_some()
@@ -675,21 +508,17 @@ pub(super) fn parse_global_static_ability(
     }
     ts.restore(cp);
 
-    // 21. `Once each turn, you may pay {M} to reroll one or more dice you rolled` (`Monitor Monitor`)
-    if ts.eat_phrase(&["once", "each", "turn"])
-        && ts.eat_comma()
-        && ts.eat_phrase(&["you", "may", "pay"])
+    // 21. `Once each turn, you may pay {M} to reroll one or more dice you rolled`
+    if eat_seq(ts, "once each turn , you may pay")
         && let Some(mc) = ts.eat_mana_cost()
-        && ts.eat_phrase(&["to", "reroll", "one", "or", "more", "dice", "you", "rolled"])
+        && eat_seq(ts, "to reroll one or more dice you rolled")
     {
         return Ok(StaticAbility::AdditionalCost(vec![Cost::Mana(mc)]));
     }
     ts.restore(cp);
 
-    // 22. `Spells with the chosen names can't be cast and lands with the chosen names can't be played` (`Null Chamber`)
-    if ts.eat_phrase(&[
-        "spells", "with", "the", "chosen", "names", "can't", "be", "cast",
-    ]) {
+    // 22. `Spells with the chosen names can't be cast and lands with the chosen names can't be played`
+    if eat_seq(ts, "spells with the chosen names can't be cast") {
         let mut parts = vec![StaticAbility::RuleRestriction {
             subject: Some(SubjectRef::All(Box::new(ObjectFilter {
                 any_spell: true,
@@ -699,9 +528,7 @@ pub(super) fn parse_global_static_ability(
             rule: RuleRestrictionKind::CantBeCast,
             condition: condition.clone(),
         }];
-        if ts.eat_phrase(&[
-            "and", "lands", "with", "the", "chosen", "names", "can't", "be", "played",
-        ]) {
+        if eat_seq(ts, "and lands with the chosen names can't be played") {
             parts.push(StaticAbility::RuleRestriction {
                 subject: Some(SubjectRef::All(Box::new(ObjectFilter {
                     any_types: CardTypeMask::LAND,
@@ -720,18 +547,11 @@ pub(super) fn parse_global_static_ability(
     }
     ts.restore(cp);
 
-    // 23. `Activated abilities of the chosen permanent can't be activated` (`Scheming Fence`)
-    if ts.eat_phrase(&[
-        "activated",
-        "abilities",
-        "of",
-        "the",
-        "chosen",
-        "permanent",
-        "can't",
-        "be",
-        "activated",
-    ]) {
+    // 23. `Activated abilities of the chosen permanent can't be activated`
+    if eat_seq(
+        ts,
+        "activated abilities of the chosen permanent can't be activated",
+    ) {
         return Ok(StaticAbility::RuleRestriction {
             subject: Some(SubjectRef::Anaphora(
                 crate::v2::ir::AnaphoraRef::ThatPermanent,
@@ -741,8 +561,8 @@ pub(super) fn parse_global_static_ability(
         });
     }
 
-    // 24. `The top card of your library has plot[. The plot cost is equal to its mana cost]` (`Fblthp`)
-    if ts.eat_phrase(&["the", "top", "card", "of", "your", "library", "has"])
+    // 24. `The top card of your library has plot[. The plot cost is equal to its mana cost]`
+    if eat_seq(ts, "the top card of your library has")
         && let Ok((keywords, _)) = try_parse(ts, parse_keyword_list)
     {
         return Ok(StaticAbility::GrantKeywords {
@@ -753,7 +573,7 @@ pub(super) fn parse_global_static_ability(
     }
     ts.restore(cp);
 
-    // 25. `Fortified land has <kws>` (`Darksteel Garrison`)
+    // 25. `Fortified land has <kws>`
     if ts.eat_phrase(&["fortified", "land", "has"])
         && let Ok((keywords, _)) = try_parse(ts, parse_keyword_list)
     {
@@ -765,34 +585,21 @@ pub(super) fn parse_global_static_ability(
     }
     ts.restore(cp);
 
-    // 26. `If ~ leaves the battlefield, this effect continues until end of turn` (`Titania's Song`)
-    if ts.eat_word("if")
-        && ts.eat_tilde()
-        && ts.eat_phrase(&["leaves", "the", "battlefield"])
-        && ts.eat_comma()
-        && ts.eat_phrase(&["this", "effect", "continues", "until", "end", "of", "turn"])
-    {
+    // 26. `If ~ leaves the battlefield, this effect continues until end of turn`
+    if eat_seq(
+        ts,
+        "if ~ leaves the battlefield , this effect continues until end of turn",
+    ) {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
     }
     ts.restore(cp);
 
-    // 27. `If <flt> being dealt damage causes a triggered ability of <perm_flt> to trigger, that ability triggers an additional time` (`Wayta`)
+    // 27. `If <flt> being dealt damage causes a triggered ability of <perm_flt> to trigger, that ability triggers an additional time`
     if ts.eat_word("if")
         && let Ok(event_filter) = try_parse(ts, parse_object_filter)
-        && ts.eat_phrase(&[
-            "being",
-            "dealt",
-            "damage",
-            "causes",
-            "a",
-            "triggered",
-            "ability",
-            "of",
-        ])
+        && eat_seq(ts, "being dealt damage causes a triggered ability of")
         && let Ok(permanent_filter) = try_parse(ts, parse_object_filter)
-        && ts.eat_phrase(&["to", "trigger"])
-        && ts.eat_comma()
-        && ts.eat_phrase(&["that", "ability", "triggers", "an", "additional", "time"])
+        && eat_seq(ts, "to trigger , that ability triggers an additional time")
     {
         return Ok(StaticAbility::TriggerModifier {
             kind: TriggerModifierKind::AdditionalTriggers,
@@ -803,38 +610,21 @@ pub(super) fn parse_global_static_ability(
     }
     ts.restore(cp);
 
-    // 28. `If a creature card with <kw> was exiled with ~'s delve ability, ~ has <kw>. The same is true for ...` (`Soulflayer`)
-    if ts.eat_phrase(&["if", "a", "creature", "card", "with"])
+    // 28. `If a creature card with <kw> was exiled with ~'s delve ability, ~ has <kw>. The same is true for ...`
+    if eat_seq(ts, "if a creature card with")
         && let Ok((keywords, _)) = try_parse(ts, parse_keyword_list)
-        && ts.eat_phrase(&["was", "exiled", "with"])
-        && ts.eat_tilde()
-        && ts.eat_phrase(&["'s", "delve", "ability"])
-        && ts.eat_comma()
-        && ts.eat_tilde()
-        && ts.eat_word("has")
+        && eat_seq(ts, "was exiled with ~ 's delve ability , ~ has")
         && try_parse(ts, parse_keyword_list).is_ok()
     {
         let _ = ts.eat_period();
         if ts.eat_phrase(&["the", "same", "is", "true", "for"]) {
             let _ = try_parse(ts, parse_keyword_list);
         }
-        return Ok(StaticAbility::GrantKeywords {
-            subject: SubjectRef::SelfObject,
-            keywords,
-            condition,
-        });
+        return Ok(grant_self_keywords(keywords, condition));
     }
     ts.restore(cp);
 
-    // 29. Extended standalone keyword lines that bypassed `card.rs` step 7:
-    //     - `Legendary/Nonbasic/Snow [forest|swamp|plains|island|mountain] landwalk` (and `First strike; legendary landwalk`)
-    //     - `Trample over planeswalkers`
-    //     - `<Type> offering` (`Artifact offering`)
-    //     - `Artifact landcycling {M}`
-    //     - `Devour <type> <N>` / `Devour X, where X is ...`
-    //     - `Modular - Sunburst`
-    //     - `[Flying|Lifelink,] protection from mana value <N> or less/greater` / `protection from spells and from permanents that were cast this turn`
-    //     - `Flying, hexproof from activated and triggered abilities`
+    // 29. Extended standalone keyword lines that bypassed `card.rs` step 7
     if let Some(st) = try_parse_extended_keyword_line(ts, condition) {
         return Ok(st);
     }
@@ -861,7 +651,7 @@ pub(super) fn parse_trigger_doubler(ts: &mut TokenStream<'_>) -> PResult<StaticA
         };
         if let Some(mut source_filter) = source_filter_opt {
             if ts.eat_word("or") {
-                let _ = ts.eat_word("another") || ts.eat_word("an") || ts.eat_word("a");
+                let _ = ts.eat_any_word(&["another", "an", "a"]);
                 if let Ok(other) = try_parse(ts, parse_object_filter) {
                     source_filter = ObjectFilter {
                         predicates: vec![FilterPredicate::AnyOf(vec![source_filter, other])],
@@ -874,8 +664,10 @@ pub(super) fn parse_trigger_doubler(ts: &mut TokenStream<'_>) -> PResult<StaticA
                     let _ = opt(ts, super::cond_ext::parse_static_condition);
                 }
                 if ts.eat_comma()
-                    && (ts.eat_phrase(&["that", "ability", "triggers", "an", "additional", "time"])
-                        || ts.eat_phrase(&["it", "triggers", "an", "additional", "time"]))
+                    && ts.eat_any_phrase(&[
+                        &["that", "ability", "triggers", "an", "additional", "time"],
+                        &["it", "triggers", "an", "additional", "time"],
+                    ])
                 {
                     return Ok(StaticAbility::TriggerModifier {
                         kind: TriggerModifierKind::AdditionalOnAbility,
@@ -888,27 +680,15 @@ pub(super) fn parse_trigger_doubler(ts: &mut TokenStream<'_>) -> PResult<StaticA
         }
     }
     ts.restore(cp);
-    if (ts.eat_phrase(&["if", "you", "casting", "or", "copying"])
+    if ((ts.eat_phrase(&["if", "you", "casting", "or", "copying"])
         && try_parse(ts, parse_object_filter).is_ok()
-        && ts.eat_phrase(&["causes", "a", "triggered", "ability", "of"])
-        || ts.eat_phrase(&[
-            "if",
-            "turning",
-            "a",
-            "face-down",
-            "permanent",
-            "face",
-            "up",
-            "causes",
-            "a",
-            "triggered",
-            "ability",
-            "of",
-        ]))
+        && ts.eat_phrase(&["causes", "a", "triggered", "ability", "of"]))
+        || eat_seq(
+            ts,
+            "if turning a face-down permanent face up causes a triggered ability of",
+        ))
         && let Ok(permanent_filter) = try_parse(ts, parse_object_filter)
-        && ts.eat_phrase(&["to", "trigger"])
-        && ts.eat_comma()
-        && ts.eat_phrase(&["that", "ability", "triggers", "an", "additional", "time"])
+        && eat_seq(ts, "to trigger , that ability triggers an additional time")
     {
         return Ok(StaticAbility::TriggerModifier {
             kind: TriggerModifierKind::AdditionalTriggers,
@@ -918,22 +698,11 @@ pub(super) fn parse_trigger_doubler(ts: &mut TokenStream<'_>) -> PResult<StaticA
         });
     }
     ts.restore(cp);
-    if ts.eat_phrase(&[
-        "if",
-        "a",
-        "player",
-        "drawing",
-        "a",
-        "card",
-        "causes",
-        "a",
-        "triggered",
-        "ability",
-        "of",
-    ]) && let Ok(permanent_filter) = try_parse(ts, parse_object_filter)
-        && ts.eat_phrase(&["to", "trigger"])
-        && ts.eat_comma()
-        && ts.eat_phrase(&["that", "ability", "triggers", "an", "additional", "time"])
+    if eat_seq(
+        ts,
+        "if a player drawing a card causes a triggered ability of",
+    ) && let Ok(permanent_filter) = try_parse(ts, parse_object_filter)
+        && eat_seq(ts, "to trigger , that ability triggers an additional time")
     {
         return Ok(StaticAbility::TriggerModifier {
             kind: TriggerModifierKind::AdditionalTriggers,
@@ -960,30 +729,33 @@ pub(super) fn parse_trigger_doubler(ts: &mut TokenStream<'_>) -> PResult<StaticA
         } else {
             ts.restore(ocp);
         }
-        if (ts.eat_phrase(&[
-            "entering",
-            "or",
-            "leaving",
-            "the",
-            "battlefield",
-            "causes",
-            "a",
-            "triggered",
-            "ability",
-            "of",
-        ]) || ts.eat_phrase(&[
-            "entering",
-            "the",
-            "battlefield",
-            "causes",
-            "a",
-            "triggered",
-            "ability",
-            "of",
-        ]) || ts.eat_phrase(&["entering", "causes", "a", "triggered", "ability", "of"])
-            || ts.eat_phrase(&["dying", "causes", "a", "triggered", "ability", "of"])
-            || ts.eat_phrase(&["attacking", "causes", "a", "triggered", "ability", "of"])
-            || ts.eat_phrase(&[
+        const EVENT_CAUSES: &[&[&str]] = &[
+            &[
+                "entering",
+                "or",
+                "leaving",
+                "the",
+                "battlefield",
+                "causes",
+                "a",
+                "triggered",
+                "ability",
+                "of",
+            ],
+            &[
+                "entering",
+                "the",
+                "battlefield",
+                "causes",
+                "a",
+                "triggered",
+                "ability",
+                "of",
+            ],
+            &["entering", "causes", "a", "triggered", "ability", "of"],
+            &["dying", "causes", "a", "triggered", "ability", "of"],
+            &["attacking", "causes", "a", "triggered", "ability", "of"],
+            &[
                 "dealing",
                 "combat",
                 "damage",
@@ -995,7 +767,9 @@ pub(super) fn parse_trigger_doubler(ts: &mut TokenStream<'_>) -> PResult<StaticA
                 "triggered",
                 "ability",
                 "of",
-            ]))
+            ],
+        ];
+        if ts.eat_any_phrase(EVENT_CAUSES)
             && let Ok(permanent_filter) = if ts.eat_tilde() {
                 Ok(ObjectFilter::default())
             } else {
@@ -1003,10 +777,7 @@ pub(super) fn parse_trigger_doubler(ts: &mut TokenStream<'_>) -> PResult<StaticA
             }
         {
             let _ = ts.eat_phrase(&["or", "an", "emblem", "you", "own"]);
-            if ts.eat_phrase(&["to", "trigger"])
-                && ts.eat_comma()
-                && ts.eat_phrase(&["that", "ability", "triggers", "an", "additional", "time"])
-            {
+            if eat_seq(ts, "to trigger , that ability triggers an additional time") {
                 return Ok(StaticAbility::TriggerModifier {
                     kind: TriggerModifierKind::AdditionalTriggers,
                     filter: event_filter,
@@ -1024,46 +795,44 @@ fn try_parse_companion_deck_rule(ts: &mut TokenStream<'_>) -> Option<StaticAbili
     let cp = ts.checkpoint();
     if ts.eat_phrase(&["your", "starting", "deck", "contains"]) {
         if ts.eat_phrase(&["only", "cards", "with"]) {
-            if ts.eat_phrase(&["even", "mana", "values"])
-                || ts.eat_phrase(&["odd", "mana", "values", "and", "land", "cards"])
-                || (ts.eat_phrase(&["mana", "value"])
-                    && ts.next_number(false).is_some()
-                    && ts.eat_phrase(&["or", "greater", "and", "land", "cards"]))
+            if ts.eat_any_phrase(&[
+                &["even", "mana", "values"],
+                &["odd", "mana", "values", "and", "land", "cards"],
+            ]) || eat_seq(ts, "mana value # or greater and land cards")
             {
                 return Some(StaticAbility::GlobalFlag(StaticFlagKind::AnyNumberInDeck));
             }
-        } else if ts.eat_phrase(&["at", "least"])
-            && ts.next_number(false).is_some()
-            && ts.eat_phrase(&["cards", "more", "than", "the", "minimum", "deck", "size"])
-        {
+        } else if eat_seq(ts, "at least # cards more than the minimum deck size") {
             return Some(StaticAbility::GlobalFlag(StaticFlagKind::AnyNumberInDeck));
         }
         ts.restore(cp);
         return None;
     }
-    if ts.eat_phrase(&[
-        "no", "card", "in", "your", "starting", "deck", "has", "more", "than", "one", "of", "the",
-        "same", "mana", "symbol", "in", "its", "mana", "cost",
-    ]) {
+    if eat_seq(
+        ts,
+        "no card in your starting deck has more than one of the same mana symbol in its mana cost",
+    ) {
         return Some(StaticAbility::GlobalFlag(StaticFlagKind::AnyNumberInDeck));
     }
     if ts.eat_word("each")
-        && (ts.eat_phrase(&["nonland", "card", "in", "your", "starting", "deck"])
-            || ts.eat_phrase(&["creature", "card", "in", "your", "starting", "deck"])
-            || ts.eat_phrase(&["permanent", "card", "in", "your", "starting", "deck"])
-            || (try_parse(ts, parse_object_filter).is_ok()
-                && ts.eat_phrase(&["in", "your", "starting", "deck"])))
+        && (ts.eat_any_phrase(&[
+            &["nonland", "card", "in", "your", "starting", "deck"],
+            &["creature", "card", "in", "your", "starting", "deck"],
+            &["permanent", "card", "in", "your", "starting", "deck"],
+        ]) || (try_parse(ts, parse_object_filter).is_ok()
+            && ts.eat_phrase(&["in", "your", "starting", "deck"])))
     {
-        if ts.eat_phrase(&["has", "a", "different", "name"])
-            || ts.eat_phrase(&["has", "an", "activated", "ability"])
-            || ts.eat_phrase(&["shares", "a", "card", "type"])
-            || (ts.eat_phrase(&["has", "mana", "value"])
-                && ts.next_number(false).is_some()
-                && (ts.eat_phrase(&["or", "less"]) || ts.eat_phrase(&["or", "greater"])))
+        if ts.eat_any_phrase(&[
+            &["has", "a", "different", "name"],
+            &["has", "an", "activated", "ability"],
+            &["shares", "a", "card", "type"],
+        ]) || (ts.eat_phrase(&["has", "mana", "value"])
+            && ts.next_number(false).is_some()
+            && ts.eat_any_phrase(&[&["or", "less"], &["or", "greater"]]))
         {
             return Some(StaticAbility::GlobalFlag(StaticFlagKind::AnyNumberInDeck));
         }
-        if ts.eat_phrase(&["is", "a"]) || ts.eat_phrase(&["is", "an"]) {
+        if ts.eat_any_phrase(&[&["is", "a"], &["is", "an"]]) {
             let mut saw_sub = false;
             while let Some(w) = ts.peek_word() {
                 if ts.vocab.lookup_subtype(&w.to_ascii_lowercase()).is_some() {
@@ -1090,47 +859,37 @@ fn try_parse_extended_keyword_line(
 ) -> Option<StaticAbility> {
     let cp = ts.checkpoint();
     let mut kws: Vec<KeywordSpec> = Vec::new();
-    // Optional leading normal keywords separated by `,` or `;` (e.g. `Flying, hexproof from ...`, `First strike; legendary landwalk`)
+    // Optional leading normal keywords separated by `,` or `;`
     if let Ok((lead, _)) = try_parse(ts, parse_keyword_list) {
-        if ts.eat_comma()
-            || matches!(
-                ts.peek().map(|t| &t.kind),
-                Some(crate::v2::lexer::TokenKind::Semicolon)
-            )
-        {
-            if matches!(
-                ts.peek().map(|t| &t.kind),
-                Some(crate::v2::lexer::TokenKind::Semicolon)
-            ) {
-                ts.next_tok();
-            }
+        if ts.eat_comma() {
+            kws.extend(lead);
+        } else if matches!(
+            ts.peek().map(|t| &t.kind),
+            Some(crate::v2::lexer::TokenKind::Semicolon)
+        ) {
+            ts.next_tok();
             kws.extend(lead);
         } else {
             ts.restore(cp);
         }
     }
     let body_cp = ts.checkpoint();
-    // Qualified landwalk (`legendary landwalk`, `nonbasic landwalk`, `snow landwalk`, `snow forestwalk`, `snow swampwalk`, `artifact landwalk`)
-    if (ts.eat_word("legendary")
-        || ts.eat_word("nonbasic")
-        || ts.eat_word("snow")
-        || ts.eat_word("artifact"))
-        && (ts.eat_word("landwalk")
-            || ts.eat_word("forestwalk")
-            || ts.eat_word("swampwalk")
-            || ts.eat_word("plainswalk")
-            || ts.eat_word("islandwalk")
-            || ts.eat_word("mountainwalk"))
+    // Qualified landwalk (`legendary/nonbasic/snow/artifact <land>walk`)
+    if ts.eat_any_word(&["legendary", "nonbasic", "snow", "artifact"])
+        && ts.eat_any_word(&[
+            "landwalk",
+            "forestwalk",
+            "swampwalk",
+            "plainswalk",
+            "islandwalk",
+            "mountainwalk",
+        ])
     {
         kws.push(KeywordSpec {
             kind: KeywordKind::Landwalk,
             param: None,
         });
-        return Some(StaticAbility::GrantKeywords {
-            subject: SubjectRef::SelfObject,
-            keywords: kws,
-            condition,
-        });
+        return Some(grant_self_keywords(kws, condition));
     }
     ts.restore(body_cp);
 
@@ -1140,11 +899,7 @@ fn try_parse_extended_keyword_line(
             kind: KeywordKind::Trample,
             param: None,
         });
-        return Some(StaticAbility::GrantKeywords {
-            subject: SubjectRef::SelfObject,
-            keywords: kws,
-            condition,
-        });
+        return Some(grant_self_keywords(kws, condition));
     }
 
     // `Artifact landcycling {M}`
@@ -1155,11 +910,7 @@ fn try_parse_extended_keyword_line(
             kind: KeywordKind::Typecycling,
             param: Some(KeywordParam::Cost(vec![Cost::Mana(mc)])),
         });
-        return Some(StaticAbility::GrantKeywords {
-            subject: SubjectRef::SelfObject,
-            keywords: kws,
-            condition,
-        });
+        return Some(grant_self_keywords(kws, condition));
     }
     ts.restore(body_cp);
 
@@ -1173,41 +924,22 @@ fn try_parse_extended_keyword_line(
                 kind: KeywordKind::Offering,
                 param: None,
             });
-            return Some(StaticAbility::GrantKeywords {
-                subject: SubjectRef::SelfObject,
-                keywords: kws,
-                condition,
-            });
+            return Some(grant_self_keywords(kws, condition));
         }
     }
     ts.restore(body_cp);
 
     // `Devour <type|subtype> <N>` or `Devour X, where X is the number of creatures devoured this way`
     if ts.eat_word("devour") {
-        if ts.eat_word("x")
-            && ts.eat_comma()
-            && ts.eat_phrase(&[
-                "where",
-                "x",
-                "is",
-                "the",
-                "number",
-                "of",
-                "creatures",
-                "devoured",
-                "this",
-                "way",
-            ])
-        {
+        if eat_seq(
+            ts,
+            "x , where x is the number of creatures devoured this way",
+        ) {
             kws.push(KeywordSpec {
                 kind: KeywordKind::Devour,
                 param: Some(KeywordParam::VariableX),
             });
-            return Some(StaticAbility::GrantKeywords {
-                subject: SubjectRef::SelfObject,
-                keywords: kws,
-                condition,
-            });
+            return Some(grant_self_keywords(kws, condition));
         }
         ts.restore(body_cp);
         let _ = ts.eat_word("devour");
@@ -1218,103 +950,60 @@ fn try_parse_extended_keyword_line(
                 kind: KeywordKind::Devour,
                 param: Some(KeywordParam::Number(u16::try_from(n.max(0)).unwrap_or(1))),
             });
-            return Some(StaticAbility::GrantKeywords {
-                subject: SubjectRef::SelfObject,
-                keywords: kws,
-                condition,
-            });
+            return Some(grant_self_keywords(kws, condition));
         }
     }
     ts.restore(body_cp);
 
     // `Modular - Sunburst`
-    if ts.eat_word("modular")
-        && matches!(
-            ts.peek().map(|t| &t.kind),
-            Some(crate::v2::lexer::TokenKind::EmDash)
-        )
-    {
-        ts.next_tok();
-        if ts.eat_word("sunburst") {
-            kws.push(KeywordSpec {
-                kind: KeywordKind::Modular,
-                param: None,
-            });
-            kws.push(KeywordSpec {
-                kind: KeywordKind::Sunburst,
-                param: None,
-            });
-            return Some(StaticAbility::GrantKeywords {
-                subject: SubjectRef::SelfObject,
-                keywords: kws,
-                condition,
-            });
-        }
+    if ts.eat_word("modular") && ts.eat_em_dash() && ts.eat_word("sunburst") {
+        kws.push(KeywordSpec {
+            kind: KeywordKind::Modular,
+            param: None,
+        });
+        kws.push(KeywordSpec {
+            kind: KeywordKind::Sunburst,
+            param: None,
+        });
+        return Some(grant_self_keywords(kws, condition));
     }
     ts.restore(body_cp);
 
     // `hexproof from activated and triggered abilities`
-    if ts.eat_phrase(&[
-        "hexproof",
-        "from",
-        "activated",
-        "and",
-        "triggered",
-        "abilities",
-    ]) {
+    if eat_seq(ts, "hexproof from activated and triggered abilities") {
         kws.push(KeywordSpec {
             kind: KeywordKind::Hexproof,
             param: None,
         });
-        return Some(StaticAbility::GrantKeywords {
-            subject: SubjectRef::SelfObject,
-            keywords: kws,
-            condition,
-        });
+        return Some(grant_self_keywords(kws, condition));
     }
 
     // `protection from mana value <N> or less/greater` / `protection from even/odd mana values` / `protection from spells and from permanents that were cast this turn`
-    if ts.eat_phrase(&["protection", "from"]) {
-        if ts.eat_phrase(&["mana", "value"])
+    if ts.eat_phrase(&["protection", "from"])
+        && ((ts.eat_phrase(&["mana", "value"])
             && ts.next_number(false).is_some()
-            && (ts.eat_phrase(&["or", "less"]) || ts.eat_phrase(&["or", "greater"]))
-        {
-            kws.push(KeywordSpec {
-                kind: KeywordKind::Protection,
-                param: None,
-            });
-            return Some(StaticAbility::GrantKeywords {
-                subject: SubjectRef::SelfObject,
-                keywords: kws,
-                condition,
-            });
-        }
-        ts.restore(body_cp);
-        let _ = ts.eat_phrase(&["protection", "from"]);
-        if ts.eat_phrase(&["even", "mana", "values"])
-            || ts.eat_phrase(&["odd", "mana", "values"])
-            || ts.eat_phrase(&[
-                "spells",
-                "and",
-                "from",
-                "permanents",
-                "that",
-                "were",
-                "cast",
-                "this",
-                "turn",
-            ])
-        {
-            kws.push(KeywordSpec {
-                kind: KeywordKind::Protection,
-                param: None,
-            });
-            return Some(StaticAbility::GrantKeywords {
-                subject: SubjectRef::SelfObject,
-                keywords: kws,
-                condition,
-            });
-        }
+            && ts.eat_any_phrase(&[&["or", "less"], &["or", "greater"]]))
+            || ts.eat_any_phrase(&[
+                &["even", "mana", "values"],
+                &["odd", "mana", "values"],
+                &[
+                    "spells",
+                    "and",
+                    "from",
+                    "permanents",
+                    "that",
+                    "were",
+                    "cast",
+                    "this",
+                    "turn",
+                ],
+            ]))
+    {
+        kws.push(KeywordSpec {
+            kind: KeywordKind::Protection,
+            param: None,
+        });
+        return Some(grant_self_keywords(kws, condition));
     }
 
     // `Space sculptor`
@@ -1467,11 +1156,7 @@ fn try_parse_draft_or_pregame_rule(
         {
             kws.extend(more);
         }
-        return Some(StaticAbility::GrantKeywords {
-            subject: SubjectRef::SelfObject,
-            keywords: kws,
-            condition: condition.clone(),
-        });
+        return Some(grant_self_keywords(kws, condition.clone()));
     }
     ts.restore(cp);
     None
@@ -1505,14 +1190,11 @@ fn try_parse_extended_global_rules(
     if ts.eat_phrase(&["cumulative", "upkeep"]) && ts.eat_em_dash() {
         let _ = ts.eat_phrase(&["have", "an", "opponent"]);
         if eat_trailing_effect(ts) {
-            return Some(StaticAbility::GrantKeywords {
-                subject: SubjectRef::SelfObject,
-                keywords: vec![KeywordSpec {
-                    kind: KeywordKind::CumulativeUpkeep,
-                    param: None,
-                }],
-                condition: condition.clone(),
-            });
+            return Some(grant_self_keyword(
+                KeywordKind::CumulativeUpkeep,
+                None,
+                condition.clone(),
+            ));
         }
         ts.restore(cp);
     }
@@ -1530,15 +1212,7 @@ fn try_parse_extended_global_rules(
         )
     {
         let rhs_str = ts.source.get(next_tok.span.start..).unwrap_or("").trim();
-        let compiled = crate::v2::card::compile_face_v2(
-            crate::FaceInput {
-                name: "~",
-                type_line: "Permanent",
-                oracle_text: rhs_str,
-            },
-            ts.vocab,
-        );
-        if compiled.is_ok() {
+        if let Ok(compiled) = ts.compile_quoted_permanent_ability(rhs_str) {
             ts.pos = ts.tokens.len();
             return Some(StaticAbility::GrantAbility {
                 subject: SubjectRef::SelfObject,

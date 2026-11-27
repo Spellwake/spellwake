@@ -1,29 +1,37 @@
 //! Activation/cast restriction, additional-combat, and temporary-static clause helpers for `v2`.
 
+use crate::ast::{CardTypeMask, ColorMask, Rounding};
 use crate::v2::clause::find_phrase_index;
 use crate::v2::condition::parse_condition;
-use crate::v2::filter::parse_object_filter;
+use crate::v2::filter::{parse_object_filter, parse_zone_ref};
 use crate::v2::ir::{
-    ActivationRestriction, Duration, Effect, ObjectFilter, ParseStage, PlayerMutation, PlayerRef,
-    RuleRestrictionKind, StaticAbility, SubjectRef,
+    ActivationRestriction, ChoiceKind, CombatStepKind, CompiledFaceV2, CountSpec, CounterKind,
+    Duration, Effect, EntryModifiers, LibraryPosition, ObjectFilter, ObjectMutation, ParseStage,
+    PlayerActionKind, PlayerMutation, PlayerRef, Replacement, RuleRestrictionKind, StaticAbility,
+    SubjectRef, ValueExpr, ZoneDest, ZoneKind, ZoneOpKind, ZoneOwner, ZoneRef,
 };
-use crate::v2::parser::{PResult, TokenStream};
+use crate::v2::lexer::TokenKind;
+use crate::v2::parser::{PResult, TokenStream, try_parse};
 use crate::v2::static_ability::parse_static_ability;
+use crate::vocab::{lookup_card_type, lookup_color};
 
 pub(super) fn parse_additional_combat(ts: &mut TokenStream<'_>) -> PResult<Effect> {
-    let _ = ts.eat_phrase(&["after", "this", "phase"])
-        || ts.eat_phrase(&["after", "this", "main", "phase"])
-        || ts.eat_phrase(&["after", "this", "combat", "phase"]);
+    let _ = ts.eat_any_phrase(&[
+        &["after", "this", "phase"],
+        &["after", "this", "main", "phase"],
+        &["after", "this", "combat", "phase"],
+    ]);
     let _ = ts.eat_comma();
-    if ts.eat_phrase(&["there", "is", "an", "additional", "beginning", "phase"])
-        || ts.eat_phrase(&["there's", "an", "additional", "beginning", "phase"])
-    {
+    if ts.eat_any_phrase(&[
+        &["there", "is", "an", "additional", "beginning", "phase"],
+        &["there's", "an", "additional", "beginning", "phase"],
+    ]) {
         let _ = ts.eat_phrase(&["after", "this", "phase"]);
-        return Ok(Effect::MutatePlayer {
-            player: PlayerRef::You,
-            mutation: PlayerMutation::Action(crate::v2::ir::PlayerActionKind::ExtraTurn),
-            duration: Duration::UntilEndOfTurn,
-        });
+        return Ok(player_action(
+            PlayerRef::You,
+            PlayerActionKind::ExtraTurn,
+            Duration::UntilEndOfTurn,
+        ));
     }
     if ts.eat_phrase(&["there", "are"]) {
         let cp = ts.checkpoint();
@@ -33,28 +41,29 @@ pub(super) fn parse_additional_combat(ts: &mut TokenStream<'_>) -> PResult<Effec
             let _ = ts.eat_phrase(&["after", "this", "phase"]);
             return Ok(Effect::ForEach {
                 over: crate::v2::ir::ForEachDomain::Count(crate::v2::ir::ValueExpr::Const(n)),
-                body: vec![Effect::MutatePlayer {
-                    player: PlayerRef::You,
-                    mutation: PlayerMutation::AdditionalCombat {
+                body: vec![mutate_player(
+                    PlayerRef::You,
+                    PlayerMutation::AdditionalCombat {
                         followed_by_main: false,
                     },
-                    duration: Duration::UntilEndOfTurn,
-                }],
+                    Duration::UntilEndOfTurn,
+                )],
             });
         }
         ts.restore(cp);
     }
-    if ts.eat_phrase(&["there", "is", "an", "additional", "combat", "phase"])
-        || ts.eat_phrase(&["there's", "an", "additional", "combat", "phase"])
-    {
+    if ts.eat_any_phrase(&[
+        &["there", "is", "an", "additional", "combat", "phase"],
+        &["there's", "an", "additional", "combat", "phase"],
+    ]) {
         let _ = ts.eat_phrase(&["after", "this", "phase"]);
         let followed_by_main =
             ts.eat_phrase(&["followed", "by", "an", "additional", "main", "phase"]);
-        return Ok(Effect::MutatePlayer {
-            player: PlayerRef::You,
-            mutation: PlayerMutation::AdditionalCombat { followed_by_main },
-            duration: Duration::UntilEndOfTurn,
-        });
+        return Ok(mutate_player(
+            PlayerRef::You,
+            PlayerMutation::AdditionalCombat { followed_by_main },
+            Duration::UntilEndOfTurn,
+        ));
     }
     Err(ts.err("expected additional combat phase clause"))
 }
@@ -68,15 +77,16 @@ pub(super) fn try_parse_extra_mana_spend_purpose(
 ) -> Option<crate::v2::ir::ManaSpendPurpose> {
     use crate::v2::ir::ManaSpendPurpose;
     let cp = ts.checkpoint();
-    if ts.eat_phrase(&["foretell", "cards"]) || ts.eat_phrase(&["foretell", "a", "card"]) {
+    if ts.eat_any_phrase(&[&["foretell", "cards"], &["foretell", "a", "card"]]) {
         let _ = ts.eat_phrase(&["from", "your", "hand"]);
         return Some(ManaSpendPurpose::Foretell);
     }
-    if ts.eat_phrase(&["pay", "cumulative", "upkeep", "costs"])
-        || ts.eat_phrase(&["pay", "a", "disturb", "cost"])
-        || ts.eat_phrase(&["pay", "a", "morph", "cost"])
-        || ts.eat_phrase(&["pay", "generic", "mana", "costs"])
-        || ts.eat_phrase(&[
+    const ACTIVATE_PURPOSES: &[&[&str]] = &[
+        &["pay", "cumulative", "upkeep", "costs"],
+        &["pay", "a", "disturb", "cost"],
+        &["pay", "a", "morph", "cost"],
+        &["pay", "generic", "mana", "costs"],
+        &[
             "pay",
             "a",
             "mana",
@@ -88,13 +98,14 @@ pub(super) fn try_parse_extra_mana_spend_purpose(
             "creature",
             "face",
             "up",
-        ])
-        || ts.eat_phrase(&["turn", "permanents", "face", "up"])
-        || ts.eat_phrase(&["turn", "a", "permanent", "face", "up"])
-        || ts.eat_phrase(&["activate", "power-up", "abilities"])
-        || ts.eat_phrase(&["activate", "equip", "abilities"])
-        || ts.eat_phrase(&["activate", "an", "equip", "ability"])
-    {
+        ],
+        &["turn", "permanents", "face", "up"],
+        &["turn", "a", "permanent", "face", "up"],
+        &["activate", "power-up", "abilities"],
+        &["activate", "equip", "abilities"],
+        &["activate", "an", "equip", "ability"],
+    ];
+    if ts.eat_any_phrase(ACTIVATE_PURPOSES) {
         return Some(ManaSpendPurpose::ActivateAbilities(None));
     }
     if ts.eat_phrase(&["cast", "the", "last", "card", "exiled", "with"]) && ts.eat_tilde() {
@@ -104,35 +115,37 @@ pub(super) fn try_parse_extra_mana_spend_purpose(
     }
     ts.restore(cp);
     // `cast a Time Lord or Alien spell` / `activate an ability of a Time Lord or Alien`
+    let time_lord_alien = |any_spell: bool| {
+        let mut flt = ObjectFilter {
+            any_spell,
+            subtypes_match_any: true,
+            ..Default::default()
+        };
+        flt.subtypes.push("Time Lord".to_string());
+        flt.subtypes.push("Alien".to_string());
+        flt
+    };
     if ts.eat_phrase(&["cast", "a", "time", "lord", "or", "alien", "spell"]) {
-        let mut flt = ObjectFilter {
-            any_spell: true,
-            subtypes_match_any: true,
-            ..Default::default()
-        };
-        flt.subtypes.push("Time Lord".to_string());
-        flt.subtypes.push("Alien".to_string());
-        return Some(ManaSpendPurpose::CastSpells(Some(flt)));
+        return Some(ManaSpendPurpose::CastSpells(Some(time_lord_alien(true))));
     }
-    if ts.eat_phrase(&[
-        "activate", "an", "ability", "of", "a", "time", "lord", "or", "alien",
-    ]) || ts.eat_phrase(&[
-        "activate",
-        "abilities",
-        "of",
-        "a",
-        "time",
-        "lord",
-        "or",
-        "alien",
+    if ts.eat_any_phrase(&[
+        &[
+            "activate", "an", "ability", "of", "a", "time", "lord", "or", "alien",
+        ],
+        &[
+            "activate",
+            "abilities",
+            "of",
+            "a",
+            "time",
+            "lord",
+            "or",
+            "alien",
+        ],
     ]) {
-        let mut flt = ObjectFilter {
-            subtypes_match_any: true,
-            ..Default::default()
-        };
-        flt.subtypes.push("Time Lord".to_string());
-        flt.subtypes.push("Alien".to_string());
-        return Some(ManaSpendPurpose::ActivateAbilities(Some(flt)));
+        return Some(ManaSpendPurpose::ActivateAbilities(Some(time_lord_alien(
+            false,
+        ))));
     }
     ts.restore(cp);
     None
@@ -151,8 +164,8 @@ pub(super) fn parse_temporary_static_clause(ts: &mut TokenStream<'_>) -> PResult
         "of",
     ]) {
         let src = parse_object_filter(ts)?;
-        return Ok(Effect::ApplyContinuous {
-            effect: Box::new(StaticAbility::RuleRestriction {
+        return Ok(apply_continuous(
+            StaticAbility::RuleRestriction {
                 subject: Some(SubjectRef::Compound(vec![
                     SubjectRef::Player(PlayerRef::EachPlayer),
                     SubjectRef::All(Box::new(ObjectFilter {
@@ -162,17 +175,16 @@ pub(super) fn parse_temporary_static_clause(ts: &mut TokenStream<'_>) -> PResult
                 ])),
                 rule: RuleRestrictionKind::CantBeTargetedBy(Box::new(src)),
                 condition: None,
-            }),
-            duration: Duration::UntilEndOfTurn,
-        });
+            },
+            Duration::UntilEndOfTurn,
+        ));
     }
     // `The next enchantment spell you cast this turn can't be countered`
     if ts.peek_phrase(&["the", "next"]) {
-        let st = parse_static_ability(ts)?;
-        return Ok(Effect::ApplyContinuous {
-            effect: Box::new(st),
-            duration: Duration::UntilEndOfTurn,
-        });
+        return Ok(apply_continuous(
+            parse_static_ability(ts)?,
+            Duration::UntilEndOfTurn,
+        ));
     }
     Err(ts.err("not a temporary static clause"))
 }
@@ -272,31 +284,31 @@ pub(super) fn parse_activation_restrictions(
             out.push(ActivationRestriction::DuringYourTurn);
         } else if ts.eat_phrase(&["during", "the", "declare", "attackers", "step"]) {
             out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::DeclareAttackers,
+                CombatStepKind::DeclareAttackers,
             ));
         } else if ts.eat_phrase(&["during", "the", "declare", "blockers", "step"]) {
             out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::DeclareBlockers,
+                CombatStepKind::DeclareBlockers,
             ));
         } else if ts.eat_phrase(&["during", "the", "combat", "damage", "step"]) {
             out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::CombatDamage,
+                CombatStepKind::CombatDamage,
             ));
         } else if ts.eat_phrase(&["during", "the", "end", "of", "combat", "step"]) {
             out.push(ActivationRestriction::DuringEndOfCombat);
         } else if ts.eat_phrase(&["during", "combat", "before", "blockers", "are", "declared"]) {
             out.push(ActivationRestriction::DuringCombat);
             out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::DeclareAttackers,
+                CombatStepKind::DeclareAttackers,
             ));
         } else if ts.eat_phrase(&["during", "combat", "after", "blockers", "are", "declared"]) {
             out.push(ActivationRestriction::DuringCombat);
             out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::DeclareBlockers,
+                CombatStepKind::DeclareBlockers,
             ));
         } else if ts.eat_phrase(&["before", "the", "combat", "damage", "step"]) {
             out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::DeclareBlockers,
+                CombatStepKind::DeclareBlockers,
             ));
         } else if ts.eat_phrase(&["after", "combat"]) {
             out.push(ActivationRestriction::OnlyIf(Box::new(
@@ -306,18 +318,18 @@ pub(super) fn parse_activation_restrictions(
                     ),
                 ),
             )));
-        } else if ts.eat_phrase(&["before", "the", "end", "of", "combat", "step"])
-            || ts.eat_phrase(&["before", "combat"])
-        {
+        } else if ts.eat_any_phrase(&[
+            &["before", "the", "end", "of", "combat", "step"],
+            &["before", "combat"],
+            &["before", "attackers", "are", "declared"],
+        ]) {
             out.push(ActivationRestriction::BeforeAttackers);
         } else if ts.eat_phrase(&["during", "combat"]) {
             out.push(ActivationRestriction::DuringCombat);
         } else if ts.eat_phrase(&["before", "blockers", "are", "declared"]) {
             out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::DeclareAttackers,
+                CombatStepKind::DeclareAttackers,
             ));
-        } else if ts.eat_phrase(&["before", "attackers", "are", "declared"]) {
-            out.push(ActivationRestriction::BeforeAttackers);
         } else if ts.eat_phrase(&["once", "each", "turn"]) {
             out.push(ActivationRestriction::OnceEachTurn);
         } else if ts.eat_word("once") {
@@ -420,22 +432,20 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
             }
             ts.restore(cp);
             if ts.eat_phrase(&["this", "ability", "can't", "be", "copied"]) {
-                let mut out = vec![Effect::ApplyContinuous {
-                    effect: Box::new(StaticAbility::RuleRestriction {
+                let mut out = vec![apply_continuous(
+                    StaticAbility::RuleRestriction {
                         subject: None,
                         rule: RuleRestrictionKind::CantBeCountered,
                         condition: None,
-                    }),
-                    duration: Duration::Instant,
-                }];
+                    },
+                    Duration::Instant,
+                )];
                 if ts.eat_phrase(&["and", "x", "can't", "be"]) && ts.next_number(false) == Some(0) {
-                    out.push(Effect::MutatePlayer {
-                        player: PlayerRef::You,
-                        mutation: PlayerMutation::Action(
-                            crate::v2::ir::PlayerActionKind::XCantBeZero,
-                        ),
-                        duration: Duration::Instant,
-                    });
+                    out.push(player_action(
+                        PlayerRef::You,
+                        PlayerActionKind::XCantBeZero,
+                        Duration::Instant,
+                    ));
                 }
                 if ts.is_eof() {
                     return Ok(out);
@@ -446,12 +456,10 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
                 "this", "ability", "still", "resolves", "if", "its", "target", "becomes", "illegal",
             ]) && ts.is_eof()
             {
-                return Ok(vec![Effect::ApplyContinuous {
-                    effect: Box::new(StaticAbility::GlobalFlag(
-                        crate::v2::ir::StaticFlagKind::AppliesInAllZones,
-                    )),
-                    duration: Duration::Instant,
-                }]);
+                return Ok(vec![apply_continuous(
+                    StaticAbility::GlobalFlag(crate::v2::ir::StaticFlagKind::AppliesInAllZones),
+                    Duration::Instant,
+                )]);
             }
             ts.restore(cp);
             if ts.eat_phrase(&["this", "ability", "costs"])
@@ -469,15 +477,15 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
                     && let Ok(cond) = parse_cond(ts)
                     && ts.is_eof()
                 {
-                    return Ok(vec![Effect::ApplyContinuous {
-                        effect: Box::new(StaticAbility::ActivationCostModifier {
+                    return Ok(vec![apply_continuous(
+                        StaticAbility::ActivationCostModifier {
                             delta,
                             less,
                             scale: None,
                             condition: Some(cond),
-                        }),
-                        duration: Duration::Permanent,
-                    }]);
+                        },
+                        Duration::Permanent,
+                    )]);
                 }
             }
         }
@@ -504,7 +512,7 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
                 "step",
             ]) {
                 r.push(ActivationRestriction::DuringCombatStep(
-                    crate::v2::ir::CombatStepKind::DeclareAttackers,
+                    CombatStepKind::DeclareAttackers,
                 ));
             }
             if ts.is_eof() {
@@ -518,13 +526,13 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
         "ability",
     ]) && ts.is_eof()
     {
-        return Ok(vec![Effect::MutatePlayer {
-            player: PlayerRef::You,
-            mutation: PlayerMutation::ManaRule(crate::v2::ir::ManaRuleKind::SpendOnlyColorOnX(
+        return Ok(vec![mutate_player(
+            PlayerRef::You,
+            PlayerMutation::ManaRule(crate::v2::ir::ManaRuleKind::SpendOnlyColorOnX(
                 crate::ast::ColorMask::EMPTY,
             )),
-            duration: Duration::Permanent,
-        }]);
+            Duration::Permanent,
+        )]);
     }
     if ts.eat_phrase(&[
         "for",
@@ -542,12 +550,10 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
         ])
         && ts.is_eof()
     {
-        return Ok(vec![Effect::ApplyContinuous {
-            effect: Box::new(StaticAbility::GlobalFlag(
-                crate::v2::ir::StaticFlagKind::CostReductionRule,
-            )),
-            duration: Duration::Permanent,
-        }]);
+        return Ok(vec![apply_continuous(
+            StaticAbility::GlobalFlag(crate::v2::ir::StaticFlagKind::CostReductionRule),
+            Duration::Permanent,
+        )]);
     }
 
     // 3. `As an additional cost to cast ~, <cost_or_effect>`
@@ -562,10 +568,10 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
             if let Ok(costs) = try_parse(ts, crate::v2::cost::parse_cost_list)
                 && ts.is_eof()
             {
-                return Ok(vec![Effect::ApplyContinuous {
-                    effect: Box::new(StaticAbility::AdditionalCost(costs)),
-                    duration: Duration::Instant,
-                }]);
+                return Ok(vec![apply_continuous(
+                    StaticAbility::AdditionalCost(costs),
+                    Duration::Instant,
+                )]);
             }
             ts.restore(body_cp);
             if let Ok(effs) = try_parse(ts, super::parse_sentence_top)
@@ -578,4 +584,297 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
     }
 
     Err(ts.err("not an extended restriction or cost sentence"))
+}
+
+// ---------------------------------------------------------------------------
+// Shared clause-submodule IR constructors and token helpers
+// ---------------------------------------------------------------------------
+
+pub(in crate::v2) fn simple_zone_op(
+    actor: PlayerRef,
+    op: ZoneOpKind,
+    subject: SubjectRef,
+    from: Vec<ZoneRef>,
+    to: Option<ZoneDest>,
+) -> Effect {
+    counted_zone_op(actor, op, subject, from, to, None)
+}
+
+pub(in crate::v2) fn counted_zone_op(
+    actor: PlayerRef,
+    op: ZoneOpKind,
+    subject: SubjectRef,
+    from: Vec<ZoneRef>,
+    to: Option<ZoneDest>,
+    count: Option<CountSpec>,
+) -> Effect {
+    Effect::ZoneOp {
+        actor,
+        op,
+        subject,
+        from,
+        to,
+        modifiers: EntryModifiers::default(),
+        except: None,
+        count,
+    }
+}
+
+pub(in crate::v2) fn move_zone_op(
+    actor: PlayerRef,
+    subject: SubjectRef,
+    from: Vec<ZoneRef>,
+    to: ZoneDest,
+    modifiers: EntryModifiers,
+    count: Option<CountSpec>,
+) -> Effect {
+    Effect::ZoneOp {
+        actor,
+        op: ZoneOpKind::Move,
+        subject,
+        from,
+        to: Some(to),
+        modifiers,
+        except: None,
+        count,
+    }
+}
+
+pub(in crate::v2) fn exile_zone_op(
+    actor: PlayerRef,
+    subject: SubjectRef,
+    from: Vec<ZoneRef>,
+    face_down: bool,
+    counters: Option<(CounterKind, ValueExpr)>,
+    count: Option<CountSpec>,
+) -> Effect {
+    Effect::ZoneOp {
+        actor,
+        op: ZoneOpKind::Exile {
+            face_down,
+            counters,
+        },
+        subject,
+        from,
+        to: None,
+        modifiers: EntryModifiers {
+            face_down,
+            ..EntryModifiers::default()
+        },
+        except: None,
+        count,
+    }
+}
+
+pub(in crate::v2) fn exact_count(count: ValueExpr) -> CountSpec {
+    CountSpec {
+        count,
+        up_to: false,
+        any_number: false,
+    }
+}
+
+pub(in crate::v2) fn simple_zone_dest(zone: ZoneKind, owner: ZoneOwner) -> ZoneDest {
+    ZoneDest {
+        zone,
+        owner,
+        library_position: None,
+        library_order: None,
+        under_control: None,
+    }
+}
+
+pub(in crate::v2) fn shuffled_zone_dest(zone: ZoneKind, owner: ZoneOwner) -> ZoneDest {
+    ZoneDest {
+        zone,
+        owner,
+        library_position: Some(LibraryPosition::Shuffled),
+        library_order: None,
+        under_control: None,
+    }
+}
+
+pub(in crate::v2) fn zone_cards_subject(zref: ZoneRef) -> SubjectRef {
+    SubjectRef::Group(Box::new(ObjectFilter {
+        any_card: true,
+        zones: vec![zref],
+        ..Default::default()
+    }))
+}
+
+pub(in crate::v2) fn all_zone_cards_subject(zref: ZoneRef) -> SubjectRef {
+    SubjectRef::All(Box::new(ObjectFilter {
+        any_card: true,
+        zones: vec![zref],
+        ..Default::default()
+    }))
+}
+
+pub(in crate::v2) fn mutate_obj(
+    subject: SubjectRef,
+    mutation: ObjectMutation,
+    duration: Duration,
+) -> Effect {
+    Effect::MutateObject {
+        subject,
+        mutation,
+        duration,
+    }
+}
+
+pub(in crate::v2) fn mutate_player(
+    player: PlayerRef,
+    mutation: PlayerMutation,
+    duration: Duration,
+) -> Effect {
+    Effect::MutatePlayer {
+        player,
+        mutation,
+        duration,
+    }
+}
+
+pub(in crate::v2) fn player_action(
+    player: PlayerRef,
+    action: PlayerActionKind,
+    duration: Duration,
+) -> Effect {
+    mutate_player(player, PlayerMutation::Action(action), duration)
+}
+
+pub(in crate::v2) fn prompt_choice(chooser: PlayerRef, kind: ChoiceKind) -> Effect {
+    Effect::PromptChoice { chooser, kind }
+}
+
+pub(in crate::v2) fn apply_continuous(effect: StaticAbility, duration: Duration) -> Effect {
+    Effect::ApplyContinuous {
+        effect: Box::new(effect),
+        duration,
+    }
+}
+
+pub(in crate::v2) fn apply_replacement(replacement: Replacement, duration: Duration) -> Effect {
+    Effect::ApplyReplacement {
+        replacement: Box::new(replacement),
+        duration,
+    }
+}
+
+pub(in crate::v2) fn compile_quoted_face(
+    ts: &TokenStream<'_>,
+    name: &str,
+    type_line: &str,
+    oracle_text: &str,
+) -> PResult<CompiledFaceV2> {
+    let compiled = crate::v2::card::compile_face_v2(
+        crate::FaceInput {
+            name,
+            type_line,
+            oracle_text,
+        },
+        ts.vocab,
+    );
+    if compiled.is_ok() {
+        Ok(compiled)
+    } else {
+        Err(compiled
+            .errors
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| ts.err("failed to compile quoted ability text")))
+    }
+}
+
+pub(in crate::v2) fn compile_quoted_permanent(
+    ts: &TokenStream<'_>,
+    quoted: &str,
+) -> PResult<CompiledFaceV2> {
+    compile_quoted_face(ts, "~", "Permanent", quoted)
+}
+
+pub(in crate::v2) fn eat_rounding(ts: &mut TokenStream<'_>, default: Rounding) -> Rounding {
+    match ts.eat_rounded_modifier() {
+        Some(true) => Rounding::Up,
+        Some(false) => Rounding::Down,
+        None => default,
+    }
+}
+
+pub(in crate::v2) fn eat_type_color_subtype_run(
+    ts: &mut TokenStream<'_>,
+    allow_colors: bool,
+    allow_colorless: bool,
+    allow_and: bool,
+) -> (CardTypeMask, ColorMask, Vec<String>) {
+    let mut add_types = CardTypeMask::EMPTY;
+    let mut colors = ColorMask::EMPTY;
+    let mut subtypes = Vec::new();
+    while let Some(w) = ts.peek_word() {
+        let low = w.to_ascii_lowercase();
+        if let Some(ct) = lookup_card_type(&low) {
+            ts.next_word();
+            add_types = add_types.union(ct);
+        } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+            ts.next_word();
+            subtypes.push(sub.to_string());
+        } else if allow_colors && let Some(c) = lookup_color(&low) {
+            ts.next_word();
+            colors = colors.union(c);
+        } else if (allow_colorless && low == "colorless")
+            || (allow_and
+                && low == "and"
+                && ts.peek_n(1).is_some_and(|t| {
+                    matches!(t.kind, TokenKind::Word(nw) if {
+                        let nl = nw.to_ascii_lowercase();
+                        (allow_colors && lookup_color(&nl).is_some())
+                            || lookup_card_type(&nl).is_some()
+                            || ts.vocab.lookup_subtype(&nl).is_some()
+                    })
+                }))
+        {
+            ts.next_word();
+        } else {
+            break;
+        }
+    }
+    (add_types, colors, subtypes)
+}
+
+pub(in crate::v2) fn parse_from_zone_list(ts: &mut TokenStream<'_>) -> PResult<Vec<ZoneRef>> {
+    let mut from = Vec::new();
+    if ts.eat_word("from") {
+        let z1 = parse_zone_ref(ts)?;
+        from.push(z1);
+        loop {
+            let zcp = ts.checkpoint();
+            if ts.eat_any_word(&["or", "and"]) {
+                let _ = ts.eat_word("from");
+                if let Ok(z2) = try_parse(ts, parse_zone_ref) {
+                    from.push(z2);
+                    continue;
+                }
+                let bare = if ts.eat_any_word(&["graveyard", "graveyards"]) {
+                    Some(ZoneKind::Graveyard)
+                } else if ts.eat_any_word(&["hand", "hands"]) {
+                    Some(ZoneKind::Hand)
+                } else if ts.eat_any_word(&["library", "libraries"]) {
+                    Some(ZoneKind::Library)
+                } else if ts.eat_word("exile") {
+                    Some(ZoneKind::Exile)
+                } else {
+                    None
+                };
+                if let Some(zone) = bare {
+                    from.push(ZoneRef {
+                        zone,
+                        owner: z1.owner,
+                    });
+                    continue;
+                }
+            }
+            ts.restore(zcp);
+            break;
+        }
+    }
+    Ok(from)
 }

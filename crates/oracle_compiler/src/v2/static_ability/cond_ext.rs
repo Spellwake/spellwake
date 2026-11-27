@@ -66,10 +66,11 @@ fn parse_static_condition_fallback(ts: &mut TokenStream<'_>) -> PResult<Conditio
     let cp = ts.checkpoint();
 
     // `you've surveilled this turn` / `you've scried or surveilled this turn`
-    if ts.eat_phrase(&["you've", "surveilled", "this", "turn"])
-        || ts.eat_phrase(&["you've", "scried", "or", "surveilled", "this", "turn"])
-        || ts.eat_phrase(&["you've", "scried", "this", "turn"])
-    {
+    if ts.eat_any_phrase(&[
+        &["you've", "surveilled", "this", "turn"],
+        &["you've", "scried", "or", "surveilled", "this", "turn"],
+        &["you've", "scried", "this", "turn"],
+    ]) {
         return Ok(ConditionExpr::PlayerCheck {
             player: PlayerRef::You,
             kind: PlayerConditionKind::DescendedThisTurn,
@@ -128,35 +129,22 @@ fn parse_static_condition_fallback(ts: &mut TokenStream<'_>) -> PResult<Conditio
 
     // `~'s power is even` / `~'s power is odd` / `~'s power is negative`
     if ts.eat_tilde() && ts.eat_phrase(&["'s", "power", "is"]) {
+        let cmp_self_power = |op: CompareOp| ConditionExpr::Compare {
+            lhs: Box::new(ValueExpr::ObjectStat {
+                subject: Box::new(SubjectRef::SelfObject),
+                stat: StatKind::Power,
+            }),
+            op,
+            rhs: Box::new(ValueExpr::Const(0)),
+        };
         if ts.eat_word("even") {
-            return Ok(ConditionExpr::Compare {
-                lhs: Box::new(ValueExpr::ObjectStat {
-                    subject: Box::new(SubjectRef::SelfObject),
-                    stat: StatKind::Power,
-                }),
-                op: CompareOp::Eq,
-                rhs: Box::new(ValueExpr::Const(0)),
-            });
+            return Ok(cmp_self_power(CompareOp::Eq));
         }
         if ts.eat_word("odd") {
-            return Ok(ConditionExpr::Not(Box::new(ConditionExpr::Compare {
-                lhs: Box::new(ValueExpr::ObjectStat {
-                    subject: Box::new(SubjectRef::SelfObject),
-                    stat: StatKind::Power,
-                }),
-                op: CompareOp::Eq,
-                rhs: Box::new(ValueExpr::Const(0)),
-            })));
+            return Ok(ConditionExpr::Not(Box::new(cmp_self_power(CompareOp::Eq))));
         }
         if ts.eat_word("negative") {
-            return Ok(ConditionExpr::Compare {
-                lhs: Box::new(ValueExpr::ObjectStat {
-                    subject: Box::new(SubjectRef::SelfObject),
-                    stat: StatKind::Power,
-                }),
-                op: CompareOp::Lt,
-                rhs: Box::new(ValueExpr::Const(0)),
-            });
+            return Ok(cmp_self_power(CompareOp::Lt));
         }
     }
     ts.restore(cp);
@@ -208,7 +196,7 @@ fn parse_static_condition_fallback(ts: &mut TokenStream<'_>) -> PResult<Conditio
     if ts.eat_phrase(&["at", "least"])
         && let Some(n) = ts.next_number(false)
         && ts.eat_phrase(&["other", "creatures"])
-        && (ts.eat_word("attack") || ts.eat_word("block"))
+        && ts.eat_any_word(&["attack", "block"])
     {
         return Ok(ConditionExpr::PlayerCheck {
             player: PlayerRef::You,
@@ -219,13 +207,10 @@ fn parse_static_condition_fallback(ts: &mut TokenStream<'_>) -> PResult<Conditio
     }
     ts.restore(cp);
 
-    // `<flt> also attacks/blocks` (e.g. `a black or green creature also attacks`, `a creature with greater power also blocks`)
+    // `<flt> also attacks/blocks`
     if let Ok(flt) = try_parse(ts, parse_object_filter)
         && ts.eat_word("also")
-        && (ts.eat_word("attacks")
-            || ts.eat_word("attack")
-            || ts.eat_word("blocks")
-            || ts.eat_word("block"))
+        && ts.eat_any_word(&["attacks", "attack", "blocks", "block"])
     {
         return Ok(ConditionExpr::Controls {
             player: PlayerRef::You,
@@ -428,7 +413,7 @@ fn parse_static_condition_fallback(ts: &mut TokenStream<'_>) -> PResult<Conditio
     ts.restore(cp);
 
     // `it's bargained` / `it was bargained` / `it's cast using teamwork`
-    if ts.eat_phrase(&["it's", "bargained"]) || ts.eat_phrase(&["it", "was", "bargained"]) {
+    if ts.eat_any_phrase(&[&["it's", "bargained"], &["it", "was", "bargained"]]) {
         return Ok(ConditionExpr::Flag(ConditionFlag::WasBargained));
     }
     if ts.eat_phrase(&["it's", "cast", "using", "teamwork"]) {
@@ -475,7 +460,7 @@ fn parse_static_condition_fallback(ts: &mut TokenStream<'_>) -> PResult<Conditio
     }
     ts.restore(cp);
 
-    // `<flt> died this turn` (e.g. `a non-Zombie creature died this turn`)
+    // `<flt> died this turn`
     if let Ok(flt) = try_parse(ts, parse_object_filter)
         && ts.eat_phrase(&["died", "this", "turn"])
     {
@@ -631,32 +616,29 @@ fn parse_static_condition_fallback(ts: &mut TokenStream<'_>) -> PResult<Conditio
     }
     ts.restore(cp);
 
-    // `you control a permanent named <Name> or a permanent named <Name2>` (relational named permanent check)
-    if ts.eat_phrase(&["you", "control", "a", "permanent", "named"])
-        && let Some(cond) = parse_named_permanent_check_tail(ts)
+    // `you control a permanent/creature named <Name> [or a permanent/creature named <Name2>]`
+    if ts.eat_any_phrase(&[
+        &["you", "control", "a", "permanent", "named"],
+        &["you", "control", "a", "creature", "named"],
+    ]) && let Some(cond) = parse_named_permanent_check_tail(ts)
     {
         return Ok(cond);
     }
     ts.restore(cp);
 
-    // `you control a creature named <Name>` (multi-word capitalized card name with `of the`)
-    if ts.eat_phrase(&["you", "control", "a", "creature", "named"])
-        && let Some(cond) = parse_named_permanent_check_tail(ts)
-    {
-        return Ok(cond);
-    }
-    ts.restore(cp);
-
-    // `their controller sacrifices <flt> [of their choice] for each <flt2> [they control that's attacking]`
-    if (ts.eat_phrase(&["their", "controller", "sacrifices"])
-        || ts.eat_phrase(&["its", "controller", "sacrifices"]))
-        && let Ok(sac_flt) = try_parse(ts, parse_object_filter)
+    // `their/its controller sacrifices <flt> [of their choice] for each <flt2> [they control that's attacking]`
+    if ts.eat_any_phrase(&[
+        &["their", "controller", "sacrifices"],
+        &["its", "controller", "sacrifices"],
+    ]) && let Ok(sac_flt) = try_parse(ts, parse_object_filter)
     {
         let _ = ts.eat_phrase(&["of", "their", "choice"]);
         if ts.eat_phrase(&["for", "each"]) {
             let _ = opt(ts, parse_object_filter);
-            let _ = ts.eat_phrase(&["they", "control", "that's", "attacking"])
-                || ts.eat_phrase(&["that's", "attacking"]);
+            let _ = ts.eat_any_phrase(&[
+                &["they", "control", "that's", "attacking"],
+                &["that's", "attacking"],
+            ]);
         }
         return Ok(ConditionExpr::SacrificedPermanentThisTurn {
             player: PlayerRef::ThatPlayer,
@@ -671,8 +653,10 @@ fn parse_static_condition_fallback(ts: &mut TokenStream<'_>) -> PResult<Conditio
     {
         if ts.eat_phrase(&["for", "each"]) {
             let _ = opt(ts, parse_object_filter);
-            let _ = ts.eat_phrase(&["they", "control", "that's", "blocking", "it"])
-                || ts.eat_phrase(&["that's", "blocking", "it"]);
+            let _ = ts.eat_any_phrase(&[
+                &["they", "control", "that's", "blocking", "it"],
+                &["that's", "blocking", "it"],
+            ]);
         }
         return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
     }
@@ -873,7 +857,7 @@ pub(crate) fn parse_static_scale_expr(ts: &mut TokenStream<'_>) -> PResult<Value
                 owner: ZoneOwner::Default,
             }));
         }
-        // `for each card type among permanents you've sacrificed this turn` (`Korvold, Gleeful Glutton`)
+        // `for each card type among permanents you've sacrificed this turn`
         if ts.eat_phrase(&[
             "card",
             "type",
@@ -888,7 +872,7 @@ pub(crate) fn parse_static_scale_expr(ts: &mut TokenStream<'_>) -> PResult<Value
                 PriorActionKind::SacrificedThisWay,
             ));
         }
-        // `for each other spell that player has cast this turn` (`Damping Sphere`)
+        // `for each other spell that player has cast this turn`
         if ts.eat_phrase(&[
             "other", "spell", "that", "player", "has", "cast", "this", "turn",
         ]) {
@@ -898,7 +882,7 @@ pub(crate) fn parse_static_scale_expr(ts: &mut TokenStream<'_>) -> PResult<Value
                 exclude_first: true,
             });
         }
-        // `for each land your opponents control that could produce {C}` (`Obsidian Charmaw`)
+        // `for each land your opponents control that could produce {C}`
         if ts.eat_phrase(&[
             "land",
             "your",
@@ -915,7 +899,7 @@ pub(crate) fn parse_static_scale_expr(ts: &mut TokenStream<'_>) -> PResult<Value
                 ..Default::default()
             })));
         }
-        // `for each <kind> counter on the creature it targets` (`Warrior's Blades`)
+        // `for each <kind> counter on the creature it targets`
         {
             let kcp = ts.checkpoint();
             if let Ok(kind) = try_parse(ts, parse_counter_kind)
@@ -928,7 +912,7 @@ pub(crate) fn parse_static_scale_expr(ts: &mut TokenStream<'_>) -> PResult<Value
             }
             ts.restore(kcp);
         }
-        // `for each <flt> you already control` (`Giada, Font of Hope`)
+        // `for each <flt> you already control`
         {
             let acp = ts.checkpoint();
             if let Ok(mut flt) = try_parse(ts, parse_object_filter)
@@ -939,7 +923,7 @@ pub(crate) fn parse_static_scale_expr(ts: &mut TokenStream<'_>) -> PResult<Value
             }
             ts.restore(acp);
         }
-        // `for each card you own in exile and in your graveyard that's an instant card, a sorcery card, or a card that has an Adventure` (`Sailors' Bane`)
+        // `for each card you own in exile and in your graveyard that's an instant card, a sorcery card, or a card that has an Adventure`
         if ts.eat_phrase(&[
             "card",
             "you",
@@ -966,7 +950,7 @@ pub(crate) fn parse_static_scale_expr(ts: &mut TokenStream<'_>) -> PResult<Value
                 ..Default::default()
             })));
         }
-        // `for each card in your hand and each foretold card you own in exile` (`Alrund`)
+        // `for each card in your hand and each foretold card you own in exile`
         if ts.eat_phrase(&[
             "card", "in", "your", "hand", "and", "each", "foretold", "card",
         ]) && ts.eat_phrase(&["you", "own", "in", "exile"])
@@ -986,7 +970,7 @@ pub(crate) fn parse_static_scale_expr(ts: &mut TokenStream<'_>) -> PResult<Value
                 }))),
             ));
         }
-        // `for each other creature on the battlefield that shares at least one creature type with it` (`Coat of Arms`)
+        // `for each other creature on the battlefield that shares at least one creature type with it`
         if ts.eat_phrase(&[
             "other",
             "creature",
@@ -1065,11 +1049,13 @@ pub(crate) fn parse_static_value_expr(ts: &mut TokenStream<'_>) -> PResult<Value
             PriorActionKind::SacrificedThisWay,
         ));
     }
-    if ts.eat_phrase(&[
-        "the", "greatest", "number", "noted", "for", "it", "this", "turn",
-    ]) || ts.eat_phrase(&["the", "last", "chosen", "number"])
-        || ts.eat_phrase(&["the", "chosen", "number"])
-    {
+    if ts.eat_any_phrase(&[
+        &[
+            "the", "greatest", "number", "noted", "for", "it", "this", "turn",
+        ],
+        &["the", "last", "chosen", "number"],
+        &["the", "chosen", "number"],
+    ]) {
         return Ok(ValueExpr::Var(crate::v2::ir::VarName::X));
     }
     if ts.eat_phrase(&[

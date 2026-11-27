@@ -10,7 +10,81 @@ use crate::v2::ir::{
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
 
 use super::cond_ext::parse_static_condition;
-use super::parse_static_core;
+use super::{and_cond, merge_cond, parse_static_core, wrap_compound};
+
+fn exile_zone() -> crate::v2::ir::ZoneRef {
+    crate::v2::ir::ZoneRef {
+        zone: crate::v2::ir::ZoneKind::Exile,
+        owner: crate::v2::ir::ZoneOwner::Default,
+    }
+}
+
+fn zone_cast_perm(
+    player: PlayerRef,
+    filter: Option<ObjectFilter>,
+    zone: Option<crate::v2::ir::ZoneRef>,
+    mode: CastPermissionMode,
+    condition: Option<ConditionExpr>,
+) -> StaticAbility {
+    StaticAbility::ZoneCastPermission {
+        player,
+        filter,
+        subject: None,
+        zone,
+        mode,
+        condition,
+    }
+}
+
+fn play_from_zone(
+    player: PlayerRef,
+    filter: Option<ObjectFilter>,
+    zone: crate::v2::ir::ZoneRef,
+    top_only: bool,
+    lands: bool,
+    spells: bool,
+    condition: Option<ConditionExpr>,
+) -> StaticAbility {
+    zone_cast_perm(
+        player,
+        filter,
+        Some(zone),
+        CastPermissionMode::PlayFromZone {
+            top_only,
+            lands,
+            spells,
+        },
+        condition,
+    )
+}
+
+fn eat_each_turn_suffix(ts: &mut TokenStream<'_>) {
+    let _ = ts.eat_any_phrase(&[
+        &["on", "each", "of", "your", "turns"],
+        &["on", "each", "of", "their", "turns"],
+        &["during", "each", "of", "your", "turns"],
+        &["during", "each", "of", "their", "turns"],
+        &["each", "turn"],
+    ]);
+}
+
+fn parse_optional_by_alt_cost(
+    ts: &mut TokenStream<'_>,
+    mode: &mut CastPermissionMode,
+    allow_using_ability: bool,
+) {
+    if allow_using_ability && ts.eat_any_phrase(&[&["using", "their"], &["using", "its"]]) {
+        let _ = ts.next_word();
+        let _ = ts.eat_any_word(&["abilities", "ability"]);
+    }
+    if ts.eat_word("by") {
+        let costs = parse_cost_list(ts).unwrap_or_default();
+        let _ = ts.eat_in_addition_to_other_costs();
+        if !costs.is_empty() {
+            *mode = CastPermissionMode::AlternativeCost(costs);
+        }
+    }
+}
 
 pub(super) fn parse_player_static_ability(
     ts: &mut TokenStream<'_>,
@@ -26,12 +100,15 @@ pub(super) fn parse_player_static_ability(
                 let alt_cp = ts.checkpoint();
                 let _ = ts.eat_word("may");
                 if let Ok(costs) = try_parse(ts, parse_cost_list)
-                    && (ts.eat_phrase(&["rather", "than", "pay"])
-                        || ts.eat_phrase(&["rather", "than", "paying"]))
-                    && (ts.eat_phrase(&["its", "mana", "cost"])
-                        || ts.eat_phrase(&["that", "spell's", "mana", "cost"])
-                        || ts.eat_phrase(&["this", "spell's", "mana", "cost"])
-                        || (ts.eat_tilde() && ts.eat_phrase(&["'s", "mana", "cost"])))
+                    && ts.eat_any_phrase(&[
+                        &["rather", "than", "pay"],
+                        &["rather", "than", "paying"],
+                    ])
+                    && (ts.eat_any_phrase(&[
+                        &["its", "mana", "cost"],
+                        &["that", "spell's", "mana", "cost"],
+                        &["this", "spell's", "mana", "cost"],
+                    ]) || (ts.eat_tilde() && ts.eat_phrase(&["'s", "mana", "cost"])))
                 {
                     return Ok(StaticAbility::AlternativeCost(costs));
                 }
@@ -58,28 +135,20 @@ pub(super) fn parse_player_static_ability(
                         .get(ts.current_span().start..)
                         .unwrap_or("")
                         .trim();
-                    if !tail_str.is_empty() {
-                        let compiled = crate::v2::card::compile_face_v2(
-                            crate::FaceInput {
-                                name: "~",
-                                type_line: "Permanent",
-                                oracle_text: tail_str,
-                            },
-                            ts.vocab,
-                        );
-                        if compiled.is_ok() {
-                            ts.pos = ts.tokens.len();
-                            return Ok(StaticAbility::RevealOpeningHand {
-                                effect: vec![crate::v2::ir::Effect::ApplyContinuous {
-                                    effect: Box::new(StaticAbility::GrantAbility {
-                                        subject: SubjectRef::SelfObject,
-                                        ability: Box::new(compiled),
-                                        condition: None,
-                                    }),
-                                    duration: crate::v2::ir::Duration::Permanent,
-                                }],
-                            });
-                        }
+                    if !tail_str.is_empty()
+                        && let Ok(compiled) = ts.compile_quoted_permanent_ability(tail_str)
+                    {
+                        ts.pos = ts.tokens.len();
+                        return Ok(StaticAbility::RevealOpeningHand {
+                            effect: vec![crate::v2::ir::Effect::ApplyContinuous {
+                                effect: Box::new(StaticAbility::GrantAbility {
+                                    subject: SubjectRef::SelfObject,
+                                    ability: Box::new(compiled),
+                                    condition: None,
+                                }),
+                                duration: crate::v2::ir::Duration::Permanent,
+                            }],
+                        });
                     }
                     // `when each opponent casts their first spell of the game, <effect>`
                     if ts.eat_phrase(&[
@@ -144,7 +213,7 @@ pub(super) fn parse_player_static_ability(
                 }
                 return Ok(first);
             }
-            // Special player-headed rules (`Fastbond`, `Strong`, `River Song`, `Opposition Agent`, `Enhanced Surveillance`, `Circling Vultures`, `Fblthp`, `Heart of Kiran`, `Butcher Orgg`, `Cunning Giant`)
+            // Special player-headed rules
             if player == PlayerRef::You {
                 let sp_cp = ts.checkpoint();
                 if ts.eat_phrase(&[
@@ -153,46 +222,68 @@ pub(super) fn parse_player_static_ability(
                 ]) {
                     return Ok(StaticAbility::AdditionalLandPlayStatic { player, extra: 99 });
                 }
-                if ts.eat_phrase(&[
-                    "gain",
-                    "life",
-                    "rather",
-                    "than",
-                    "lose",
-                    "life",
-                    "from",
-                    "radiation",
-                ]) || ts.eat_phrase(&[
-                    "draw", "cards", "from", "the", "bottom", "of", "your", "library", "rather",
-                    "than", "the", "top",
-                ]) || ts.eat_phrase(&[
-                    "control",
-                    "your",
-                    "opponents",
-                    "while",
-                    "they're",
-                    "searching",
-                    "their",
-                    "libraries",
-                ]) || ts.eat_phrase(&[
-                    "may",
-                    "look",
-                    "at",
-                    "an",
-                    "additional",
-                    "two",
-                    "cards",
-                    "each",
-                    "time",
-                    "you",
-                    "surveil",
-                ]) || (ts.eat_phrase(&["may", "discard"])
-                    && ts.eat_tilde()
-                    && ts.eat_phrase(&["any", "time", "you", "could", "cast", "an", "instant"]))
-                    || ts.eat_phrase(&[
+                const SPECIAL_YOU_PHRASES: &[&[&str]] = &[
+                    &[
+                        "gain",
+                        "life",
+                        "rather",
+                        "than",
+                        "lose",
+                        "life",
+                        "from",
+                        "radiation",
+                    ],
+                    &[
+                        "draw", "cards", "from", "the", "bottom", "of", "your", "library",
+                        "rather", "than", "the", "top",
+                    ],
+                    &[
+                        "control",
+                        "your",
+                        "opponents",
+                        "while",
+                        "they're",
+                        "searching",
+                        "their",
+                        "libraries",
+                    ],
+                    &[
+                        "may",
+                        "look",
+                        "at",
+                        "an",
+                        "additional",
+                        "two",
+                        "cards",
+                        "each",
+                        "time",
+                        "you",
+                        "surveil",
+                    ],
+                    &[
                         "may", "plot", "nonland", "cards", "from", "the", "top", "of", "your",
                         "library",
-                    ])
+                    ],
+                    &[
+                        "may",
+                        "have",
+                        "it",
+                        "assign",
+                        "its",
+                        "combat",
+                        "damage",
+                        "to",
+                        "a",
+                        "creature",
+                        "defending",
+                        "player",
+                        "controls",
+                    ],
+                ];
+                if ts.eat_any_phrase(SPECIAL_YOU_PHRASES)
+                    || (ts.eat_phrase(&["may", "discard"])
+                        && ts.eat_tilde()
+                        && ts.eat_phrase(&["any", "time", "you", "could", "cast", "an", "instant"]))
                     || (ts.eat_phrase(&[
                         "may",
                         "remove",
@@ -230,21 +321,6 @@ pub(super) fn parse_player_static_ability(
                             "they",
                             "control",
                         ]))
-                    || ts.eat_phrase(&[
-                        "may",
-                        "have",
-                        "it",
-                        "assign",
-                        "its",
-                        "combat",
-                        "damage",
-                        "to",
-                        "a",
-                        "creature",
-                        "defending",
-                        "player",
-                        "controls",
-                    ])
                 {
                     return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AppliesInAllZones));
                 }
@@ -266,14 +342,13 @@ pub(super) fn parse_player_static_ability(
                     if ts.eat_phrase(&["the", "mana", "cost", "for"])
                         && let Ok(filter) = try_parse(ts, parse_object_filter)
                     {
-                        return Ok(StaticAbility::ZoneCastPermission {
-                            player: PlayerRef::You,
-                            filter: Some(filter),
-                            subject: None,
-                            zone: None,
-                            mode: CastPermissionMode::AlternativeCost(costs),
-                            condition: None,
-                        });
+                        return Ok(zone_cast_perm(
+                            PlayerRef::You,
+                            Some(filter),
+                            None,
+                            CastPermissionMode::AlternativeCost(costs),
+                            None,
+                        ));
                     }
                 }
                 ts.restore(alt_cp);
@@ -282,16 +357,20 @@ pub(super) fn parse_player_static_ability(
                 let asgn_cp = ts.checkpoint();
                 if ts.eat_phrase(&["may", "have"])
                     && let Ok(subj) = try_parse(ts, parse_subject_ref)
-                    && (ts.eat_phrase(&[
-                        "assign", "its", "combat", "damage", "as", "though", "it", "weren't",
-                        "blocked",
-                    ]) || ts.eat_phrase(&[
-                        "assign", "his", "combat", "damage", "as", "though", "he", "weren't",
-                        "blocked",
-                    ]) || ts.eat_phrase(&[
-                        "assign", "her", "combat", "damage", "as", "though", "she", "weren't",
-                        "blocked",
-                    ]))
+                    && ts.eat_any_phrase(&[
+                        &[
+                            "assign", "its", "combat", "damage", "as", "though", "it", "weren't",
+                            "blocked",
+                        ],
+                        &[
+                            "assign", "his", "combat", "damage", "as", "though", "he", "weren't",
+                            "blocked",
+                        ],
+                        &[
+                            "assign", "her", "combat", "damage", "as", "though", "she", "weren't",
+                            "blocked",
+                        ],
+                    ])
                 {
                     return Ok(StaticAbility::SubjectRule {
                         subject: subj,
@@ -337,8 +416,10 @@ pub(super) fn parse_player_static_ability(
             }
             ts.restore(mcp);
             if ts.eat_phrase(&["may", "look", "at", "face-down", "creatures"])
-                && (ts.eat_phrase(&["you", "don't", "control"])
-                    || ts.eat_phrase(&["your", "opponents", "control"]))
+                && ts.eat_any_phrase(&[
+                    &["you", "don't", "control"],
+                    &["your", "opponents", "control"],
+                ])
             {
                 let _ = ts.eat_phrase(&["any", "time"]);
                 return Ok(StaticAbility::VisibilityRule {
@@ -349,8 +430,7 @@ pub(super) fn parse_player_static_ability(
             ts.restore(mcp);
             if player == PlayerRef::You
                 && ts.eat_phrase(&["may", "reveal", "the", "first", "card", "you", "draw"])
-                && (ts.eat_phrase(&["each", "turn"])
-                    || ts.eat_phrase(&["on", "each", "of", "your", "turns"]))
+                && ts.eat_any_phrase(&[&["each", "turn"], &["on", "each", "of", "your", "turns"]])
             {
                 let _ = ts.eat_phrase(&["as", "you", "draw", "it"]);
                 let base = StaticAbility::VisibilityRule {
@@ -364,15 +444,7 @@ pub(super) fn parse_player_static_ability(
                         .get(ts.current_span().start..)
                         .unwrap_or("")
                         .trim();
-                    let compiled = crate::v2::card::compile_face_v2(
-                        crate::FaceInput {
-                            name: "~",
-                            type_line: "Permanent",
-                            oracle_text: tail_str,
-                        },
-                        ts.vocab,
-                    );
-                    if compiled.is_ok() {
+                    if let Ok(compiled) = ts.compile_quoted_permanent_ability(tail_str) {
                         ts.pos = ts.tokens.len();
                         return Ok(StaticAbility::Compound(vec![
                             base,
@@ -425,7 +497,7 @@ pub(super) fn parse_player_static_ability(
                 return Ok(base);
             }
             ts.restore(mcp);
-            // `Each player may look at cards they exiled with ~[, and ...]` (`Shared Fate`)
+            // `Each player may look at cards they exiled with ~[, and ...]`
             if ts.eat_phrase(&["may", "look", "at", "cards", "they", "exiled", "with"])
                 && ts.eat_tilde()
             {
@@ -444,30 +516,35 @@ pub(super) fn parse_player_static_ability(
                 return Ok(first);
             }
             ts.restore(mcp);
-            if ts.eat_phrase(&["play", "with", "their", "hands", "revealed"])
-                || ts.eat_phrase(&["plays", "with", "their", "hand", "revealed"])
-                || ts.eat_phrase(&["play", "with", "your", "hand", "revealed"])
-            {
+            if ts.eat_any_phrase(&[
+                &["play", "with", "their", "hands", "revealed"],
+                &["plays", "with", "their", "hand", "revealed"],
+                &["play", "with", "your", "hand", "revealed"],
+            ]) {
                 return Ok(StaticAbility::PlayerRestriction {
                     player,
                     restriction: PlayerRestrictionKind::PlaysWithHandRevealed,
                     condition,
                 });
             }
-            if ts.eat_phrase(&[
-                "play",
-                "with",
-                "the",
-                "top",
-                "card",
-                "of",
-                "their",
-                "libraries",
-                "revealed",
-            ]) || ts.eat_phrase(&[
-                "plays", "with", "the", "top", "card", "of", "their", "library", "revealed",
-            ]) || ts.eat_phrase(&[
-                "play", "with", "the", "top", "card", "of", "your", "library", "revealed",
+            if ts.eat_any_phrase(&[
+                &[
+                    "play",
+                    "with",
+                    "the",
+                    "top",
+                    "card",
+                    "of",
+                    "their",
+                    "libraries",
+                    "revealed",
+                ],
+                &[
+                    "plays", "with", "the", "top", "card", "of", "their", "library", "revealed",
+                ],
+                &[
+                    "play", "with", "the", "top", "card", "of", "your", "library", "revealed",
+                ],
             ]) {
                 return Ok(StaticAbility::VisibilityRule {
                     player,
@@ -551,8 +628,10 @@ pub(super) fn parse_player_static_ability(
             if ts.eat_phrase(&["may", "look", "at", "the", "top", "card", "of"]) {
                 let library = parse_zone_ref(ts)?;
                 if ts.eat_phrase(&["and", "at", "face-down", "creatures"]) {
-                    let _ = ts.eat_phrase(&["you", "don't", "control"])
-                        || ts.eat_phrase(&["your", "opponents", "control"]);
+                    let _ = ts.eat_any_phrase(&[
+                        &["you", "don't", "control"],
+                        &["your", "opponents", "control"],
+                    ]);
                 }
                 let _ = ts.eat_phrase(&["any", "time"]);
                 let first = StaticAbility::VisibilityRule {
@@ -569,11 +648,7 @@ pub(super) fn parse_player_static_ability(
                 return Ok(first);
             }
             if ts.eat_phrase(&["may", "play", "an", "additional", "land"]) {
-                let _ = ts.eat_phrase(&["on", "each", "of", "your", "turns"])
-                    || ts.eat_phrase(&["on", "each", "of", "their", "turns"])
-                    || ts.eat_phrase(&["during", "each", "of", "your", "turns"])
-                    || ts.eat_phrase(&["during", "each", "of", "their", "turns"])
-                    || ts.eat_phrase(&["each", "turn"]);
+                eat_each_turn_suffix(ts);
                 return Ok(StaticAbility::AdditionalLandPlayStatic { player, extra: 1 });
             }
             {
@@ -582,11 +657,7 @@ pub(super) fn parse_player_static_ability(
                     && let Some(n) = ts.next_number(false).and_then(|v| u8::try_from(v).ok())
                     && ts.eat_phrase(&["additional", "lands"])
                 {
-                    let _ = ts.eat_phrase(&["on", "each", "of", "your", "turns"])
-                        || ts.eat_phrase(&["on", "each", "of", "their", "turns"])
-                        || ts.eat_phrase(&["during", "each", "of", "your", "turns"])
-                        || ts.eat_phrase(&["during", "each", "of", "their", "turns"])
-                        || ts.eat_phrase(&["each", "turn"]);
+                    eat_each_turn_suffix(ts);
                     return Ok(StaticAbility::AdditionalLandPlayStatic { player, extra: n });
                 }
                 ts.restore(alcp);
@@ -596,18 +667,9 @@ pub(super) fn parse_player_static_ability(
                 if ts.eat_phrase(&["may", "play"]) && ts.eat_tilde() && ts.eat_word("from") {
                     let top_only = ts.eat_phrase(&["the", "top", "of"]);
                     if let Ok(zone) = try_parse(ts, parse_zone_ref) {
-                        return Ok(StaticAbility::ZoneCastPermission {
-                            player,
-                            filter: None,
-                            subject: None,
-                            zone: Some(zone),
-                            mode: CastPermissionMode::PlayFromZone {
-                                top_only,
-                                lands: true,
-                                spells: true,
-                            },
-                            condition: None,
-                        });
+                        return Ok(play_from_zone(
+                            player, None, zone, top_only, true, true, None,
+                        ));
                     }
                 }
                 ts.restore(plself);
@@ -617,18 +679,9 @@ pub(super) fn parse_player_static_ability(
                 if ts.eat_phrase(&["may", "play", "the", "top", "card", "of"])
                     && let Ok(zone) = try_parse(ts, parse_zone_ref)
                 {
-                    return Ok(StaticAbility::ZoneCastPermission {
-                        player,
-                        filter: None,
-                        subject: None,
-                        zone: Some(zone),
-                        mode: CastPermissionMode::PlayFromZone {
-                            top_only: true,
-                            lands: true,
-                            spells: true,
-                        },
-                        condition,
-                    });
+                    return Ok(play_from_zone(
+                        player, None, zone, true, true, true, condition,
+                    ));
                 }
                 ts.restore(plflt);
                 if ts.eat_phrase(&["may", "play"])
@@ -637,32 +690,26 @@ pub(super) fn parse_player_static_ability(
                     if ts.eat_word("from") {
                         let top_only = ts.eat_phrase(&["the", "top", "of"]);
                         if let Ok(zone) = try_parse(ts, parse_zone_ref) {
-                            return Ok(StaticAbility::ZoneCastPermission {
+                            return Ok(play_from_zone(
                                 player,
-                                filter: Some(flt),
-                                subject: None,
-                                zone: Some(zone),
-                                mode: CastPermissionMode::PlayFromZone {
-                                    top_only,
-                                    lands: true,
-                                    spells: false,
-                                },
+                                Some(flt),
+                                zone,
+                                top_only,
+                                true,
+                                false,
                                 condition,
-                            });
+                            ));
                         }
                     } else if let Some(zone) = flt.zones.pop() {
-                        return Ok(StaticAbility::ZoneCastPermission {
+                        return Ok(play_from_zone(
                             player,
-                            filter: Some(flt),
-                            subject: None,
-                            zone: Some(zone),
-                            mode: CastPermissionMode::PlayFromZone {
-                                top_only: false,
-                                lands: true,
-                                spells: false,
-                            },
+                            Some(flt),
+                            zone,
+                            false,
+                            true,
+                            false,
                             condition,
-                        });
+                        ));
                     }
                 }
                 ts.restore(plflt);
@@ -670,39 +717,41 @@ pub(super) fn parse_player_static_ability(
             {
                 let actcp = ts.checkpoint();
                 if ts.eat_phrase(&["may", "activate"]) {
-                    // `equip abilities any time you could cast an instant` (`Leonin Shikari`, `Forge Anew`)
-                    if ts.eat_phrase(&[
-                        "equip",
-                        "abilities",
-                        "any",
-                        "time",
-                        "you",
-                        "could",
-                        "cast",
-                        "an",
-                        "instant",
-                    ]) || ts.eat_phrase(&[
-                        "exhaust",
-                        "abilities",
-                        "as",
-                        "though",
-                        "they",
-                        "haven't",
-                        "been",
-                        "activated",
-                    ]) || ts.eat_phrase(&[
-                        "each",
-                        "of",
-                        "those",
-                        "abilities",
-                        "only",
-                        "once",
-                        "each",
-                        "turn",
+                    if ts.eat_any_phrase(&[
+                        &[
+                            "equip",
+                            "abilities",
+                            "any",
+                            "time",
+                            "you",
+                            "could",
+                            "cast",
+                            "an",
+                            "instant",
+                        ],
+                        &[
+                            "exhaust",
+                            "abilities",
+                            "as",
+                            "though",
+                            "they",
+                            "haven't",
+                            "been",
+                            "activated",
+                        ],
+                        &[
+                            "each",
+                            "of",
+                            "those",
+                            "abilities",
+                            "only",
+                            "once",
+                            "each",
+                            "turn",
+                        ],
                     ]) {
                         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::LoyaltyAsInstant));
                     }
-                    // `the loyalty abilities of [~ | planeswalkers you control] twice each turn rather than only once` (`Urza`, `Oath of Teferi`)
                     if ts.eat_phrase(&["the", "loyalty", "abilities", "of"])
                         && (ts.eat_tilde() || try_parse(ts, parse_object_filter).is_ok())
                         && ts.eat_phrase(&[
@@ -713,7 +762,6 @@ pub(super) fn parse_player_static_ability(
                     }
                     ts.restore(actcp);
                     let _ = ts.eat_phrase(&["may", "activate"]);
-                    // `loyalty abilities of ~ on any player's turn any time you could cast an instant` (`Teferi, Master of Time`)
                     if ts.eat_phrase(&["loyalty", "abilities", "of"]) && ts.eat_tilde() {
                         let _ = ts.eat_phrase(&["on", "any", "player's", "turn"]);
                         if ts.eat_phrase(&["any", "time", "you", "could", "cast", "an", "instant"])
@@ -752,28 +800,27 @@ pub(super) fn parse_player_static_ability(
                         ]));
                     }
                     if ts.eat_phrase(&["rather", "than", "pay"])
-                        && (ts.eat_phrase(&[
-                            "the", "cycling", "cost", "of", "the", "first", "card", "you", "cycle",
-                            "each", "turn",
-                        ]) || ts.eat_phrase(&[
-                            "the", "equip", "cost", "of", "the", "first", "equip", "ability",
-                            "you", "activate", "each", "turn",
-                        ]) || ts.eat_phrase(&[
-                            "the", "equip", "cost", "of", "the", "first", "equip", "ability",
-                            "you", "activate", "during", "each", "of", "your", "turns",
-                        ]) || ts.eat_phrase(&[
-                            "the", "power-up", "cost", "of", "the", "first", "power-up", "ability",
-                            "you", "activate", "during", "each", "of", "your", "turns",
-                        ]) || ts.eat_phrase(&["cycling", "costs"])
-                            || ts.eat_phrase(&[
-                                "the",
-                                "echo",
-                                "cost",
-                                "for",
-                                "permanents",
-                                "you",
-                                "control",
-                            ]))
+                        && ts.eat_any_phrase(&[
+                            &[
+                                "the", "cycling", "cost", "of", "the", "first", "card", "you",
+                                "cycle", "each", "turn",
+                            ],
+                            &[
+                                "the", "equip", "cost", "of", "the", "first", "equip", "ability",
+                                "you", "activate", "each", "turn",
+                            ],
+                            &[
+                                "the", "equip", "cost", "of", "the", "first", "equip", "ability",
+                                "you", "activate", "during", "each", "of", "your", "turns",
+                            ],
+                            &[
+                                "the", "power-up", "cost", "of", "the", "first", "power-up",
+                                "ability", "you", "activate", "during", "each", "of", "your",
+                                "turns",
+                            ],
+                            &["cycling", "costs"],
+                            &["the", "echo", "cost", "for", "permanents", "you", "control"],
+                        ])
                     {
                         return Ok(StaticAbility::ActivationCostModifier {
                             delta: mc,
@@ -807,30 +854,34 @@ pub(super) fn parse_player_static_ability(
             }
             {
                 let spcp = ts.checkpoint();
-                let spend_matched = ts.eat_phrase(&[
-                    "may", "spend", "mana", "as", "though", "it", "were", "mana", "of", "any",
-                    "color",
-                ]) || ts.eat_phrase(&[
-                    "may", "spend", "mana", "as", "though", "it", "were", "mana", "of", "any",
-                    "type",
-                ]) || ts.eat_phrase(&[
-                    "may",
-                    "spend",
-                    "other",
-                    "mana",
-                    "only",
-                    "as",
-                    "though",
-                    "it",
-                    "were",
-                    "colorless",
-                    "mana",
+                let spend_matched = ts.eat_any_phrase(&[
+                    &[
+                        "may", "spend", "mana", "as", "though", "it", "were", "mana", "of", "any",
+                        "color",
+                    ],
+                    &[
+                        "may", "spend", "mana", "as", "though", "it", "were", "mana", "of", "any",
+                        "type",
+                    ],
+                    &[
+                        "may",
+                        "spend",
+                        "other",
+                        "mana",
+                        "only",
+                        "as",
+                        "though",
+                        "it",
+                        "were",
+                        "colorless",
+                        "mana",
+                    ],
+                    &["can", "spend", "mana", "of", "any", "type"],
+                    &["can", "spend", "mana", "of", "any", "color"],
                 ]) || (ts.eat_phrase(&["may", "spend", "mana", "from"])
                     && try_parse(ts, parse_object_filter).is_ok()
                     && ts
                         .eat_phrase(&["as", "though", "it", "were", "mana", "of", "any", "color"]))
-                    || ts.eat_phrase(&["can", "spend", "mana", "of", "any", "type"])
-                    || ts.eat_phrase(&["can", "spend", "mana", "of", "any", "color"])
                     || (ts.eat_phrase(&["may", "spend"])
                         && ts.peek_word().is_some_and(|w| {
                             crate::vocab::lookup_color(&w.to_ascii_lowercase()).is_some()
@@ -848,10 +899,8 @@ pub(super) fn parse_player_static_ability(
                             })));
                 if spend_matched {
                     let filter = if ts.eat_phrase(&["to", "cast"]) {
-                        if ts.eat_phrase(&["those", "spells"])
-                            || ts.eat_phrase(&["that", "spell"])
-                            || ts.eat_word("them")
-                            || ts.eat_word("it")
+                        if ts.eat_any_phrase(&[&["those", "spells"], &["that", "spell"]])
+                            || ts.eat_any_word(&["them", "it"])
                         {
                             Some(ObjectFilter {
                                 any_spell: true,
@@ -887,90 +936,74 @@ pub(super) fn parse_player_static_ability(
             }
             {
                 let pland_cp = ts.checkpoint();
-                if ts.eat_phrase(&["may", "play", "lands", "and", "cast"])
-                    || ts.eat_phrase(&["may", "play", "a", "land", "and", "cast"])
-                    || ts.eat_phrase(&["may", "play", "a", "land", "or", "cast"])
-                {
-                    let spell_flt = if ts.eat_phrase(&["spells", "from"])
-                        || ts.eat_phrase(&["a", "spell", "from"])
-                    {
-                        Some(None)
-                    } else {
-                        let s_cp = ts.checkpoint();
-                        if let Ok(sf) = try_parse(ts, parse_object_filter)
-                            && ts.eat_word("from")
-                        {
-                            Some(Some(sf))
+                if ts.eat_any_phrase(&[
+                    &["may", "play", "lands", "and", "cast"],
+                    &["may", "play", "a", "land", "and", "cast"],
+                    &["may", "play", "a", "land", "or", "cast"],
+                ]) {
+                    let spell_flt =
+                        if ts.eat_any_phrase(&[&["spells", "from"], &["a", "spell", "from"]]) {
+                            Some(None)
                         } else {
-                            ts.restore(s_cp);
-                            None
-                        }
-                    };
+                            let s_cp = ts.checkpoint();
+                            if let Ok(sf) = try_parse(ts, parse_object_filter)
+                                && ts.eat_word("from")
+                            {
+                                Some(Some(sf))
+                            } else {
+                                ts.restore(s_cp);
+                                None
+                            }
+                        };
                     if let Some(spell_flt) = spell_flt {
-                        if (ts.eat_phrase(&["among", "cards", "exiled", "with"])
-                            || ts.eat_phrase(&["among", "cards", "you", "own", "exiled", "with"])
-                            || ts.eat_phrase(&["among", "cards", "they", "exiled", "with"]))
-                            && ts.eat_tilde()
+                        if ts.eat_any_phrase(&[
+                            &["among", "cards", "exiled", "with"],
+                            &["among", "cards", "you", "own", "exiled", "with"],
+                            &["among", "cards", "they", "exiled", "with"],
+                        ]) && ts.eat_tilde()
                         {
                             let _ = ts.eat_phrase(&["this", "turn"]);
-                            return Ok(StaticAbility::ZoneCastPermission {
+                            return Ok(play_from_zone(
                                 player,
-                                filter: spell_flt,
-                                subject: None,
-                                zone: Some(crate::v2::ir::ZoneRef {
-                                    zone: crate::v2::ir::ZoneKind::Exile,
-                                    owner: crate::v2::ir::ZoneOwner::Default,
-                                }),
-                                mode: CastPermissionMode::PlayFromZone {
-                                    top_only: false,
-                                    lands: true,
-                                    spells: true,
-                                },
+                                spell_flt,
+                                exile_zone(),
+                                false,
+                                true,
+                                true,
                                 condition,
-                            });
+                            ));
                         }
                         if ts.eat_phrase(&["among", "those", "cards"]) {
-                            return Ok(StaticAbility::ZoneCastPermission {
+                            return Ok(play_from_zone(
                                 player,
-                                filter: spell_flt,
-                                subject: None,
-                                zone: Some(crate::v2::ir::ZoneRef {
-                                    zone: crate::v2::ir::ZoneKind::Exile,
-                                    owner: crate::v2::ir::ZoneOwner::Default,
-                                }),
-                                mode: CastPermissionMode::PlayFromZone {
-                                    top_only: false,
-                                    lands: true,
-                                    spells: true,
-                                },
+                                spell_flt,
+                                exile_zone(),
+                                false,
+                                true,
+                                true,
                                 condition,
-                            });
+                            ));
                         }
                         if ts.eat_phrase(&["among", "cards", "you", "exiled"]) {
                             let _ = ts.eat_phrase(&["that", "have"])
                                 && opt(ts, crate::v2::filter::parse_counter_kind).is_some()
                                 && ts.eat_phrase(&["counters", "on", "them"]);
-                            return Ok(StaticAbility::ZoneCastPermission {
+                            return Ok(play_from_zone(
                                 player,
-                                filter: spell_flt,
-                                subject: None,
-                                zone: Some(crate::v2::ir::ZoneRef {
-                                    zone: crate::v2::ir::ZoneKind::Exile,
-                                    owner: crate::v2::ir::ZoneOwner::Default,
-                                }),
-                                mode: CastPermissionMode::PlayFromZone {
-                                    top_only: false,
-                                    lands: true,
-                                    spells: true,
-                                },
+                                spell_flt,
+                                exile_zone(),
+                                false,
+                                true,
+                                true,
                                 condition,
-                            });
+                            ));
                         }
                         if ts.eat_word("among")
                             && let Ok(mut among_flt) = try_parse(ts, parse_object_filter)
                         {
-                            let _ = ts.eat_phrase(&["you've", "surveilled", "this", "turn"])
-                                || ts.eat_phrase(&[
+                            let _ = ts.eat_any_phrase(&[
+                                &["you've", "surveilled", "this", "turn"],
+                                &[
                                     "that",
                                     "were",
                                     "put",
@@ -979,41 +1012,26 @@ pub(super) fn parse_player_static_ability(
                                     "libraries",
                                     "this",
                                     "turn",
-                                ])
-                                || (ts.eat_phrase(&["that", "have"])
-                                    && opt(ts, crate::v2::filter::parse_counter_kind).is_some()
-                                    && ts.eat_phrase(&["counters", "on", "them"]));
-                            let zone = among_flt.zones.pop().unwrap_or(crate::v2::ir::ZoneRef {
-                                zone: crate::v2::ir::ZoneKind::Exile,
-                                owner: crate::v2::ir::ZoneOwner::Default,
-                            });
-                            return Ok(StaticAbility::ZoneCastPermission {
+                                ],
+                            ]) || (ts.eat_phrase(&["that", "have"])
+                                && opt(ts, crate::v2::filter::parse_counter_kind).is_some()
+                                && ts.eat_phrase(&["counters", "on", "them"]));
+                            let zone = among_flt.zones.pop().unwrap_or_else(exile_zone);
+                            return Ok(play_from_zone(
                                 player,
-                                filter: spell_flt.or(Some(among_flt)),
-                                subject: None,
-                                zone: Some(zone),
-                                mode: CastPermissionMode::PlayFromZone {
-                                    top_only: false,
-                                    lands: true,
-                                    spells: true,
-                                },
+                                spell_flt.or(Some(among_flt)),
+                                zone,
+                                false,
+                                true,
+                                true,
                                 condition,
-                            });
+                            ));
                         }
                         let top_only = ts.eat_phrase(&["the", "top", "of"]);
                         if let Ok(zone) = try_parse(ts, parse_zone_ref) {
-                            return Ok(StaticAbility::ZoneCastPermission {
-                                player,
-                                filter: spell_flt,
-                                subject: None,
-                                zone: Some(zone),
-                                mode: CastPermissionMode::PlayFromZone {
-                                    top_only,
-                                    lands: true,
-                                    spells: true,
-                                },
-                                condition,
-                            });
+                            return Ok(play_from_zone(
+                                player, spell_flt, zone, top_only, true, true, condition,
+                            ));
                         }
                     }
                 }
@@ -1036,75 +1054,52 @@ pub(super) fn parse_player_static_ability(
                         cast_flt.zones.pop().or_else(|| play_flt.zones.pop())
                     };
                     if let Some(zone) = zone {
-                        return Ok(StaticAbility::ZoneCastPermission {
+                        return Ok(play_from_zone(
                             player,
-                            filter: Some(cast_flt),
-                            subject: None,
-                            zone: Some(zone),
-                            mode: CastPermissionMode::PlayFromZone {
-                                top_only,
-                                lands: true,
-                                spells: true,
-                            },
-                            condition: None,
-                        });
+                            Some(cast_flt),
+                            zone,
+                            top_only,
+                            true,
+                            true,
+                            None,
+                        ));
                     }
                 }
                 ts.restore(plcp);
             }
             if ts.eat_phrase(&["may", "play", "lands", "from"]) {
                 if ts.eat_phrase(&["among", "cards", "exiled", "with"]) && ts.eat_tilde() {
-                    return Ok(StaticAbility::ZoneCastPermission {
+                    return Ok(play_from_zone(
                         player,
-                        filter: None,
-                        subject: None,
-                        zone: Some(crate::v2::ir::ZoneRef {
-                            zone: crate::v2::ir::ZoneKind::Exile,
-                            owner: crate::v2::ir::ZoneOwner::Default,
-                        }),
-                        mode: CastPermissionMode::PlayFromZone {
-                            top_only: false,
-                            lands: true,
-                            spells: false,
-                        },
+                        None,
+                        exile_zone(),
+                        false,
+                        true,
+                        false,
                         condition,
-                    });
+                    ));
                 }
                 let top_only = ts.eat_phrase(&["the", "top", "of"]);
                 let zone = parse_zone_ref(ts)?;
-                return Ok(StaticAbility::ZoneCastPermission {
-                    player,
-                    filter: None,
-                    subject: None,
-                    zone: Some(zone),
-                    mode: CastPermissionMode::PlayFromZone {
-                        top_only,
-                        lands: true,
-                        spells: false,
-                    },
-                    condition: None,
-                });
+                return Ok(play_from_zone(
+                    player, None, zone, top_only, true, false, None,
+                ));
             }
             if ts.eat_phrase(&["may", "play", "cards", "from"]) {
-                if (ts.eat_phrase(&["among", "cards", "exiled", "with"])
-                    || ts.eat_phrase(&["among", "cards", "you", "own", "exiled", "with"]))
-                    && ts.eat_tilde()
+                if ts.eat_any_phrase(&[
+                    &["among", "cards", "exiled", "with"],
+                    &["among", "cards", "you", "own", "exiled", "with"],
+                ]) && ts.eat_tilde()
                 {
-                    return Ok(StaticAbility::ZoneCastPermission {
+                    return Ok(play_from_zone(
                         player,
-                        filter: None,
-                        subject: None,
-                        zone: Some(crate::v2::ir::ZoneRef {
-                            zone: crate::v2::ir::ZoneKind::Exile,
-                            owner: crate::v2::ir::ZoneOwner::Default,
-                        }),
-                        mode: CastPermissionMode::PlayFromZone {
-                            top_only: false,
-                            lands: true,
-                            spells: true,
-                        },
+                        None,
+                        exile_zone(),
+                        false,
+                        true,
+                        true,
                         condition,
-                    });
+                    ));
                 }
                 if ts.eat_word("among")
                     && let Ok(mut among_flt) = try_parse(ts, parse_object_filter)
@@ -1113,50 +1108,32 @@ pub(super) fn parse_player_static_ability(
                         zone: crate::v2::ir::ZoneKind::Graveyard,
                         owner: crate::v2::ir::ZoneOwner::You,
                     });
-                    return Ok(StaticAbility::ZoneCastPermission {
+                    return Ok(play_from_zone(
                         player,
-                        filter: Some(among_flt),
-                        subject: None,
-                        zone: Some(zone),
-                        mode: CastPermissionMode::PlayFromZone {
-                            top_only: false,
-                            lands: true,
-                            spells: true,
-                        },
+                        Some(among_flt),
+                        zone,
+                        false,
+                        true,
+                        true,
                         condition,
-                    });
+                    ));
                 }
                 let top_only = ts.eat_phrase(&["the", "top", "of"]);
                 let zone = parse_zone_ref(ts)?;
-                return Ok(StaticAbility::ZoneCastPermission {
-                    player,
-                    filter: None,
-                    subject: None,
-                    zone: Some(zone),
-                    mode: CastPermissionMode::PlayFromZone {
-                        top_only,
-                        lands: true,
-                        spells: true,
-                    },
-                    condition: None,
-                });
+                return Ok(play_from_zone(
+                    player, None, zone, top_only, true, true, None,
+                ));
             }
             if ts.eat_phrase(&["may", "play", "cards", "exiled", "with"]) && ts.eat_tilde() {
-                return Ok(StaticAbility::ZoneCastPermission {
+                return Ok(play_from_zone(
                     player,
-                    filter: None,
-                    subject: None,
-                    zone: Some(crate::v2::ir::ZoneRef {
-                        zone: crate::v2::ir::ZoneKind::Exile,
-                        owner: crate::v2::ir::ZoneOwner::Default,
-                    }),
-                    mode: CastPermissionMode::PlayFromZone {
-                        top_only: false,
-                        lands: true,
-                        spells: true,
-                    },
-                    condition: None,
-                });
+                    None,
+                    exile_zone(),
+                    false,
+                    true,
+                    true,
+                    None,
+                ));
             }
             if ts.eat_phrase(&[
                 "can", "cast", "spells", "only", "any", "time", "they", "could", "cast", "a",
@@ -1173,18 +1150,14 @@ pub(super) fn parse_player_static_ability(
                 let csc_cp = ts.checkpoint();
                 if ts.eat_phrase(&["can", "cast", "spells"]) {
                     let also_act = ts.eat_phrase(&["and", "activate", "abilities"]);
-                    if ts.eat_phrase(&["only", "during", "their", "own", "turns"])
-                        || ts.eat_phrase(&["only", "during", "your", "turn"])
-                    {
+                    if ts.eat_any_phrase(&[
+                        &["only", "during", "their", "own", "turns"],
+                        &["only", "during", "your", "turn"],
+                    ]) {
                         let not_own = ConditionExpr::Not(Box::new(ConditionExpr::Flag(
                             crate::v2::ir::ConditionFlag::IsYourTurn,
                         )));
-                        let merged = match condition.clone() {
-                            Some(prev) => {
-                                Some(ConditionExpr::And(Box::new(prev), Box::new(not_own)))
-                            }
-                            None => Some(not_own),
-                        };
+                        let merged = Some(and_cond(condition.clone(), not_own));
                         let mut parts = vec![StaticAbility::PlayerRestriction {
                             player,
                             restriction: PlayerRestrictionKind::CantCastSpells,
@@ -1207,11 +1180,7 @@ pub(super) fn parse_player_static_ability(
                                 condition,
                             });
                         }
-                        return Ok(if parts.len() == 1 {
-                            parts.remove(0)
-                        } else {
-                            StaticAbility::Compound(parts)
-                        });
+                        return Ok(wrap_compound(parts));
                     }
                 }
                 ts.restore(csc_cp);
@@ -1225,10 +1194,7 @@ pub(super) fn parse_player_static_ability(
                         subject: Some(SubjectRef::Anaphora(
                             crate::v2::ir::AnaphoraRef::TheExiledCard,
                         )),
-                        zone: Some(crate::v2::ir::ZoneRef {
-                            zone: crate::v2::ir::ZoneKind::Exile,
-                            owner: crate::v2::ir::ZoneOwner::Default,
-                        }),
+                        zone: Some(exile_zone()),
                         mode: CastPermissionMode::CastFromZone,
                         condition,
                     });
@@ -1277,11 +1243,7 @@ pub(super) fn parse_player_static_ability(
                             let costs = parse_cost_list(ts).unwrap_or_default();
                             let _ = ts
                                 .eat_phrase(&["rather", "than", "paying", "its", "mana", "cost"])
-                                || ts.eat_phrase(&[
-                                    "in", "addition", "to", "paying", "its", "other", "costs",
-                                ])
-                                || ts
-                                    .eat_phrase(&["in", "addition", "to", "its", "other", "costs"]);
+                                || ts.eat_in_addition_to_other_costs();
                             if !costs.is_empty() {
                                 mode = CastPermissionMode::AlternativeCost(costs);
                             }
@@ -1300,86 +1262,76 @@ pub(super) fn parse_player_static_ability(
                         } else {
                             None
                         };
-                        let merged_cond = match (condition, extra_cond) {
-                            (Some(prev), Some(c)) => {
-                                Some(ConditionExpr::And(Box::new(prev), Box::new(c)))
-                            }
-                            (None, Some(c)) => Some(c),
-                            (prev, None) => prev,
-                        };
                         return Ok(StaticAbility::ZoneCastPermission {
                             player,
                             filter: None,
                             subject: Some(SubjectRef::SelfObject),
                             zone: Some(zone),
                             mode,
-                            condition: merged_cond,
+                            condition: merge_cond(condition, extra_cond),
                         });
                     }
                     if ts.eat_phrase(&["as", "though", "it", "had", "flash"]) {
+                        let any_spell_flt = Some(ObjectFilter {
+                            any_spell: true,
+                            ..Default::default()
+                        });
                         if ts.eat_phrase(&["if", "you", "pay"])
                             && let Some(mc) = ts.eat_mana_cost()
                             && ts.eat_phrase(&["more", "to", "cast", "it"])
                         {
-                            return Ok(StaticAbility::ZoneCastPermission {
+                            return Ok(zone_cast_perm(
                                 player,
-                                filter: Some(ObjectFilter {
-                                    any_spell: true,
-                                    ..Default::default()
-                                }),
-                                subject: None,
-                                zone: None,
-                                mode: CastPermissionMode::AsThoughFlash {
+                                any_spell_flt,
+                                None,
+                                CastPermissionMode::AsThoughFlash {
                                     extra_cost: Some(Box::new(crate::v2::ir::Cost::Mana(mc))),
                                 },
-                                condition: None,
-                            });
+                                None,
+                            ));
                         }
                         let cond = if ts.eat_phrase(&["as", "long", "as"]) || ts.eat_word("if") {
                             Some(parse_static_condition(ts)?)
                         } else {
                             None
                         };
-                        return Ok(StaticAbility::ZoneCastPermission {
+                        return Ok(zone_cast_perm(
                             player,
-                            filter: Some(ObjectFilter {
-                                any_spell: true,
-                                ..Default::default()
-                            }),
-                            subject: None,
-                            zone: None,
-                            mode: CastPermissionMode::AsThoughFlash { extra_cost: None },
-                            condition: cond,
-                        });
+                            any_spell_flt,
+                            None,
+                            CastPermissionMode::AsThoughFlash { extra_cost: None },
+                            cond,
+                        ));
                     }
                 }
                 ts.restore(c_cp);
-                // `You may cast the first <flt> you cast each turn as though it had flash` (`The Blue Spirit`)
+                // `You may cast the first <flt> you cast each turn as though it had flash`
                 {
                     let f_cp = ts.checkpoint();
                     if ts.eat_phrase(&["the", "first"])
                         && let Ok(flt) = try_parse(ts, parse_object_filter)
-                        && (ts.eat_phrase(&[
-                            "you", "cast", "each", "turn", "as", "though", "it", "had", "flash",
-                        ]) || ts
-                            .eat_phrase(&["each", "turn", "as", "though", "it", "had", "flash"]))
+                        && ts.eat_any_phrase(&[
+                            &[
+                                "you", "cast", "each", "turn", "as", "though", "it", "had", "flash",
+                            ],
+                            &["each", "turn", "as", "though", "it", "had", "flash"],
+                        ])
                     {
                         return Ok(StaticAbility::NextSpellModifier {
                             filter: flt.clone(),
-                            effect: Box::new(StaticAbility::ZoneCastPermission {
+                            effect: Box::new(zone_cast_perm(
                                 player,
-                                filter: Some(flt),
-                                subject: None,
-                                zone: None,
-                                mode: CastPermissionMode::AsThoughFlash { extra_cost: None },
+                                Some(flt),
+                                None,
+                                CastPermissionMode::AsThoughFlash { extra_cost: None },
                                 condition,
-                            }),
+                            )),
                         });
                     }
                     ts.restore(f_cp);
                 }
                 if let Ok(mut filter) = try_parse(ts, parse_object_filter) {
-                    // Support `<flt1> and <flt2>` (`sorcery spells and Dragon spells`, `Angel spells and Human spells`)
+                    // Support `<flt1> and <flt2>`
                     {
                         let and_cp = ts.checkpoint();
                         if ts.eat_word("and")
@@ -1401,9 +1353,10 @@ pub(super) fn parse_player_static_ability(
                             ts.restore(and_cp);
                         }
                     }
-                    if ts.eat_phrase(&["without", "paying", "their", "mana", "costs"])
-                        || ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
-                    {
+                    if ts.eat_any_phrase(&[
+                        &["without", "paying", "their", "mana", "costs"],
+                        &["without", "paying", "its", "mana", "cost"],
+                    ]) {
                         let base = StaticAbility::ZoneCastPermission {
                             player,
                             filter: None,
@@ -1412,19 +1365,19 @@ pub(super) fn parse_player_static_ability(
                             mode: CastPermissionMode::WithoutPaying,
                             condition: condition.clone(),
                         };
-                        if ts.eat_phrase(&["and", "as", "though", "they", "had", "flash"])
-                            || ts.eat_phrase(&["and", "as", "though", "it", "had", "flash"])
-                        {
+                        if ts.eat_any_phrase(&[
+                            &["and", "as", "though", "they", "had", "flash"],
+                            &["and", "as", "though", "it", "had", "flash"],
+                        ]) {
                             return Ok(StaticAbility::Compound(vec![
                                 base,
-                                StaticAbility::ZoneCastPermission {
+                                zone_cast_perm(
                                     player,
-                                    filter: Some(filter),
-                                    subject: None,
-                                    zone: None,
-                                    mode: CastPermissionMode::AsThoughFlash { extra_cost: None },
+                                    Some(filter),
+                                    None,
+                                    CastPermissionMode::AsThoughFlash { extra_cost: None },
                                     condition,
-                                },
+                                ),
                             ]));
                         }
                         return Ok(base);
@@ -1434,95 +1387,67 @@ pub(super) fn parse_player_static_ability(
                         if ts.eat_word("by") {
                             let costs = parse_cost_list(ts).unwrap_or_default();
                             if !costs.is_empty()
-                                && (ts.eat_phrase(&[
-                                    "rather", "than", "paying", "their", "mana", "costs",
-                                ]) || ts.eat_phrase(&[
-                                    "rather", "than", "paying", "its", "mana", "cost",
-                                ]))
+                                && ts.eat_any_phrase(&[
+                                    &["rather", "than", "paying", "their", "mana", "costs"],
+                                    &["rather", "than", "paying", "its", "mana", "cost"],
+                                ])
                             {
-                                return Ok(StaticAbility::ZoneCastPermission {
+                                return Ok(zone_cast_perm(
                                     player,
-                                    filter: Some(filter),
-                                    subject: None,
-                                    zone: None,
-                                    mode: CastPermissionMode::AlternativeCost(costs),
+                                    Some(filter),
+                                    None,
+                                    CastPermissionMode::AlternativeCost(costs),
                                     condition,
-                                });
+                                ));
                             }
                         }
                         ts.restore(by_cp);
                     }
-                    // Optional `that have a cycling ability` (`Abandoned Sarcophagus`)
                     let _ = ts.eat_phrase(&["that", "have", "a", "cycling", "ability"]);
                     if filter
                         .flags
                         .contains(crate::v2::ir::FilterFlags::EXILED_WITH_SELF)
-                        || ((ts.eat_phrase(&[
-                            "from", "among", "cards", "you", "own", "exiled", "with",
-                        ]) || ts.eat_phrase(&[
-                            "from", "among", "the", "cards", "they", "don't", "own", "exiled",
-                            "with",
-                        ]) || ts.eat_phrase(&["from", "among", "cards", "exiled", "with"]))
-                            && ts.eat_tilde())
+                        || (ts.eat_any_phrase(&[
+                            &["from", "among", "cards", "you", "own", "exiled", "with"],
+                            &[
+                                "from", "among", "the", "cards", "they", "don't", "own", "exiled",
+                                "with",
+                            ],
+                            &["from", "among", "cards", "exiled", "with"],
+                        ]) && ts.eat_tilde())
                     {
                         let mut mode = CastPermissionMode::PlayFromZone {
                             top_only: false,
                             lands: false,
                             spells: true,
                         };
-                        if ts.eat_word("by") {
-                            let costs = parse_cost_list(ts).unwrap_or_default();
-                            let _ = ts.eat_phrase(&[
-                                "in", "addition", "to", "paying", "their", "other", "costs",
-                            ]) || ts
-                                .eat_phrase(&["in", "addition", "to", "their", "other", "costs"])
-                                || ts.eat_phrase(&[
-                                    "in", "addition", "to", "paying", "its", "other", "costs",
-                                ])
-                                || ts
-                                    .eat_phrase(&["in", "addition", "to", "its", "other", "costs"]);
-                            if !costs.is_empty() {
-                                mode = CastPermissionMode::AlternativeCost(costs);
-                            }
-                        }
-                        let base = StaticAbility::ZoneCastPermission {
-                            player,
-                            filter: None,
-                            subject: None,
-                            zone: Some(crate::v2::ir::ZoneRef {
-                                zone: crate::v2::ir::ZoneKind::Exile,
-                                owner: crate::v2::ir::ZoneOwner::Default,
-                            }),
-                            mode,
-                            condition: None,
-                        };
+                        parse_optional_by_alt_cost(ts, &mut mode, false);
+                        let base = zone_cast_perm(player, None, Some(exile_zone()), mode, None);
                         if ts.eat_phrase(&[
                             "and", "you", "may", "cast", "them", "as", "though", "they", "had",
                             "flash",
                         ]) {
                             return Ok(StaticAbility::Compound(vec![
                                 base,
-                                StaticAbility::ZoneCastPermission {
+                                zone_cast_perm(
                                     player,
-                                    filter: Some(filter),
-                                    subject: None,
-                                    zone: None,
-                                    mode: CastPermissionMode::AsThoughFlash { extra_cost: None },
-                                    condition: None,
-                                },
+                                    Some(filter),
+                                    None,
+                                    CastPermissionMode::AsThoughFlash { extra_cost: None },
+                                    None,
+                                ),
                             ]));
                         }
                         return Ok(base);
                     }
                     if ts.eat_phrase(&["as", "though", "they", "had", "flash"]) {
-                        return Ok(StaticAbility::ZoneCastPermission {
+                        return Ok(zone_cast_perm(
                             player,
-                            filter: Some(filter),
-                            subject: None,
-                            zone: None,
-                            mode: CastPermissionMode::AsThoughFlash { extra_cost: None },
-                            condition: None,
-                        });
+                            Some(filter),
+                            None,
+                            CastPermissionMode::AsThoughFlash { extra_cost: None },
+                            None,
+                        ));
                     }
                     if ts.eat_word("from") {
                         if ts.eat_word("among")
@@ -1537,28 +1462,14 @@ pub(super) fn parse_player_static_ability(
                                 lands: false,
                                 spells: true,
                             };
-                            if ts.eat_word("by") {
-                                let costs = parse_cost_list(ts).unwrap_or_default();
-                                let _ = ts.eat_phrase(&[
-                                    "in", "addition", "to", "paying", "their", "other", "costs",
-                                ]) || ts.eat_phrase(&[
-                                    "in", "addition", "to", "their", "other", "costs",
-                                ]) || ts.eat_phrase(&[
-                                    "in", "addition", "to", "paying", "its", "other", "costs",
-                                ]) || ts
-                                    .eat_phrase(&["in", "addition", "to", "its", "other", "costs"]);
-                                if !costs.is_empty() {
-                                    mode = CastPermissionMode::AlternativeCost(costs);
-                                }
-                            }
-                            return Ok(StaticAbility::ZoneCastPermission {
+                            parse_optional_by_alt_cost(ts, &mut mode, false);
+                            return Ok(zone_cast_perm(
                                 player,
-                                filter: Some(filter),
-                                subject: None,
-                                zone: Some(zone),
+                                Some(filter),
+                                Some(zone),
                                 mode,
                                 condition,
-                            });
+                            ));
                         }
                         let top_only = ts.eat_phrase(&["the", "top", "of"]);
                         if let Ok(zone) = try_parse(ts, parse_zone_ref) {
@@ -1567,34 +1478,14 @@ pub(super) fn parse_player_static_ability(
                                 lands: false,
                                 spells: true,
                             };
-                            if ts.eat_phrase(&["using", "their"])
-                                || ts.eat_phrase(&["using", "its"])
-                            {
-                                let _ = ts.next_word();
-                                let _ = ts.eat_word("abilities") || ts.eat_word("ability");
-                            }
-                            if ts.eat_word("by") {
-                                let costs = parse_cost_list(ts).unwrap_or_default();
-                                let _ = ts.eat_phrase(&[
-                                    "in", "addition", "to", "paying", "their", "other", "costs",
-                                ]) || ts.eat_phrase(&[
-                                    "in", "addition", "to", "their", "other", "costs",
-                                ]) || ts.eat_phrase(&[
-                                    "in", "addition", "to", "paying", "its", "other", "costs",
-                                ]) || ts
-                                    .eat_phrase(&["in", "addition", "to", "its", "other", "costs"]);
-                                if !costs.is_empty() {
-                                    mode = CastPermissionMode::AlternativeCost(costs);
-                                }
-                            }
-                            return Ok(StaticAbility::ZoneCastPermission {
+                            parse_optional_by_alt_cost(ts, &mut mode, true);
+                            return Ok(zone_cast_perm(
                                 player,
-                                filter: Some(filter),
-                                subject: None,
-                                zone: Some(zone),
+                                Some(filter),
+                                Some(zone),
                                 mode,
                                 condition,
-                            });
+                            ));
                         }
                     } else if let Some(zone) = filter.zones.pop() {
                         let mut mode = CastPermissionMode::PlayFromZone {
@@ -1602,33 +1493,14 @@ pub(super) fn parse_player_static_ability(
                             lands: false,
                             spells: true,
                         };
-                        if ts.eat_phrase(&["using", "their"]) || ts.eat_phrase(&["using", "its"]) {
-                            let _ = ts.next_word();
-                            let _ = ts.eat_word("abilities") || ts.eat_word("ability");
-                        }
-                        if ts.eat_word("by") {
-                            let costs = parse_cost_list(ts).unwrap_or_default();
-                            let _ = ts.eat_phrase(&[
-                                "in", "addition", "to", "paying", "their", "other", "costs",
-                            ]) || ts
-                                .eat_phrase(&["in", "addition", "to", "their", "other", "costs"])
-                                || ts.eat_phrase(&[
-                                    "in", "addition", "to", "paying", "its", "other", "costs",
-                                ])
-                                || ts
-                                    .eat_phrase(&["in", "addition", "to", "its", "other", "costs"]);
-                            if !costs.is_empty() {
-                                mode = CastPermissionMode::AlternativeCost(costs);
-                            }
-                        }
-                        return Ok(StaticAbility::ZoneCastPermission {
+                        parse_optional_by_alt_cost(ts, &mut mode, true);
+                        return Ok(zone_cast_perm(
                             player,
-                            filter: Some(filter),
-                            subject: None,
-                            zone: Some(zone),
+                            Some(filter),
+                            Some(zone),
                             mode,
                             condition,
-                        });
+                        ));
                     }
                 }
             }

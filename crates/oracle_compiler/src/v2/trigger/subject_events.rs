@@ -33,14 +33,15 @@ pub(super) fn try_parse_extra_trigger_event(ts: &mut TokenStream<'_>) -> Option<
 /// Consume optional post-subject relative qualifiers before a subject-headed trigger verb.
 pub(super) fn eat_subject_post_qualifiers(ts: &mut TokenStream<'_>, _subject: &mut SubjectRef) {
     loop {
-        if ts.eat_phrase(&["that's", "enchanted"])
-            || ts.eat_phrase(&["that's", "equipped"])
-            || ts.eat_phrase(&["that", "was", "turned", "face", "up", "this", "turn"])
-            || ts.eat_phrase(&["but", "don't", "control"])
-            || ts.eat_phrase(&["it's", "paired", "with"])
-            || ts.eat_phrase(&["you've", "cast"])
-            || ts.eat_phrase(&["you", "cast"])
-        {
+        if ts.eat_any_phrase(&[
+            &["that's", "enchanted"],
+            &["that's", "equipped"],
+            &["that", "was", "turned", "face", "up", "this", "turn"],
+            &["but", "don't", "control"],
+            &["it's", "paired", "with"],
+            &["you've", "cast"],
+            &["you", "cast"],
+        ]) {
             continue;
         }
         {
@@ -129,6 +130,32 @@ pub(super) fn eat_subject_post_qualifiers(ts: &mut TokenStream<'_>, _subject: &m
     }
 }
 
+fn eat_optional_from_zone(ts: &mut TokenStream<'_>, allow_bare_anywhere: bool) -> Option<ZoneKind> {
+    if ts.eat_phrase(&["from", "anywhere", "other", "than"]) {
+        let _ = try_parse(ts, parse_zone_ref);
+        if !allow_bare_anywhere {
+            let ocp = ts.checkpoint();
+            if !ts.eat_any_word(&["or", "and/or"]) || try_parse(ts, parse_zone_ref).is_err() {
+                ts.restore(ocp);
+            }
+        }
+        None
+    } else if allow_bare_anywhere && ts.eat_phrase(&["from", "anywhere"]) {
+        None
+    } else if ts.eat_word("from") {
+        let from = try_parse(ts, parse_zone_ref).ok().map(|z| z.zone);
+        if from.is_some() || allow_bare_anywhere {
+            let ocp = ts.checkpoint();
+            if !ts.eat_any_word(&["and/or", "or"]) || try_parse(ts, parse_zone_ref).is_err() {
+                ts.restore(ocp);
+            }
+        }
+        from
+    } else {
+        None
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 pub(super) fn parse_subject_trigger_verb(
     ts: &mut TokenStream<'_>,
@@ -138,24 +165,25 @@ pub(super) fn parse_subject_trigger_verb(
     {
         let pcp = ts.checkpoint();
         if ts.eat_word("'s") {
-            if ts.eat_phrase(&["cumulative", "upkeep", "is", "paid"])
-                || ts.eat_phrase(&["echo", "cost", "is", "paid"])
-            {
+            if ts.eat_any_phrase(&[
+                &["cumulative", "upkeep", "is", "paid"],
+                &["echo", "cost", "is", "paid"],
+            ]) {
                 return Ok(TriggerEvent::AbilityActivated {
                     player: PlayerRef::You,
                     non_mana_only: true,
                 });
             }
-            if (ts.eat_word("power")
-                || ts.eat_word("toughness")
-                || ts.eat_phrase(&["mana", "value"]))
+            if ts.eat_any_phrase(&[&["power"], &["toughness"], &["mana", "value"]])
                 && ts.eat_word("is")
                 && ts.next_number(false).is_some()
             {
-                let _ = ts.eat_phrase(&["or", "greater"])
-                    || ts.eat_phrase(&["or", "more"])
-                    || ts.eat_phrase(&["or", "less"])
-                    || ts.eat_phrase(&["or", "fewer"]);
+                let _ = ts.eat_any_phrase(&[
+                    &["or", "greater"],
+                    &["or", "more"],
+                    &["or", "less"],
+                    &["or", "fewer"],
+                ]);
                 return Ok(TriggerEvent::SubjectState {
                     subject,
                     event: SubjectTriggerKind::Transforms,
@@ -165,13 +193,14 @@ pub(super) fn parse_subject_trigger_verb(
         ts.restore(pcp);
     }
 
-    // Trigger-causing triggers (`entering [under an opponent's control] causes a triggered ability [of that creature] to trigger`,
-    // `attacking causes a triggered ability [of that creature] to trigger`)
+    // Trigger-causing triggers (`entering/attacking [under ...] causes a triggered ability [of ...] to trigger`)
     {
         let tcp = ts.checkpoint();
-        if ts.eat_word("entering") || ts.eat_word("attacking") {
-            let _ = ts.eat_phrase(&["under", "an", "opponent's", "control"])
-                || ts.eat_phrase(&["under", "your", "control"]);
+        if ts.eat_any_word(&["entering", "attacking"]) {
+            let _ = ts.eat_any_phrase(&[
+                &["under", "an", "opponent's", "control"],
+                &["under", "your", "control"],
+            ]);
             if ts.eat_phrase(&["causes", "a", "triggered", "ability"]) {
                 if ts.eat_word("of") {
                     let _ = opt(ts, parse_subject_ref);
@@ -187,56 +216,37 @@ pub(super) fn parse_subject_trigger_verb(
         ts.restore(tcp);
     }
 
-    if ts.eat_phrase(&["enters", "the", "battlefield"])
-        || ts.eat_phrase(&["enter", "the", "battlefield"])
-        || ts.eat_word("enters")
-        || ts.eat_word("enter")
-    {
-        let mut from = None;
-        let _ = ts.eat_word("untapped")
-            || ts.eat_word("tapped")
-            || ts.eat_word("transformed")
-            || ts.eat_word("attacking");
-        let _ = ts.eat_phrase(&["under", "your", "control"])
-            || ts.eat_phrase(&["under", "an", "opponent's", "control"])
-            || ts.eat_phrase(&["under", "their", "control"])
-            || ts.eat_phrase(&["under", "a", "player's", "control"]);
-        let _ = ts.eat_word("untapped")
-            || ts.eat_word("tapped")
-            || ts.eat_word("transformed")
-            || ts.eat_word("attacking");
+    if ts.eat_any_phrase(&[
+        &["enters", "the", "battlefield"],
+        &["enter", "the", "battlefield"],
+        &["enters"],
+        &["enter"],
+    ]) {
+        const ENTER_MODS: &[&str] = &["untapped", "tapped", "transformed", "attacking"];
+        let _ = ts.eat_any_word(ENTER_MODS);
+        let _ = ts.eat_any_phrase(&[
+            &["under", "your", "control"],
+            &["under", "an", "opponent's", "control"],
+            &["under", "their", "control"],
+            &["under", "a", "player's", "control"],
+        ]);
+        let _ = ts.eat_any_word(ENTER_MODS);
         let _ = ts.eat_phrase(&["without", "being", "played"]);
         if ts.eat_phrase(&["attached", "to"]) {
             let _ = opt(ts, parse_object_filter);
         }
-        if ts.eat_phrase(&["from", "anywhere", "other", "than"]) {
-            let _ = try_parse(ts, parse_zone_ref);
-            let ocp = ts.checkpoint();
-            if !(ts.eat_word("or") || ts.eat_word("and/or"))
-                || try_parse(ts, parse_zone_ref).is_err()
-            {
-                ts.restore(ocp);
-            }
-        } else if ts.eat_word("from")
-            && let Ok(z) = try_parse(ts, parse_zone_ref)
-        {
-            from = Some(z.zone);
-            let ocp = ts.checkpoint();
-            if !(ts.eat_word("or") || ts.eat_word("and/or"))
-                || try_parse(ts, parse_zone_ref).is_err()
-            {
-                ts.restore(ocp);
-            }
-        }
-        let _ = ts.eat_phrase(&["during", "the", "declare", "attackers", "step"])
-            || ts.eat_phrase(&["during", "combat"]);
+        let from = eat_optional_from_zone(ts, false);
+        let _ = ts.eat_any_phrase(&[
+            &["during", "the", "declare", "attackers", "step"],
+            &["during", "combat"],
+        ]);
         return Ok(TriggerEvent::ZoneChange {
             from,
             to: Some(ZoneKind::Battlefield),
             subject,
         });
     }
-    if ts.eat_word("leaves") || ts.eat_word("leave") {
+    if ts.eat_any_word(&["leaves", "leave"]) {
         if ts.eat_phrase(&["the", "battlefield"]) {
             let _ = ts.eat_phrase(&["without", "dying"]);
             return Ok(TriggerEvent::ZoneChange {
@@ -255,7 +265,7 @@ pub(super) fn parse_subject_trigger_verb(
     }
     if ts.eat_phrase(&["becomes", "unattached", "from"])
         && {
-            let _ = ts.eat_word("a") || ts.eat_word("an");
+            let _ = ts.eat_any_word(&["a", "an"]);
             true
         }
         && try_parse(ts, parse_object_filter).is_ok()
@@ -275,42 +285,29 @@ pub(super) fn parse_subject_trigger_verb(
                 },
             });
         }
-        let _ = ts.eat_word("a") || ts.eat_word("an");
+        let _ = ts.eat_any_word(&["a", "an"]);
         if let Ok(target) = try_parse(ts, parse_object_filter) {
             return Ok(TriggerEvent::BecomesAttached { subject, target });
         }
     }
-    if ts.eat_phrase(&["phases", "in"]) || ts.eat_phrase(&["phase", "in"]) {
-        return Ok(TriggerEvent::SubjectState {
-            subject,
-            event: SubjectTriggerKind::PhasesIn,
-        });
-    }
-    if ts.eat_phrase(&["phases", "out"]) || ts.eat_phrase(&["phase", "out"]) {
-        return Ok(TriggerEvent::SubjectState {
-            subject,
-            event: SubjectTriggerKind::PhasesOut,
-        });
-    }
-    if ts.eat_word("mutates") || ts.eat_word("mutate") {
-        return Ok(TriggerEvent::SubjectState {
-            subject,
-            event: SubjectTriggerKind::Mutates,
-        });
-    }
-    if ts.eat_phrase(&["crews", "a", "vehicle"])
-        || ts.eat_phrase(&["crew", "a", "vehicle"])
-        || ts.eat_phrase(&["saddles", "a", "mount"])
-        || ts.eat_phrase(&["saddle", "a", "mount"])
-    {
-        return Ok(TriggerEvent::SubjectState {
-            subject,
-            event: SubjectTriggerKind::CrewsVehicle,
-        });
+    const SUBJ_STATE_1: &[(&[&str], SubjectTriggerKind)] = &[
+        (&["phases", "in"], SubjectTriggerKind::PhasesIn),
+        (&["phase", "in"], SubjectTriggerKind::PhasesIn),
+        (&["phases", "out"], SubjectTriggerKind::PhasesOut),
+        (&["phase", "out"], SubjectTriggerKind::PhasesOut),
+        (&["mutates"], SubjectTriggerKind::Mutates),
+        (&["mutate"], SubjectTriggerKind::Mutates),
+        (&["crews", "a", "vehicle"], SubjectTriggerKind::CrewsVehicle),
+        (&["crew", "a", "vehicle"], SubjectTriggerKind::CrewsVehicle),
+        (&["saddles", "a", "mount"], SubjectTriggerKind::CrewsVehicle),
+        (&["saddle", "a", "mount"], SubjectTriggerKind::CrewsVehicle),
+    ];
+    if let Some(event) = super::eat_table(ts, SUBJ_STATE_1) {
+        return Ok(TriggerEvent::SubjectState { subject, event });
     }
     // Subject keyword-action triggers: explores, connives, evolves, fights, enlists, mentors, trains,
     // becomes renowned/plotted/saddled, is championed with ~, is countered
-    if ts.eat_word("explores") || ts.eat_word("explore") {
+    if ts.eat_any_word(&["explores", "explore"]) {
         let ecp = ts.checkpoint();
         if !matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Comma))
             && try_parse(ts, parse_object_filter).is_err()
@@ -322,54 +319,73 @@ pub(super) fn parse_subject_trigger_verb(
             event: SubjectTriggerKind::Transforms,
         });
     }
-    if ts.eat_word("connives") || ts.eat_word("connive") {
-        return Ok(TriggerEvent::SubjectState {
-            subject,
-            event: SubjectTriggerKind::Transforms,
-        });
+    #[derive(Clone, Copy)]
+    enum SubjVerbTag {
+        State(SubjectTriggerKind),
+        Evolve,
+        Fight,
+        Attacks,
+        Plotted,
     }
-    if ts.eat_word("evolves") || ts.eat_word("evolve") {
-        return Ok(TriggerEvent::CounterPlaced {
-            subject,
-            kind: Some(CounterKind::PlusOnePlusOne),
-        });
-    }
-    if ts.eat_word("fights") || ts.eat_word("fight") {
-        return Ok(TriggerEvent::DealsDamage {
-            combat_only: false,
-            source: Some(subject),
-            target: None,
-        });
-    }
-    if ts.eat_phrase(&["enlists", "a", "creature"])
-        || ts.eat_phrase(&["enlist", "a", "creature"])
-        || ts.eat_phrase(&["mentors", "a", "creature"])
-        || ts.eat_phrase(&["mentor", "a", "creature"])
-        || ts.eat_word("trains")
-        || ts.eat_word("train")
-    {
-        return Ok(TriggerEvent::Attacks {
-            subject: Some(subject),
-            player: None,
-        });
-    }
-    if ts.eat_phrase(&["becomes", "renowned"]) || ts.eat_phrase(&["become", "renowned"]) {
-        return Ok(TriggerEvent::SubjectState {
-            subject,
-            event: SubjectTriggerKind::BecomesMonstrous,
-        });
-    }
-    if ts.eat_phrase(&["becomes", "plotted"]) || ts.eat_phrase(&["become", "plotted"]) {
-        return Ok(TriggerEvent::ZoneChange {
-            from: Some(ZoneKind::Hand),
-            to: Some(ZoneKind::Exile),
-            subject,
-        });
-    }
-    if ts.eat_phrase(&["becomes", "saddled"]) || ts.eat_phrase(&["become", "saddled"]) {
-        return Ok(TriggerEvent::SubjectState {
-            subject,
-            event: SubjectTriggerKind::BecomesCrewed,
+    const SUBJ_VERB_1: &[(&[&str], SubjVerbTag)] = &[
+        (
+            &["connives"],
+            SubjVerbTag::State(SubjectTriggerKind::Transforms),
+        ),
+        (
+            &["connive"],
+            SubjVerbTag::State(SubjectTriggerKind::Transforms),
+        ),
+        (&["evolves"], SubjVerbTag::Evolve),
+        (&["evolve"], SubjVerbTag::Evolve),
+        (&["fights"], SubjVerbTag::Fight),
+        (&["fight"], SubjVerbTag::Fight),
+        (&["enlists", "a", "creature"], SubjVerbTag::Attacks),
+        (&["enlist", "a", "creature"], SubjVerbTag::Attacks),
+        (&["mentors", "a", "creature"], SubjVerbTag::Attacks),
+        (&["mentor", "a", "creature"], SubjVerbTag::Attacks),
+        (&["trains"], SubjVerbTag::Attacks),
+        (&["train"], SubjVerbTag::Attacks),
+        (
+            &["becomes", "renowned"],
+            SubjVerbTag::State(SubjectTriggerKind::BecomesMonstrous),
+        ),
+        (
+            &["become", "renowned"],
+            SubjVerbTag::State(SubjectTriggerKind::BecomesMonstrous),
+        ),
+        (&["becomes", "plotted"], SubjVerbTag::Plotted),
+        (&["become", "plotted"], SubjVerbTag::Plotted),
+        (
+            &["becomes", "saddled"],
+            SubjVerbTag::State(SubjectTriggerKind::BecomesCrewed),
+        ),
+        (
+            &["become", "saddled"],
+            SubjVerbTag::State(SubjectTriggerKind::BecomesCrewed),
+        ),
+    ];
+    if let Some(tag) = super::eat_table(ts, SUBJ_VERB_1) {
+        return Ok(match tag {
+            SubjVerbTag::State(event) => TriggerEvent::SubjectState { subject, event },
+            SubjVerbTag::Evolve => TriggerEvent::CounterPlaced {
+                subject,
+                kind: Some(CounterKind::PlusOnePlusOne),
+            },
+            SubjVerbTag::Fight => TriggerEvent::DealsDamage {
+                combat_only: false,
+                source: Some(subject),
+                target: None,
+            },
+            SubjVerbTag::Attacks => TriggerEvent::Attacks {
+                subject: Some(subject),
+                player: None,
+            },
+            SubjVerbTag::Plotted => TriggerEvent::ZoneChange {
+                from: Some(ZoneKind::Hand),
+                to: Some(ZoneKind::Exile),
+                subject,
+            },
         });
     }
     if ts.eat_phrase(&["is", "championed", "with"]) && ts.eat_tilde() {
@@ -379,7 +395,7 @@ pub(super) fn parse_subject_trigger_verb(
             subject,
         });
     }
-    if ts.eat_phrase(&["is", "countered"]) || ts.eat_phrase(&["are", "countered"]) {
+    if ts.eat_any_phrase(&[&["is", "countered"], &["are", "countered"]]) {
         let spell = match subject {
             SubjectRef::Group(f) | SubjectRef::All(f) | SubjectRef::Each(f) => Some(*f),
             _ => None,
@@ -392,12 +408,14 @@ pub(super) fn parse_subject_trigger_verb(
     }
     {
         let rcp = ts.checkpoint();
-        if (ts.eat_phrase(&["is", "returned", "to"]) || ts.eat_phrase(&["are", "returned", "to"]))
-            && (ts.eat_phrase(&["your", "hand"])
-                || ts.eat_phrase(&["its", "owner's", "hand"])
-                || ts.eat_phrase(&["their", "owners'", "hands"])
-                || ts.eat_phrase(&["a", "player's", "hand"])
-                || ts.eat_word("hand"))
+        if ts.eat_any_phrase(&[&["is", "returned", "to"], &["are", "returned", "to"]])
+            && ts.eat_any_phrase(&[
+                &["your", "hand"],
+                &["its", "owner's", "hand"],
+                &["their", "owners'", "hands"],
+                &["a", "player's", "hand"],
+                &["hand"],
+            ])
         {
             let from = if ts.eat_word("from") {
                 try_parse(ts, parse_zone_ref).ok().map(|z| z.zone)
@@ -412,9 +430,10 @@ pub(super) fn parse_subject_trigger_verb(
         }
         ts.restore(rcp);
     }
-    if ts.eat_phrase(&["is", "exiled", "from", "the", "battlefield"])
-        || ts.eat_phrase(&["are", "exiled", "from", "the", "battlefield"])
-    {
+    if ts.eat_any_phrase(&[
+        &["is", "exiled", "from", "the", "battlefield"],
+        &["are", "exiled", "from", "the", "battlefield"],
+    ]) {
         let _ = ts.eat_phrase(&["while", "you're", "activating", "a", "craft", "ability"]);
         return Ok(TriggerEvent::ZoneChange {
             from: Some(ZoneKind::Battlefield),
@@ -424,10 +443,10 @@ pub(super) fn parse_subject_trigger_verb(
     }
     {
         let hcp = ts.checkpoint();
-        if (ts.eat_phrase(&["has", "no"]) || ts.eat_phrase(&["have", "no"]))
+        if ts.eat_any_phrase(&[&["has", "no"], &["have", "no"]])
             && let Ok(kind) = try_parse(ts, parse_counter_kind)
-            && (ts.eat_word("counters") || ts.eat_word("counter"))
-            && (ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]))
+            && ts.eat_any_word(&["counters", "counter"])
+            && ts.eat_any_phrase(&[&["on", "it"], &["on", "them"]])
         {
             return Ok(TriggerEvent::CounterEvent {
                 subject,
@@ -436,17 +455,17 @@ pub(super) fn parse_subject_trigger_verb(
             });
         }
         ts.restore(hcp);
-        if (ts.eat_word("has") || ts.eat_word("have"))
+        if ts.eat_any_word(&["has", "have"])
             && let Some(n) = ts.next_number(false)
-            && (ts.eat_phrase(&["or", "more"])
-                || ts.eat_phrase(&["or", "fewer"])
-                || ts.eat_phrase(&["or", "less"]))
+            && ts.eat_any_phrase(&[&["or", "more"], &["or", "fewer"], &["or", "less"]])
             && let Ok(kind) = try_parse(ts, parse_counter_kind)
-            && (ts.eat_word("counters") || ts.eat_word("counter"))
-            && (ts.eat_phrase(&["on", "it"])
-                || ts.eat_phrase(&["on", "them"])
-                || ts.eat_phrase(&["on", "him"])
-                || ts.eat_phrase(&["on", "her"]))
+            && ts.eat_any_word(&["counters", "counter"])
+            && ts.eat_any_phrase(&[
+                &["on", "it"],
+                &["on", "them"],
+                &["on", "him"],
+                &["on", "her"],
+            ])
         {
             return Ok(TriggerEvent::CounterEvent {
                 subject,
@@ -457,8 +476,7 @@ pub(super) fn parse_subject_trigger_verb(
             });
         }
         ts.restore(hcp);
-        if (ts.eat_word("has") || ts.eat_word("have")) && try_parse(ts, parse_keyword_kind).is_ok()
-        {
+        if ts.eat_any_word(&["has", "have"]) && try_parse(ts, parse_keyword_kind).is_ok() {
             return Ok(TriggerEvent::SubjectState {
                 subject,
                 event: SubjectTriggerKind::Transforms,
@@ -466,24 +484,22 @@ pub(super) fn parse_subject_trigger_verb(
         }
         ts.restore(hcp);
     }
-    if ts.eat_phrase(&["becomes", "crewed"]) {
-        return Ok(TriggerEvent::SubjectState {
-            subject,
-            event: SubjectTriggerKind::BecomesCrewed,
-        });
-    }
-    if ts.eat_phrase(&["becomes", "monstrous"]) {
-        return Ok(TriggerEvent::SubjectState {
-            subject,
-            event: SubjectTriggerKind::BecomesMonstrous,
-        });
+    const SUBJ_STATE_2: &[(&[&str], SubjectTriggerKind)] = &[
+        (&["becomes", "crewed"], SubjectTriggerKind::BecomesCrewed),
+        (
+            &["becomes", "monstrous"],
+            SubjectTriggerKind::BecomesMonstrous,
+        ),
+    ];
+    if let Some(event) = super::eat_table(ts, SUBJ_STATE_2) {
+        return Ok(TriggerEvent::SubjectState { subject, event });
     }
     if ts.eat_phrase(&["becomes", "level"])
         && let Some(level) = ts.next_number(false).and_then(|n| u8::try_from(n).ok())
     {
         return Ok(TriggerEvent::ClassBecomesLevel { level });
     }
-    if ts.eat_word("transforms") || ts.eat_word("transform") {
+    if ts.eat_any_word(&["transforms", "transform"]) {
         if ts.eat_word("into") {
             let _ = ts.eat_tilde() || try_parse(ts, parse_object_filter).is_ok();
         }
@@ -492,20 +508,19 @@ pub(super) fn parse_subject_trigger_verb(
             event: SubjectTriggerKind::Transforms,
         });
     }
-    if ts.eat_phrase(&["is", "sacrificed", "or", "destroyed"])
-        || ts.eat_phrase(&["are", "sacrificed", "or", "destroyed"])
-    {
+    if ts.eat_any_phrase(&[
+        &["is", "sacrificed", "or", "destroyed"],
+        &["are", "sacrificed", "or", "destroyed"],
+    ]) {
         return Ok(TriggerEvent::Dies { subject });
     }
-    if (ts.eat_word("exploits") || ts.eat_word("exploit"))
-        && try_parse(ts, parse_object_filter).is_ok()
-    {
+    if ts.eat_any_word(&["exploits", "exploit"]) && try_parse(ts, parse_object_filter).is_ok() {
         return Ok(TriggerEvent::SubjectState {
             subject,
             event: SubjectTriggerKind::Exploits,
         });
     }
-    if ts.eat_phrase(&["is", "cast"]) || ts.eat_phrase(&["are", "cast"]) {
+    if ts.eat_any_phrase(&[&["is", "cast"], &["are", "cast"]]) {
         let spell = match subject {
             SubjectRef::Group(f) | SubjectRef::All(f) | SubjectRef::Each(f) => Some(*f),
             _ => None,
@@ -516,20 +531,21 @@ pub(super) fn parse_subject_trigger_verb(
             from_outside_hand: false,
         });
     }
-    if ts.eat_phrase(&["is", "put", "onto", "the", "stack"])
-        || ts.eat_phrase(&["are", "put", "onto", "the", "stack"])
-    {
+    if ts.eat_any_phrase(&[
+        &["is", "put", "onto", "the", "stack"],
+        &["are", "put", "onto", "the", "stack"],
+    ]) {
         return Ok(TriggerEvent::ZoneChange {
             from: None,
             to: Some(ZoneKind::Stack),
             subject,
         });
     }
-    if ts.eat_word("dies") || ts.eat_word("die") {
-        let _ = ts.eat_phrase(&["during", "combat"]) || ts.eat_phrase(&["this", "turn"]);
+    if ts.eat_any_word(&["dies", "die"]) {
+        let _ = ts.eat_any_phrase(&[&["during", "combat"], &["this", "turn"]]);
         return Ok(TriggerEvent::Dies { subject });
     }
-    if ts.eat_phrase(&["is", "put", "into"]) || ts.eat_phrase(&["are", "put", "into"]) {
+    if ts.eat_any_phrase(&[&["is", "put", "into"], &["are", "put", "into"]]) {
         let z = if ts.eat_phrase(&["a", "player's", "graveyard"]) {
             ZoneRef {
                 zone: ZoneKind::Graveyard,
@@ -538,38 +554,23 @@ pub(super) fn parse_subject_trigger_verb(
         } else {
             parse_zone_ref(ts)?
         };
-        let from = if ts.eat_phrase(&["from", "anywhere", "other", "than"]) {
-            let _ = try_parse(ts, parse_zone_ref);
-            None
-        } else if ts.eat_phrase(&["from", "anywhere"]) {
-            None
-        } else if ts.eat_word("from") {
-            let first_from = try_parse(ts, parse_zone_ref).ok().map(|zr| zr.zone);
-            let ocp = ts.checkpoint();
-            if !(ts.eat_word("and/or") || ts.eat_word("or"))
-                || try_parse(ts, parse_zone_ref).is_err()
-            {
-                ts.restore(ocp);
-            }
-            first_from
-        } else {
-            None
-        };
+        let from = eat_optional_from_zone(ts, true);
         return Ok(TriggerEvent::ZoneChange {
             from,
             to: Some(z.zone),
             subject,
         });
     }
-    if ts.eat_phrase(&["attacks", "and", "isn't", "blocked"])
-        || ts.eat_phrase(&["attack", "and", "aren't", "blocked"])
-    {
+    if ts.eat_any_phrase(&[
+        &["attacks", "and", "isn't", "blocked"],
+        &["attack", "and", "aren't", "blocked"],
+    ]) {
         return Ok(TriggerEvent::SubjectState {
             subject,
             event: SubjectTriggerKind::AttacksAndNotBlocked,
         });
     }
-    if ts.eat_word("attacks") || ts.eat_word("attack") {
+    if ts.eat_any_word(&["attacks", "attack"]) {
         let _ = ts.eat_word("alone");
         if !ts.is_eof()
             && !matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Comma))
@@ -581,16 +582,15 @@ pub(super) fn parse_subject_trigger_verb(
                     || w.eq_ignore_ascii_case("for")
             })
         {
-            let _ = ts.eat_phrase(&["one", "or", "more", "of"])
-                || ts.eat_phrase(&["one", "or", "more"]);
+            let _ = ts.eat_any_phrase(&[&["one", "or", "more", "of"], &["one", "or", "more"]]);
             let _ = ts.eat_phrase(&["the", "monarch"]) || opt(ts, parse_subject_ref).is_some();
-            let _ = ts.eat_phrase(&["who", "has", "more", "life", "than", "you"])
-                || ts.eat_phrase(&["who", "has", "the", "initiative"]);
+            let _ = ts.eat_any_phrase(&[
+                &["who", "has", "more", "life", "than", "you"],
+                &["who", "has", "the", "initiative"],
+            ]);
         }
         let _ = ts.eat_word("alone");
-        if ts.eat_phrase(&["and", "isn't", "blocked"])
-            || ts.eat_phrase(&["and", "aren't", "blocked"])
-        {
+        if ts.eat_any_phrase(&[&["and", "isn't", "blocked"], &["and", "aren't", "blocked"]]) {
             return Ok(TriggerEvent::SubjectState {
                 subject,
                 event: SubjectTriggerKind::AttacksAndNotBlocked,
@@ -601,7 +601,7 @@ pub(super) fn parse_subject_trigger_verb(
             player: None,
         });
     }
-    if ts.eat_phrase(&["becomes", "blocked"]) || ts.eat_phrase(&["become", "blocked"]) {
+    if ts.eat_any_phrase(&[&["becomes", "blocked"], &["become", "blocked"]]) {
         let by = if ts.eat_word("by") {
             if ts.next_number(false).is_some() {
                 let _ = ts.eat_phrase(&["or", "more"]);
@@ -612,7 +612,7 @@ pub(super) fn parse_subject_trigger_verb(
         };
         return Ok(TriggerEvent::BecomesBlocked { subject, by });
     }
-    if ts.eat_word("blocks") || ts.eat_word("block") {
+    if ts.eat_any_word(&["blocks", "block"]) {
         let blocked = if ts.is_eof()
             || matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Comma))
             || ts.peek_phrase(&["or", "becomes", "blocked"])
@@ -627,17 +627,19 @@ pub(super) fn parse_subject_trigger_verb(
         };
         return Ok(TriggerEvent::Blocks { subject, blocked });
     }
-    if ts.eat_phrase(&["is", "turned", "face", "up"])
-        || ts.eat_phrase(&["are", "turned", "face", "up"])
-    {
+    if ts.eat_any_phrase(&[
+        &["is", "turned", "face", "up"],
+        &["are", "turned", "face", "up"],
+    ]) {
         return Ok(TriggerEvent::SubjectState {
             subject,
             event: SubjectTriggerKind::TurnedFaceUp,
         });
     }
-    if ts.eat_phrase(&["is", "tapped", "for", "mana"])
-        || ts.eat_phrase(&["are", "tapped", "for", "mana"])
-    {
+    if ts.eat_any_phrase(&[
+        &["is", "tapped", "for", "mana"],
+        &["are", "tapped", "for", "mana"],
+    ]) {
         let mut flt = match subject {
             SubjectRef::Group(f) | SubjectRef::All(f) | SubjectRef::Each(f) => *f,
             _ => ObjectFilter::default(),
@@ -651,14 +653,15 @@ pub(super) fn parse_subject_trigger_verb(
             filter: Some(flt),
         });
     }
-    // `causes ...` and `destroys <subj>` triggers (`Firesong and Sunspeaker`, `Sacred Ground`, `Widespread Panic`, `Karmic Justice`)
+    // `causes ...` and `destroys <subj>` triggers
     {
         let ccp = ts.checkpoint();
         if ts.eat_word("causes") {
-            if ts.eat_phrase(&["a", "player", "to", "shuffle", "their", "library"])
-                || ts.eat_phrase(&["an", "opponent", "to", "shuffle", "their", "library"])
-                || ts.eat_phrase(&["its", "controller", "to", "shuffle", "their", "library"])
-            {
+            if ts.eat_any_phrase(&[
+                &["a", "player", "to", "shuffle", "their", "library"],
+                &["an", "opponent", "to", "shuffle", "their", "library"],
+                &["its", "controller", "to", "shuffle", "their", "library"],
+            ]) {
                 return Ok(TriggerEvent::PlayerAction {
                     player: PlayerRef::AnyPlayer,
                     action: PlayerTriggerKind::ShufflesLibrary,
@@ -697,7 +700,7 @@ pub(super) fn parse_subject_trigger_verb(
     {
         return Ok(TriggerEvent::Dies { subject: destroyed });
     }
-    if ts.eat_phrase(&["becomes", "tapped"]) || ts.eat_phrase(&["become", "tapped"]) {
+    if ts.eat_any_phrase(&[&["becomes", "tapped"], &["become", "tapped"]]) {
         let _ = ts.eat_phrase(&["to", "pay", "a"])
             && try_parse(ts, parse_keyword_kind).is_ok()
             && ts.eat_word("cost");
@@ -706,13 +709,13 @@ pub(super) fn parse_subject_trigger_verb(
             event: SubjectTriggerKind::BecomesTapped,
         });
     }
-    if ts.eat_phrase(&["becomes", "untapped"]) || ts.eat_phrase(&["become", "untapped"]) {
+    if ts.eat_any_phrase(&[&["becomes", "untapped"], &["become", "untapped"]]) {
         return Ok(TriggerEvent::SubjectState {
             subject,
             event: SubjectTriggerKind::BecomesUntapped,
         });
     }
-    if ts.eat_phrase(&["is", "dealt"]) || ts.eat_phrase(&["are", "dealt"]) {
+    if ts.eat_any_phrase(&[&["is", "dealt"], &["are", "dealt"]]) {
         if ts.next_number(false).is_some() {
             let _ = ts.eat_phrase(&["or", "more"]);
         }
@@ -733,11 +736,12 @@ pub(super) fn parse_subject_trigger_verb(
             });
         }
     }
-    if ts.eat_phrase(&["becomes", "the", "target", "of"])
-        || ts.eat_phrase(&["become", "the", "target", "of"])
-    {
+    if ts.eat_any_phrase(&[
+        &["becomes", "the", "target", "of"],
+        &["become", "the", "target", "of"],
+    ]) {
         let acp = ts.checkpoint();
-        if (ts.eat_word("a") || ts.eat_word("an"))
+        if ts.eat_any_word(&["a", "an"])
             && try_parse(ts, parse_keyword_kind).is_ok()
             && ts.eat_word("ability")
         {
@@ -762,16 +766,17 @@ pub(super) fn parse_subject_trigger_verb(
         let source = parse_object_filter(ts)?;
         return Ok(TriggerEvent::BecomesTarget { subject, source });
     }
-    if ts.eat_phrase(&["is", "on", "the", "battlefield"])
-        || ts.eat_phrase(&["are", "on", "the", "battlefield"])
-    {
+    if ts.eat_any_phrase(&[
+        &["is", "on", "the", "battlefield"],
+        &["are", "on", "the", "battlefield"],
+    ]) {
         return Ok(TriggerEvent::ZoneChange {
             from: None,
             to: Some(ZoneKind::Battlefield),
             subject,
         });
     }
-    if ts.eat_phrase(&["is", "milled"]) || ts.eat_phrase(&["are", "milled"]) {
+    if ts.eat_any_phrase(&[&["is", "milled"], &["are", "milled"]]) {
         return Ok(TriggerEvent::PlayerObjectEvent {
             player: PlayerRef::You,
             kind: PlayerObjectTriggerKind::MillsCard,

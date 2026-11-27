@@ -10,6 +10,12 @@ use crate::v2::ir::{
 use crate::v2::parser::{PResult, TokenStream, try_parse};
 use crate::v2::value::parse_value_expr;
 
+use super::{
+    apply_continuous, apply_replacement, exact_count, exile_zone_op, move_zone_op, mutate_obj,
+    mutate_player, player_action, prompt_choice, simple_zone_dest, simple_zone_op,
+    zone_cards_subject,
+};
+
 pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec> {
     let _ = ts.eat_phrase(&["an", "additional"]);
     {
@@ -97,14 +103,16 @@ pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec>
     }
     {
         let tcp = ts.checkpoint();
-        if (ts.eat_phrase(&["one", "mana", "of", "any", "type", "that"])
-            || ts.eat_phrase(&["one", "mana", "of", "any", "color", "that"])
-            || ts.eat_phrase(&["one", "mana", "of", "any", "type"])
-            || ts.eat_phrase(&["one", "mana", "of", "any", "color"]))
-            && (ts.eat_phrase(&["the", "sacrificed", "land"])
-                || ts.eat_phrase(&["the", "sacrificed", "permanent"])
-                || ts.eat_phrase(&["the", "exiled", "land"])
-                || try_parse(ts, parse_object_filter).is_ok())
+        if ts.eat_any_phrase(&[
+            &["one", "mana", "of", "any", "type", "that"],
+            &["one", "mana", "of", "any", "color", "that"],
+            &["one", "mana", "of", "any", "type"],
+            &["one", "mana", "of", "any", "color"],
+        ]) && (ts.eat_any_phrase(&[
+            &["the", "sacrificed", "land"],
+            &["the", "sacrificed", "permanent"],
+            &["the", "exiled", "land"],
+        ]) || try_parse(ts, parse_object_filter).is_ok())
             && (ts.eat_phrase(&["could", "produce"]) || ts.eat_word("produced"))
         {
             return Ok(ManaSpec::AnyColor {
@@ -114,29 +122,30 @@ pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec>
         }
         ts.restore(tcp);
     }
-    if ts.eat_phrase(&[
-        "one", "mana", "of", "any", "type", "that", "land", "produced",
-    ]) || ts.eat_phrase(&[
-        "one",
-        "mana",
-        "of",
-        "any",
-        "type",
-        "that",
-        "permanent",
-        "produced",
-    ]) || ts.eat_phrase(&[
-        "one", "mana", "of", "any", "of", "the", "exiled", "cards'", "colors",
-    ]) || ts.eat_phrase(&["one", "mana", "of", "any", "color"])
-    {
+    if ts.eat_any_phrase(&[
+        &[
+            "one", "mana", "of", "any", "type", "that", "land", "produced",
+        ],
+        &[
+            "one",
+            "mana",
+            "of",
+            "any",
+            "type",
+            "that",
+            "permanent",
+            "produced",
+        ],
+        &[
+            "one", "mana", "of", "any", "of", "the", "exiled", "cards'", "colors",
+        ],
+        &["one", "mana", "of", "any", "color"],
+    ]) {
         let _ = ts.eat_phrase(&["in", "your", "commander's", "color", "identity"]);
         let acp = ts.checkpoint();
         if ts.eat_word("among") && try_parse(ts, parse_object_filter).is_ok() {
-            // Optional `among <flt>` restriction (e.g. `among legendary permanents you control`)
             let ccp = ts.checkpoint();
-            if ts.eat_word("and") && try_parse(ts, parse_object_filter).is_ok() {
-                // Compound `among <flt1> and <flt2>`
-            } else {
+            if !(ts.eat_word("and") && try_parse(ts, parse_object_filter).is_ok()) {
                 ts.restore(ccp);
             }
         } else {
@@ -377,131 +386,160 @@ pub(super) fn parse_keyword_action_verb(
     ts: &mut TokenStream<'_>,
     actor: PlayerRef,
 ) -> PResult<Effect> {
-    if ts.eat_phrase(&["take", "the", "initiative"])
-        || ts.eat_phrase(&["takes", "the", "initiative"])
-    {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::TakeInitiative),
-            duration: Duration::Instant,
-        });
+    const SIMPLE_PLAYER_ACTIONS: &[(&[&str], PlayerActionKind)] = &[
+        (
+            &["take", "the", "initiative"],
+            PlayerActionKind::TakeInitiative,
+        ),
+        (
+            &["takes", "the", "initiative"],
+            PlayerActionKind::TakeInitiative,
+        ),
+        (
+            &["open", "an", "attraction"],
+            PlayerActionKind::OpenAttraction,
+        ),
+        (
+            &["opens", "an", "attraction"],
+            PlayerActionKind::OpenAttraction,
+        ),
+        (
+            &["repeat", "this", "process", "any", "number", "of", "times"],
+            PlayerActionKind::RepeatProcessOnce,
+        ),
+        (
+            &["repeat", "this", "process", "once"],
+            PlayerActionKind::RepeatProcessOnce,
+        ),
+        (
+            &["repeat", "this", "process"],
+            PlayerActionKind::RepeatProcessOnce,
+        ),
+        (&["win", "the", "game"], PlayerActionKind::WinGame),
+        (&["wins", "the", "game"], PlayerActionKind::WinGame),
+        (&["recruit"], PlayerActionKind::Recruit),
+        (&["recruits"], PlayerActionKind::Recruit),
+        (&["learn"], PlayerActionKind::Learn),
+        (&["learns"], PlayerActionKind::Learn),
+        (
+            &["clash", "with", "an", "opponent"],
+            PlayerActionKind::Clash,
+        ),
+        (
+            &["clashes", "with", "an", "opponent"],
+            PlayerActionKind::Clash,
+        ),
+        (&["forage"], PlayerActionKind::Forage),
+        (&["forages"], PlayerActionKind::Forage),
+        (&["manifest", "dread"], PlayerActionKind::ManifestDread),
+        (&["manifests", "dread"], PlayerActionKind::ManifestDread),
+        (
+            &["manifest", "the", "top", "card", "of", "your", "library"],
+            PlayerActionKind::Manifest,
+        ),
+        (
+            &["manifest", "the", "top", "card", "of", "their", "library"],
+            PlayerActionKind::Manifest,
+        ),
+        (
+            &["manifests", "the", "top", "card", "of", "your", "library"],
+            PlayerActionKind::Manifest,
+        ),
+        (
+            &["manifests", "the", "top", "card", "of", "their", "library"],
+            PlayerActionKind::Manifest,
+        ),
+        (
+            &["venture", "into", "the", "dungeon"],
+            PlayerActionKind::VentureIntoDungeon,
+        ),
+        (
+            &["ventures", "into", "the", "dungeon"],
+            PlayerActionKind::VentureIntoDungeon,
+        ),
+    ];
+    for &(phrase, action) in SIMPLE_PLAYER_ACTIONS {
+        if ts.eat_phrase(phrase) {
+            return Ok(player_action(actor, action, Duration::Instant));
+        }
     }
-    if ts.eat_phrase(&["open", "an", "attraction"]) || ts.eat_phrase(&["opens", "an", "attraction"])
-    {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::OpenAttraction),
-            duration: Duration::Instant,
-        });
+    if ts.eat_any_phrase(&[
+        &[
+            "don't", "lose", "this", "mana", "as", "steps", "and", "phases", "end",
+        ],
+        &[
+            "doesn't", "lose", "this", "mana", "as", "steps", "and", "phases", "end",
+        ],
+        &["don't", "lose", "this", "mana", "as", "steps", "end"],
+        &["doesn't", "lose", "this", "mana", "as", "steps", "end"],
+    ]) {
+        return Ok(player_action(
+            actor,
+            PlayerActionKind::KeepManaAcrossSteps,
+            Duration::UntilEndOfTurn,
+        ));
     }
-    if ts.eat_phrase(&["repeat", "this", "process", "any", "number", "of", "times"])
-        || ts.eat_phrase(&["repeat", "this", "process", "once"])
-        || ts.eat_phrase(&["repeat", "this", "process"])
-    {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::RepeatProcessOnce),
-            duration: Duration::Instant,
-        });
+    if ts.eat_any_phrase(&[&["end", "the", "turn"], &["ends", "the", "turn"]]) {
+        return Ok(mutate_player(
+            actor,
+            PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::CleanupStep),
+            Duration::Instant,
+        ));
     }
-    if ts.eat_phrase(&["win", "the", "game"]) || ts.eat_phrase(&["wins", "the", "game"]) {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::WinGame),
-            duration: Duration::Instant,
-        });
-    }
-    if ts.eat_phrase(&[
-        "don't", "lose", "this", "mana", "as", "steps", "and", "phases", "end",
-    ]) || ts.eat_phrase(&[
-        "doesn't", "lose", "this", "mana", "as", "steps", "and", "phases", "end",
-    ]) || ts.eat_phrase(&["don't", "lose", "this", "mana", "as", "steps", "end"])
-        || ts.eat_phrase(&["doesn't", "lose", "this", "mana", "as", "steps", "end"])
-    {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::KeepManaAcrossSteps),
-            duration: Duration::UntilEndOfTurn,
-        });
-    }
-    if ts.eat_phrase(&["end", "the", "turn"]) || ts.eat_phrase(&["ends", "the", "turn"]) {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::CleanupStep),
-            duration: Duration::Instant,
-        });
-    }
-    if ts.eat_phrase(&["time", "travel"]) || ts.eat_phrase(&["time", "travels"]) {
+    if ts.eat_any_phrase(&[&["time", "travel"], &["time", "travels"]]) {
         let time_subj = SubjectRef::All(Box::new(crate::v2::ir::ObjectFilter {
             predicates: vec![crate::v2::ir::FilterPredicate::HasCounterKind(
                 crate::v2::ir::CounterKind::Time,
             )],
             ..Default::default()
         }));
-        let eff = Effect::PromptChoice {
-            chooser: actor,
-            kind: crate::v2::ir::ChoiceKind::ChooseBranch(vec![
-                vec![Effect::MutateObject {
-                    subject: time_subj.clone(),
-                    mutation: ObjectMutation::PutCounters {
+        let eff = prompt_choice(
+            actor,
+            crate::v2::ir::ChoiceKind::ChooseBranch(vec![
+                vec![mutate_obj(
+                    time_subj.clone(),
+                    ObjectMutation::PutCounters {
                         kind: crate::v2::ir::CounterKind::Time,
                         count: ValueExpr::Const(1),
                     },
-                    duration: Duration::Instant,
-                }],
-                vec![Effect::MutateObject {
-                    subject: time_subj,
-                    mutation: ObjectMutation::RemoveCounters {
+                    Duration::Instant,
+                )],
+                vec![mutate_obj(
+                    time_subj,
+                    ObjectMutation::RemoveCounters {
                         kind: crate::v2::ir::CounterKind::Time,
                         count: Some(ValueExpr::Const(1)),
                         all: false,
                     },
-                    duration: Duration::Instant,
-                }],
+                    Duration::Instant,
+                )],
             ]),
-        };
+        );
         return Ok(wrap_optional_repeat_times(ts, eff));
     }
-    if ts.eat_word("airbend") || ts.eat_word("airbends") {
+    if ts.eat_any_word(&["airbend", "airbends"]) {
         let any_number = ts.eat_phrase(&["any", "number", "of"]);
         let subject = parse_subject_ref(ts)?;
-        return Ok(Effect::ZoneOp {
+        return Ok(exile_zone_op(
             actor,
-            op: crate::v2::ir::ZoneOpKind::Exile {
-                face_down: false,
-                counters: None,
-            },
             subject,
-            from: Vec::new(),
-            to: None,
-            modifiers: crate::v2::ir::EntryModifiers::default(),
-            except: None,
-            count: if any_number {
-                Some(crate::v2::ir::CountSpec {
-                    count: ValueExpr::Const(0),
-                    up_to: false,
-                    any_number: true,
-                })
-            } else {
-                None
-            },
-        });
+            Vec::new(),
+            false,
+            None,
+            any_number.then_some(crate::v2::ir::CountSpec {
+                count: ValueExpr::Const(0),
+                up_to: false,
+                any_number: true,
+            }),
+        ));
     }
-    if ts.eat_word("cloak") || ts.eat_word("cloaks") {
+    if ts.eat_any_word(&["cloak", "cloaks"]) {
         let (subject, from, count) = if ts.eat_phrase(&["the", "top", "card", "of"]) {
             let zref = crate::v2::filter::parse_zone_ref(ts)?;
             (
-                SubjectRef::Group(Box::new(crate::v2::ir::ObjectFilter {
-                    any_card: true,
-                    zones: vec![zref],
-                    ..Default::default()
-                })),
+                zone_cards_subject(zref),
                 vec![zref],
-                Some(crate::v2::ir::CountSpec {
-                    count: ValueExpr::Const(1),
-                    up_to: false,
-                    any_number: false,
-                }),
+                Some(exact_count(ValueExpr::Const(1))),
             )
         } else {
             let subj = parse_subject_ref(ts)?;
@@ -513,192 +551,134 @@ pub(super) fn parse_keyword_action_verb(
             }
             (subj, f, None)
         };
-        return Ok(Effect::ZoneOp {
+        return Ok(move_zone_op(
             actor,
-            op: crate::v2::ir::ZoneOpKind::Move,
             subject,
             from,
-            to: Some(crate::v2::ir::ZoneDest {
-                zone: crate::v2::ir::ZoneKind::Battlefield,
-                owner: crate::v2::ir::ZoneOwner::Default,
-                library_position: None,
-                library_order: None,
-                under_control: None,
-            }),
-            modifiers: crate::v2::ir::EntryModifiers {
+            simple_zone_dest(
+                crate::v2::ir::ZoneKind::Battlefield,
+                crate::v2::ir::ZoneOwner::Default,
+            ),
+            crate::v2::ir::EntryModifiers {
                 face_down: true,
                 ..crate::v2::ir::EntryModifiers::default()
             },
-            except: None,
             count,
-        });
+        ));
     }
-    if ts.eat_word("skip") || ts.eat_word("skips") {
-        if ts.eat_phrase(&["all", "combat", "phases", "of", "their", "next", "turn"])
-            || ts.eat_phrase(&["all", "combat", "phases", "of", "your", "next", "turn"])
-        {
-            return Ok(Effect::MutatePlayer {
-                player: actor,
-                mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::BeginningOfCombat),
-                duration: Duration::UntilEndOfNextTurn,
-            });
+    if ts.eat_any_word(&["skip", "skips"]) {
+        const SKIP_NEXT_TURN_STEPS: &[(&[&str], crate::ast::TurnStepAst)] = &[
+            (
+                &["all", "combat", "phases", "of", "their", "next", "turn"],
+                crate::ast::TurnStepAst::BeginningOfCombat,
+            ),
+            (
+                &["all", "combat", "phases", "of", "your", "next", "turn"],
+                crate::ast::TurnStepAst::BeginningOfCombat,
+            ),
+            (
+                &["the", "untap", "step", "of", "that", "turn"],
+                crate::ast::TurnStepAst::UntapStep,
+            ),
+            (
+                &["the", "draw", "step", "of", "that", "turn"],
+                crate::ast::TurnStepAst::DrawStep,
+            ),
+        ];
+        for &(phrase, step) in SKIP_NEXT_TURN_STEPS {
+            if ts.eat_phrase(phrase) {
+                return Ok(mutate_player(
+                    actor,
+                    PlayerMutation::SkipNextStep(step),
+                    Duration::UntilEndOfNextTurn,
+                ));
+            }
         }
-        if ts.eat_phrase(&["the", "untap", "step", "of", "that", "turn"]) {
-            return Ok(Effect::MutatePlayer {
-                player: actor,
-                mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::UntapStep),
-                duration: Duration::UntilEndOfNextTurn,
-            });
-        }
-        if ts.eat_phrase(&["the", "draw", "step", "of", "that", "turn"]) {
-            return Ok(Effect::MutatePlayer {
-                player: actor,
-                mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::DrawStep),
-                duration: Duration::UntilEndOfNextTurn,
-            });
-        }
-        if ts.eat_phrase(&["your", "next"]) || ts.eat_phrase(&["their", "next"]) {
+        const SKIP_STEPS: &[(&[&str], crate::ast::TurnStepAst)] = &[
+            (&["draw", "step"], crate::ast::TurnStepAst::DrawStep),
+            (&["untap", "step"], crate::ast::TurnStepAst::UntapStep),
+            (
+                &["combat", "phase"],
+                crate::ast::TurnStepAst::BeginningOfCombat,
+            ),
+        ];
+        if ts.eat_any_phrase(&[&["your", "next"], &["their", "next"]]) {
             if ts.eat_word("turn") {
-                return Ok(Effect::MutatePlayer {
-                    player: actor,
-                    mutation: PlayerMutation::Action(PlayerActionKind::SkipNextTurn),
-                    duration: Duration::Instant,
-                });
+                return Ok(player_action(
+                    actor,
+                    PlayerActionKind::SkipNextTurn,
+                    Duration::Instant,
+                ));
             }
             if let Ok(cnt) = try_parse(ts, parse_value_expr)
                 && ts.eat_word("turns")
             {
                 return Ok(Effect::ForEach {
                     over: ForEachDomain::Count(cnt),
-                    body: vec![Effect::MutatePlayer {
-                        player: actor,
-                        mutation: PlayerMutation::Action(PlayerActionKind::SkipNextTurn),
-                        duration: Duration::Instant,
-                    }],
+                    body: vec![player_action(
+                        actor,
+                        PlayerActionKind::SkipNextTurn,
+                        Duration::Instant,
+                    )],
                 });
             }
-            if ts.eat_phrase(&["draw", "step"]) {
-                return Ok(Effect::MutatePlayer {
-                    player: actor,
-                    mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::DrawStep),
-                    duration: Duration::Instant,
-                });
-            }
-            if ts.eat_phrase(&["untap", "step"]) {
-                return Ok(Effect::MutatePlayer {
-                    player: actor,
-                    mutation: PlayerMutation::SkipNextStep(crate::ast::TurnStepAst::UntapStep),
-                    duration: Duration::Instant,
-                });
-            }
-            if ts.eat_phrase(&["combat", "phase"]) {
-                return Ok(Effect::MutatePlayer {
-                    player: actor,
-                    mutation: PlayerMutation::SkipNextStep(
-                        crate::ast::TurnStepAst::BeginningOfCombat,
-                    ),
-                    duration: Duration::Instant,
-                });
+            for &(phrase, step) in SKIP_STEPS {
+                if ts.eat_phrase(phrase) {
+                    return Ok(mutate_player(
+                        actor,
+                        PlayerMutation::SkipNextStep(step),
+                        Duration::Instant,
+                    ));
+                }
             }
         }
-        if ts.eat_word("your") || ts.eat_word("their") {
-            let step = if ts.eat_phrase(&["draw", "step"]) {
-                Some(crate::ast::TurnStepAst::DrawStep)
-            } else if ts.eat_phrase(&["untap", "step"]) {
-                Some(crate::ast::TurnStepAst::UntapStep)
-            } else if ts.eat_phrase(&["combat", "phase"]) {
-                Some(crate::ast::TurnStepAst::BeginningOfCombat)
-            } else {
-                None
-            };
-            if let Some(st) = step {
-                let dur = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-                return Ok(Effect::MutatePlayer {
-                    player: actor,
-                    mutation: PlayerMutation::SkipNextStep(st),
-                    duration: dur,
-                });
+        if ts.eat_any_word(&["your", "their"]) {
+            for &(phrase, step) in SKIP_STEPS {
+                if ts.eat_phrase(phrase) {
+                    let dur = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+                    return Ok(mutate_player(
+                        actor,
+                        PlayerMutation::SkipNextStep(step),
+                        dur,
+                    ));
+                }
             }
         }
-    }
-    if ts.eat_word("flip") || ts.eat_word("flips") {
-        let subject = parse_subject_ref(ts)?;
-        return Ok(Effect::MutateObject {
-            subject,
-            mutation: ObjectMutation::StateAction(ObjectStateAction::Flip),
-            duration: Duration::Permanent,
-        });
-    }
-    if ts.eat_word("recruit") || ts.eat_word("recruits") {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::Recruit),
-            duration: Duration::Instant,
-        });
-    }
-    if ts.eat_word("earthbend") || ts.eat_word("earthbends") {
-        let amount = parse_value_expr(ts)?;
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::ScaledAction {
-                kind: ScaledPlayerAction::Earthbend,
-                amount,
-            },
-            duration: Duration::Instant,
-        });
     }
     if ts.eat_word("monstrosity") {
         let amt = parse_value_expr(ts)?;
-        return Ok(Effect::MutateObject {
-            subject: SubjectRef::SelfObject,
-            mutation: ObjectMutation::KeywordAction {
+        return Ok(mutate_obj(
+            SubjectRef::SelfObject,
+            ObjectMutation::KeywordAction {
                 kind: ObjectKeywordAction::Monstrosity,
                 amount: amt,
             },
-            duration: Duration::Permanent,
-        });
+            Duration::Permanent,
+        ));
     }
-    if (ts.eat_word("empower") || ts.eat_word("empowers"))
+    if ts.eat_any_word(&["empower", "empowers"])
         && let Some(w) = ts.peek_word()
         && let Some(pw) = ts.vocab.lookup_subtype(&w.to_ascii_lowercase())
     {
         let planeswalker = pw.to_string();
         ts.next_word();
         let amount = parse_value_expr(ts)?;
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Empower {
+        return Ok(mutate_player(
+            actor,
+            PlayerMutation::Empower {
                 planeswalker,
                 amount,
             },
-            duration: Duration::Instant,
-        });
+            Duration::Instant,
+        ));
     }
-    if ts.eat_word("learn") || ts.eat_word("learns") {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::Learn),
-            duration: Duration::Instant,
-        });
+    if ts.eat_any_word(&["proliferate", "proliferates"]) {
+        return Ok(wrap_optional_repeat_times(
+            ts,
+            player_action(actor, PlayerActionKind::Proliferate, Duration::Instant),
+        ));
     }
-    if (ts.eat_word("clash") || ts.eat_word("clashes"))
-        && ts.eat_phrase(&["with", "an", "opponent"])
-    {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::Clash),
-            duration: Duration::Instant,
-        });
-    }
-    if ts.eat_word("proliferate") || ts.eat_word("proliferates") {
-        let eff = Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::Proliferate),
-            duration: Duration::Instant,
-        };
-        return Ok(wrap_optional_repeat_times(ts, eff));
-    }
-    if ts.eat_word("investigate") || ts.eat_word("investigates") {
+    if ts.eat_any_word(&["investigate", "investigates"]) {
         let amt = if ts.eat_word("twice") {
             ValueExpr::Const(2)
         } else {
@@ -720,64 +700,44 @@ pub(super) fn parse_keyword_action_verb(
                 ValueExpr::Const(1)
             }
         };
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::ScaledAction {
+        return Ok(mutate_player(
+            actor,
+            PlayerMutation::ScaledAction {
                 kind: ScaledPlayerAction::Investigate,
                 amount: amt,
             },
-            duration: Duration::Instant,
-        });
+            Duration::Instant,
+        ));
     }
-    if ts.eat_word("populate") || ts.eat_word("populates") {
-        let eff = Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::Populate),
-            duration: Duration::Instant,
-        };
-        return Ok(wrap_optional_repeat_times(ts, eff));
+    if ts.eat_any_word(&["populate", "populates"]) {
+        return Ok(wrap_optional_repeat_times(
+            ts,
+            player_action(actor, PlayerActionKind::Populate, Duration::Instant),
+        ));
     }
-    if ts.eat_word("forage") || ts.eat_word("forages") {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::Forage),
-            duration: Duration::Instant,
-        });
-    }
-    if ts.eat_word("blight") || ts.eat_word("blights") {
-        let amount = parse_value_expr(ts)?;
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::ScaledAction {
-                kind: ScaledPlayerAction::Blight,
-                amount,
-            },
-            duration: Duration::Instant,
-        });
-    }
-    if ts.eat_word("behold") || ts.eat_word("beholds") {
+    if ts.eat_any_word(&["behold", "beholds"]) {
         let flt = parse_object_filter(ts)?;
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Behold(flt),
-            duration: Duration::Instant,
-        });
+        return Ok(mutate_player(
+            actor,
+            PlayerMutation::Behold(flt),
+            Duration::Instant,
+        ));
     }
-    if ts.eat_word("adapt") || ts.eat_word("adapts") {
+    if ts.eat_any_word(&["adapt", "adapts"]) {
         let n = ts
             .next_number(false)
             .and_then(|v| u16::try_from(v).ok())
             .ok_or_else(|| ts.err("expected number after `adapt`"))?;
-        return Ok(Effect::MutateObject {
-            subject: SubjectRef::SelfObject,
-            mutation: ObjectMutation::KeywordAction {
+        return Ok(mutate_obj(
+            SubjectRef::SelfObject,
+            ObjectMutation::KeywordAction {
                 kind: ObjectKeywordAction::Adapt,
                 amount: ValueExpr::Const(i32::from(n)),
             },
-            duration: Duration::Instant,
-        });
+            Duration::Instant,
+        ));
     }
-    if ts.eat_word("amass") || ts.eat_word("amasses") {
+    if ts.eat_any_word(&["amass", "amasses"]) {
         let subtype = if let Some(w) = ts.peek_word()
             && let Some(sub) = ts.vocab.lookup_subtype(&w.to_ascii_lowercase())
         {
@@ -787,144 +747,91 @@ pub(super) fn parse_keyword_action_verb(
             "Army".to_string()
         };
         let amount = parse_value_expr(ts)?;
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Amass { subtype, amount },
-            duration: Duration::Instant,
-        });
-    }
-    if ts.eat_word("incubate") || ts.eat_word("incubates") {
-        let amount = parse_value_expr(ts)?;
-        let eff = Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::ScaledAction {
-                kind: ScaledPlayerAction::Incubate,
-                amount,
-            },
-            duration: Duration::Instant,
-        };
-        return Ok(wrap_optional_repeat_times(ts, eff));
-    }
-    if ts.eat_word("discover") || ts.eat_word("discovers") {
-        let amount = parse_value_expr(ts)?;
-        let eff = Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::ScaledAction {
-                kind: ScaledPlayerAction::Discover,
-                amount,
-            },
-            duration: Duration::Instant,
-        };
-        return Ok(wrap_optional_repeat_times(ts, eff));
-    }
-    if ts.eat_word("bolster") || ts.eat_word("bolsters") {
-        let amount = parse_value_expr(ts)?;
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::ScaledAction {
-                kind: ScaledPlayerAction::Bolster,
-                amount,
-            },
-            duration: Duration::Instant,
-        });
-    }
-    if ts.eat_word("support") || ts.eat_word("supports") {
-        let amount = parse_value_expr(ts)?;
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::ScaledAction {
-                kind: ScaledPlayerAction::Support,
-                amount,
-            },
-            duration: Duration::Instant,
-        });
-    }
-    if ts.eat_word("fateseal") || ts.eat_word("fateseals") {
-        let amount = parse_value_expr(ts)?;
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::ScaledAction {
-                kind: ScaledPlayerAction::Fateseal,
-                amount,
-            },
-            duration: Duration::Instant,
-        });
-    }
-    if ts.eat_phrase(&["manifest", "dread"]) || ts.eat_phrase(&["manifests", "dread"]) {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::ManifestDread),
-            duration: Duration::Instant,
-        });
-    }
-    if (ts.eat_word("manifest") || ts.eat_word("manifests"))
-        && (ts.eat_phrase(&["the", "top", "card", "of", "your", "library"])
-            || ts.eat_phrase(&["the", "top", "card", "of", "their", "library"]))
-    {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::Manifest),
-            duration: Duration::Instant,
-        });
-    }
-    if ts.eat_phrase(&["venture", "into", "the", "dungeon"])
-        || ts.eat_phrase(&["ventures", "into", "the", "dungeon"])
-    {
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::Action(PlayerActionKind::VentureIntoDungeon),
-            duration: Duration::Instant,
-        });
+        return Ok(mutate_player(
+            actor,
+            PlayerMutation::Amass { subtype, amount },
+            Duration::Instant,
+        ));
     }
     if ts.eat_phrase(&["the", "ring", "tempts", "you"]) {
-        return Ok(Effect::MutatePlayer {
-            player: PlayerRef::You,
-            mutation: PlayerMutation::Action(PlayerActionKind::RingTemptsYou),
-            duration: Duration::Instant,
-        });
+        return Ok(player_action(
+            PlayerRef::You,
+            PlayerActionKind::RingTemptsYou,
+            Duration::Instant,
+        ));
     }
-    if ts.eat_phrase(&["collect", "evidence"]) {
-        let amount = parse_value_expr(ts)?;
-        return Ok(Effect::MutatePlayer {
-            player: actor,
-            mutation: PlayerMutation::ScaledAction {
-                kind: ScaledPlayerAction::CollectEvidence,
-                amount,
-            },
-            duration: Duration::Instant,
-        });
+    const SCALED_ACTIONS: &[(&[&str], ScaledPlayerAction, bool)] = &[
+        (&["earthbend"], ScaledPlayerAction::Earthbend, false),
+        (&["earthbends"], ScaledPlayerAction::Earthbend, false),
+        (&["blight"], ScaledPlayerAction::Blight, false),
+        (&["blights"], ScaledPlayerAction::Blight, false),
+        (&["incubate"], ScaledPlayerAction::Incubate, true),
+        (&["incubates"], ScaledPlayerAction::Incubate, true),
+        (&["discover"], ScaledPlayerAction::Discover, true),
+        (&["discovers"], ScaledPlayerAction::Discover, true),
+        (&["bolster"], ScaledPlayerAction::Bolster, false),
+        (&["bolsters"], ScaledPlayerAction::Bolster, false),
+        (&["support"], ScaledPlayerAction::Support, false),
+        (&["supports"], ScaledPlayerAction::Support, false),
+        (&["fateseal"], ScaledPlayerAction::Fateseal, false),
+        (&["fateseals"], ScaledPlayerAction::Fateseal, false),
+        (
+            &["collect", "evidence"],
+            ScaledPlayerAction::CollectEvidence,
+            false,
+        ),
+    ];
+    for &(phrase, kind, repeat) in SCALED_ACTIONS {
+        if ts.eat_phrase(phrase) {
+            let amount = parse_value_expr(ts)?;
+            let eff = mutate_player(
+                actor,
+                PlayerMutation::ScaledAction { kind, amount },
+                Duration::Instant,
+            );
+            return Ok(if repeat {
+                wrap_optional_repeat_times(ts, eff)
+            } else {
+                eff
+            });
+        }
     }
-    if ts.eat_word("goad") || ts.eat_word("goads") {
-        let subject = parse_subject_ref(ts)?;
-        return Ok(Effect::MutateObject {
-            subject,
-            mutation: ObjectMutation::StateAction(ObjectStateAction::Goad),
-            duration: Duration::UntilYourNextTurn,
-        });
-    }
-    if ts.eat_word("detain") || ts.eat_word("detains") {
-        let subject = parse_subject_ref(ts)?;
-        return Ok(Effect::MutateObject {
-            subject,
-            mutation: ObjectMutation::StateAction(ObjectStateAction::Detain),
-            duration: Duration::UntilYourNextTurn,
-        });
-    }
-    if ts.eat_word("suspect") || ts.eat_word("suspects") {
-        let subject = parse_subject_ref(ts)?;
-        return Ok(Effect::MutateObject {
-            subject,
-            mutation: ObjectMutation::StateAction(ObjectStateAction::Suspect),
-            duration: Duration::Permanent,
-        });
-    }
-    if ts.eat_word("exert") || ts.eat_word("exerts") {
-        let subject = parse_subject_ref(ts)?;
-        return Ok(Effect::MutateObject {
-            subject,
-            mutation: ObjectMutation::StateAction(ObjectStateAction::Exert),
-            duration: Duration::Instant,
-        });
+    const OBJECT_STATE_VERBS: &[(&[&str], ObjectStateAction, Duration)] = &[
+        (
+            &["flip", "flips"],
+            ObjectStateAction::Flip,
+            Duration::Permanent,
+        ),
+        (
+            &["goad", "goads"],
+            ObjectStateAction::Goad,
+            Duration::UntilYourNextTurn,
+        ),
+        (
+            &["detain", "detains"],
+            ObjectStateAction::Detain,
+            Duration::UntilYourNextTurn,
+        ),
+        (
+            &["suspect", "suspects"],
+            ObjectStateAction::Suspect,
+            Duration::Permanent,
+        ),
+        (
+            &["exert", "exerts"],
+            ObjectStateAction::Exert,
+            Duration::Instant,
+        ),
+    ];
+    for (words, action, dur) in OBJECT_STATE_VERBS {
+        if ts.eat_any_word(words) {
+            let subject = parse_subject_ref(ts)?;
+            return Ok(mutate_obj(
+                subject,
+                ObjectMutation::StateAction(*action),
+                dur.clone(),
+            ));
+        }
     }
     Err(ts.err("not a keyword action verb"))
 }
@@ -1026,21 +933,17 @@ pub(crate) fn parse_damage_redirect_replacement(
     Err(ts.err("not a damage redirect sentence"))
 }
 
-/// Parse auxiliary top-level effect sentences (`Its power is equal to ... and its toughness is equal to ...`,
-/// `The escape/replicate cost is equal to ...`, damage redirection) without bloating `clause/mod.rs`.
+/// Parse auxiliary top-level effect sentences without bloating `clause/mod.rs`.
 pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
-    // 1. Damage redirection (`Shimian Night Stalker`, `Gideon's Sacrifice`, `Flame Spill`, `Gandalf's Sanction`)
+    // 1. Damage redirection
     {
         let rcp = ts.checkpoint();
         if let Ok((replacement, duration)) = try_parse(ts, parse_damage_redirect_replacement) {
-            return Ok(vec![Effect::ApplyReplacement {
-                replacement: Box::new(replacement),
-                duration,
-            }]);
+            return Ok(vec![apply_replacement(replacement, duration)]);
         }
         ts.restore(rcp);
     }
-    // 2. `Its power is equal to <v1> and its toughness is equal to <v2>` (`Kalitas, Bloodchief of Ghet`, `Broken Visage`, `Ritual of the Returned`, `Gemini Engine`)
+    // 2. `Its power is equal to <v1> and its toughness is equal to <v2>`
     {
         let pcp = ts.checkpoint();
         if ts.eat_phrase(&["its", "power", "is", "equal", "to"])
@@ -1048,25 +951,24 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
             && ts.eat_phrase(&["and", "its", "toughness", "is", "equal", "to"])
             && let Ok(toughness) = try_parse(ts, parse_value_expr)
         {
-            return Ok(vec![Effect::MutateObject {
-                subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It),
-                mutation: ObjectMutation::SetDynamicBasePT {
+            return Ok(vec![mutate_obj(
+                SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It),
+                ObjectMutation::SetDynamicBasePT {
                     power,
                     toughness,
                     add_types: crate::ast::CardTypeMask::EMPTY,
                     keep_existing_types: true,
                 },
-                duration: Duration::Permanent,
-            }]);
+                Duration::Permanent,
+            )]);
         }
         ts.restore(pcp);
     }
-    // 3. `The escape/replicate cost is equal to [its | the card's] mana cost [plus <costs>]` (`Underworld Breach`, `Djinn Illuminatus`, `Confession Dial`)
+    // 3. `The escape/replicate cost is equal to [its | the card's] mana cost [plus <costs>]`
     {
         let ecp = ts.checkpoint();
         if ts.eat_phrase(&["the", "escape", "cost", "is", "equal", "to"])
-            && (ts.eat_phrase(&["its", "mana", "cost"])
-                || ts.eat_phrase(&["the", "card's", "mana", "cost"]))
+            && ts.eat_any_phrase(&[&["its", "mana", "cost"], &["the", "card's", "mana", "cost"]])
         {
             let mut costs = vec![crate::v2::ir::Cost::PayAnyAmountMana];
             if ts.eat_word("plus")
@@ -1074,13 +976,13 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
             {
                 costs.extend(extra);
             }
-            return Ok(vec![Effect::ApplyContinuous {
-                effect: Box::new(crate::v2::ir::StaticAbility::AlternativeCost(costs)),
-                duration: Duration::UntilEndOfTurn,
-            }]);
+            return Ok(vec![apply_continuous(
+                crate::v2::ir::StaticAbility::AlternativeCost(costs),
+                Duration::UntilEndOfTurn,
+            )]);
         }
         ts.restore(ecp);
-        if (ts.eat_word("the") || ts.eat_word("its"))
+        if ts.eat_any_word(&["the", "its"])
             && ts.peek_word().is_some_and(|w| {
                 matches!(
                     w.to_ascii_lowercase().as_str(),
@@ -1101,17 +1003,17 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
         {
             ts.next_word();
             if ts.eat_phrase(&["cost", "is", "equal", "to", "its", "mana", "cost"]) {
-                return Ok(vec![Effect::ApplyContinuous {
-                    effect: Box::new(crate::v2::ir::StaticAbility::AlternativeCost(vec![
+                return Ok(vec![apply_continuous(
+                    crate::v2::ir::StaticAbility::AlternativeCost(vec![
                         crate::v2::ir::Cost::PayAnyAmountMana,
-                    ])),
-                    duration: Duration::Permanent,
-                }]);
+                    ]),
+                    Duration::Permanent,
+                )]);
             }
         }
         ts.restore(ecp);
     }
-    // 4. `copy the next <flt> you cast this turn when you cast it` (`Sea Gate Stormcaller`, `Flamehold Grappler`, `Tzaangor Shaman`)
+    // 4. `copy the next <flt> you cast this turn when you cast it`
     {
         let ccp = ts.checkpoint();
         if ts.eat_phrase(&["copy", "the", "next"])
@@ -1138,29 +1040,30 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
         }
         ts.restore(ccp);
     }
-    // 4b. `After [this | the second main] phase [this turn], there's/there is an additional combat phase [followed by an additional main phase]` (`World at War`, `Lightning Runner`, `Scourge of the Throne`)
+    // 4b. `After [this | the second main] phase [this turn], there's/there is an additional combat phase [followed by an additional main phase]`
     {
         let acp = ts.checkpoint();
-        if (ts.eat_phrase(&["after", "this", "phase"])
-            || ts.eat_phrase(&["after", "the", "second", "main", "phase", "this", "turn"])
-            || ts.eat_phrase(&["after", "the", "second", "main", "phase"]))
-            && ts.eat_comma()
-            && (ts.eat_phrase(&["there", "is", "an", "additional", "combat", "phase"])
-                || ts.eat_phrase(&["there's", "an", "additional", "combat", "phase"]))
+        if ts.eat_any_phrase(&[
+            &["after", "this", "phase"],
+            &["after", "the", "second", "main", "phase", "this", "turn"],
+            &["after", "the", "second", "main", "phase"],
+        ]) && ts.eat_comma()
+            && ts.eat_any_phrase(&[
+                &["there", "is", "an", "additional", "combat", "phase"],
+                &["there's", "an", "additional", "combat", "phase"],
+            ])
         {
             let followed_by_main =
                 ts.eat_phrase(&["followed", "by", "an", "additional", "main", "phase"]);
-            return Ok(vec![Effect::MutatePlayer {
-                player: PlayerRef::You,
-                mutation: PlayerMutation::AdditionalCombat { followed_by_main },
-                duration: Duration::UntilEndOfTurn,
-            }]);
+            return Ok(vec![mutate_player(
+                PlayerRef::You,
+                PlayerMutation::AdditionalCombat { followed_by_main },
+                Duration::UntilEndOfTurn,
+            )]);
         }
         ts.restore(acp);
     }
-    // 5. `The next time <you/they/player> would draw a card this turn, instead <effect>` (`Aladdin's Lamp`, `Urabrask, Heretic Praetor`)
-    //    AND `The next time damage would be dealt to <from> this turn, that damage is dealt to <to> instead` (`Glarecaster`, `Mirrorwood Treefolk`)
-    //    AND `The next time <src> would deal [combat] damage [to <tgt>] this turn, <instead>` (`Impulsive Maneuvers`, `Goblin Psychopath`, `Aegis of Honor`)
+    // 5. `The next time ...`
     {
         let ncp = ts.checkpoint();
         if ts.eat_phrase(&["the", "next", "time"]) {
@@ -1176,16 +1079,16 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                     && let Ok(to) = try_parse(ts, parse_subject_ref)
                     && ts.eat_word("instead")
                 {
-                    return Ok(vec![Effect::ApplyReplacement {
-                        replacement: Box::new(crate::v2::ir::Replacement::DamageRule(
+                    return Ok(vec![apply_replacement(
+                        crate::v2::ir::Replacement::DamageRule(
                             crate::v2::ir::DamageReplacement::RedirectNext {
                                 amount: ValueExpr::Const(0),
                                 from,
                                 to,
                             },
-                        )),
-                        duration: Duration::UntilEndOfTurn,
-                    }]);
+                        ),
+                        Duration::UntilEndOfTurn,
+                    )]);
                 }
             }
             ts.restore(dcp);
@@ -1196,19 +1099,19 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                 && ts.eat_word("instead")
                 && let Ok(instead) = try_parse(ts, super::parse_effect_sentence)
             {
-                return Ok(vec![Effect::ApplyReplacement {
-                    replacement: Box::new(crate::v2::ir::Replacement::EventInstead {
+                return Ok(vec![apply_replacement(
+                    crate::v2::ir::Replacement::EventInstead {
                         event: crate::v2::ir::TriggerEvent::PlayerAction {
                             player,
                             action: crate::v2::ir::PlayerTriggerKind::CardDrawn,
                         },
                         instead,
-                    }),
-                    duration: Duration::UntilEndOfTurn,
-                }]);
+                    },
+                    Duration::UntilEndOfTurn,
+                )]);
             }
             ts.restore(dcp);
-            // 5b2. `<player> would roll one or more dice this turn, instead they roll that many dice plus one [and|, then] you choose one of those rolls to ignore` (`Squid Fire Knight`, `Bamboozling Beeble`)
+            // 5b2. `<player> would roll one or more dice this turn, instead ...`
             if let Ok(player) = try_parse(ts, crate::v2::filter::parse_player_ref)
                 && ts.eat_phrase(&["would", "roll", "one", "or", "more", "dice", "this", "turn"])
                 && ts.eat_comma()
@@ -1217,25 +1120,25 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                 ])
             {
                 let _ = ts.eat_comma();
-                let _ = ts.eat_word("then") || ts.eat_word("and");
+                let _ = ts.eat_any_word(&["then", "and"]);
                 if ts.eat_phrase(&[
                     "you", "choose", "one", "of", "those", "rolls", "to", "ignore",
                 ]) {
-                    return Ok(vec![Effect::ApplyReplacement {
-                        replacement: Box::new(crate::v2::ir::Replacement::EventInstead {
+                    return Ok(vec![apply_replacement(
+                        crate::v2::ir::Replacement::EventInstead {
                             event: crate::v2::ir::TriggerEvent::RolledDie { player, value: 0 },
-                            instead: vec![Effect::MutatePlayer {
+                            instead: vec![mutate_player(
                                 player,
-                                mutation: PlayerMutation::RollDie { sides: 6, count: 2 },
-                                duration: Duration::Instant,
-                            }],
-                        }),
-                        duration: Duration::UntilEndOfTurn,
-                    }]);
+                                PlayerMutation::RollDie { sides: 6, count: 2 },
+                                Duration::Instant,
+                            )],
+                        },
+                        Duration::UntilEndOfTurn,
+                    )]);
                 }
             }
             ts.restore(dcp);
-            // 5b3. `<subj> adapts this turn, it adapts as though it had no +1/+1 counters on it` (`Biomancer's Familiar`)
+            // 5b3. `<subj> adapts this turn, it adapts as though it had no +1/+1 counters on it`
             if let Ok(subject) = try_parse(ts, parse_subject_ref)
                 && ts.eat_phrase(&["adapts", "this", "turn"])
                 && ts.eat_comma()
@@ -1243,18 +1146,18 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                 && try_parse(ts, crate::v2::filter::parse_counter_kind).is_ok()
                 && ts.eat_phrase(&["counters", "on", "it"])
             {
-                return Ok(vec![Effect::ApplyReplacement {
-                    replacement: Box::new(crate::v2::ir::Replacement::EntersWithCounters {
+                return Ok(vec![apply_replacement(
+                    crate::v2::ir::Replacement::EntersWithCounters {
                         subject: Some(subject),
                         kind: crate::v2::ir::CounterKind::PlusOnePlusOne,
                         count: ValueExpr::Const(1),
                         additional: true,
-                    }),
-                    duration: Duration::UntilEndOfTurn,
-                }]);
+                    },
+                    Duration::UntilEndOfTurn,
+                )]);
             }
             ts.restore(dcp);
-            // 5b4. `one or more <flt> enter this turn, each enters with <val> additional <kind> counter(s) on it` (`Storyweave`)
+            // 5b4. `one or more <flt> enter this turn, each enters with <val> additional <kind> counter(s) on it`
             if ts.eat_phrase(&["one", "or", "more"])
                 && let Ok(flt) = try_parse(ts, parse_object_filter)
                 && ts.eat_phrase(&["enter", "this", "turn"])
@@ -1263,36 +1166,36 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                 && let Ok(count) = try_parse(ts, parse_value_expr)
                 && ts.eat_word("additional")
                 && let Ok(kind) = try_parse(ts, crate::v2::filter::parse_counter_kind)
-                && (ts.eat_word("counters") || ts.eat_word("counter"))
+                && ts.eat_any_word(&["counters", "counter"])
                 && ts.eat_phrase(&["on", "it"])
             {
-                return Ok(vec![Effect::ApplyReplacement {
-                    replacement: Box::new(crate::v2::ir::Replacement::EntersWithCounters {
+                return Ok(vec![apply_replacement(
+                    crate::v2::ir::Replacement::EntersWithCounters {
                         subject: Some(SubjectRef::Group(Box::new(flt))),
                         kind,
                         count,
                         additional: true,
-                    }),
-                    duration: Duration::UntilEndOfTurn,
-                }]);
+                    },
+                    Duration::UntilEndOfTurn,
+                )]);
             }
             ts.restore(dcp);
-            // 5b5. `<subj> would be destroyed this turn, <instead> instead` (`Pyramids`)
+            // 5b5. `<subj> would be destroyed this turn, remove all damage marked on it instead`
             if let Ok(subject) = try_parse(ts, parse_subject_ref)
                 && ts.eat_phrase(&["would", "be", "destroyed", "this", "turn"])
                 && ts.eat_comma()
                 && ts.eat_phrase(&["remove", "all", "damage", "marked", "on", "it", "instead"])
             {
-                return Ok(vec![Effect::ApplyReplacement {
-                    replacement: Box::new(crate::v2::ir::Replacement::EventInstead {
+                return Ok(vec![apply_replacement(
+                    crate::v2::ir::Replacement::EventInstead {
                         event: crate::v2::ir::TriggerEvent::Dies { subject },
                         instead: Vec::new(),
-                    }),
-                    duration: Duration::UntilEndOfTurn,
-                }]);
+                    },
+                    Duration::UntilEndOfTurn,
+                )]);
             }
             ts.restore(dcp);
-            // 5b6. `you cast <flt> [from your hand] this turn, put that card into your hand instead of into your graveyard as it resolves` (`Soulfire Grand Master`)
+            // 5b6. `you cast <flt> [from your hand] this turn, put that card into your hand instead of into your graveyard as it resolves`
             if ts.eat_phrase(&["you", "cast"])
                 && let Ok(flt) = try_parse(ts, parse_object_filter)
             {
@@ -1316,43 +1219,37 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                         "resolves",
                     ])
                 {
-                    return Ok(vec![Effect::ApplyReplacement {
-                        replacement: Box::new(crate::v2::ir::Replacement::EventInstead {
+                    return Ok(vec![apply_replacement(
+                        crate::v2::ir::Replacement::EventInstead {
                             event: crate::v2::ir::TriggerEvent::SpellCast {
                                 caster: PlayerRef::You,
                                 spell: Some(flt),
                                 from_outside_hand: false,
                             },
-                            instead: vec![Effect::ZoneOp {
-                                actor: PlayerRef::You,
-                                op: crate::v2::ir::ZoneOpKind::Move,
-                                subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatCard),
-                                from: Vec::new(),
-                                to: Some(crate::v2::ir::ZoneDest {
-                                    zone: crate::v2::ir::ZoneKind::Hand,
-                                    owner: crate::v2::ir::ZoneOwner::You,
-                                    library_position: None,
-                                    library_order: None,
-                                    under_control: None,
-                                }),
-                                modifiers: crate::v2::ir::EntryModifiers::default(),
-                                except: None,
-                                count: None,
-                            }],
-                        }),
-                        duration: Duration::UntilEndOfTurn,
-                    }]);
+                            instead: vec![simple_zone_op(
+                                PlayerRef::You,
+                                crate::v2::ir::ZoneOpKind::Move,
+                                SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatCard),
+                                Vec::new(),
+                                Some(simple_zone_dest(
+                                    crate::v2::ir::ZoneKind::Hand,
+                                    crate::v2::ir::ZoneOwner::You,
+                                )),
+                            )],
+                        },
+                        Duration::UntilEndOfTurn,
+                    )]);
                 }
             }
             ts.restore(dcp);
             // 5c. `<src | a source of your choice> would deal [combat] damage [to <tgt> [and/or <tgt2>]] this turn/combat, <instead>`
-            let src_opt = if ts.eat_phrase(&["a", "source", "of", "your", "choice"])
-                || ts.eat_phrase(&["a", "source", "of", "their", "choice"])
-            {
+            let src_opt = if ts.eat_any_phrase(&[
+                &["a", "source", "of", "your", "choice"],
+                &["a", "source", "of", "their", "choice"],
+            ]) {
                 Some(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatSource))
             } else if let Ok(s) = try_parse(ts, parse_subject_ref) {
-                let _ = ts.eat_phrase(&["of", "your", "choice"])
-                    || ts.eat_phrase(&["of", "their", "choice"]);
+                let _ = ts.eat_any_phrase(&[&["of", "your", "choice"], &["of", "their", "choice"]]);
                 Some(s)
             } else {
                 None
@@ -1366,7 +1263,7 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                         let _ = ts.eat_phrase(&["one", "or", "more"]);
                         if let Ok(t1) = try_parse(ts, parse_subject_ref) {
                             let tcp = ts.checkpoint();
-                            if (ts.eat_word("and/or") || ts.eat_word("and"))
+                            if ts.eat_any_word(&["and/or", "and"])
                                 && let Ok(t2) = try_parse(ts, parse_subject_ref)
                             {
                                 Some(SubjectRef::Compound(vec![t1, t2]))
@@ -1380,7 +1277,7 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                     } else {
                         None
                     };
-                    if (ts.eat_phrase(&["this", "turn"]) || ts.eat_phrase(&["this", "combat"]))
+                    if ts.eat_any_phrase(&[&["this", "turn"], &["this", "combat"]])
                         && ts.eat_comma()
                     {
                         if ts.eat_phrase(&["prevent", "all", "but"])
@@ -1388,16 +1285,16 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                                 ts.next_number(false).and_then(|n| u16::try_from(n).ok())
                             && ts.eat_phrase(&["of", "that", "damage"])
                         {
-                            return Ok(vec![Effect::ApplyReplacement {
-                                replacement: Box::new(crate::v2::ir::Replacement::DamageRule(
+                            return Ok(vec![apply_replacement(
+                                crate::v2::ir::Replacement::DamageRule(
                                     crate::v2::ir::DamageReplacement::PreventAllBut {
                                         source: None,
                                         target: tgt,
                                         remaining: rem,
                                     },
-                                )),
-                                duration: Duration::UntilEndOfTurn,
-                            }]);
+                                ),
+                                Duration::UntilEndOfTurn,
+                            )]);
                         }
                         if ts.eat_phrase(&["prevent", "that", "damage"]) {
                             return Ok(vec![Effect::PreventDamage {
@@ -1413,34 +1310,33 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                                 let _ = try_parse(ts, parse_subject_ref);
                             }
                             if ts.eat_word("instead") {
-                                return Ok(vec![Effect::ApplyReplacement {
-                                    replacement: Box::new(
-                                        crate::v2::ir::Replacement::ModifyDamage {
-                                            source: None,
-                                            target: tgt,
-                                            add: 0,
-                                            factor: 2,
-                                        },
-                                    ),
-                                    duration: Duration::UntilEndOfTurn,
-                                }]);
+                                return Ok(vec![apply_replacement(
+                                    crate::v2::ir::Replacement::ModifyDamage {
+                                        source: None,
+                                        target: tgt,
+                                        add: 0,
+                                        factor: 2,
+                                    },
+                                    Duration::UntilEndOfTurn,
+                                )]);
                             }
                         }
-                        if (ts.eat_phrase(&["it", "deals", "that", "damage", "to"])
-                            || ts.eat_phrase(&["that", "spell", "deals", "that", "damage", "to"]))
-                            && let Ok(to) = try_parse(ts, parse_subject_ref)
+                        if ts.eat_any_phrase(&[
+                            &["it", "deals", "that", "damage", "to"],
+                            &["that", "spell", "deals", "that", "damage", "to"],
+                        ]) && let Ok(to) = try_parse(ts, parse_subject_ref)
                             && ts.eat_word("instead")
                         {
-                            return Ok(vec![Effect::ApplyReplacement {
-                                replacement: Box::new(crate::v2::ir::Replacement::DamageRule(
+                            return Ok(vec![apply_replacement(
+                                crate::v2::ir::Replacement::DamageRule(
                                     crate::v2::ir::DamageReplacement::RedirectNext {
                                         amount: ValueExpr::Const(0),
                                         from: tgt.unwrap_or(src),
                                         to,
                                     },
-                                )),
-                                duration: Duration::UntilEndOfTurn,
-                            }]);
+                                ),
+                                Duration::UntilEndOfTurn,
+                            )]);
                         }
                     }
                 }

@@ -26,6 +26,90 @@ use cost_modifiers::{parse_cost_modifier, parse_next_spell_modifier};
 use global_rules::parse_global_static_ability;
 use player_rules::parse_player_static_ability;
 
+pub(super) fn and_cond(prev: Option<ConditionExpr>, extra: ConditionExpr) -> ConditionExpr {
+    match prev {
+        Some(p) => ConditionExpr::And(Box::new(p), Box::new(extra)),
+        None => extra,
+    }
+}
+
+pub(super) fn merge_cond(
+    prev: Option<ConditionExpr>,
+    extra: Option<ConditionExpr>,
+) -> Option<ConditionExpr> {
+    match extra {
+        Some(c) => Some(and_cond(prev, c)),
+        None => prev,
+    }
+}
+
+pub(super) fn wrap_compound(mut parts: Vec<StaticAbility>) -> StaticAbility {
+    if parts.len() == 1 {
+        parts.remove(0)
+    } else {
+        StaticAbility::Compound(parts)
+    }
+}
+
+fn try_trailing_phrase_cond(
+    ts: &mut TokenStream<'_>,
+    end_trim: usize,
+    words: &[&str],
+    extra_cond: ConditionExpr,
+    condition: &Option<ConditionExpr>,
+) -> Option<StaticAbility> {
+    let n = words.len();
+    if end_trim < ts.pos + n {
+        return None;
+    }
+    let matched = words.iter().enumerate().all(|(i, &w)| {
+        matches!(
+            ts.tokens[end_trim - n + i].kind,
+            crate::v2::lexer::TokenKind::Word(tok) if tok.eq_ignore_ascii_case(w)
+        )
+    });
+    if !matched {
+        return None;
+    }
+    let mut body_ts = ts.sub_stream(&ts.tokens[ts.pos..end_trim - n], ts.stage);
+    let merged = and_cond(condition.clone(), extra_cond);
+    if let Ok(st) = parse_static_core(&mut body_ts, Some(merged))
+        && body_ts.is_eof()
+    {
+        ts.pos = ts.tokens.len();
+        return Some(st);
+    }
+    None
+}
+
+fn try_trailing_unless(
+    ts: &mut TokenStream<'_>,
+    body_start: usize,
+    end_trim: usize,
+    base_cond: Option<ConditionExpr>,
+) -> Option<StaticAbility> {
+    let u_idx = (body_start + 1..end_trim).find(|&idx| {
+        matches!(
+            ts.tokens[idx].kind,
+            crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("unless")
+        )
+    })?;
+    let mut cond_ts = ts.sub_stream(&ts.tokens[u_idx + 1..end_trim], ts.stage);
+    let c = parse_static_condition(&mut cond_ts).ok()?;
+    if !cond_ts.is_eof() {
+        return None;
+    }
+    let merged = and_cond(base_cond, ConditionExpr::Not(Box::new(c)));
+    let mut body_ts = ts.sub_stream(&ts.tokens[body_start..u_idx], ts.stage);
+    let st = parse_static_core(&mut body_ts, Some(merged)).ok()?;
+    if body_ts.is_eof() {
+        ts.pos = ts.tokens.len();
+        Some(st)
+    } else {
+        None
+    }
+}
+
 pub fn parse_static_ability(ts: &mut TokenStream<'_>) -> PResult<StaticAbility> {
     // Optional leading (possibly stacked!) `During your turn, `, `As long as <condition>, `, or `If <condition>, `
     let mut condition: Option<ConditionExpr> = None;
@@ -41,9 +125,10 @@ pub fn parse_static_ability(ts: &mut TokenStream<'_>) -> PResult<StaticAbility> 
                 return Err(ts.err("expected `,` after `As long as <condition>`"));
             }
             Some(c)
-        } else if (ts.eat_phrase(&["during", "your", "turn"])
-            || ts.eat_phrase(&["during", "each", "of", "your", "turns"]))
-            && ts.eat_comma()
+        } else if ts.eat_any_phrase(&[
+            &["during", "your", "turn"],
+            &["during", "each", "of", "your", "turns"],
+        ]) && ts.eat_comma()
         {
             Some(ConditionExpr::Flag(ConditionFlag::IsYourTurn))
         } else if ts.eat_phrase(&["during", "turns", "other", "than", "yours"]) && ts.eat_comma() {
@@ -54,9 +139,10 @@ pub fn parse_static_ability(ts: &mut TokenStream<'_>) -> PResult<StaticAbility> 
             Some(ConditionExpr::EventCheck(EventCheckKind::DuringStep(
                 TurnStepAst::BeginningOfCombat,
             )))
-        } else if (ts.eat_phrase(&["during", "your", "end", "step"])
-            || ts.eat_phrase(&["during", "each", "opponent's", "end", "step"]))
-            && ts.eat_comma()
+        } else if ts.eat_any_phrase(&[
+            &["during", "your", "end", "step"],
+            &["during", "each", "opponent's", "end", "step"],
+        ]) && ts.eat_comma()
         {
             Some(ConditionExpr::EventCheck(EventCheckKind::DuringStep(
                 TurnStepAst::EndStep,
@@ -75,35 +161,25 @@ pub fn parse_static_ability(ts: &mut TokenStream<'_>) -> PResult<StaticAbility> 
             }
         };
         match next_cond {
-            Some(c) => {
-                condition = Some(match condition {
-                    Some(prev) => ConditionExpr::And(Box::new(prev), Box::new(c)),
-                    None => c,
-                });
-            }
+            Some(c) => condition = Some(and_cond(condition, c)),
             None => break,
         }
     }
 
     // Strip trailing `as long as <condition>` if present!
-    let end_trim = if matches!(
-        ts.tokens.last().map(|t| &t.kind),
-        Some(crate::v2::lexer::TokenKind::Period)
-    ) {
-        ts.tokens.len() - 1
-    } else {
-        ts.tokens.len()
-    };
+    let end_trim = ts.tokens.len()
+        - usize::from(matches!(
+            ts.tokens.last().map(|t| &t.kind),
+            Some(crate::v2::lexer::TokenKind::Period)
+        ));
 
     // Strip trailing `, where X is <ValueExpr>` binder (including comma inside preceding quote)
     if let Some((body_end, expr_start)) = find_where_x_is(ts.tokens, ts.pos, end_trim) {
-        let expr_slice = &ts.tokens[expr_start..end_trim];
-        let mut expr_ts = ts.sub_stream(expr_slice, ts.stage);
+        let mut expr_ts = ts.sub_stream(&ts.tokens[expr_start..end_trim], ts.stage);
         if let Ok(expr) = parse_value_expr(&mut expr_ts)
             && expr_ts.is_eof()
         {
-            let body_slice = &ts.tokens[ts.pos..body_end];
-            let mut body_ts = ts.sub_stream(body_slice, ts.stage);
+            let mut body_ts = ts.sub_stream(&ts.tokens[ts.pos..body_end], ts.stage);
             let inner = parse_static_core(&mut body_ts, condition.take())?;
             body_ts.expect_eof()?;
             ts.pos = ts.tokens.len();
@@ -119,13 +195,11 @@ pub fn parse_static_ability(ts: &mut TokenStream<'_>) -> PResult<StaticAbility> 
         && let Some(ala_idx) = find_as_long_as(ts.tokens, ts.pos, end_trim)
         && ala_idx > ts.pos
     {
-        let cond_slice = &ts.tokens[ala_idx + 3..end_trim];
-        let mut cond_ts = ts.sub_stream(cond_slice, ts.stage);
+        let mut cond_ts = ts.sub_stream(&ts.tokens[ala_idx + 3..end_trim], ts.stage);
         if let Ok(c) = parse_static_condition(&mut cond_ts)
             && cond_ts.is_eof()
         {
-            let body_slice = &ts.tokens[ts.pos..ala_idx];
-            let mut body_ts = ts.sub_stream(body_slice, ts.stage);
+            let mut body_ts = ts.sub_stream(&ts.tokens[ts.pos..ala_idx], ts.stage);
             let st = parse_static_core(&mut body_ts, Some(c))?;
             body_ts.expect_eof()?;
             ts.pos = ts.tokens.len();
@@ -134,45 +208,23 @@ pub fn parse_static_ability(ts: &mut TokenStream<'_>) -> PResult<StaticAbility> 
     }
 
     // Strip trailing `during your turn` or `during combat` (merging with any leading condition)
-    if end_trim >= ts.pos + 3
-        && matches!(ts.tokens[end_trim - 3].kind, crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("during"))
-        && matches!(ts.tokens[end_trim - 2].kind, crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("your"))
-        && matches!(ts.tokens[end_trim - 1].kind, crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("turn"))
-    {
-        let body_slice = &ts.tokens[ts.pos..end_trim - 3];
-        let mut body_ts = ts.sub_stream(body_slice, ts.stage);
-        let merged = match condition.clone() {
-            Some(prev) => ConditionExpr::And(
-                Box::new(prev),
-                Box::new(ConditionExpr::Flag(ConditionFlag::IsYourTurn)),
-            ),
-            None => ConditionExpr::Flag(ConditionFlag::IsYourTurn),
-        };
-        if let Ok(st) = parse_static_core(&mut body_ts, Some(merged))
-            && body_ts.is_eof()
-        {
-            ts.pos = ts.tokens.len();
-            return Ok(st);
-        }
+    if let Some(st) = try_trailing_phrase_cond(
+        ts,
+        end_trim,
+        &["during", "your", "turn"],
+        ConditionExpr::Flag(ConditionFlag::IsYourTurn),
+        &condition,
+    ) {
+        return Ok(st);
     }
-    if end_trim >= ts.pos + 2
-        && matches!(ts.tokens[end_trim - 2].kind, crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("during"))
-        && matches!(ts.tokens[end_trim - 1].kind, crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("combat"))
-    {
-        let body_slice = &ts.tokens[ts.pos..end_trim - 2];
-        let mut body_ts = ts.sub_stream(body_slice, ts.stage);
-        let combat_cond =
-            ConditionExpr::EventCheck(EventCheckKind::DuringStep(TurnStepAst::BeginningOfCombat));
-        let merged = match condition.clone() {
-            Some(prev) => ConditionExpr::And(Box::new(prev), Box::new(combat_cond)),
-            None => combat_cond,
-        };
-        if let Ok(st) = parse_static_core(&mut body_ts, Some(merged))
-            && body_ts.is_eof()
-        {
-            ts.pos = ts.tokens.len();
-            return Ok(st);
-        }
+    if let Some(st) = try_trailing_phrase_cond(
+        ts,
+        end_trim,
+        &["during", "combat"],
+        ConditionExpr::EventCheck(EventCheckKind::DuringStep(TurnStepAst::BeginningOfCombat)),
+        &condition,
+    ) {
+        return Ok(st);
     }
 
     // Strip trailing `if <cond>` on static abilities
@@ -180,13 +232,11 @@ pub fn parse_static_ability(ts: &mut TokenStream<'_>) -> PResult<StaticAbility> 
         && let Some(if_idx) = (ts.pos + 1..end_trim)
             .find(|&idx| matches!(ts.tokens[idx].kind, crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("if")))
     {
-        let cond_slice = &ts.tokens[if_idx + 1..end_trim];
-        let mut cond_ts = ts.sub_stream(cond_slice, ts.stage);
+        let mut cond_ts = ts.sub_stream(&ts.tokens[if_idx + 1..end_trim], ts.stage);
         if let Ok(c) = parse_static_condition(&mut cond_ts)
             && cond_ts.is_eof()
         {
-            let body_slice = &ts.tokens[ts.pos..if_idx];
-            let mut body_ts = ts.sub_stream(body_slice, ts.stage);
+            let mut body_ts = ts.sub_stream(&ts.tokens[ts.pos..if_idx], ts.stage);
             if let Ok(st) = parse_static_core(&mut body_ts, Some(c))
                 && body_ts.is_eof()
             {
@@ -218,28 +268,8 @@ pub fn parse_static_ability(ts: &mut TokenStream<'_>) -> PResult<StaticAbility> 
         Err(first_err) => {
             // Fallback: trailing `unless <cond>` when the direct parse failed
             ts.restore(core_cp);
-            if let Some(u_idx) = (ts.pos + 1..end_trim).find(|&idx| {
-                matches!(ts.tokens[idx].kind, crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("unless"))
-            }) {
-                let cond_slice = &ts.tokens[u_idx + 1..end_trim];
-                let mut cond_ts = ts.sub_stream(cond_slice, ts.stage);
-                if let Ok(c) = parse_static_condition(&mut cond_ts)
-                    && cond_ts.is_eof()
-                {
-                    let neg = ConditionExpr::Not(Box::new(c));
-                    let merged = match base_cond.clone() {
-                        Some(prev) => ConditionExpr::And(Box::new(prev), Box::new(neg)),
-                        None => neg,
-                    };
-                    let body_slice = &ts.tokens[ts.pos..u_idx];
-                    let mut body_ts = ts.sub_stream(body_slice, ts.stage);
-                    if let Ok(st) = parse_static_core(&mut body_ts, Some(merged))
-                        && body_ts.is_eof()
-                    {
-                        ts.pos = ts.tokens.len();
-                        return Ok(st);
-                    }
-                }
+            if let Some(st) = try_trailing_unless(ts, ts.pos, end_trim, base_cond.clone()) {
+                return Ok(st);
             }
             // Fallback: standalone permanent effect lines (e.g. Attraction Visit/Prize bodies)
             if base_cond.is_none()
@@ -271,36 +301,12 @@ pub fn parse_static_ability(ts: &mut TokenStream<'_>) -> PResult<StaticAbility> 
     let _ = ts.eat_period();
     // Fallback: trailing `unless <cond>` left unconsumed after a valid prefix
     if !ts.is_eof()
-        && let Some(u_idx) = (core_cp_pos(ts, core_cp) + 1..end_trim).find(|&idx| {
-            matches!(ts.tokens[idx].kind, crate::v2::lexer::TokenKind::Word(w) if w.eq_ignore_ascii_case("unless"))
-        })
+        && let Some(st) = try_trailing_unless(ts, core_cp_pos(ts, core_cp), end_trim, base_cond)
     {
-        let cond_slice = &ts.tokens[u_idx + 1..end_trim];
-        let mut cond_ts = ts.sub_stream(cond_slice, ts.stage);
-        if let Ok(c) = parse_static_condition(&mut cond_ts)
-            && cond_ts.is_eof()
-        {
-            let neg = ConditionExpr::Not(Box::new(c));
-            let merged = match base_cond {
-                Some(prev) => ConditionExpr::And(Box::new(prev), Box::new(neg)),
-                None => neg,
-            };
-            let body_slice = &ts.tokens[core_cp_pos(ts, core_cp)..u_idx];
-            let mut body_ts = ts.sub_stream(body_slice, ts.stage);
-            if let Ok(st) = parse_static_core(&mut body_ts, Some(merged))
-                && body_ts.is_eof()
-            {
-                ts.pos = ts.tokens.len();
-                return Ok(st);
-            }
-        }
+        return Ok(st);
     }
     ts.expect_eof()?;
-    Ok(if parts.len() == 1 {
-        parts.remove(0)
-    } else {
-        StaticAbility::Compound(parts)
-    })
+    Ok(wrap_compound(parts))
 }
 
 fn core_cp_pos(ts: &TokenStream<'_>, cp: crate::v2::parser::Checkpoint) -> usize {
@@ -373,8 +379,7 @@ fn parse_static_core(
                 return Ok(StaticAbility::AdditionalCost(Vec::new()));
             }
             if ts.eat_phrase(&["sacrifice", "half", "the", "lands", "you", "control"]) {
-                let _ = ts.eat_comma();
-                let _ = ts.eat_phrase(&["rounded", "up"]) || ts.eat_phrase(&["rounded", "down"]);
+                let _ = ts.eat_rounded_modifier();
                 return Ok(StaticAbility::AdditionalCost(Vec::new()));
             }
             if let Ok(mut costs) = try_parse(ts, parse_cost_list) {
@@ -556,7 +561,7 @@ fn parse_static_core(
         ts.restore(bcp);
     }
 
-    // 0aa0. `If you cast it any time a sorcery couldn't have been cast, the controller of the permanent it becomes sacrifices it at the beginning of the next cleanup step.` (`Spider Climb` flash-Aura cycle)
+    // 0aa0. `If you cast it any time a sorcery couldn't have been cast, the controller of the permanent it becomes sacrifices it at the beginning of the next cleanup step.`
     if ts.eat_phrase(&[
         "if", "you", "cast", "it", "any", "time", "a", "sorcery", "couldn't", "have", "been",
         "cast",
@@ -1064,16 +1069,11 @@ fn parse_static_core(
                 } else {
                     None
                 };
-                let final_cond = match (condition.clone(), extra_cond) {
-                    (Some(prev), Some(c)) => Some(ConditionExpr::And(Box::new(prev), Box::new(c))),
-                    (None, Some(c)) => Some(c),
-                    (prev, None) => prev,
-                };
                 return Ok(StaticAbility::ActivationCostModifier {
                     delta,
                     less,
                     scale,
-                    condition: final_cond,
+                    condition: merge_cond(condition, extra_cond),
                 });
             }
         }
@@ -1203,11 +1203,11 @@ fn parse_static_core(
                     || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
                 let alt_cost = if !free && ts.eat_word("by") {
                     let costs = opt(ts, parse_cost_list);
-                    let _ = ts
-                        .eat_phrase(&["in", "addition", "to", "paying", "its", "other", "costs"])
-                        || ts.eat_phrase(&["in", "addition", "to", "its", "other", "costs"])
-                        || ts.eat_phrase(&["rather", "than", "paying", "its", "mana", "cost"])
-                        || ts.eat_phrase(&["rather", "than", "paying", "their", "mana", "costs"]);
+                    let _ = ts.eat_in_addition_to_other_costs()
+                        || ts.eat_any_phrase(&[
+                            &["rather", "than", "paying", "its", "mana", "cost"],
+                            &["rather", "than", "paying", "their", "mana", "costs"],
+                        ]);
                     costs
                 } else {
                     None
@@ -1234,13 +1234,15 @@ fn parse_static_core(
     // 0aa. `You control enchanted creature/permanent/enchantment/artifact/land/equipment/planeswalker`
     if ts.eat_phrase(&["you", "control", "enchanted"])
         && (ts.eat_phrase(&["artifact", "creature"])
-            || ts.eat_word("creature")
-            || ts.eat_word("permanent")
-            || ts.eat_word("artifact")
-            || ts.eat_word("enchantment")
-            || ts.eat_word("land")
-            || ts.eat_word("equipment")
-            || ts.eat_word("planeswalker"))
+            || ts.eat_any_word(&[
+                "creature",
+                "permanent",
+                "artifact",
+                "enchantment",
+                "land",
+                "equipment",
+                "planeswalker",
+            ]))
     {
         return Ok(StaticAbility::ControlEnchanted {
             controller: PlayerRef::You,
@@ -1349,48 +1351,55 @@ fn parse_static_core(
     }
     if ts.eat_phrase(&["this", "effect", "doesn't", "remove"])
         && (ts.eat_tilde()
-            || ts.eat_phrase(&[
-                "auras",
-                "and",
-                "equipment",
-                "you",
-                "control",
-                "that",
-                "are",
-                "already",
-                "attached",
-                "to",
-                "it",
+            || ts.eat_any_phrase(&[
+                &[
+                    "auras",
+                    "and",
+                    "equipment",
+                    "you",
+                    "control",
+                    "that",
+                    "are",
+                    "already",
+                    "attached",
+                    "to",
+                    "it",
+                ],
+                &["auras", "that", "are", "already", "attached", "to", "it"],
             ])
-            || ts.eat_phrase(&["auras", "that", "are", "already", "attached", "to", "it"])
             || (ts.eat_phrase(&["auras", "already", "attached", "to"])
                 && opt(ts, parse_subject_ref).is_some())
             || ts.eat_word("auras"))
     {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::RetainAttachment));
     }
-    if ts.eat_phrase(&[
-        "this", "effect", "reduces", "only", "the", "amount", "of", "colored", "mana", "you", "pay",
-    ]) || ts.eat_phrase(&[
-        "this", "effect", "can't", "reduce", "the", "mana", "in", "that", "cost", "to", "less",
-        "than", "one", "mana",
-    ]) || ts.eat_phrase(&[
-        "this",
-        "effect",
-        "can't",
-        "reduce",
-        "the",
-        "mana",
-        "in",
-        "that",
-        "ability's",
-        "activation",
-        "cost",
-        "to",
-        "less",
-        "than",
-        "one",
-        "mana",
+    if ts.eat_any_phrase(&[
+        &[
+            "this", "effect", "reduces", "only", "the", "amount", "of", "colored", "mana", "you",
+            "pay",
+        ],
+        &[
+            "this", "effect", "can't", "reduce", "the", "mana", "in", "that", "cost", "to", "less",
+            "than", "one", "mana",
+        ],
+        &[
+            "this",
+            "effect",
+            "can't",
+            "reduce",
+            "the",
+            "mana",
+            "in",
+            "that",
+            "ability's",
+            "activation",
+            "cost",
+            "to",
+            "less",
+            "than",
+            "one",
+            "mana",
+        ],
     ]) || {
         let rcp = ts.checkpoint();
         if ts.eat_phrase(&[
@@ -1482,26 +1491,25 @@ fn parse_static_core(
             None
         };
         if let Some(player) = p_opt {
-            if ts.eat_phrase(&["gain", "life"]) {
-                return Ok(StaticAbility::PlayerRestriction {
-                    player,
-                    restriction: PlayerRestrictionKind::CantGainLife,
-                    condition,
-                });
-            }
-            if ts.eat_phrase(&["search", "libraries"]) {
-                return Ok(StaticAbility::PlayerRestriction {
-                    player,
-                    restriction: PlayerRestrictionKind::CantSearchLibraries,
-                    condition,
-                });
-            }
-            if ts.eat_phrase(&["draw", "more", "than", "one", "card", "each", "turn"]) {
-                return Ok(StaticAbility::PlayerRestriction {
-                    player,
-                    restriction: PlayerRestrictionKind::CantDrawMoreThanOne,
-                    condition,
-                });
+            const SIMPLE_PLAYER_RESTRICTIONS: &[(&[&str], PlayerRestrictionKind)] = &[
+                (&["gain", "life"], PlayerRestrictionKind::CantGainLife),
+                (
+                    &["search", "libraries"],
+                    PlayerRestrictionKind::CantSearchLibraries,
+                ),
+                (
+                    &["draw", "more", "than", "one", "card", "each", "turn"],
+                    PlayerRestrictionKind::CantDrawMoreThanOne,
+                ),
+            ];
+            for &(phrase, restriction) in SIMPLE_PLAYER_RESTRICTIONS {
+                if ts.eat_phrase(phrase) {
+                    return Ok(StaticAbility::PlayerRestriction {
+                        player,
+                        restriction,
+                        condition,
+                    });
+                }
             }
             {
                 let cm_cp = ts.checkpoint();
@@ -1521,8 +1529,10 @@ fn parse_static_core(
             if ts.eat_phrase(&["untap", "more", "than"])
                 && let Some(n) = ts.next_number(false)
                 && try_parse(ts, parse_object_filter).is_ok()
-                && (ts.eat_phrase(&["during", "their", "untap", "steps"])
-                    || ts.eat_phrase(&["during", "your", "untap", "step"]))
+                && ts.eat_any_phrase(&[
+                    &["during", "their", "untap", "steps"],
+                    &["during", "your", "untap", "step"],
+                ])
             {
                 return Ok(StaticAbility::PlayerRestriction {
                     player,
@@ -1573,89 +1583,45 @@ fn parse_static_core(
                     } else {
                         None
                     };
-                    let merged = match (condition.clone(), extra_cond) {
-                        (Some(prev), Some(c)) => {
-                            Some(ConditionExpr::And(Box::new(prev), Box::new(c)))
-                        }
-                        (None, Some(c)) => Some(c),
-                        (prev, None) => prev,
-                    };
                     return Ok(StaticAbility::CantCastSpellsMatching {
                         player,
                         filter,
-                        condition: merged,
+                        condition: merge_cond(condition, extra_cond),
                     });
                 }
                 ts.restore(pl_cp);
             }
             if ts.eat_phrase(&["cast", "spells"]) {
-                if ts.eat_phrase(&["with", "the", "chosen", "name"]) {
-                    let mut filter = ObjectFilter {
-                        any_spell: true,
-                        ..Default::default()
-                    };
-                    filter.predicates.push(FilterPredicate::OfChosenName);
-                    return Ok(StaticAbility::CantCastSpellsMatching {
-                        player,
-                        filter,
-                        condition,
-                    });
-                }
-                if ts.eat_phrase(&["of", "the", "chosen", "color"]) {
-                    let mut filter = ObjectFilter {
-                        any_spell: true,
-                        ..Default::default()
-                    };
-                    filter.predicates.push(FilterPredicate::OfChosenColor);
-                    return Ok(StaticAbility::CantCastSpellsMatching {
-                        player,
-                        filter,
-                        condition,
-                    });
-                }
-                if ts.eat_phrase(&["of", "the", "chosen", "type"]) {
-                    let mut filter = ObjectFilter {
-                        any_spell: true,
-                        ..Default::default()
-                    };
-                    filter
-                        .predicates
-                        .push(FilterPredicate::OfChosenCreatureType);
-                    return Ok(StaticAbility::CantCastSpellsMatching {
-                        player,
-                        filter,
-                        condition,
-                    });
-                }
-                if ts.eat_phrase(&["from", "anywhere", "other", "than", "their", "hands"])
-                    || ts.eat_phrase(&["from", "anywhere", "other", "than", "your", "hand"])
-                {
-                    let mut filter = ObjectFilter {
-                        any_spell: true,
-                        ..Default::default()
-                    };
-                    filter.predicates.push(FilterPredicate::FromOutsideHand);
-                    return Ok(StaticAbility::CantCastSpellsMatching {
-                        player,
-                        filter,
-                        condition,
-                    });
-                }
-                if ts.eat_phrase(&["with", "the", "same", "name", "as"])
+                let pred = if ts.eat_phrase(&["with", "the", "chosen", "name"]) {
+                    Some(FilterPredicate::OfChosenName)
+                } else if ts.eat_phrase(&["of", "the", "chosen", "color"]) {
+                    Some(FilterPredicate::OfChosenColor)
+                } else if ts.eat_phrase(&["of", "the", "chosen", "type"]) {
+                    Some(FilterPredicate::OfChosenCreatureType)
+                } else if ts.eat_any_phrase(&[
+                    &["from", "anywhere", "other", "than", "their", "hands"],
+                    &["from", "anywhere", "other", "than", "your", "hand"],
+                ]) {
+                    Some(FilterPredicate::FromOutsideHand)
+                } else if ts.eat_phrase(&["with", "the", "same", "name", "as"])
                     && let Ok(ref_subj) = try_parse(ts, parse_subject_ref)
                 {
-                    let mut filter = ObjectFilter {
-                        any_spell: true,
-                        ..Default::default()
-                    };
-                    filter.predicates.push(FilterPredicate::SharesPropertyWith {
+                    Some(FilterPredicate::SharesPropertyWith {
                         property: crate::v2::ir::SharedProperty::Name,
                         reference: Box::new(ref_subj),
                         negated: false,
-                    });
+                    })
+                } else {
+                    None
+                };
+                if let Some(p) = pred {
                     return Ok(StaticAbility::CantCastSpellsMatching {
                         player,
-                        filter,
+                        filter: ObjectFilter {
+                            any_spell: true,
+                            predicates: vec![p],
+                            ..Default::default()
+                        },
                         condition,
                     });
                 }
@@ -1807,14 +1773,10 @@ fn parse_static_core(
                         None
                     };
                     if let Some(c) = extra_cond {
-                        let merged = match condition {
-                            Some(prev) => Some(ConditionExpr::And(Box::new(prev), Box::new(c))),
-                            None => Some(c),
-                        };
                         return Ok(StaticAbility::RuleRestriction {
                             subject: Some(SubjectRef::SelfObject),
                             rule: RuleRestrictionKind::CantBeCast,
-                            condition: merged,
+                            condition: Some(and_cond(condition, c)),
                         });
                     }
                 }
@@ -2106,21 +2068,23 @@ fn parse_static_core(
     {
         let skcp = ts.checkpoint();
         if let Ok(player) = try_parse(ts, crate::v2::filter::parse_player_ref)
-            && (ts.eat_phrase(&["skip", "their"]) || ts.eat_phrase(&["skips", "their"]))
+            && ts.eat_any_phrase(&[&["skip", "their"], &["skips", "their"]])
         {
-            let step = if ts.eat_phrase(&["untap", "steps"]) || ts.eat_phrase(&["untap", "step"]) {
-                Some(TurnStepAst::UntapStep)
-            } else if ts.eat_phrase(&["upkeep", "steps"]) || ts.eat_phrase(&["upkeep", "step"]) {
-                Some(TurnStepAst::Upkeep)
-            } else if ts.eat_phrase(&["draw", "steps"]) || ts.eat_phrase(&["draw", "step"]) {
-                Some(TurnStepAst::DrawStep)
-            } else if ts.eat_phrase(&["end", "steps"]) || ts.eat_phrase(&["end", "step"]) {
-                Some(TurnStepAst::EndStep)
-            } else {
-                None
-            };
-            if let Some(step) = step {
-                return Ok(StaticAbility::SkipStep { player, step });
+            const STEP_PHRASES: &[(&[&str], TurnStepAst)] = &[
+                (&["untap", "steps"], TurnStepAst::UntapStep),
+                (&["untap", "step"], TurnStepAst::UntapStep),
+                (&["upkeep", "steps"], TurnStepAst::Upkeep),
+                (&["upkeep", "step"], TurnStepAst::Upkeep),
+                (&["draw", "steps"], TurnStepAst::DrawStep),
+                (&["draw", "step"], TurnStepAst::DrawStep),
+                (&["end", "steps"], TurnStepAst::EndStep),
+                (&["end", "step"], TurnStepAst::EndStep),
+            ];
+            if let Some((_, step)) = STEP_PHRASES.iter().find(|(p, _)| ts.eat_phrase(p)) {
+                return Ok(StaticAbility::SkipStep {
+                    player,
+                    step: *step,
+                });
             }
         }
         ts.restore(skcp);
@@ -2318,9 +2282,7 @@ fn parse_static_core(
                         toughness: Some(mv),
                     });
                 }
-                let keep_existing = ts
-                    .eat_phrase(&["in", "addition", "to", "its", "other", "types"])
-                    || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"]);
+                let keep_existing = ts.eat_in_addition_to_other_types();
                 if let Some((power, toughness)) = base_pt {
                     parts.push(StaticAbility::SetBasePT {
                         subject: subj.clone(),
@@ -2348,7 +2310,7 @@ fn parse_static_core(
                     }
                     ts.restore(t2);
                     let _ = ts.eat_comma();
-                    if (ts.eat_phrase(&["and", "it", "has"]) || ts.eat_phrase(&["and", "has"]))
+                    if ts.eat_any_phrase(&[&["and", "it", "has"], &["and", "has"]])
                         && let Ok((keywords, _)) = try_parse(ts, parse_keyword_list)
                     {
                         parts.push(StaticAbility::GrantKeywords {
@@ -2361,11 +2323,7 @@ fn parse_static_core(
                     ts.restore(t2);
                     break;
                 }
-                return Ok(if parts.len() == 1 {
-                    parts.remove(0)
-                } else {
-                    StaticAbility::Compound(parts)
-                });
+                return Ok(wrap_compound(parts));
             }
         }
         ts.restore(itcp);

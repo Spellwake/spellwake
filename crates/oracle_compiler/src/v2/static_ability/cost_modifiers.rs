@@ -16,17 +16,20 @@ pub(super) fn parse_next_spell_modifier(
     condition: Option<ConditionExpr>,
 ) -> PResult<StaticAbility> {
     let cp = ts.checkpoint();
-    if (ts.eat_phrase(&["the", "next"]) || ts.eat_phrase(&["the", "first"]))
+    if ts.eat_any_phrase(&[&["the", "next"], &["the", "first"]])
         && let Ok(mut flt) = try_parse(ts, parse_object_filter)
-        && (ts.eat_phrase(&["you", "cast", "this", "turn"])
-            || ts.eat_phrase(&["you", "cast", "each", "turn"])
-            || ts.eat_phrase(&["you", "cast", "during", "each", "of", "your", "turns"])
-            || ts.eat_phrase(&["they", "cast", "this", "turn"])
-            || ts.eat_phrase(&["they", "cast", "each", "turn"])
-            || (flt.controller.is_some()
-                && (ts.eat_phrase(&["this", "turn"])
-                    || ts.eat_phrase(&["each", "turn"])
-                    || ts.eat_phrase(&["during", "each", "of", "your", "turns"]))))
+        && (ts.eat_any_phrase(&[
+            &["you", "cast", "this", "turn"],
+            &["you", "cast", "each", "turn"],
+            &["you", "cast", "during", "each", "of", "your", "turns"],
+            &["they", "cast", "this", "turn"],
+            &["they", "cast", "each", "turn"],
+        ]) || (flt.controller.is_some()
+            && ts.eat_any_phrase(&[
+                &["this", "turn"],
+                &["each", "turn"],
+                &["during", "each", "of", "your", "turns"],
+            ])))
     {
         flt.controller = Some(ControllerRelation::You);
         if ts.eat_phrase(&[
