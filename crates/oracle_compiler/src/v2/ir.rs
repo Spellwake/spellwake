@@ -177,6 +177,7 @@ pub enum KeywordKind {
     Station,
     Partner,
     Companion,
+    Fuse,
 }
 
 /// Optional typed parameter on a keyword (e.g. `Equip {2}`, `Ward {1}`, `Protection from red`).
@@ -239,6 +240,7 @@ pub enum PlayerRef {
     ItsController,
     ItsOwner,
     ThatObjectController,
+    ThatSpellController,
     ChosenPlayer,
     LowestLifePlayer,
     HighestLifePlayer,
@@ -373,6 +375,7 @@ pub enum PriorActionKind {
     TappedThisWay,
     DealtDamageThisWay,
     EnergyPaidThisWay,
+    ThatMany,
 }
 
 /// Shared characteristic property for relational predicates.
@@ -418,6 +421,11 @@ pub enum FilterPredicate {
     HasCounterKind(CounterKind),
     AmongPriorCards,
     OfChosenPlayer(PlayerRef),
+    OfChosenColor,
+    OfChosenCreatureType,
+    ManaCostIn(Vec<ManaCost>),
+    InChosenPile,
+    DrawnThisTurn,
 }
 
 /// Strictly-typed orthogonal object filter with explicit AND (`all_types`) vs OR (`any_types`).
@@ -538,6 +546,10 @@ pub enum SubjectRef {
     Each(Box<ObjectFilter>),
     All(Box<ObjectFilter>),
     Group(Box<ObjectFilter>),
+    Counted {
+        filter: Box<ObjectFilter>,
+        count: CountSpec,
+    },
     Compound(Vec<SubjectRef>),
     PlayersDealtCombatDamageBy {
         player: PlayerRef,
@@ -578,6 +590,10 @@ pub enum ValueExpr {
     Var(VarName),
     PriorActionCount(PriorActionKind),
     Count(Box<ObjectFilter>),
+    CounterCount {
+        subject: Box<SubjectRef>,
+        kind: CounterKind,
+    },
     ObjectStat {
         subject: Box<SubjectRef>,
         stat: StatKind,
@@ -677,6 +693,14 @@ pub struct ManaSpendRule {
     pub spell_filter: Option<ObjectFilter>,
 }
 
+/// Typed copy-token exception clause (`, except it has haste`, `, except it isn't legendary`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CopyException {
+    AddKeywords(Vec<KeywordSpec>),
+    NotLegendary,
+    AddTypes(CardTypeMask),
+}
+
 /// Typed token specification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TokenSpec {
@@ -688,9 +712,11 @@ pub enum TokenSpec {
         card_types: CardTypeMask,
         subtypes: Vec<String>,
         keywords: Vec<KeywordSpec>,
+        abilities: Vec<CompiledFaceV2>,
     },
     CopyOf {
         source: Box<SubjectRef>,
+        exceptions: Vec<CopyException>,
     },
 }
 
@@ -837,6 +863,7 @@ pub enum ObjectMutation {
     CantBlock,
     CantAttackOrBlock,
     CantBeBlocked,
+    CantBeRegenerated,
 }
 
 /// Typed player mutation kind.
@@ -1073,7 +1100,17 @@ pub enum RuleRestrictionKind {
     CantBeBlocked,
     CantBeCountered,
     CantBeTargetedBy(Box<ObjectFilter>),
+    DamageCantBePrevented,
     AreGoaded,
+}
+
+/// Typed player-level static restriction kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlayerRestrictionKind {
+    CantCastSpells,
+    CantActivateAbilities,
+    CastOnlyAsSorcery,
+    PlaysWithHandRevealed,
 }
 
 /// Typed static ability.
@@ -1110,6 +1147,48 @@ pub enum StaticAbility {
         rule: RuleRestrictionKind,
         condition: Option<ConditionExpr>,
     },
+    PlayerRestriction {
+        player: PlayerRef,
+        restriction: PlayerRestrictionKind,
+        condition: Option<ConditionExpr>,
+    },
+    SkipStep {
+        player: PlayerRef,
+        step: TurnStepAst,
+    },
+    LookAtTopOfLibrary {
+        player: PlayerRef,
+        library: ZoneRef,
+    },
+    PlayFromZone {
+        player: PlayerRef,
+        zone: ZoneRef,
+        top_only: bool,
+        lands: bool,
+        spells: bool,
+    },
+    AdditionalTriggers {
+        event_filter: ObjectFilter,
+        permanent_filter: ObjectFilter,
+        extra_count: u8,
+    },
+    SetSubtypes {
+        subject: SubjectRef,
+        subtypes: Vec<String>,
+        keep_existing: bool,
+    },
+    RemoveAllAbilities {
+        subject: SubjectRef,
+    },
+    SetBasePT {
+        subject: SubjectRef,
+        power: i32,
+        toughness: i32,
+    },
+    CastAsThoughFlash {
+        player: PlayerRef,
+        filter: ObjectFilter,
+    },
     NextSpellModifier {
         filter: ObjectFilter,
         effect: Box<StaticAbility>,
@@ -1129,6 +1208,15 @@ pub enum Replacement {
         kind: CounterKind,
         count: ValueExpr,
         additional: bool,
+    },
+    AsEnters(Vec<Effect>),
+    MultiplyTokens {
+        controller: PlayerRef,
+        factor: u8,
+    },
+    MultiplyCounters {
+        filter: ObjectFilter,
+        factor: u8,
     },
     EventInstead {
         event: TriggerEvent,
@@ -1185,6 +1273,10 @@ pub enum TriggerEvent {
     CounterPlaced {
         subject: SubjectRef,
         kind: Option<CounterKind>,
+    },
+    BecomesTarget {
+        subject: SubjectRef,
+        source: ObjectFilter,
     },
 }
 

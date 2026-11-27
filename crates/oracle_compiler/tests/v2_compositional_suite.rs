@@ -932,7 +932,161 @@ fn v2_fails_closed_on_unparsed_trailing_tokens_and_unknown_grammar() {
         },
         TokenSpec::CopyOf {
             source: Box::new(SubjectRef::SelfObject),
+            exceptions: Vec::new(),
         },
         ZoneOwner::You,
     );
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RealFixtureFace {
+    name: String,
+    type_line: String,
+    oracle_text: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RealFixtureCard {
+    oracle_id: String,
+    name: String,
+    layout: String,
+    faces: Vec<RealFixtureFace>,
+}
+
+/// 4. Honest fail-closed real-card corpus regression floor + deep IR assertions on iconic real Magic cards.
+#[test]
+fn v2_real_magic_card_corpus_sample_and_iconic_staples() {
+    let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("content")
+        .join("tests")
+        .join("fixtures")
+        .join("creature-vocabulary.input.json");
+    let vocab = Vocabulary::load_from_file(&vocab_path).expect("load CR creature vocabulary");
+
+    let raw = include_str!("fixtures/real_cards_corpus_sample.json");
+    let cards: Vec<RealFixtureCard> =
+        serde_json::from_str(raw).expect("valid real_cards_corpus_sample.json");
+    assert_eq!(cards.len(), 103);
+
+    let mut summary = V2CorpusSummary::default();
+    let mut compiled_by_name = std::collections::BTreeMap::new();
+    for card in &cards {
+        let faces: Vec<FaceInput<'_>> = card
+            .faces
+            .iter()
+            .map(|f| FaceInput {
+                name: &f.name,
+                type_line: &f.type_line,
+                oracle_text: &f.oracle_text,
+            })
+            .collect();
+        let input = CardInput {
+            oracle_id: &card.oracle_id,
+            name: &card.name,
+            layout: &card.layout,
+            faces,
+        };
+        let compiled = compile_card_v2(&input, &vocab);
+        summary.record(&compiled);
+        compiled_by_name.insert(card.name.as_str(), compiled);
+    }
+
+    // Honest strict fail-closed coverage floor on the 103 hardest real Magic cards.
+    assert!(
+        summary.strictly_compiled_cards >= 37,
+        "expected >= 37/103 strictly compiled real cards in v2, got {}/{}",
+        summary.strictly_compiled_cards,
+        summary.total_cards
+    );
+
+    // Verify iconic real cards compile 100% strictly with zero unconsumed tokens and typed IR.
+    let must_strict = [
+        "Sylvan Library",
+        "Urza's Saga",
+        "Liliana of the Veil",
+        "Smothering Tithe",
+        "Sen Triplets",
+        "Panharmonicon",
+        "Fable of the Mirror-Breaker // Reflection of Kiki-Jiki",
+        "Rhystic Study",
+        "Doubling Season",
+        "Necropotence",
+        "Teferi, Time Raveler",
+        "Bonecrusher Giant // Stomp",
+        "Brainstorm",
+        "Wrath of God",
+        "Collected Company",
+        "Fact or Fiction",
+        "Blood Moon",
+        "Humility",
+        "Wear // Tear",
+    ];
+    for name in must_strict {
+        let compiled = compiled_by_name
+            .get(name)
+            .unwrap_or_else(|| panic!("fixture missing `{name}`"));
+        assert!(
+            compiled.strictly_compiled,
+            "expected iconic real card `{name}` to strictly compile in v2; errors: {:#?}",
+            compiled
+                .faces
+                .iter()
+                .flat_map(|f| f.errors.iter())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // Spot-check deep typed IR semantics on Urza's Saga, Rhystic Study, Blood Moon, Humility, Wrath of God.
+    let saga = &compiled_by_name["Urza's Saga"];
+    assert_eq!(saga.faces[0].abilities.len(), 3);
+    assert!(matches!(
+        &saga.faces[0].abilities[1],
+        Ability::SagaChapter { chapters, body }
+            if chapters == &[2]
+                && matches!(
+                    body.as_slice(),
+                    [Effect::MutateObject {
+                        mutation: ObjectMutation::GrantAbility(granted),
+                        ..
+                    }] if granted.is_ok() && granted.abilities.len() == 1
+                )
+    ));
+
+    let rhystic = &compiled_by_name["Rhystic Study"];
+    assert!(matches!(
+        rhystic.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(body.as_slice(), [Effect::Unless { payer: Some(PlayerRef::ThatPlayer), .. }])
+    ));
+
+    let blood_moon = &compiled_by_name["Blood Moon"];
+    assert!(matches!(
+        blood_moon.faces[0].statics.as_slice(),
+        [StaticAbility::SetSubtypes { subtypes, keep_existing: false, .. }]
+            if subtypes == &["Mountain".to_string()]
+    ));
+
+    let humility = &compiled_by_name["Humility"];
+    assert!(matches!(
+        humility.faces[0].statics.as_slice(),
+        [StaticAbility::Compound(parts)]
+            if matches!(
+                parts.as_slice(),
+                [
+                    StaticAbility::RemoveAllAbilities { .. },
+                    StaticAbility::SetBasePT { power: 1, toughness: 1, .. }
+                ]
+            )
+    ));
+
+    let wrath = &compiled_by_name["Wrath of God"];
+    assert_eq!(wrath.faces[0].spell_effects.len(), 2);
+    assert!(matches!(
+        &wrath.faces[0].spell_effects[1],
+        Effect::MutateObject {
+            mutation: ObjectMutation::CantBeRegenerated,
+            ..
+        }
+    ));
 }

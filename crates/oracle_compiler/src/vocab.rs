@@ -10,8 +10,15 @@ use crate::CompilerError;
 use crate::ast::{CardTypeMask, ColorMask, SupertypeMask};
 
 #[derive(Debug, Deserialize)]
-struct CreatureVocabFile {
-    members: Vec<String>,
+struct CreatureVocabEntry {
+    canonical_label: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum CreatureVocabFile {
+    Members { members: Vec<String> },
+    Entries { entries: Vec<CreatureVocabEntry> },
 }
 
 /// Read-only canonical vocabulary shared across all card compilations.
@@ -22,15 +29,22 @@ pub struct Vocabulary {
 }
 
 impl Vocabulary {
-    /// Load creature subtypes from Spellwake's pinned `creature-vocabulary.input.v1.json`.
+    /// Load creature subtypes from Spellwake's pinned `creature-vocabulary.input.v1.json`
+    /// or `creature-vocabulary.input.json`.
     ///
     /// # Errors
     /// Returns [`CompilerError::Io`] if the file cannot be read or [`CompilerError::Json`]
-    /// if the JSON structure does not contain a `members` string array.
+    /// if the JSON structure does not contain a `members` or `entries` array.
     pub fn load_from_file(path: &Path) -> Result<Self, CompilerError> {
         let raw = fs::read_to_string(path)?;
         let parsed: CreatureVocabFile = serde_json::from_str(&raw)?;
-        Ok(Self::from_creature_members(&parsed.members))
+        let members: Vec<String> = match parsed {
+            CreatureVocabFile::Members { members } => members,
+            CreatureVocabFile::Entries { entries } => {
+                entries.into_iter().map(|e| e.canonical_label).collect()
+            }
+        };
+        Ok(Self::from_creature_members(&members))
     }
 
     /// Build a vocabulary from a slice of canonical creature subtype names.
