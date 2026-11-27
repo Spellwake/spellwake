@@ -5877,7 +5877,8 @@ impl ExecutableBody {
                     };
                     family = toolbox_merge_family(family, sel_fam)?;
                     let op_fam = match &spec.op {
-                        crate::toolbox::ObjectMutation::Goad { by } => {
+                        crate::toolbox::ObjectMutation::Goad { by }
+                        | crate::toolbox::ObjectMutation::GoadPermanent { by } => {
                             validate_toolbox_player_selector(
                                 by,
                                 context,

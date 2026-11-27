@@ -12,11 +12,11 @@ use crate::{
     stack_window::StackEntry,
     toolbox::{
         ChoiceCategory, ChoiceRecord, ExecValue, PromptChoiceReply, PromptChoiceSpec, PromptDomain,
-        ResolvedPromptDomain, SubtypeChoiceKind, TagValue,
+        ResolvedPromptDomain, SelectionConstraint, SubtypeChoiceKind, TagValue,
     },
 };
 use spellwake_contracts::RulesInteger;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn color_mask_to_mana_set(mask: ColorMask) -> BTreeSet<ManaType> {
     let effective = if mask.is_empty() {
@@ -54,6 +54,31 @@ fn mana_to_color_mask(mana: ManaType) -> ColorMask {
     }
 }
 
+fn try_match_card_type(
+    obj_idx: usize,
+    type_sets: &[&BTreeSet<CardType>],
+    visited: &mut BTreeSet<CardType>,
+    matched: &mut BTreeMap<CardType, usize>,
+) -> bool {
+    let Some(types) = type_sets.get(obj_idx) else {
+        return false;
+    };
+    for &card_type in *types {
+        if !visited.insert(card_type) {
+            continue;
+        }
+        let can_claim = match matched.get(&card_type).copied() {
+            None => true,
+            Some(prev_idx) => try_match_card_type(prev_idx, type_sets, visited, matched),
+        };
+        if can_claim {
+            matched.insert(card_type, obj_idx);
+            return true;
+        }
+    }
+    false
+}
+
 pub(super) struct ChoiceEventMeta {
     pub(super) chooser: SeatId,
     pub(super) category: ChoiceCategory,
@@ -62,6 +87,98 @@ pub(super) struct ChoiceEventMeta {
 }
 
 impl EffectWindow {
+    pub(super) fn satisfies_selection_constraint(
+        &self,
+        ids: &[ObjectId],
+        constraint: SelectionConstraint,
+    ) -> Result<bool, EffectError> {
+        if ids.len() <= 1 {
+            return Ok(true);
+        }
+        let evaluated = self.evaluated_characteristics()?;
+        let mut objects = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let Some(obj) = evaluated.get(id) else {
+                return Ok(false);
+            };
+            objects.push(obj);
+        }
+        Ok(match constraint {
+            SelectionConstraint::DistinctNames => {
+                for (i, left) in objects.iter().enumerate() {
+                    for right in &objects[i + 1..] {
+                        if self
+                            .name_rules
+                            .shares_name(&left.current_names, &right.current_names)
+                        {
+                            return Ok(false);
+                        }
+                    }
+                }
+                true
+            }
+            SelectionConstraint::DistinctManaValues => {
+                let mut seen = BTreeSet::new();
+                for obj in &objects {
+                    let mv = self
+                        .permanent_mana_value(obj.object)
+                        .unwrap_or_else(|| obj.defined.mana_value.clone());
+                    if !seen.insert(mv) {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            SelectionConstraint::DistinctPowers => {
+                let mut seen = BTreeSet::new();
+                for obj in &objects {
+                    let Some(power) = obj
+                        .power_toughness
+                        .as_ref()
+                        .map(|pt| pt.derived.power.clone())
+                        .or_else(|| {
+                            obj.defined
+                                .printed_pt
+                                .as_ref()
+                                .map(|pt| pt.baseline().power)
+                        })
+                    else {
+                        return Ok(false);
+                    };
+                    if !seen.insert(power) {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+            SelectionConstraint::SharedCardType => {
+                let mut shared = objects[0].current_types.clone();
+                for obj in &objects[1..] {
+                    shared.retain(|ty| obj.current_types.contains(ty));
+                    if shared.is_empty() {
+                        return Ok(false);
+                    }
+                }
+                !shared.is_empty()
+            }
+            SelectionConstraint::DistinctCardTypes => {
+                let type_sets: Vec<&BTreeSet<CardType>> =
+                    objects.iter().map(|obj| &obj.current_types).collect();
+                let mut matched = BTreeMap::new();
+                for (obj_idx, types) in type_sets.iter().enumerate() {
+                    if types.is_empty() {
+                        return Ok(false);
+                    }
+                    let mut visited = BTreeSet::new();
+                    if !try_match_card_type(obj_idx, &type_sets, &mut visited, &mut matched) {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
+        })
+    }
+
     pub(super) fn record_choice_and_emit(
         &mut self,
         entry: &StackEntry,
@@ -281,6 +398,14 @@ impl EffectWindow {
         let chosen_count: usize;
         match reply {
             PromptChoiceReply::Objects(chosen) => {
+                if let PromptDomain::Objects {
+                    constraint: Some(constraint),
+                    ..
+                } = &spec.domain
+                    && !self.satisfies_selection_constraint(&chosen, *constraint)?
+                {
+                    return Err(EffectError::SelectionOutsideDomain);
+                }
                 chosen_count = chosen.len();
                 if let Some(unchosen_slot) = spec.bind_unchosen
                     && let ResolvedPromptDomain::Objects { candidates, .. } = resolved_domain

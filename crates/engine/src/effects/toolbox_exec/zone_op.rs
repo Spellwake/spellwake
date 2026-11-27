@@ -243,9 +243,9 @@ impl EffectWindow {
                 chooser,
                 min,
                 max,
+                constraint,
                 category,
                 hidden,
-                ..
             } => {
                 let actor = self
                     .eval_player_selector_at(
@@ -281,6 +281,11 @@ impl EffectWindow {
                     .resolution_cursor_mut()
                     .and_then(|c| c.pending_prompt_reply.take());
                 let chosen = if let Some(PromptChoiceReply::Objects(ids)) = reply {
+                    if let Some(constraint) = *constraint
+                        && !self.satisfies_selection_constraint(&ids, constraint)?
+                    {
+                        return Err(EffectError::SelectionOutsideDomain);
+                    }
                     self.record_choice_and_emit(
                         entry,
                         index,
@@ -295,7 +300,15 @@ impl EffectWindow {
                     ids
                 } else if candidates.is_empty() && clamped_min == 0 {
                     Vec::new()
-                } else if clamped_min == clamped_max && clamped_min == candidates.len() {
+                } else if clamped_min == clamped_max
+                    && clamped_min == candidates.len()
+                    && match *constraint {
+                        None => true,
+                        Some(constraint) => {
+                            self.satisfies_selection_constraint(&candidates, constraint)?
+                        }
+                    }
+                {
                     candidates.clone()
                 } else {
                     let frame = PromptChoiceFrame {
@@ -775,7 +788,7 @@ impl EffectWindow {
                 tapped,
                 attacking,
                 transformed,
-                face_down: _,
+                face_down,
                 entering_counters,
                 attach_to,
             } => {
@@ -868,8 +881,27 @@ impl EffectWindow {
                     }
 
                     let before = self.rules_snapshot(None)?;
+                    let mut face_up_origins = BTreeMap::new();
+                    if *face_down {
+                        for (obj_id, dest) in &to_move {
+                            if matches!(dest, ObjectDestination::Battlefield { .. })
+                                && let Some(card) = self.window.cards().get(*obj_id).cloned()
+                            {
+                                face_up_origins.insert(*obj_id, card);
+                                self.window.set_orientation(
+                                    *obj_id,
+                                    Some(crate::face_down::FaceDownKind::Manifest),
+                                )?;
+                            }
+                        }
+                    }
                     let (window, mut movements) =
                         self.window.record_linked_return_moves(&to_move)?;
+                    for movement in &mut movements {
+                        if let Some(original) = face_up_origins.remove(&movement.before.id()) {
+                            movement.before = original;
+                        }
+                    }
                     self.window = window;
                     for mv in &mut movements {
                         if mv.after.zone() != ObjectZone::Battlefield {

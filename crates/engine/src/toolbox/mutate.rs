@@ -100,6 +100,8 @@ pub enum ObjectMutation {
     Regenerate,
     /// Goad each selected creature under the first player resolved by `by` (CR 701.38).
     Goad { by: PlayerSelector },
+    /// Goad each selected creature under the first player resolved by `by` for the rest of the game (CR 701.38).
+    GoadPermanent { by: PlayerSelector },
     /// Exert each selected permanent (skips next untap step + emits Exert occurrence).
     Exert,
     /// Attach each selected attachment (Aura/Equipment/Fortification) to the first object in `host`.
@@ -219,7 +221,7 @@ impl ObjectMutation {
     #[must_use]
     pub fn uses_target(&self) -> bool {
         match self {
-            Self::Goad { by } => by.uses_target(),
+            Self::Goad { by } | Self::GoadPermanent { by } => by.uses_target(),
             Self::Attach { host } => host.uses_target(),
             Self::AttachToPlayer { player } => player.uses_target(),
             Self::AddCounters { amount, .. }
@@ -296,7 +298,7 @@ impl ObjectMutation {
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
         match self {
-            Self::Goad { by } => by.validate_vocabulary(vocabulary),
+            Self::Goad { by } | Self::GoadPermanent { by } => by.validate_vocabulary(vocabulary),
             Self::Attach { host } => host.validate_vocabulary(vocabulary),
             Self::AttachToPlayer { player } => player.validate_vocabulary(vocabulary),
             Self::AddCounters { amount, .. }
@@ -426,6 +428,18 @@ impl MutateObjectSpec {
                 | ObjectMutation::UnlockDoor { .. }
                 | ObjectMutation::Enlist
         )
+    }
+
+    /// Goad each object returned by `source` under `by` until `by`'s next turn (CR 701.38).
+    #[must_use]
+    pub fn goad(source: ObjectQuery, by: PlayerSelector) -> Self {
+        Self::all(source, ObjectMutation::Goad { by })
+    }
+
+    /// Goad each object returned by `source` under `by` for the rest of the game (CR 701.38).
+    #[must_use]
+    pub fn goad_permanently(source: ObjectQuery, by: PlayerSelector) -> Self {
+        Self::all(source, ObjectMutation::GoadPermanent { by })
     }
 
     #[must_use]

@@ -2433,11 +2433,24 @@ pub(super) fn lower_control_misc_instruction(
                 .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
             Ok(())
         }
+        InstructionAst::Empower {
+            planeswalker,
+            count,
+        } => lower_empower_instruction(
+            planeswalker,
+            count,
+            builder,
+            vocabulary,
+            in_trigger,
+            bound_x,
+        ),
         InstructionAst::ChooseAndKeep {
             pick,
             keep_to,
             rest_to,
-        } => lower_standalone_choose_and_keep(pick, keep_to, rest_to, builder, vocabulary),
+        } => lower_standalone_choose_and_keep(
+            pick, keep_to, rest_to, builder, vocabulary, in_trigger, bound_x,
+        ),
         InstructionAst::ManualTabletopAction { .. } => {
             Err("oracle:tabletop-honor-excluded-from-constructed")
         }
@@ -2478,13 +2491,32 @@ fn try_lower_choose_objects_new_primitives(
         {
             let suffix = suffix_raw.trim();
             let mut trial = builder.clone();
-            let qz_opt: Option<spellwake_engine::toolbox::QueryZone> = if suffix.is_empty() {
+            let linked_exile_suffix = (self_pronoun_valid || in_trigger)
+                && matches!(
+                    suffix,
+                    "exiled with ~"
+                        | "exiled with it"
+                        | "exiled with this enchantment"
+                        | "exiled with this artifact"
+                        | "exiled with this creature"
+                        | "exiled with this permanent"
+                );
+            let qz_opt: Option<spellwake_engine::toolbox::QueryZone> = if linked_exile_suffix {
+                None
+            } else if suffix.is_empty() {
                 Some(spellwake_engine::toolbox::QueryZone::Battlefield)
             } else if matches!(suffix, "from your graveyard" | "in your graveyard") {
                 Some(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::Controller,
                     ),
+                )))
+            } else if matches!(
+                suffix,
+                "from an opponent's graveyard" | "in an opponent's graveyard"
+            ) {
+                Some(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                    spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachOpponent),
                 )))
             } else if matches!(
                 suffix,
@@ -2515,10 +2547,43 @@ fn try_lower_choose_objects_new_primitives(
                 Some(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
                     spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer),
                 )))
+            } else if matches!(suffix, "from your hand" | "in your hand") {
+                Some(spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                )))
+            } else if matches!(
+                suffix,
+                "from target opponent's hand" | "in target opponent's hand"
+            ) {
+                trial
+                    .bind_target(BodyTarget::SingleOpponent)
+                    .ok()
+                    .map(|()| {
+                        spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                        ))
+                    })
+            } else if matches!(
+                suffix,
+                "from target player's hand" | "in target player's hand"
+            ) {
+                trial.bind_target(BodyTarget::SinglePlayer).ok().map(|()| {
+                    spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::TargetPlayer,
+                        ),
+                    ))
+                })
+            } else if matches!(suffix, "from exile" | "in exile") {
+                Some(spellwake_engine::toolbox::QueryZone::Exile)
             } else {
                 None
             };
-            if let Some(qz) = qz_opt
+            if (linked_exile_suffix || qz_opt.is_some())
                 && let Ok(parsed) = spellwake_oracle_compiler::filter::parse_object_filter(
                     card_phrase,
                     &cached_compiler_vocab(vocabulary),
@@ -2544,8 +2609,25 @@ fn try_lower_choose_objects_new_primitives(
                 {
                     const CHOOSE_OBJ_BIND: spellwake_engine::toolbox::BindingId =
                         spellwake_engine::toolbox::BindingId(923);
+                    let source_query = if linked_exile_suffix {
+                        if obj == ObjectFilter::any() {
+                            spellwake_engine::toolbox::ObjectQuery::LinkedExile { group: None }
+                        } else {
+                            spellwake_engine::toolbox::ObjectQuery::Filtered {
+                                source: Box::new(
+                                    spellwake_engine::toolbox::ObjectQuery::LinkedExile {
+                                        group: None,
+                                    },
+                                ),
+                                filter: Box::new(obj),
+                            }
+                        }
+                    } else {
+                        let qz = qz_opt?;
+                        spellwake_engine::toolbox::ObjectQuery::zone(qz, obj)
+                    };
                     let mut spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
-                        spellwake_engine::toolbox::ObjectQuery::zone(qz, obj),
+                        source_query,
                         spellwake_engine::toolbox::ZoneSelection::Random {
                             count: Box::new(ValueExpr::literal(1)),
                             chooser: p_sel,
@@ -2663,57 +2745,95 @@ fn try_lower_choose_objects_new_primitives(
         return None;
     }
 
-    // 2. Card from a revealed or looked-at target opponent/player's hand (SourceZoneFilter::TargetPlayerHand).
+    // 2. Card from a revealed or looked-at hand (TargetPlayerHand or prior ZoneOp Hand Reveal/Look).
     if chooser == PlayerRefAst::You
         && !body_raw.contains("target")
-        && matches!(
-            builder.target,
-            BodyTarget::SingleOpponent | BodyTarget::SinglePlayer
-        )
-        && builder.instructions.iter().any(|op| {
-            matches!(
-                op,
-                Instruction::ZoneOp(spec)
-                    if matches!(
-                        spec.destination,
-                        spellwake_engine::toolbox::ZoneDest::RevealOnly
-                            | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
-                    )
-            )
-        })
         && let Some(card_phrase) = body_raw
             .strip_suffix(" from it")
             .or_else(|| body_raw.strip_suffix(" in it"))
             .or_else(|| body_raw.strip_suffix(" from that hand"))
     {
-        let card_phrase = card_phrase.trim();
-        let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
-            card_phrase,
-            &cached_compiler_vocab(vocabulary),
-        )
-        .ok()?;
-        if parsed.zone.is_some() {
-            return None;
+        let prior_revealed_hand: Option<Option<spellwake_engine::toolbox::PlayerSelector>> =
+            builder.instructions.iter().rev().find_map(|op| match op {
+                Instruction::ZoneOp(spec)
+                    if matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::RevealOnly
+                            | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                    ) =>
+                {
+                    if let spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                        zone: spellwake_engine::toolbox::QueryZone::Hand(owner),
+                        ..
+                    } = &spec.source
+                    {
+                        Some(Some((**owner).clone()))
+                    } else {
+                        Some(None)
+                    }
+                }
+
+                _ => None,
+            });
+        if let Some(revealed_hand_owner) = prior_revealed_hand
+            && let Ok(parsed) = spellwake_oracle_compiler::filter::parse_object_filter(
+                card_phrase.trim(),
+                &cached_compiler_vocab(vocabulary),
+            )
+            && parsed.zone.is_none()
+            && let Ok(obj) = if is_unrestricted_filter(&parsed) {
+                Ok(ObjectFilter::any())
+            } else {
+                lower_object_filter_in_context(&parsed, builder, in_trigger, vocabulary)
+            }
+            && !obj.has_target_player()
+        {
+            if matches!(
+                builder.target,
+                BodyTarget::SingleOpponent | BodyTarget::SinglePlayer
+            ) {
+                builder.instructions.push(Instruction::ChooseObjects {
+                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                    source_zone: SourceZoneFilter::TargetPlayerHand,
+                    filter: Box::new(obj),
+                    min: ValueExpr::literal(min_val),
+                    max: ValueExpr::literal(max_val),
+                    distinct_powers: false,
+                    max_total_power: None,
+                    unchosen_action: None,
+                });
+                return Some(Ok(()));
+            }
+            if let Some(hand_owner) = revealed_hand_owner {
+                const CHOOSE_OBJ_BIND: spellwake_engine::toolbox::BindingId =
+                    spellwake_engine::toolbox::BindingId(923);
+                const CHOOSE_UNCHOSEN_BIND: spellwake_engine::toolbox::BindingId =
+                    spellwake_engine::toolbox::BindingId(924);
+                let mut spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                    spellwake_engine::toolbox::ObjectQuery::zone(
+                        spellwake_engine::toolbox::QueryZone::Hand(Box::new(hand_owner)),
+                        obj,
+                    ),
+                    spellwake_engine::toolbox::ZoneSelection::Prompt {
+                        chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        min: Box::new(ValueExpr::literal(min_val)),
+                        max: Box::new(ValueExpr::literal(max_val)),
+                        constraint: None,
+                        category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                        hidden: false,
+                    },
+                    spellwake_engine::toolbox::ZoneDest::None,
+                );
+                spec.bind_moved = Some(CHOOSE_OBJ_BIND);
+                spec.bind_unchosen = Some(CHOOSE_UNCHOSEN_BIND);
+                builder
+                    .instructions
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
+                return Some(Ok(()));
+            }
         }
-        let obj = if is_unrestricted_filter(&parsed) {
-            ObjectFilter::any()
-        } else {
-            lower_object_filter_in_context(&parsed, builder, in_trigger, vocabulary).ok()?
-        };
-        if obj.has_target_player() {
-            return None;
-        }
-        builder.instructions.push(Instruction::ChooseObjects {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            source_zone: SourceZoneFilter::TargetPlayerHand,
-            filter: Box::new(obj),
-            min: ValueExpr::literal(min_val),
-            max: ValueExpr::literal(max_val),
-            distinct_powers: false,
-            max_total_power: None,
-            unchosen_action: None,
-        });
-        return Some(Ok(()));
     }
 
     // 3. Card from objects moved earlier in this resolution (SourceZoneFilter::LastMoved).
@@ -2813,9 +2933,8 @@ fn try_lower_choose_objects_new_primitives(
         return Some(Ok(()));
     }
 
-    // 5. Permanent you control other than this permanent (chooser must be You so ControllerFilter::You binds to controller).
-    if chooser == PlayerRefAst::You
-        && !body_raw.contains("target")
+    // 5. Permanent you control other than this permanent (any chooser, e.g. Wormfang Crab).
+    if !body_raw.contains("target")
         && !body_raw.contains(" in ")
         && !body_raw.contains(" from ")
         && (self_pronoun_valid || in_trigger)
@@ -2832,31 +2951,88 @@ fn try_lower_choose_objects_new_primitives(
         if parsed.zone.is_some() {
             return None;
         }
-        parsed.controller = Some(ControllerRelation::You);
         parsed.flags = parsed.flags.union(AstFilterFlags::EXCLUDE_SELF);
-        let mut trial = builder.clone();
-        let players = lower_affected_players_in_context(chooser, &mut trial, in_trigger).ok()?;
-        let obj = lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary).ok()?;
-        if obj.has_target_player() {
-            return None;
+        if chooser == PlayerRefAst::You {
+            parsed.controller = Some(ControllerRelation::You);
+            let mut trial = builder.clone();
+            let players =
+                lower_affected_players_in_context(chooser, &mut trial, in_trigger).ok()?;
+            let obj =
+                lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary).ok()?;
+            if obj.has_target_player() {
+                return None;
+            }
+            trial.instructions.push(Instruction::ChooseObjects {
+                players,
+                source_zone: SourceZoneFilter::AnyBattlefield,
+                filter: Box::new(obj),
+                min: ValueExpr::literal(min_val),
+                max: ValueExpr::literal(max_val),
+                distinct_powers: false,
+                max_total_power: None,
+                unchosen_action: None,
+            });
+            *builder = trial;
+            return Some(Ok(()));
         }
-        trial.instructions.push(Instruction::ChooseObjects {
-            players,
-            source_zone: SourceZoneFilter::AnyBattlefield,
-            filter: Box::new(obj),
-            min: ValueExpr::literal(min_val),
-            max: ValueExpr::literal(max_val),
-            distinct_powers: false,
-            max_total_power: None,
-            unchosen_action: None,
-        });
-        *builder = trial;
-        return Some(Ok(()));
+        parsed.controller = None;
+        let mut trial = builder.clone();
+        let p_sel = if matches!(chooser, PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer) {
+            trial.instructions.push(Instruction::ChooseValue {
+                chooser: ResolvingPlayer::Controller,
+                domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
+                    opponents_only: chooser == PlayerRefAst::AnyOpponent,
+                },
+            });
+            Some(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                ResolvingPlayer::ChosenPlayer,
+            ))
+        } else if let Some(players) = try_group_affected_players(chooser) {
+            Some(spellwake_engine::toolbox::PlayerSelector::Group(players))
+        } else {
+            lower_resolving_player_in_context(chooser, &mut trial, in_trigger)
+                .ok()
+                .map(spellwake_engine::toolbox::PlayerSelector::Resolving)
+        };
+        if let Some(p_sel) = p_sel
+            && let Ok(obj) = lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary)
+            && !obj.has_target_player()
+        {
+            const CHOOSE_OBJ_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(923);
+            const CHOOSE_UNCHOSEN_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(924);
+            let mut spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                spellwake_engine::toolbox::ObjectQuery::zone(
+                    spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                    )),
+                    obj,
+                ),
+                spellwake_engine::toolbox::ZoneSelection::Prompt {
+                    chooser: p_sel,
+                    min: Box::new(ValueExpr::literal(min_val)),
+                    max: Box::new(ValueExpr::literal(max_val)),
+                    constraint: None,
+                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                    hidden: false,
+                },
+                spellwake_engine::toolbox::ZoneDest::None,
+            );
+            spec.bind_moved = Some(CHOOSE_OBJ_BIND);
+            spec.bind_unchosen = Some(CHOOSE_UNCHOSEN_BIND);
+            trial
+                .instructions
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
+            *builder = trial;
+            return Some(Ok(()));
+        }
     }
 
-    // 6. Non-target controlled battlefield object in ChooseOption (e.g. Season of Weaving: "an artifact or creature you control").
-    if chooser == PlayerRefAst::You
-        && !body_raw.contains("target")
+    // 6. Non-target controlled battlefield object in ChooseOption (e.g. Season of Weaving, Urza's Sylex).
+    if !body_raw.contains("target")
         && !body_raw.contains(" in ")
         && !body_raw.contains(" from ")
         && let Some(ctrl_phrase) = body_raw.strip_suffix(" you control")
@@ -2870,16 +3046,114 @@ fn try_lower_choose_objects_new_primitives(
             return None;
         }
         parsed.controller = None;
+        if chooser == PlayerRefAst::You {
+            let obj = if is_unrestricted_filter(&parsed) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter_in_context(&parsed, builder, in_trigger, vocabulary).ok()?
+            };
+            if obj.has_target_player() {
+                return None;
+            }
+            builder.instructions.push(Instruction::ChooseObjects {
+                players: AffectedPlayers::One(ResolvingPlayer::Controller),
+                source_zone: SourceZoneFilter::Battlefield,
+                filter: Box::new(obj),
+                min: ValueExpr::literal(min_val),
+                max: ValueExpr::literal(max_val),
+                distinct_powers: false,
+                max_total_power: None,
+                unchosen_action: None,
+            });
+            return Some(Ok(()));
+        }
+        let mut trial = builder.clone();
+        let p_sel = if matches!(chooser, PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer) {
+            trial.instructions.push(Instruction::ChooseValue {
+                chooser: ResolvingPlayer::Controller,
+                domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
+                    opponents_only: chooser == PlayerRefAst::AnyOpponent,
+                },
+            });
+            Some(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                ResolvingPlayer::ChosenPlayer,
+            ))
+        } else if let Some(players) = try_group_affected_players(chooser) {
+            Some(spellwake_engine::toolbox::PlayerSelector::Group(players))
+        } else {
+            lower_resolving_player_in_context(chooser, &mut trial, in_trigger)
+                .ok()
+                .map(spellwake_engine::toolbox::PlayerSelector::Resolving)
+        };
+        if let Some(p_sel) = p_sel
+            && let Ok(obj) = if is_unrestricted_filter(&parsed) {
+                Ok(ObjectFilter::any())
+            } else {
+                lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary)
+            }
+            && !obj.has_target_player()
+        {
+            const CHOOSE_OBJ_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(923);
+            const CHOOSE_UNCHOSEN_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(924);
+            let mut spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                spellwake_engine::toolbox::ObjectQuery::zone(
+                    spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                    )),
+                    obj,
+                ),
+                spellwake_engine::toolbox::ZoneSelection::Prompt {
+                    chooser: p_sel,
+                    min: Box::new(ValueExpr::literal(min_val)),
+                    max: Box::new(ValueExpr::literal(max_val)),
+                    constraint: None,
+                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                    hidden: false,
+                },
+                spellwake_engine::toolbox::ZoneDest::None,
+            );
+            spec.bind_moved = Some(CHOOSE_OBJ_BIND);
+            spec.bind_unchosen = Some(CHOOSE_UNCHOSEN_BIND);
+            trial
+                .instructions
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
+            *builder = trial;
+            return Some(Ok(()));
+        }
+    }
+
+    // 6b. Non-You chooser choosing permanents "they control" (e.g. Urza's Sylex: "Each player chooses six lands they control").
+    if chooser != PlayerRefAst::You
+        && !body_raw.contains("target")
+        && !body_raw.contains(" in ")
+        && !body_raw.contains(" from ")
+        && let Some(ctrl_phrase) = body_raw.strip_suffix(" they control")
+    {
+        let mut parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+            ctrl_phrase.trim(),
+            &cached_compiler_vocab(vocabulary),
+        )
+        .ok()?;
+        if parsed.zone.is_some() {
+            return None;
+        }
+        parsed.controller = None;
+        let mut trial = builder.clone();
+        let players = lower_affected_players_in_context(chooser, &mut trial, in_trigger).ok()?;
         let obj = if is_unrestricted_filter(&parsed) {
             ObjectFilter::any()
         } else {
-            lower_object_filter_in_context(&parsed, builder, in_trigger, vocabulary).ok()?
+            lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary).ok()?
         };
         if obj.has_target_player() {
             return None;
         }
-        builder.instructions.push(Instruction::ChooseObjects {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
+        trial.instructions.push(Instruction::ChooseObjects {
+            players,
             source_zone: SourceZoneFilter::Battlefield,
             filter: Box::new(obj),
             min: ValueExpr::literal(min_val),
@@ -2888,6 +3162,7 @@ fn try_lower_choose_objects_new_primitives(
             max_total_power: None,
             unchosen_action: None,
         });
+        *builder = trial;
         return Some(Ok(()));
     }
 
@@ -3029,22 +3304,99 @@ fn try_lower_choose_objects_new_primitives(
 
     // 9. Exile card choices via universal ZoneOp(ZoneSelection::Prompt, ZoneDest::None).
     {
-        let exile_match: Option<(&str, spellwake_engine::toolbox::QueryZone)> =
-            if let Some(p) = body_raw.strip_suffix(" you own in exile") {
+        let mut required_counter_override: Option<CounterKind> = None;
+        let mut linked_exile_phrase: Option<&str> = None;
+        if self_pronoun_valid || in_trigger {
+            for suf in [
+                " exiled with ~",
+                " exiled with it",
+                " exiled with this enchantment",
+                " exiled with this artifact",
+                " exiled with this creature",
+                " exiled with this permanent",
+            ] {
+                if let Some(p) = body_raw.strip_suffix(suf) {
+                    linked_exile_phrase = Some(p.trim());
+                    break;
+                }
+            }
+        }
+        let exile_match: Option<(String, spellwake_engine::toolbox::QueryZone)> =
+            if linked_exile_phrase.is_some() {
+                None
+            } else if let Some(p) = body_raw.strip_suffix(" you own in exile") {
                 Some((
-                    p,
+                    p.trim().to_string(),
                     spellwake_engine::toolbox::QueryZone::ExileOwnedBy(Box::new(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             ResolvingPlayer::Controller,
                         ),
                     )),
                 ))
+            } else if let Some(p) = body_raw
+                .strip_suffix(" an opponent owns in exile")
+                .or_else(|| body_raw.strip_suffix(" opponents own in exile"))
+            {
+                Some((
+                    p.trim().to_string(),
+                    spellwake_engine::toolbox::QueryZone::ExileOwnedBy(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Group(
+                            AffectedPlayers::EachOpponent,
+                        ),
+                    )),
+                ))
             } else if let Some(p) = body_raw.strip_suffix(" in exile") {
-                Some((p, spellwake_engine::toolbox::QueryZone::Exile))
+                Some((
+                    p.trim().to_string(),
+                    spellwake_engine::toolbox::QueryZone::Exile,
+                ))
+            } else if let Some(after_ex) = body_raw.strip_prefix("exiled ") {
+                let (without_void, has_void) =
+                    if let Some(r) = after_ex.strip_suffix(" with a void counter on it") {
+                        (r.trim(), true)
+                    } else if let Some(r) = after_ex.strip_suffix(" with a void counter") {
+                        (r.trim(), true)
+                    } else {
+                        (after_ex.trim(), false)
+                    };
+                if has_void {
+                    required_counter_override = Some(CounterKind::Void);
+                }
+                if let Some(p) = without_void
+                    .strip_suffix(" an opponent owns")
+                    .or_else(|| without_void.strip_suffix(" opponents own"))
+                {
+                    Some((
+                        p.trim().to_string(),
+                        spellwake_engine::toolbox::QueryZone::ExileOwnedBy(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Group(
+                                AffectedPlayers::EachOpponent,
+                            ),
+                        )),
+                    ))
+                } else if let Some(p) = without_void.strip_suffix(" you own") {
+                    Some((
+                        p.trim().to_string(),
+                        spellwake_engine::toolbox::QueryZone::ExileOwnedBy(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                        )),
+                    ))
+                } else if has_void {
+                    Some((
+                        without_void.to_string(),
+                        spellwake_engine::toolbox::QueryZone::Exile,
+                    ))
+                } else {
+                    None
+                }
             } else {
                 None
             };
-        if let Some((card_phrase, qz)) = exile_match
+        let phrase_opt: Option<&str> =
+            linked_exile_phrase.or_else(|| exile_match.as_ref().map(|(s, _)| s.as_str()));
+        if let Some(card_phrase) = phrase_opt
             && !card_phrase.contains("target")
             && let Ok(parsed) = spellwake_oracle_compiler::filter::parse_object_filter(
                 card_phrase.trim(),
@@ -3061,19 +3413,47 @@ fn try_lower_choose_objects_new_primitives(
                     .map(spellwake_engine::toolbox::PlayerSelector::Resolving)
             };
             if let Some(p_sel) = p_sel
-                && let Ok(obj) = if is_unrestricted_filter(&parsed) {
+                && let Ok(mut obj) = if is_unrestricted_filter(&parsed) {
                     Ok(ObjectFilter::any())
                 } else {
                     lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary)
                 }
                 && bind_filter_player_target(&mut trial, &obj).is_ok()
             {
+                if let Some(ck) = required_counter_override {
+                    obj = match obj {
+                        ObjectFilter::Clause(mut clause) => {
+                            if clause.required_counter_kind.is_some() {
+                                return None;
+                            }
+                            clause.required_counter_kind = Some(ck);
+                            ObjectFilter::Clause(clause)
+                        }
+                        _ => return None,
+                    };
+                }
                 const CHOOSE_OBJ_BIND: spellwake_engine::toolbox::BindingId =
                     spellwake_engine::toolbox::BindingId(923);
                 const CHOOSE_UNCHOSEN_BIND: spellwake_engine::toolbox::BindingId =
                     spellwake_engine::toolbox::BindingId(924);
+                let source_query = if linked_exile_phrase.is_some() {
+                    if obj == ObjectFilter::any() {
+                        spellwake_engine::toolbox::ObjectQuery::LinkedExile { group: None }
+                    } else {
+                        spellwake_engine::toolbox::ObjectQuery::Filtered {
+                            source: Box::new(spellwake_engine::toolbox::ObjectQuery::LinkedExile {
+                                group: None,
+                            }),
+                            filter: Box::new(obj),
+                        }
+                    }
+                } else if let Some((_, qz)) = exile_match {
+                    spellwake_engine::toolbox::ObjectQuery::zone(qz, obj)
+                } else {
+                    return None;
+                };
                 let mut spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
-                    spellwake_engine::toolbox::ObjectQuery::zone(qz, obj),
+                    source_query,
                     spellwake_engine::toolbox::ZoneSelection::Prompt {
                         chooser: p_sel,
                         min: Box::new(ValueExpr::literal(min_val)),
@@ -3162,6 +3542,16 @@ fn try_lower_choose_objects_new_primitives(
                         )),
                     )
                 })
+        } else if let Some(p) = body_raw
+            .strip_suffix(" in an opponent's graveyard")
+            .or_else(|| body_raw.strip_suffix(" from an opponent's graveyard"))
+        {
+            Some((
+                p,
+                spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                    spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachOpponent),
+                )),
+            ))
         } else if let Some(p) = body_raw
             .strip_suffix(" in a graveyard")
             .or_else(|| body_raw.strip_suffix(" from a graveyard"))
@@ -6718,33 +7108,174 @@ fn lower_put_sticker_instruction(
     }
 }
 
+fn lower_empower_instruction(
+    planeswalker: &str,
+    count: &ValueExprAst,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Result<(), &'static str> {
+    if !planeswalker.trim().eq_ignore_ascii_case("jace") {
+        return Err("oracle:unsupported-instruction");
+    }
+    let amt =
+        lower_value_expr_in_context(resolve_x(count, bound_x), builder, in_trigger, vocabulary)?;
+    let jace_sub =
+        spellwake_engine::program::SingleSubtype::Planeswalker(PlaneswalkerSubtype::Jace);
+    let jace_list = spellwake_engine::program::SubtypeList::from_slice(&[jace_sub])
+        .ok_or("oracle:empower-subtype")?;
+    let mut jace_clause = ObjectClause::any();
+    jace_clause.subtypes = SubtypeFilter::AnyOfList(jace_list);
+    jace_clause.token = Some(true);
+    let jace_filter = ObjectFilter::Clause(jace_clause);
+
+    let mut jace_program = Program::new(
+        BTreeSet::from([CardType::Planeswalker]),
+        BTreeSet::new(),
+        BTreeSet::new(),
+        ProgramKind::Permanent(PermanentDefinition {
+            entry_tap: None,
+            attachment: None,
+            printed_pt: None,
+            casting_cost: None,
+        }),
+    );
+    jace_program
+        .planeswalker_subtypes
+        .insert(PlaneswalkerSubtype::Jace);
+    jace_program.effect_defined_colors = Some(BTreeSet::from([Color::Blue]));
+    jace_program.printed_loyalty = Some(0.into());
+
+    let surveil_id = ActivatedAbilityId(0);
+    jace_program.loyalty_costs.insert(surveil_id, -1);
+    jace_program.activated.push(ActivatedAbility {
+        id: surveil_id,
+        mana_cost: ManaCost::free(),
+        source_cost: SourceCost::None,
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::surveil(
+                    ResolvingPlayer::Controller,
+                    ValueExpr::literal(1),
+                ),
+            ))],
+        ),
+    });
+
+    let draw_id = ActivatedAbilityId(1);
+    jace_program.loyalty_costs.insert(draw_id, -3);
+    jace_program.activated.push(ActivatedAbility {
+        id: draw_id,
+        mana_cost: ManaCost::free(),
+        source_cost: SourceCost::None,
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::DrawCards(Box::new(
+                spellwake_engine::toolbox::DrawCardsSpec::simple(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    ValueExpr::literal(1),
+                ),
+            ))],
+        ),
+    });
+
+    let jace_name =
+        EnglishCardName::new("Jace Token".to_string()).map_err(|_| "oracle:empower-token-name")?;
+    let jace_def = TokenDefinition::new(jace_program, TokenName::Specified(jace_name), vocabulary)
+        .map_err(|_| "oracle:empower-token-invalid")?;
+
+    let skip_create = builder.instructions.len() + 2;
+    builder.instructions.push(Instruction::BranchCondition {
+        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Not(Box::new(
+            spellwake_engine::toolbox::ConditionExpr::NonEmpty(Box::new(
+                spellwake_engine::toolbox::ObjectQuery::zone(
+                    spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                    )),
+                    jace_filter,
+                ),
+            )),
+        ))),
+        destination: skip_create,
+    });
+    builder.instructions.push(Instruction::CreateTokens {
+        creations: vec![TokenCreation::one(jace_def)],
+    });
+    builder
+        .instructions
+        .push(Instruction::MutateObject(Box::new(
+            spellwake_engine::toolbox::MutateObjectSpec {
+                source: spellwake_engine::toolbox::ObjectQuery::zone(
+                    spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                    )),
+                    jace_filter,
+                ),
+                selection: spellwake_engine::toolbox::ZoneSelection::Prompt {
+                    chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    min: Box::new(ValueExpr::literal(1)),
+                    max: Box::new(ValueExpr::literal(1)),
+                    constraint: None,
+                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                    hidden: false,
+                },
+                op: spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                    kind: CounterKind::Loyalty,
+                    amount: amt,
+                },
+                bind_mutated: None,
+                bind_succeeded: None,
+            },
+        )));
+    Ok(())
+}
+
+fn instruction_produces_card_pool(op: &Instruction) -> bool {
+    match op {
+        Instruction::ZoneOp(_)
+        | Instruction::ForEachPlayerQuery { .. }
+        | Instruction::LookTopChooseExt { .. }
+        | Instruction::RevealUntilMatchExt { .. }
+        | Instruction::ExileTopPlay { .. }
+        | Instruction::SearchLibrary { .. }
+        | Instruction::ChooseObjects { .. } => true,
+        Instruction::MutatePlayer(spec) => {
+            matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_))
+        }
+
+        _ => false,
+    }
+}
+
 fn lower_standalone_choose_and_keep(
     pick: &str,
     keep_to: &str,
     rest_to: &str,
     builder: &mut BodyBuilder,
     vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    bound_x: Option<&ValueExprAst>,
 ) -> Result<(), &'static str> {
     use spellwake_engine::toolbox::{
         BindingId, ChoiceCategory, GraveyardSemantics, LibraryOrderPos, ObjectQuery,
         PlayerSelector, ZoneController, ZoneDest, ZoneOpSpec, ZoneSelection,
     };
     let has_pool = last_instruction_moved_object(&builder.instructions)
-        || builder.instructions.iter().rev().any(|op| {
-            matches!(
-                op,
-                Instruction::ZoneOp(_)
-                    | Instruction::ForEachPlayerQuery { .. }
-                    | Instruction::LookTopChooseExt { .. }
-                    | Instruction::RevealUntilMatchExt { .. }
-                    | Instruction::ExileTopPlay { .. }
-                    | Instruction::SearchLibrary { .. }
-            ) || matches!(
-                op,
-                Instruction::MutatePlayer(spec)
-                    if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_))
-            )
-        });
+        || builder
+            .instructions
+            .iter()
+            .rev()
+            .any(instruction_produces_card_pool);
     if !has_pool {
         return Err("oracle:unsupported-choose-and-keep");
     }
@@ -6752,10 +7283,19 @@ fn lower_standalone_choose_and_keep(
     let keep_dest = if keep_low.contains("hand") {
         ZoneDest::Hand
     } else if keep_low.contains("battlefield") {
+        if keep_low.contains("opponent's control") || keep_low.contains("their control") {
+            return Err("oracle:unsupported-choose-and-keep");
+        }
+        let controller =
+            if keep_low.contains("owner's control") || keep_low.contains("owners' control") {
+                ZoneController::Owner
+            } else {
+                ZoneController::Player(Box::new(PlayerSelector::Resolving(
+                    ResolvingPlayer::Controller,
+                )))
+            };
         ZoneDest::Battlefield {
-            controller: ZoneController::Player(Box::new(PlayerSelector::Resolving(
-                ResolvingPlayer::Controller,
-            ))),
+            controller,
             tapped: keep_low.contains("tapped"),
             attacking: keep_low.contains("attacking"),
             transformed: false,
@@ -6769,11 +7309,11 @@ fn lower_standalone_choose_and_keep(
         }
     } else if keep_low.contains("exile") {
         ZoneDest::exile()
-    } else if keep_low.contains("top") && keep_low.contains("library") {
+    } else if keep_low.contains("top") {
         ZoneDest::Library {
             position: LibraryOrderPos::Top,
         }
-    } else if keep_low.contains("bottom") && keep_low.contains("library") {
+    } else if keep_low.contains("bottom") {
         ZoneDest::Library {
             position: if keep_low.contains("random") {
                 LibraryOrderPos::BottomRandom
@@ -6802,7 +7342,7 @@ fn lower_standalone_choose_and_keep(
         Some(ZoneDest::exile())
     } else if rest_low.contains("hand") {
         Some(ZoneDest::Hand)
-    } else if rest_low.contains("top") && rest_low.contains("library") {
+    } else if rest_low.contains("top") {
         Some(ZoneDest::Library {
             position: LibraryOrderPos::Top,
         })
@@ -6813,29 +7353,36 @@ fn lower_standalone_choose_and_keep(
     };
 
     let pick_low = pick.trim().trim_end_matches('.').to_ascii_lowercase();
-    let (keep_all, min_v, max_v, filter_opt): (bool, i64, i64, Option<ObjectFilter>) = if matches!(
+    let (keep_all, min_expr, max_expr, filter_opt): (
+        bool,
+        ValueExpr,
+        ValueExpr,
+        Option<ObjectFilter>,
+    ) = if matches!(
         pick_low.as_str(),
         "all"
             | "all of them"
             | "them"
+            | "those"
             | "all cards"
             | "all of those cards"
             | "all cards revealed this way"
             | "all cards exiled this way"
             | "those cards"
     ) {
-        (true, 0, 0, None)
+        (true, ValueExpr::literal(0), ValueExpr::literal(0), None)
     } else if matches!(
         pick_low.as_str(),
         "one"
             | "1"
+            | "one card"
             | "one of them"
             | "one of those cards"
             | "a card"
             | "that card"
             | "a card from among them"
     ) {
-        (false, 1, 1, None)
+        (false, ValueExpr::literal(1), ValueExpr::literal(1), None)
     } else if matches!(
         pick_low.as_str(),
         "up to one"
@@ -6844,56 +7391,126 @@ fn lower_standalone_choose_and_keep(
             | "up to one card"
             | "up to one of those cards"
     ) {
-        (false, 0, 1, None)
+        (false, ValueExpr::literal(0), ValueExpr::literal(1), None)
     } else if matches!(
         pick_low.as_str(),
-        "two" | "2" | "two of them" | "two of those cards"
+        "two" | "2" | "two cards" | "two of them" | "two of those cards"
     ) {
-        (false, 2, 2, None)
+        (false, ValueExpr::literal(2), ValueExpr::literal(2), None)
     } else if matches!(
         pick_low.as_str(),
-        "up to two" | "up to two of them" | "up to two of those cards"
+        "up to two" | "up to two cards" | "up to two of them" | "up to two of those cards"
     ) {
-        (false, 0, 2, None)
-    } else if matches!(pick_low.as_str(), "three" | "3" | "three of them") {
-        (false, 3, 3, None)
-    } else if matches!(pick_low.as_str(), "up to three" | "up to three of them") {
-        (false, 0, 3, None)
+        (false, ValueExpr::literal(0), ValueExpr::literal(2), None)
+    } else if matches!(
+        pick_low.as_str(),
+        "three" | "3" | "three cards" | "three of them" | "three of those cards"
+    ) {
+        (false, ValueExpr::literal(3), ValueExpr::literal(3), None)
+    } else if matches!(
+        pick_low.as_str(),
+        "up to three" | "up to three cards" | "up to three of them" | "up to three of those cards"
+    ) {
+        (false, ValueExpr::literal(0), ValueExpr::literal(3), None)
+    } else if matches!(
+        pick_low.as_str(),
+        "four" | "4" | "four cards" | "four of them" | "four of those cards"
+    ) {
+        (false, ValueExpr::literal(4), ValueExpr::literal(4), None)
+    } else if matches!(
+        pick_low.as_str(),
+        "up to four" | "up to four cards" | "up to four of them" | "up to four of those cards"
+    ) {
+        (false, ValueExpr::literal(0), ValueExpr::literal(4), None)
+    } else if matches!(
+        pick_low.as_str(),
+        "five" | "5" | "five cards" | "five of them" | "five of those cards"
+    ) {
+        (false, ValueExpr::literal(5), ValueExpr::literal(5), None)
+    } else if matches!(
+        pick_low.as_str(),
+        "up to five" | "up to five cards" | "up to five of them" | "up to five of those cards"
+    ) {
+        (false, ValueExpr::literal(0), ValueExpr::literal(5), None)
+    } else if matches!(
+        pick_low.as_str(),
+        "up to x" | "up to x of them" | "up to x cards"
+    ) && let Some(bx) = bound_x
+    {
+        let x_ve = lower_value_expr_in_context(bx, builder, in_trigger, vocabulary)
+            .map_err(|_| "oracle:unsupported-choose-and-keep")?;
+        (false, ValueExpr::literal(0), x_ve, None)
+    } else if matches!(pick_low.as_str(), "x" | "x of them" | "x cards")
+        && let Some(bx) = bound_x
+    {
+        let x_ve = lower_value_expr_in_context(bx, builder, in_trigger, vocabulary)
+            .map_err(|_| "oracle:unsupported-choose-and-keep")?;
+        (false, x_ve.clone(), x_ve, None)
     } else {
-        let (all_flag, lo, hi, phrase) = if let Some(r) = pick_low
+        let (all_flag, lo_ve, hi_ve, phrase) = if let Some(r) = pick_low
             .strip_prefix("all ")
             .or_else(|| pick_low.strip_prefix("each "))
             .or_else(|| pick_low.strip_prefix("those "))
         {
-            (true, 0i64, 0i64, r)
+            (true, ValueExpr::literal(0), ValueExpr::literal(0), r)
         } else if let Some(r) = pick_low.strip_prefix("up to one ") {
-            (false, 0, 1, r)
+            (false, ValueExpr::literal(0), ValueExpr::literal(1), r)
         } else if let Some(r) = pick_low.strip_prefix("up to two ") {
-            (false, 0, 2, r)
+            (false, ValueExpr::literal(0), ValueExpr::literal(2), r)
         } else if let Some(r) = pick_low.strip_prefix("up to three ") {
-            (false, 0, 3, r)
+            (false, ValueExpr::literal(0), ValueExpr::literal(3), r)
+        } else if let Some(r) = pick_low.strip_prefix("up to four ") {
+            (false, ValueExpr::literal(0), ValueExpr::literal(4), r)
+        } else if let Some(r) = pick_low.strip_prefix("up to five ") {
+            (false, ValueExpr::literal(0), ValueExpr::literal(5), r)
+        } else if let Some(r) = pick_low.strip_prefix("up to x ")
+            && let Some(bx) = bound_x
+        {
+            let x_ve = lower_value_expr_in_context(bx, builder, in_trigger, vocabulary)
+                .map_err(|_| "oracle:unsupported-choose-and-keep")?;
+            (false, ValueExpr::literal(0), x_ve, r)
         } else if let Some(r) = pick_low.strip_prefix("any number of ") {
-            (false, 0, 100, r)
+            (false, ValueExpr::literal(0), ValueExpr::literal(100), r)
         } else if let Some(r) = pick_low.strip_prefix("two ") {
-            (false, 2, 2, r)
+            (false, ValueExpr::literal(2), ValueExpr::literal(2), r)
         } else if let Some(r) = pick_low.strip_prefix("three ") {
-            (false, 3, 3, r)
+            (false, ValueExpr::literal(3), ValueExpr::literal(3), r)
+        } else if let Some(r) = pick_low.strip_prefix("four ") {
+            (false, ValueExpr::literal(4), ValueExpr::literal(4), r)
+        } else if let Some(r) = pick_low.strip_prefix("five ") {
+            (false, ValueExpr::literal(5), ValueExpr::literal(5), r)
+        } else if let Some(r) = pick_low.strip_prefix("x ")
+            && let Some(bx) = bound_x
+        {
+            let x_ve = lower_value_expr_in_context(bx, builder, in_trigger, vocabulary)
+                .map_err(|_| "oracle:unsupported-choose-and-keep")?;
+            (false, x_ve.clone(), x_ve, r)
         } else if let Some(r) = pick_low
             .strip_prefix("one ")
             .or_else(|| pick_low.strip_prefix("a "))
             .or_else(|| pick_low.strip_prefix("an "))
         {
-            (false, 1, 1, r)
+            (false, ValueExpr::literal(1), ValueExpr::literal(1), r)
         } else {
             return Err("oracle:unsupported-choose-and-keep");
         };
-        let cleaned = phrase
-            .trim()
-            .trim_end_matches(" revealed this way")
-            .trim_end_matches(" exiled this way")
-            .trim_end_matches(" from among them")
-            .trim_end_matches(" from among those cards")
-            .trim();
+        let mut cleaned = phrase.trim();
+        loop {
+            let next = cleaned
+                .trim_end_matches(" revealed this way")
+                .trim_end_matches(" exiled this way")
+                .trim_end_matches(" looked at this way")
+                .trim_end_matches(" from among the revealed cards")
+                .trim_end_matches(" from among those cards")
+                .trim_end_matches(" from among those")
+                .trim_end_matches(" from among them")
+                .trim_end_matches(" of them")
+                .trim();
+            if next.len() == cleaned.len() {
+                break;
+            }
+            cleaned = next;
+        }
         let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
             cleaned,
             &cached_compiler_vocab(vocabulary),
@@ -6912,7 +7529,7 @@ fn lower_standalone_choose_and_keep(
             }
             Some(f)
         };
-        (all_flag, lo, hi, obj)
+        (all_flag, lo_ve, hi_ve, obj)
     };
 
     const POOL_BIND: BindingId = BindingId(927);
@@ -6937,8 +7554,8 @@ fn lower_standalone_choose_and_keep(
     } else {
         ZoneSelection::Prompt {
             chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
-            min: Box::new(ValueExpr::literal(min_v)),
-            max: Box::new(ValueExpr::literal(max_v)),
+            min: Box::new(min_expr),
+            max: Box::new(max_expr),
             constraint: None,
             category: ChoiceCategory::Generic,
             hidden: false,
@@ -6989,6 +7606,48 @@ fn is_safe_resolving_player_for_shuffle(
         | ResolvingPlayer::AttachedHostController
         | ResolvingPlayer::SourceOwner
         | ResolvingPlayer::SourceChosenPlayer => has_source,
+        ResolvingPlayer::TargetPlayer => matches!(
+            builder.target,
+            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+        ),
+        ResolvingPlayer::TargetController => matches!(
+            builder.target,
+            BodyTarget::SingleOpponent
+                | BodyTarget::SinglePlayer
+                | BodyTarget::SingleSpell(_)
+                | BodyTarget::SingleStackObject(_)
+                | BodyTarget::SingleStackEntry
+                | BodyTarget::SinglePermanent
+                | BodyTarget::SingleCreature
+                | BodyTarget::SinglePlaneswalker
+                | BodyTarget::FilteredPermanent(_)
+                | BodyTarget::SingleCreatureOrPlayer
+                | BodyTarget::SinglePlayerOrPlaneswalker
+                | BodyTarget::SingleOpponentOrPlaneswalker
+                | BodyTarget::SingleAnyTarget
+        ),
+        ResolvingPlayer::TargetOwner => matches!(
+            builder.target,
+            BodyTarget::SinglePermanent
+                | BodyTarget::SingleCreature
+                | BodyTarget::SinglePlaneswalker
+                | BodyTarget::FilteredPermanent(_)
+                | BodyTarget::SingleOwnGraveyardCard
+                | BodyTarget::FilteredOwnGraveyardCard(_)
+                | BodyTarget::FilteredAnyGraveyardCard { .. }
+                | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                | BodyTarget::AnyGraveyardCard
+                | BodyTarget::AnyGraveyardCreature
+                | BodyTarget::SingleSpell(_)
+        ),
+        ResolvingPlayer::TargetSpellController => matches!(
+            builder.target,
+            BodyTarget::SingleSpell(_)
+                | BodyTarget::SingleStackObject(_)
+                | BodyTarget::SingleStackEntry
+                | BodyTarget::ControlledAbility { .. }
+                | BodyTarget::StackEntryTargetingControlledPermanent
+        ),
         ResolvingPlayer::ChosenPlayer => builder.instructions.iter().any(|op| {
             matches!(
                 op,
@@ -7021,7 +7680,7 @@ pub(super) fn lower_shuffle_that_player_fallback(
     in_trigger: bool,
 ) -> Result<(), &'static str> {
     use spellwake_engine::toolbox::{ObjectQuery, PlayerSelector, ZoneOpSpec};
-    // 1. Prior SearchLibrary(PlayerLibrary(players)) or multi-player loop/offer/choice.
+    // 1. Prior SearchLibrary(PlayerLibrary(players)) or multi-player loop/offer/choice/draw.
     for op in builder.instructions.iter().rev() {
         match op {
             Instruction::SearchLibrary { filter } => {
@@ -7035,6 +7694,26 @@ pub(super) fn lower_shuffle_that_player_fallback(
                     return Ok(());
                 }
             }
+            Instruction::DrawCards(spec) => match &spec.players {
+                PlayerSelector::Resolving(rp) | PlayerSelector::Group(AffectedPlayers::One(rp))
+                    if *rp != ResolvingPlayer::Controller
+                        && is_safe_resolving_player_for_shuffle(*rp, builder, in_trigger) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(*rp),
+                    );
+                    return Ok(());
+                }
+                PlayerSelector::Group(players) if !matches!(players, AffectedPlayers::One(_)) => {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            ZoneOpSpec::shuffle(PlayerSelector::Group(*players)),
+                        ),
+                    );
+                    return Ok(());
+                }
+                _ => {}
+            },
             Instruction::ForEachPlayerQuery { selector, .. } => {
                 if let PlayerSelector::Group(players) = selector.as_ref() {
                     let ok = match players {
@@ -7165,6 +7844,37 @@ pub(super) fn lower_shuffle_that_player_fallback(
             },
             _ => {}
         }
+    }
+    // 1b. Bound spell/permanent/graveyard/player target when prior instruction acted on it
+    // (e.g. Counter target spell ... Then that player shuffles).
+    let target_rp = match builder.target {
+        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
+            Some(ResolvingPlayer::TargetPlayer)
+        }
+        BodyTarget::SingleSpell(_)
+        | BodyTarget::SingleStackObject(_)
+        | BodyTarget::SingleStackEntry
+        | BodyTarget::ControlledAbility { .. }
+        | BodyTarget::StackEntryTargetingControlledPermanent => {
+            Some(ResolvingPlayer::TargetSpellController)
+        }
+        BodyTarget::SinglePermanent
+        | BodyTarget::SingleCreature
+        | BodyTarget::SinglePlaneswalker
+        | BodyTarget::FilteredPermanent(_) => Some(ResolvingPlayer::TargetController),
+        BodyTarget::AnyGraveyardCard
+        | BodyTarget::AnyGraveyardCreature
+        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+        | BodyTarget::FilteredAnyGraveyardCard { .. } => Some(ResolvingPlayer::TargetOwner),
+        _ => None,
+    };
+    if let Some(rp) = target_rp
+        && is_safe_resolving_player_for_shuffle(rp, builder, in_trigger)
+    {
+        builder.instructions.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(rp),
+        );
+        return Ok(());
     }
     // 2. Prior object movement or selection: shuffle the owners of those moved/selected objects.
     let has_prior_objects = last_instruction_moved_object(&builder.instructions)

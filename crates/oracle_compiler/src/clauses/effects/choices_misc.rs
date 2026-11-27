@@ -36,11 +36,109 @@ use crate::filter::{
 use crate::preprocess::{count_symbol_sequence, is_mana_sequence, parse_base_pt};
 use crate::vocab::{Vocabulary, parse_number_word};
 
+fn split_copy_and_choose_new_targets(rest: &str) -> Option<&str> {
+    for sep in [
+        ", and you may choose new targets for ",
+        ", and you may choose a new target for ",
+        ", and they may choose new targets for ",
+        ", and they may choose a new target for ",
+        ", and may choose new targets for ",
+        ", and may choose a new target for ",
+        " and you may choose new targets for ",
+        " and you may choose a new target for ",
+        " and they may choose new targets for ",
+        " and they may choose a new target for ",
+        " and may choose new targets for ",
+        " and may choose a new target for ",
+        ", you may choose new targets for ",
+        ", you may choose a new target for ",
+        ", they may choose new targets for ",
+        ", they may choose a new target for ",
+    ] {
+        if let Some((before, after)) = rest.split_once(sep) {
+            let tail = after.trim().trim_end_matches('.');
+            if matches!(
+                tail,
+                "the copy"
+                    | "the copies"
+                    | "that copy"
+                    | "their copy"
+                    | "their copies"
+                    | "any of the copies"
+                    | "the copy they control"
+                    | "the copies they control"
+                    | "the copy you control"
+                    | "the copies you control"
+            ) {
+                return Some(before.trim());
+            }
+        }
+    }
+    None
+}
+
+fn parse_copy_instruction_from_rest(
+    rest_clean: &str,
+    vocab: &Vocabulary,
+) -> Option<InstructionAst> {
+    let (core, exception) = match rest_clean.split_once(", except ") {
+        Some((c, e)) => (c.trim(), Some(e.trim().to_string())),
+        None => (rest_clean, None),
+    };
+    let (core, count) = if let Some(c) = core.strip_suffix(" twice") {
+        (c.trim(), Some(vconst(2)))
+    } else if let Some((c, times_raw)) = core.rsplit_once(' ')
+        && times_raw == "times"
+        && let Some((c2, num_tok)) = c.rsplit_once(' ')
+        && let Ok(n) = parse_value_expr(num_tok, vocab)
+    {
+        (c2.trim(), Some(Box::new(n)))
+    } else if let Some((c, _fe)) = core.split_once(" for each other ") {
+        (c.trim(), Some(Box::new(ValueExprAst::PriorResult)))
+    } else {
+        (core, None)
+    };
+    if core == "the spell countered this way" {
+        return Some(InstructionAst::Copy {
+            subject: Box::new(SubjectRefAst::Anaphora(core.to_string())),
+            exception,
+            count,
+        });
+    }
+    if let Ok(subj) = parse_subject_or_target(core, vocab) {
+        return Some(InstructionAst::Copy {
+            subject: Box::new(subj),
+            exception,
+            count,
+        });
+    }
+    None
+}
+
 pub(super) fn try_parse_pass_c_primitives(
     s: &str,
     low: &str,
     vocab: &Vocabulary,
 ) -> Option<Vec<InstructionAst>> {
+    // 0. Combined "copy <subject>[,] [and] [you|they] may choose [a] new target(s) for the copy/copies"
+    // Emit both Copy and MayChooseNewTargetsForCopy so lowering fuses may_choose_new_targets = true.
+    if let Some((_, rest)) = split_leading_player_verb(low, "copy", "copies")
+        && let Some(rest_clean) = split_copy_and_choose_new_targets(rest)
+    {
+        if let Some(copy_ins) = parse_copy_instruction_from_rest(rest_clean, vocab) {
+            return Some(vec![copy_ins, InstructionAst::MayChooseNewTargetsForCopy]);
+        }
+        if let Some((copy_part, cond_raw)) = rest_clean.rsplit_once(" if ")
+            && let Ok(cond) = parse_condition(cond_raw.trim(), vocab)
+            && let Some(copy_ins) = parse_copy_instruction_from_rest(copy_part.trim(), vocab)
+        {
+            return Some(vec![ins_if(
+                cond,
+                vec![copy_ins, InstructionAst::MayChooseNewTargetsForCopy],
+            )]);
+        }
+    }
+
     // 1. ControlPlayerTurn (Mindslaver, Emrakul the Promised End, Worst Fears, Sorin Markov, Secret of Bloodbending)
     for pref in ["you control ", "you gain control of ", "control "] {
         if let Some(after) = low.strip_prefix(pref)
@@ -932,45 +1030,15 @@ pub(super) fn try_parse_misc_actions(
             value: Box::new(value),
         });
     }
-    if low.contains("choose new targets for the cop") {
-        return Some(InstructionAst::MayChooseNewTargetsForCopy);
-    }
     if let Some((_, rest)) = split_leading_player_verb(low, "copy", "copies") {
-        let rest_clean = rest
-            .split_once(" and may choose a new target for ")
-            .or_else(|| rest.split_once(" and may choose new targets for "))
-            .map_or(rest, |(b, _)| b.trim());
-        let (core, exception) = match rest_clean.split_once(", except ") {
-            Some((c, e)) => (c.trim(), Some(e.trim().to_string())),
-            None => (rest_clean, None),
-        };
-        let (core, count) = if let Some(c) = core.strip_suffix(" twice") {
-            (c.trim(), Some(vconst(2)))
-        } else if let Some((c, times_raw)) = core.rsplit_once(' ')
-            && times_raw == "times"
-            && let Some((c2, num_tok)) = c.rsplit_once(' ')
-            && let Ok(n) = parse_value_expr(num_tok, vocab)
-        {
-            (c2.trim(), Some(Box::new(n)))
-        } else if let Some((c, _fe)) = core.split_once(" for each other ") {
-            (c.trim(), Some(Box::new(ValueExprAst::PriorResult)))
-        } else {
-            (core, None)
-        };
-        if core == "the spell countered this way" {
-            return Some(InstructionAst::Copy {
-                subject: Box::new(SubjectRefAst::Anaphora(core.to_string())),
-                exception,
-                count,
-            });
+        if split_copy_and_choose_new_targets(rest).is_some() {
+            return None;
         }
-        if let Ok(subj) = parse_subject_or_target(core, vocab) {
-            return Some(InstructionAst::Copy {
-                subject: Box::new(subj),
-                exception,
-                count,
-            });
+        if let Some(copy_ins) = parse_copy_instruction_from_rest(rest, vocab) {
+            return Some(copy_ins);
         }
+    } else if low.contains("choose new targets for the cop") {
+        return Some(InstructionAst::MayChooseNewTargetsForCopy);
     }
     None
 }

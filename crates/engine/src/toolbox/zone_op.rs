@@ -31,6 +31,8 @@ pub enum SelectionConstraint {
     DistinctPowers,
     /// Selected objects must share at least one card type.
     SharedCardType,
+    /// Selected objects must each be assignable to a distinct card type.
+    DistinctCardTypes,
 }
 
 /// How objects are selected from a [`ZoneOpSpec::source`] query.
@@ -234,6 +236,20 @@ impl ZoneDest {
             attacking: false,
             transformed: false,
             face_down: false,
+            entering_counters: Vec::new(),
+            attach_to: None,
+        }
+    }
+
+    /// Face-down battlefield entry (2/2 colorless nameless creature, CR 708.2) under `controller`.
+    #[must_use]
+    pub const fn battlefield_face_down(controller: ZoneController, tapped: bool) -> Self {
+        Self::Battlefield {
+            controller,
+            tapped,
+            attacking: false,
+            transformed: false,
+            face_down: true,
             entering_counters: Vec::new(),
             attach_to: None,
         }

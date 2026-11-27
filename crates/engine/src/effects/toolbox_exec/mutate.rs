@@ -369,6 +369,14 @@ impl EffectWindow {
             .and_then(|c| c.pending_prompt_reply.take());
         let selected: Vec<ObjectId> =
             if let Some(PromptChoiceReply::Objects(chosen)) = pending_reply {
+                if let ZoneSelection::Prompt {
+                    constraint: Some(constraint),
+                    ..
+                } = &spec.selection
+                    && !self.satisfies_selection_constraint(&chosen, *constraint)?
+                {
+                    return Err(EffectError::SelectionOutsideDomain);
+                }
                 chosen
             } else {
                 match &spec.selection {
@@ -389,7 +397,7 @@ impl EffectWindow {
                         chooser,
                         min,
                         max,
-                        constraint: _,
+                        constraint,
                         category,
                         hidden,
                     } => {
@@ -425,7 +433,15 @@ impl EffectWindow {
                         let clamped_min = min_n.min(clamped_max);
                         if candidates.is_empty() || clamped_max == 0 {
                             Vec::new()
-                        } else if clamped_min == clamped_max && clamped_min == candidates.len() {
+                        } else if clamped_min == clamped_max
+                            && clamped_min == candidates.len()
+                            && match *constraint {
+                                None => true,
+                                Some(constraint) => {
+                                    self.satisfies_selection_constraint(&candidates, constraint)?
+                                }
+                            }
+                        {
                             candidates
                         } else {
                             let frame = PromptChoiceFrame {
@@ -609,7 +625,8 @@ impl EffectWindow {
                     succeeded = true;
                 }
             }
-            ObjectMutation::Goad { by } => {
+            ObjectMutation::Goad { by } | ObjectMutation::GoadPermanent { by } => {
+                let permanent = matches!(spec.op, ObjectMutation::GoadPermanent { .. });
                 let goader = self
                     .eval_player_selector_at(controller, Some(entry), by, self.resolution_cursor())?
                     .into_iter()
@@ -623,6 +640,9 @@ impl EffectWindow {
                         .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
                     {
                         self.goaded.entry(id).or_default().insert(goader);
+                        if permanent {
+                            self.permanent_goaded.entry(id).or_default().insert(goader);
+                        }
                         mutated.push(id);
                     }
                 }

@@ -4977,6 +4977,53 @@ pub(super) fn lower_restrictions_statics_instruction(
                 .trim()
                 .trim_end_matches('.')
                 .to_ascii_lowercase();
+            if matches!(
+                raw_low.as_str(),
+                "the tokens are goaded for the rest of the game"
+                    | "those tokens are goaded for the rest of the game"
+                    | "the token is goaded for the rest of the game"
+                    | "that token is goaded for the rest of the game"
+            ) && has_prior_token_creation(&builder.instructions)
+            {
+                builder
+                    .instructions
+                    .push(Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::goad_permanently(
+                            spellwake_engine::toolbox::ObjectQuery::CreatedTokens,
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                        ),
+                    )));
+                return Ok(());
+            }
+            if matches!(
+                raw_low.as_str(),
+                "it is goaded for the rest of the game"
+                    | "it's goaded for the rest of the game"
+                    | "that creature is goaded for the rest of the game"
+            ) {
+                let query = if is_permanent_body_target(builder.target) {
+                    Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+                } else if has_prior_token_creation(&builder.instructions) {
+                    Some(spellwake_engine::toolbox::ObjectQuery::CreatedTokens)
+                } else {
+                    None
+                };
+                if let Some(q) = query {
+                    builder
+                        .instructions
+                        .push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::goad_permanently(
+                                q,
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                            ),
+                        )));
+                    return Ok(());
+                }
+            }
             let mut dur = ResolvedDuration::UntilEndOfTurn;
             let mut body = raw_low.as_str();
             for (pref, d) in [
@@ -5807,6 +5854,38 @@ pub(super) fn lower_restrictions_statics_instruction(
             let Some(compiled_face) = compiled.as_deref() else {
                 return Err("oracle:unsupported-grant-ability-text");
             };
+            if (self_pronoun_valid || in_trigger)
+                && is_self_pronoun(eff_subject, builder, self_pronoun_valid)
+                && compiled_face.failures.is_empty()
+                && compiled_face.replacements.is_empty()
+                && compiled_face.spell_effects.is_empty()
+                && compiled_face.keywords.is_empty()
+                && compiled_face.abilities.is_empty()
+                && let [
+                    StaticAbilityAst::CdaPowerToughness {
+                        power: Some(p_ast),
+                        toughness: Some(t_ast),
+                    },
+                ] = compiled_face.statics.as_slice()
+            {
+                let pt_part = lower_self_cda_pt_static_part(p_ast, t_ast, vocabulary)?;
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Battlefield {
+                                id: ids.static_id(),
+                                selector: PermanentSelector {
+                                    controller: ControllerSelector::SourceItself,
+                                    ..PermanentSelector::default()
+                                },
+                                parts: StaticParts(vec![pt_part]),
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
             let parts = match lower_granted_ability_specs(compiled_face, vocabulary, ids) {
                 Ok(p) => p,
                 Err(err) => {
