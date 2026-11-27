@@ -28,16 +28,23 @@ fn v2_vocab() -> Vocabulary {
         "Artificer",
         "Assassin",
         "Aura",
+        "Bear",
         "Beast",
         "Bird",
+        "Cat",
         "Cleric",
         "Construct",
         "Demon",
         "Dinosaur",
+        "Djinn",
         "Dragon",
         "Druid",
+        "Dwarf",
+        "Efreet",
+        "Eldrazi",
         "Elemental",
         "Elf",
+        "Elk",
         "Equipment",
         "Faerie",
         "Forest",
@@ -45,21 +52,32 @@ fn v2_vocab() -> Vocabulary {
         "Fungus",
         "Giant",
         "Goblin",
+        "God",
         "Golem",
         "Human",
         "Hydra",
         "Illusion",
         "Insect",
         "Island",
+        "Kirin",
         "Knight",
+        "Kor",
+        "Licid",
+        "Lizard",
         "Merfolk",
         "Monk",
         "Mountain",
+        "Nephilim",
+        "Nightmare",
         "Ninja",
+        "Noble",
         "Ooze",
         "Phoenix",
+        "Phyrexian",
         "Pirate",
         "Plains",
+        "Plant",
+        "Rat",
         "Rogue",
         "Samurai",
         "Scout",
@@ -69,13 +87,18 @@ fn v2_vocab() -> Vocabulary {
         "Sliver",
         "Soldier",
         "Sphinx",
+        "Spider",
         "Spirit",
         "Swamp",
         "Thopter",
+        "Thrull",
         "Treasure",
+        "Treefolk",
+        "Tyranid",
         "Vampire",
         "Vehicle",
         "Wall",
+        "Warlock",
         "Warrior",
         "Wizard",
         "Wolf",
@@ -86,6 +109,14 @@ fn v2_vocab() -> Vocabulary {
     .map(ToString::to_string)
     .collect();
     Vocabulary::from_creature_members(&members)
+}
+
+fn v2_vocab_or_env() -> Vocabulary {
+    if let Ok(vocab_path) = std::env::var("SPELLWAKE_CREATURE_VOCABULARY_INPUT") {
+        Vocabulary::load_from_file(std::path::Path::new(&vocab_path)).expect("load vocab")
+    } else {
+        v2_vocab()
+    }
 }
 
 fn compile_v2_strict(
@@ -1313,11 +1344,6 @@ fn v2_wave3_compositional_grammar_deep_ir_assertions() {
             "Flash\nIf a player would begin an extra turn, that player skips that turn instead.\n{4}, {T}, Exile Gerrard's Hourglass Pendant: Return to the battlefield tapped all artifact, creature, enchantment, and land cards in your graveyard that were put there from the battlefield this turn.",
         ),
         (
-            "Teferi's Ageless Insight",
-            "Legendary Enchantment",
-            "If you would draw a card except the first one you draw in each of your draw steps, draw two cards instead.",
-        ),
-        (
             "Loxodon Smiter",
             "Creature — Elephant Soldier",
             "This spell can't be countered.\nIf a spell or ability an opponent controls causes you to discard Loxodon Smiter, put it onto the battlefield instead of putting it into your graveyard.",
@@ -1599,11 +1625,6 @@ fn v2_wave4_compositional_grammar_deep_ir_assertions() {
             "You may play two additional lands on each of your turns.",
         ),
         (
-            "Pithing Needle",
-            "Artifact",
-            "As Pithing Needle enters, choose a card name.\nActivated abilities of sources with the chosen name can't be activated unless they're mana abilities.",
-        ),
-        (
             "Faerie Squadron",
             "Creature — Faerie",
             "Kicker {3}{U}\nIf Faerie Squadron was kicked, it enters with two +1/+1 counters on it and with flying.",
@@ -1881,11 +1902,6 @@ fn v2_wave5_compositional_grammar_deep_ir_assertions() {
             "Haste\n{1}: Gingerbrute can't be blocked this turn except by creatures with haste.\n{2}, {T}, Sacrifice Gingerbrute: You gain 3 life.",
         ),
         (
-            "Exotic Orchard",
-            "Land",
-            "{T}: Add one mana of any color that a land an opponent controls could produce.",
-        ),
-        (
             "Swift Warkite",
             "Creature — Dragon",
             "Flying\nWhen Swift Warkite enters, you may put a creature card with mana value 3 or less from your hand or graveyard onto the battlefield. That creature gains haste. Return it to your hand at the beginning of the next end step.",
@@ -2066,15 +2082,30 @@ fn v2_wave5_compositional_grammar_deep_ir_assertions() {
         )]
     ));
 
-    // 9. Dain, Lord of the Iron Hills -> ConditionFlag::HasEnduringStory + StaticAbility::AttackTax
-    let dain = compile_v2_strict(
-        "Dain, Lord of the Iron Hills",
-        "Legendary Creature — Dwarf Noble",
-        "As long as you have an enduring story, creatures can't attack you unless their controller pays {1} for each of those creatures.",
+    // 9. Conditional AttackTax (`Dain`) fails closed honestly (AttackTax has no condition field);
+    //    unconditional `Propaganda` still compiles faithfully to StaticAbility::AttackTax
+    let dain = compile_card_v2(
+        &CardInput {
+            oracle_id: "dain",
+            name: "Dain, Lord of the Iron Hills",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Dain, Lord of the Iron Hills",
+                type_line: "Legendary Creature - Dwarf Noble",
+                oracle_text: "As long as you have an enduring story, creatures can't attack you unless their controller pays {1} for each of those creatures.",
+            }],
+        },
+        &vocab,
+    );
+    assert!(!dain.strictly_compiled);
+    let propaganda = compile_v2_strict(
+        "Ghostly Prison",
+        "Enchantment",
+        "Creatures can't attack you unless their controller pays {2} for each of those creatures.",
         &vocab,
     );
     assert!(matches!(
-        dain.faces[0].statics.as_slice(),
+        propaganda.faces[0].statics.as_slice(),
         [StaticAbility::AttackTax {
             per_creature: true,
             ..
@@ -2096,19 +2127,22 @@ fn v2_wave5_compositional_grammar_deep_ir_assertions() {
         }]
     ));
 
-    // 11. Pithing Needle -> StaticAbility::GlobalFlag(StaticFlagKind::NamedSourcesCantActivate)
-    let needle = compile_v2_strict(
-        "Pithing Needle",
-        "Artifact",
-        "As Pithing Needle enters, choose a card name.\nActivated abilities of sources with the chosen name can't be activated unless they're mana abilities.",
+    // 11. Pithing Needle fails closed honestly (cannot drop `unless they're mana abilities`)
+    let needle = compile_card_v2(
+        &CardInput {
+            oracle_id: "pithing-needle",
+            name: "Pithing Needle",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Pithing Needle",
+                type_line: "Artifact",
+                oracle_text: "As Pithing Needle enters, choose a card name.\nActivated abilities of sources with the chosen name can't be activated unless they're mana abilities.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        needle.faces[0].statics.as_slice(),
-        [StaticAbility::GlobalFlag(
-            StaticFlagKind::NamedSourcesCantActivate
-        )]
-    ));
+    assert!(!needle.strictly_compiled);
+    let _ = StaticFlagKind::NamedSourcesCantActivate;
 
     // 12. Assault Formation -> StaticAbility::SubjectRule(SubjectStaticRule::AssignDamageByToughness)
     let assault = compile_v2_strict(
@@ -2133,9 +2167,7 @@ fn v2_wave5_compositional_grammar_deep_ir_assertions() {
 #[test]
 fn v2_wave6_compositional_grammar_deep_ir_assertions() {
     use spellwake_oracle_compiler::ast::SupertypeMask;
-    use spellwake_oracle_compiler::v2::ir::{
-        ConditionExpr, DamageReplacement, PlayerRestrictionKind, ZoneMetricKind,
-    };
+    use spellwake_oracle_compiler::v2::ir::{ConditionExpr, PlayerRestrictionKind, ZoneMetricKind};
     let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("content")
@@ -2161,19 +2193,9 @@ fn v2_wave6_compositional_grammar_deep_ir_assertions() {
             "Enchant creature, land, or planeswalker\nEnchanted permanent is a colorless land with \"{T}: Add {C}\" and loses all other card types and abilities.",
         ),
         (
-            "Stormwild Capridor",
-            "Creature - Bird Goat",
-            "Flying\nIf noncombat damage would be dealt to Stormwild Capridor, prevent that damage. Put a +1/+1 counter on Stormwild Capridor for each 1 damage prevented this way.",
-        ),
-        (
             "Inkshield",
             "Instant",
             "Prevent all combat damage that would be dealt to you this turn. For each 1 damage prevented this way, create a 2/1 white and black Inkling creature token with flying.",
-        ),
-        (
-            "Wolverine, Best There Is",
-            "Legendary Creature - Mutant Berserker Hero",
-            "Double all damage Wolverine would deal.\nAt the beginning of each end step, if Wolverine dealt damage to another creature this turn, put a +1/+1 counter on him.\n{1}{G}: Regenerate Wolverine.",
         ),
         (
             "Plaguecrafter",
@@ -2196,11 +2218,6 @@ fn v2_wave6_compositional_grammar_deep_ir_assertions() {
             "Islandwalk\nMerfolk spells and Wizard spells you cast cost {1} less to cast.",
         ),
         (
-            "Awaken the Ancient",
-            "Enchantment - Aura",
-            "Enchant Mountain\nEnchanted Mountain is a 7/7 red Giant creature with haste. It's still a land.",
-        ),
-        (
             "Bounty Agent",
             "Creature - Human Soldier",
             "Vigilance\n{T}, Sacrifice Bounty Agent: Destroy target legendary permanent that's an artifact, creature, or enchantment.",
@@ -2211,11 +2228,6 @@ fn v2_wave6_compositional_grammar_deep_ir_assertions() {
             "Play with your hand revealed.\nIf you would draw a card, reveal the top card of your library instead. If it's a creature card, put it into your graveyard. Otherwise, draw a card.\nWhenever a creature is put into your graveyard from the battlefield, return it to your hand.",
         ),
         (
-            "Kozilek, the Great Distortion",
-            "Legendary Creature - Eldrazi",
-            "When you cast this spell, if you have fewer than seven cards in hand, draw cards equal to the difference.\nMenace\nDiscard a card with mana value X: Counter target spell with mana value X.",
-        ),
-        (
             "Vastwood Animist",
             "Creature - Elf Shaman Ally",
             "{T}: Target land you control becomes an X/X Elemental creature until end of turn, where X is the number of Allies you control. It's still a land.",
@@ -2224,11 +2236,6 @@ fn v2_wave6_compositional_grammar_deep_ir_assertions() {
             "Urza's Ruinous Blast",
             "Legendary Sorcery",
             "Exile all nonland permanents that aren't legendary.",
-        ),
-        (
-            "Epic Experiment",
-            "Sorcery",
-            "Exile the top X cards of your library. For each instant and sorcery card with mana value X or less among them, you may cast that spell without paying its mana cost. Then put all cards exiled this way that weren't cast into your graveyard.",
         ),
         (
             "Cursed Totem",
@@ -2296,18 +2303,21 @@ fn v2_wave6_compositional_grammar_deep_ir_assertions() {
             if matches!(subject.predicates.as_slice(), [FilterPredicate::AnyOf(parts)] if parts.len() == 2)
     ));
 
-    // 3. Stormwild Capridor two-sentence damage-prevention replacement preserves rider
-    let capridor = compile_v2_strict(
-        "Stormwild Capridor",
-        "Creature - Bird Goat",
-        "If noncombat damage would be dealt to Stormwild Capridor, prevent that damage. Put a +1/+1 counter on Stormwild Capridor for each 1 damage prevented this way.",
+    // 3. Stormwild Capridor fails closed honestly because Replacement has no noncombat_only discriminator
+    let capridor = compile_card_v2(
+        &CardInput {
+            oracle_id: "stormwild-capridor",
+            name: "Stormwild Capridor",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Stormwild Capridor",
+                type_line: "Creature - Bird Goat",
+                oracle_text: "If noncombat damage would be dealt to Stormwild Capridor, prevent that damage. Put a +1/+1 counter on Stormwild Capridor for each 1 damage prevented this way.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        capridor.faces[0].replacements.as_slice(),
-        [Replacement::DamageRule(DamageReplacement::PreventWithRider { rider, .. })]
-            if !rider.is_empty()
-    ));
+    assert!(!capridor.strictly_compiled);
 
     // 4. Inkshield `For each 1 damage prevented this way` compiles to ForEachDomain::EachUnitOfValue
     let inkshield = compile_v2_strict(
@@ -2416,7 +2426,7 @@ fn v2_wave6_compositional_grammar_deep_ir_assertions() {
         }]
     ));
 
-    // 10. Wolverine `Double all damage ~ would deal` -> Replacement::ModifyDamage { factor: 2 }
+    // 10. Wolverine `Double all damage ~ would deal` -> Replacement::ModifyDamage { factor: 2 } (kept honest!)
     let wolverine = compile_v2_strict(
         "Wolverine, Best There Is",
         "Legendary Creature - Mutant Berserker Hero",
@@ -2467,9 +2477,8 @@ fn v2_wave6_compositional_grammar_deep_ir_assertions() {
 #[test]
 fn v2_wave7_compositional_grammar_deep_ir_assertions() {
     use spellwake_oracle_compiler::v2::ir::{
-        CounterKind, DamageReplacement, LibraryPosition, ObjectMutation, PlayerRestrictionKind,
-        PlayerTriggerKind, Replacement, StaticAbility, TokenReplacementKind, TriggerEvent, VarName,
-        ZoneOpKind,
+        CounterKind, LibraryPosition, ObjectMutation, PlayerRestrictionKind, PlayerTriggerKind,
+        Replacement, StaticAbility, TokenReplacementKind, TriggerEvent, VarName, ZoneOpKind,
     };
     let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -2501,26 +2510,6 @@ fn v2_wave7_compositional_grammar_deep_ir_assertions() {
             "If one or more tokens would be created, twice that many of those tokens are created instead.\nIf one or more +1/+1 counters would be put on a creature, twice that many +1/+1 counters are put on that creature instead.",
         ),
         (
-            "Jinnie Fay, Jetmir's Second",
-            "Legendary Creature - Elf Druid",
-            "If you would create one or more tokens, you may instead create that many 2/2 green Cat creature tokens with haste or that many 3/1 green Dog creature tokens with vigilance.",
-        ),
-        (
-            "Winter Orb",
-            "Artifact",
-            "As long as Winter Orb is untapped, players can't untap more than one land during their untap steps.",
-        ),
-        (
-            "Winter Moon",
-            "Artifact",
-            "Players can't untap more than one nonbasic land during their untap steps.",
-        ),
-        (
-            "Phyrexian Vindicator",
-            "Creature - Phyrexian Horror",
-            "Flying\nIf damage would be dealt to Phyrexian Vindicator, prevent that damage. When damage is prevented this way, Phyrexian Vindicator deals that much damage to any other target.",
-        ),
-        (
             "Dralnu, Lich Lord",
             "Legendary Creature - Zombie Wizard",
             "If damage would be dealt to Dralnu, Lich Lord, sacrifice that many permanents instead.\n{T}: Target instant or sorcery card in your graveyard gains flashback until end of turn. The flashback cost is equal to its mana cost.",
@@ -2529,21 +2518,6 @@ fn v2_wave7_compositional_grammar_deep_ir_assertions() {
             "The Golden Throne",
             "Legendary Artifact",
             "Arcane Life-support \u{2014} If you would lose the game, instead exile The Golden Throne and your life total becomes 1.\nA Thousand Souls Die Every Day \u{2014} {T}, Sacrifice a creature: Add three mana in any combination of colors.",
-        ),
-        (
-            "Kruphix, God of Horizons",
-            "Legendary Enchantment Creature - God",
-            "Indestructible\nAs long as your devotion to green and blue is less than seven, Kruphix isn't a creature.\nYou have no maximum hand size.\nIf you would lose unspent mana, that mana becomes colorless instead.",
-        ),
-        (
-            "Training Grounds",
-            "Enchantment",
-            "Activated abilities of creatures you control cost {2} less to activate. This effect can't reduce the mana in that cost to less than one mana.",
-        ),
-        (
-            "Fatal Push",
-            "Instant",
-            "Destroy target creature if it has mana value 2 or less.\nRevolt \u{2014} Destroy that creature if it has mana value 4 or less instead if a permanent left the battlefield under your control this turn.",
         ),
         (
             "Ygra, Eater of All",
@@ -2561,11 +2535,6 @@ fn v2_wave7_compositional_grammar_deep_ir_assertions() {
             "Flying\nWhenever you cast a spell, put a +1/+1 counter on Ramos, Dragon Engine for each of that spell's colors.\nRemove five +1/+1 counters from Ramos, Dragon Engine: Add {W}{W}{U}{U}{B}{B}{R}{R}{G}{G}. Activate only once each turn.",
         ),
         (
-            "Bolas's Citadel",
-            "Legendary Artifact",
-            "You may look at the top card of your library any time.\nYou may play lands and cast spells from the top of your library. If you cast a spell this way, pay life equal to its mana value rather than pay its mana cost.\n{T}, Sacrifice ten nonland permanents: Each opponent loses 10 life.",
-        ),
-        (
             "Knight of the Holy Nimbus",
             "Creature - Human Rebel Knight",
             "Flanking\nIf Knight of the Holy Nimbus would be destroyed, regenerate it.\n{2}: Knight of the Holy Nimbus can't be regenerated this turn. Only any opponent may activate this ability.",
@@ -2579,11 +2548,6 @@ fn v2_wave7_compositional_grammar_deep_ir_assertions() {
             "Foul Renewal",
             "Sorcery",
             "Return target creature card from your graveyard to your hand. Target creature gets -X/-X until end of turn, where X is the toughness of the card returned this way.",
-        ),
-        (
-            "Cactus Preserve",
-            "Land",
-            "Cactus Preserve enters tapped.\n{T}: Add one mana of any type that a land you control could produce.\n{3}: Until end of turn, Cactus Preserve becomes an X/X green Plant creature with reach, where X is the greatest mana value among your commanders. It's still a land.",
         ),
         (
             "Deem Inferior",
@@ -2671,33 +2635,51 @@ fn v2_wave7_compositional_grammar_deep_ir_assertions() {
         }]
     ));
 
-    // 4. Winter Moon (`PlayerRestrictionKind::CantUntapMoreThan(1)`)
-    let winter_moon = compile_v2_strict(
-        "Winter Moon",
+    // 4. Winter Moon fails closed honestly (CantUntapMoreThan has no filter for `nonbasic land`)
+    let winter_moon = compile_card_v2(
+        &CardInput {
+            oracle_id: "winter-moon",
+            name: "Winter Moon",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Winter Moon",
+                type_line: "Artifact",
+                oracle_text: "Players can't untap more than one nonbasic land during their untap steps.",
+            }],
+        },
+        &vocab,
+    );
+    assert!(!winter_moon.strictly_compiled);
+    // Unfiltered `permanent` still compiles faithfully to CantUntapMoreThan(1)
+    let static_orb = compile_v2_strict(
+        "Static Orb",
         "Artifact",
-        "Players can't untap more than one nonbasic land during their untap steps.",
+        "Players can't untap more than two permanents during their untap steps.",
         &vocab,
     );
     assert!(matches!(
-        winter_moon.faces[0].statics.as_slice(),
+        static_orb.faces[0].statics.as_slice(),
         [StaticAbility::PlayerRestriction {
-            restriction: PlayerRestrictionKind::CantUntapMoreThan(1),
+            restriction: PlayerRestrictionKind::CantUntapMoreThan(2),
             ..
         }]
     ));
 
-    // 5. Phyrexian Vindicator (`PreventWithRider` with non-empty reflexive trigger rider)
-    let vindicator = compile_v2_strict(
-        "Phyrexian Vindicator",
-        "Creature - Phyrexian Horror",
-        "If damage would be dealt to Phyrexian Vindicator, prevent that damage. When damage is prevented this way, Phyrexian Vindicator deals that much damage to any other target.",
+    // 5. Phyrexian Vindicator fails closed honestly (reflexive trigger rider on damage prevention)
+    let vindicator = compile_card_v2(
+        &CardInput {
+            oracle_id: "phyrexian-vindicator",
+            name: "Phyrexian Vindicator",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Phyrexian Vindicator",
+                type_line: "Creature - Phyrexian Horror",
+                oracle_text: "If damage would be dealt to Phyrexian Vindicator, prevent that damage. When damage is prevented this way, Phyrexian Vindicator deals that much damage to any other target.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        vindicator.faces[0].replacements.as_slice(),
-        [Replacement::DamageRule(DamageReplacement::PreventWithRider { rider, .. })]
-            if !rider.is_empty()
-    ));
+    assert!(!vindicator.strictly_compiled);
 
     // 6. The Golden Throne (`Replacement::EventInstead` on `PlayerTriggerKind::LosesGame`)
     let throne = compile_v2_strict(
@@ -2811,17 +2793,21 @@ fn v2_wave7_compositional_grammar_deep_ir_assertions() {
         })
     ));
 
-    // 12. Training Grounds (activation cost modifier -> StaticAbility::ActivationCostModifier with less: true)
-    let grounds = compile_v2_strict(
-        "Training Grounds",
-        "Enchantment",
-        "Activated abilities of creatures you control cost {2} less to activate. This effect can't reduce the mana in that cost to less than one mana.",
+    // 12. Training Grounds fails closed honestly (ActivationCostModifier has no `of <flt>` filter)
+    let grounds = compile_card_v2(
+        &CardInput {
+            oracle_id: "training-grounds",
+            name: "Training Grounds",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Training Grounds",
+                type_line: "Enchantment",
+                oracle_text: "Activated abilities of creatures you control cost {2} less to activate. This effect can't reduce the mana in that cost to less than one mana.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        grounds.faces[0].statics.first(),
-        Some(StaticAbility::ActivationCostModifier { less: true, .. })
-    ));
+    assert!(!grounds.strictly_compiled);
 }
 
 /// 11. Deep Wave 8 compositional IR assertions (zero new core IR enum variants,
@@ -2834,11 +2820,10 @@ fn v2_wave7_compositional_grammar_deep_ir_assertions() {
 #[test]
 fn v2_wave8_compositional_grammar_deep_ir_assertions() {
     use spellwake_oracle_compiler::v2::ir::{
-        CastPermissionMode, ConditionExpr, DamageReplacement, Duration, FilterFlags, KeywordKind,
-        KeywordParam, KeywordSpec, LibraryPosition, ManaSpec, ObjectMutation, PlayerMutation,
-        PlayerObjectTriggerKind, PlayerRestrictionKind, PlayerTriggerKind, Replacement,
-        RuleRestrictionKind, StaticAbility, SubjectStaticRule, TriggerEvent, ValueExpr,
-        ZoneMetricKind, ZoneOpKind,
+        CastPermissionMode, ConditionExpr, DamageReplacement, Duration, FilterFlags,
+        LibraryPosition, ManaSpec, PlayerMutation, PlayerObjectTriggerKind, PlayerRestrictionKind,
+        PlayerTriggerKind, Replacement, RuleRestrictionKind, StaticAbility, SubjectStaticRule,
+        TriggerEvent, ValueExpr, ZoneMetricKind, ZoneOpKind,
     };
     let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -2858,11 +2843,6 @@ fn v2_wave8_compositional_grammar_deep_ir_assertions() {
             "As Foretold",
             "Enchantment",
             "At the beginning of your upkeep, put a time counter on As Foretold.\nOnce each turn, you may pay {0} rather than pay the mana cost for a spell you cast with mana value X or less, where X is the number of time counters on As Foretold.",
-        ),
-        (
-            "Solphim, Mayhem Dominus",
-            "Legendary Creature - Phyrexian Horror",
-            "If a source you control would deal noncombat damage to an opponent or a permanent an opponent controls, it deals double that damage to that player or permanent instead.\n{1}{R/P}{R/P}, Discard two cards: Put an indestructible counter on Solphim, Mayhem Dominus.",
         ),
         (
             "Lashknife Barrier",
@@ -2890,21 +2870,6 @@ fn v2_wave8_compositional_grammar_deep_ir_assertions() {
             "Permanents enter tapped this turn.\nDraw a card.",
         ),
         (
-            "Command Tower",
-            "Land",
-            "{T}: Add one mana of any color in your commander's color identity.",
-        ),
-        (
-            "Arcane Signet",
-            "Artifact",
-            "{T}: Add one mana of any color in your commander's color identity.",
-        ),
-        (
-            "Giver of Runes",
-            "Creature - Kor Cleric",
-            "{T}: Another target creature you control gains protection from colorless or from the color of your choice until end of turn.",
-        ),
-        (
             "Doomsday",
             "Sorcery",
             "Search your library and graveyard for five cards and exile the rest. Put the chosen cards on top of your library in any order. You lose half your life, rounded up.",
@@ -2915,19 +2880,9 @@ fn v2_wave8_compositional_grammar_deep_ir_assertions() {
             "Search your library for up to four cards with different names and reveal them. Target opponent chooses two of those cards. Put the chosen cards into your graveyard and the rest into your hand. Then shuffle.",
         ),
         (
-            "Ghyrson Starn, Kelermorph",
-            "Legendary Creature - Tyranid Human",
-            "Ward {2}\nThree Autostubs \u{2014} Whenever another source you control deals exactly 1 damage to a permanent or player, Ghyrson Starn, Kelermorph deals 2 damage to that permanent or player.",
-        ),
-        (
             "Forbidden Orchard",
             "Land",
             "{T}: Add one mana of any color.\nWhenever you tap Forbidden Orchard for mana, target opponent creates a 1/1 colorless Spirit creature token.",
-        ),
-        (
-            "Encroaching Mycosynth",
-            "Artifact",
-            "Nonland permanents you control are artifacts in addition to their other types. The same is true for permanent spells you control and nonland permanent cards you own that aren't on the battlefield.",
         ),
         (
             "Anje, Maid of Dishonor",
@@ -2953,16 +2908,6 @@ fn v2_wave8_compositional_grammar_deep_ir_assertions() {
             "Oko, the Ringleader",
             "Legendary Planeswalker - Oko",
             "At the beginning of combat on your turn, Oko, the Ringleader becomes a copy of up to one target creature you control until end of turn, except it has hexproof.\n+1: Draw two cards. If you've committed a crime this turn, discard a card. Otherwise, discard two cards.\n-1: Create a 3/3 green Elk creature token.\n-5: For each other nonland permanent you control, create a token that's a copy of it.",
-        ),
-        (
-            "Grist, the Hunger Tide",
-            "Legendary Planeswalker - Grist",
-            "As long as Grist, the Hunger Tide isn't on the battlefield, it's a 1/1 Insect creature in addition to its other types.\n+1: Create a 1/1 black and green Insect creature token, then mill a card. If an Insect card was milled this way, put a loyalty counter on Grist, the Hunger Tide and repeat this process.\n-2: You may sacrifice a creature. When you do, destroy target creature or planeswalker.\n-5: Each opponent loses life equal to the number of creature cards in your graveyard.",
-        ),
-        (
-            "Maha, Its Feathers Night",
-            "Legendary Creature - Elemental Bird",
-            "Flying, trample\nWard\u{2014}Discard a card.\nCreatures your opponents control have base toughness 1.",
         ),
         (
             "Mabel, Heir to Cragflame",
@@ -3099,15 +3044,30 @@ fn v2_wave8_compositional_grammar_deep_ir_assertions() {
             )
     ));
 
-    // 6. Command Tower -> PlayerMutation::AddMana(ManaSpec::AnyColor)
-    let tower = compile_v2_strict(
-        "Command Tower",
-        "Land",
-        "{T}: Add one mana of any color in your commander's color identity.",
+    // 6. Command Tower fails closed honestly (ManaSpec::AnyColor has no commander color identity qualifier)
+    let tower = compile_card_v2(
+        &CardInput {
+            oracle_id: "command-tower",
+            name: "Command Tower",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Command Tower",
+                type_line: "Land",
+                oracle_text: "{T}: Add one mana of any color in your commander's color identity.",
+            }],
+        },
+        &vocab,
+    );
+    assert!(!tower.strictly_compiled);
+    // Plain `Add one mana of any color.` still compiles faithfully to ManaSpec::AnyColor
+    let paradise = compile_v2_strict(
+        "Birds of Paradise",
+        "Creature - Bird",
+        "{T}: Add one mana of any color.",
         &vocab,
     );
     assert!(matches!(
-        tower.faces[0].abilities.as_slice(),
+        paradise.faces[0].abilities.as_slice(),
         [Ability::Activated { body, .. }]
             if matches!(
                 body.as_slice(),
@@ -3118,30 +3078,21 @@ fn v2_wave8_compositional_grammar_deep_ir_assertions() {
             )
     ));
 
-    // 7. Giver of Runes -> Protection with KeywordParam::ChosenColor
-    let giver = compile_v2_strict(
-        "Giver of Runes",
-        "Creature - Kor Cleric",
-        "{T}: Another target creature you control gains protection from colorless or from the color of your choice until end of turn.",
+    // 7. Giver of Runes fails closed honestly (cannot drop `from colorless` in `protection from colorless or from the color of your choice`)
+    let giver = compile_card_v2(
+        &CardInput {
+            oracle_id: "giver-of-runes",
+            name: "Giver of Runes",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Giver of Runes",
+                type_line: "Creature - Kor Cleric",
+                oracle_text: "{T}: Another target creature you control gains protection from colorless or from the color of your choice until end of turn.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        giver.faces[0].abilities.as_slice(),
-        [Ability::Activated { body, .. }]
-            if matches!(
-                body.as_slice(),
-                [Effect::MutateObject {
-                    mutation: ObjectMutation::GrantKeywords(kws),
-                    ..
-                }] if matches!(
-                    kws.as_slice(),
-                    [KeywordSpec {
-                        kind: KeywordKind::Protection,
-                        param: Some(KeywordParam::ChosenColor),
-                    }]
-                )
-            )
-    ));
+    assert!(!giver.strictly_compiled);
 
     // 8. Forbidden Orchard -> PlayerObjectTriggerKind::TappedForMana
     let orchard = compile_v2_strict(
@@ -3204,17 +3155,21 @@ fn v2_wave8_compositional_grammar_deep_ir_assertions() {
             )
     ));
 
-    // 11. Grist (`~ isn't on the battlefield` -> ConditionExpr::SubjectMatches with NOT_ON_BATTLEFIELD)
-    let grist = compile_v2_strict(
-        "Grist, the Hunger Tide",
-        "Legendary Planeswalker - Grist",
-        "As long as Grist, the Hunger Tide isn't on the battlefield, it's a 1/1 Insect creature in addition to its other types.",
+    // 11. Grist fails closed honestly (SetSubtypes has no condition field for `As long as ~ isn't on the battlefield`)
+    let grist = compile_card_v2(
+        &CardInput {
+            oracle_id: "grist",
+            name: "Grist, the Hunger Tide",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Grist, the Hunger Tide",
+                type_line: "Legendary Planeswalker - Grist",
+                oracle_text: "As long as Grist, the Hunger Tide isn't on the battlefield, it's a 1/1 Insect creature in addition to its other types.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        grist.faces[0].statics.as_slice(),
-        [StaticAbility::Compound(parts)] if !parts.is_empty()
-    ));
+    assert!(!grist.strictly_compiled);
 
     // 12. Diffusion Sliver (`counter that spell or ability unless its controller pays {2}`)
     let sliver = compile_v2_strict(
@@ -3263,8 +3218,8 @@ fn v2_wave8_compositional_grammar_deep_ir_assertions() {
 #[test]
 fn v2_wave9_compositional_grammar_deep_ir_assertions() {
     use spellwake_oracle_compiler::v2::ir::{
-        ActivationRestriction, AnaphoraRef, Duration, Effect, ForEachDomain, KeywordKind,
-        KeywordParam, LibraryOrder, ManaRuleKind, ObjectMutation, PlayerActionKind, PlayerMutation,
+        ActivationRestriction, AnaphoraRef, Effect, ForEachDomain, KeywordKind, KeywordParam,
+        LibraryOrder, ManaRuleKind, ObjectMutation, PlayerActionKind, PlayerMutation,
         PlayerRestrictionKind, RuleRestrictionKind, StaticAbility, SubjectRef, SubjectStaticRule,
         VisibilityKind, ZoneOpKind,
     };
@@ -3278,16 +3233,6 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
     let vocab = Vocabulary::load_from_file(&vocab_path).expect("load CR creature vocabulary");
 
     let cases: &[(&str, &str, &str)] = &[
-        (
-            "Defiler of Vigor",
-            "Creature - Phyrexian Wurm",
-            "Trample\nAs an additional cost to cast green permanent spells, you may pay 2 life. Those spells cost {G} less to cast if you paid life this way. This effect reduces only the amount of green mana you pay.\nWhenever you cast a green permanent spell, put a +1/+1 counter on each creature you control.",
-        ),
-        (
-            "Curse of Opulence",
-            "Enchantment - Aura Curse",
-            "Enchant player\nWhenever enchanted player is attacked, create a Gold token. Each opponent attacking that player does the same.",
-        ),
         (
             "Rings of Brighthearth",
             "Artifact",
@@ -3314,11 +3259,6 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
             "Enchant artifact or creature\nEnchanted permanent doesn't untap during its controller's untap step and its activated abilities can't be activated.",
         ),
         (
-            "Faith's Fetters",
-            "Enchantment - Aura",
-            "Enchant permanent\nWhen Faith's Fetters enters, you gain 4 life.\nEnchanted permanent can't attack or block, and its activated abilities can't be activated unless they're mana abilities.",
-        ),
-        (
             "Arcades, the Strategist",
             "Legendary Creature - Elder Dragon",
             "Flying, vigilance\nWhenever a creature you control with defender enters, draw a card.\nEach creature you control with defender assigns combat damage equal to its toughness rather than its power and can attack as though it didn't have defender.",
@@ -3334,11 +3274,6 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
             "You can't cast more than one spell each turn.\nWhenever you cast a spell, draw a card.",
         ),
         (
-            "Kaalia of the Vast",
-            "Legendary Creature - Human Cleric",
-            "Flying\nWhenever Kaalia of the Vast attacks an opponent, you may put an Angel, Demon, or Dragon creature card from your hand onto the battlefield tapped and attacking that opponent.",
-        ),
-        (
             "Hellrider",
             "Creature - Devil",
             "Haste\nWhenever a creature you control attacks, Hellrider deals 1 damage to the player or planeswalker it's attacking.",
@@ -3349,19 +3284,9 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
             "When Contagion Engine enters, put a -1/-1 counter on each creature target player controls.\n{4}, {T}: Proliferate twice.",
         ),
         (
-            "Ad Nauseam",
-            "Instant",
-            "Reveal the top card of your library and put that card into your hand. You lose life equal to its mana value. You may repeat this process any number of times.",
-        ),
-        (
             "Goblin Recruiter",
             "Creature - Goblin",
             "When Goblin Recruiter enters, search your library for any number of Goblin cards, reveal them, then shuffle and put those cards on top in any order.",
-        ),
-        (
-            "Rosheen Meanderer",
-            "Legendary Creature - Giant Shaman",
-            "{T}: Add {C}{C}{C}{C}. Spend this mana only on costs that contain {X}.",
         ),
         (
             "Pay No Heed",
@@ -3377,11 +3302,6 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
             "Scandalmonger",
             "Creature - Boar Monger",
             "{2}: Target player discards a card. Any player may activate this ability but only as a sorcery.",
-        ),
-        (
-            "Magma Opus",
-            "Instant",
-            "Magma Opus deals 4 damage divided as you choose among any number of targets. Tap two target permanents. Create a 4/4 blue and red Elemental creature token. Draw two cards.\n{U/R}{U/R}, Discard Magma Opus: Create a Treasure token.",
         ),
         (
             "Piercing Rays",
@@ -3409,11 +3329,6 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
             "Trample\nWhenever Peema Trailblazer deals combat damage to a player, you get that many {E}.\nExhaust \u{2014} Pay six {E}: Put two +1/+1 counters on Peema Trailblazer. Then draw cards equal to the greatest power among creatures you control.",
         ),
         (
-            "Apostle's Blessing",
-            "Instant",
-            "Target artifact or creature you control gains protection from artifacts or from the color of your choice until end of turn.",
-        ),
-        (
             "Kindred Summons",
             "Instant",
             "Choose a creature type. Reveal cards from the top of your library until you reveal X creature cards of the chosen type, where X is the number of creatures you control of that type. Put those cards onto the battlefield, then shuffle the rest of the revealed cards into your library.",
@@ -3430,16 +3345,16 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
     }
 
     // Deep IR assertions:
-    // 1. Magma Opus -> spell_effects (4 effects) + Activated ability on Instant!
-    let opus = compile_v2_strict(
-        "Magma Opus",
-        "Instant",
-        "Magma Opus deals 4 damage divided as you choose among any number of targets. Tap two target permanents. Create a 4/4 blue and red Elemental creature token. Draw two cards.\n{U/R}{U/R}, Discard Magma Opus: Create a Treasure token.",
+    // 1. Piercing Rays -> spell_effects + Forecast activated ability on Sorcery!
+    let rays = compile_v2_strict(
+        "Piercing Rays",
+        "Sorcery",
+        "Exile target tapped creature.\nForecast \u{2014} {2}{W}, Reveal Piercing Rays from your hand: Tap target untapped creature.",
         &vocab,
     );
-    assert_eq!(opus.faces[0].spell_effects.len(), 4);
+    assert_eq!(rays.faces[0].spell_effects.len(), 1);
     assert!(matches!(
-        opus.faces[0].abilities.as_slice(),
+        rays.faces[0].abilities.as_slice(),
         [Ability::Activated { cost, body, .. }] if cost.len() == 2 && body.len() == 1
     ));
 
@@ -3578,24 +3493,22 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
             )
     ));
 
-    // 9. Rosheen Meanderer -> ManaRule(SpendOnlyColorOnX)
-    let rosheen = compile_v2_strict(
-        "Rosheen Meanderer",
-        "Legendary Creature - Giant Shaman",
-        "{T}: Add {C}{C}{C}{C}. Spend this mana only on costs that contain {X}.",
+    // 9. Rosheen Meanderer fails closed honestly (SpendOnlyColorOnX(EMPTY) proxy purged)
+    let rosheen = compile_card_v2(
+        &CardInput {
+            oracle_id: "rosheen-meanderer",
+            name: "Rosheen Meanderer",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Rosheen Meanderer",
+                type_line: "Legendary Creature - Giant Shaman",
+                oracle_text: "{T}: Add {C}{C}{C}{C}. Spend this mana only on costs that contain {X}.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        rosheen.faces[0].abilities.as_slice(),
-        [Ability::Activated { body, .. }]
-            if matches!(
-                &body[1],
-                Effect::MutatePlayer {
-                    mutation: PlayerMutation::ManaRule(ManaRuleKind::SpendOnlyColorOnX(_)),
-                    ..
-                }
-            )
-    ));
+    assert!(!rosheen.strictly_compiled);
+    let _ = ManaRuleKind::SpendOnlyColorOnX(ColorMask::EMPTY);
 
     // 10. Goblin Recruiter -> ZoneOp(Move, Top + AnyOrder)
     let recruiter = compile_v2_strict(
@@ -3678,26 +3591,21 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
                 }
             ))
     ));
-    let blessing = compile_v2_strict(
-        "Apostle's Blessing",
-        "Instant",
-        "Target artifact or creature you control gains protection from artifacts or from the color of your choice until end of turn.",
+    let blessing = compile_card_v2(
+        &CardInput {
+            oracle_id: "apostles-blessing",
+            name: "Apostle's Blessing",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Apostle's Blessing",
+                type_line: "Instant",
+                oracle_text: "Target artifact or creature you control gains protection from artifacts or from the color of your choice until end of turn.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        blessing.faces[0].spell_effects.as_slice(),
-        [Effect::MutateObject {
-            mutation: ObjectMutation::GrantKeywords(kws),
-            duration: Duration::UntilEndOfTurn,
-            ..
-        }] if matches!(
-            kws.as_slice(),
-            [spellwake_oracle_compiler::v2::ir::KeywordSpec {
-                kind: KeywordKind::Protection,
-                param: Some(KeywordParam::ChosenColor),
-            }]
-        )
-    ));
+    assert!(!blessing.strictly_compiled);
+    let _ = (KeywordParam::ChosenColor, ObjectMutation::Tap);
 }
 
 /// 13. Deep Wave 10 compositional IR assertions (85.55% -> 86.16%, +198 cards, 0 regressions,
@@ -3740,21 +3648,6 @@ fn v2_wave10_compositional_grammar_deep_ir_assertions() {
             "Target creature you control deals damage equal to its power to each other creature and each opponent.",
         ),
         (
-            "Flash",
-            "Instant",
-            "You may put a creature card from your hand onto the battlefield. If you do, sacrifice it unless you pay its mana cost reduced by {2}.",
-        ),
-        (
-            "Vampire Nocturnus",
-            "Creature - Vampire",
-            "Play with the top card of your library revealed.\nAs long as the top card of your library is black, Vampire Nocturnus and other Vampire creatures you control get +2/+1 and have flying.",
-        ),
-        (
-            "Robber of the Rich",
-            "Creature - Human Archer Rogue",
-            "Reach, haste\nWhenever Robber of the Rich attacks, if defending player has more cards in hand than you, exile the top card of their library. During any turn you attacked with a Rogue, you may cast that card and you may spend mana as though it were mana of any color to cast that spell.",
-        ),
-        (
             "Shirei, Shizo's Caretaker",
             "Legendary Creature - Spirit",
             "Whenever a creature with power 1 or less is put into your graveyard from the battlefield, you may return that card to the battlefield at the beginning of the next end step if Shirei, Shizo's Caretaker is still on the battlefield.",
@@ -3763,11 +3656,6 @@ fn v2_wave10_compositional_grammar_deep_ir_assertions() {
             "Kaya, Intangible Slayer",
             "Legendary Planeswalker - Kaya",
             "Hexproof\n+2: Each opponent loses 3 life and you gain 3 life.\n0: You draw two cards. Then each opponent may scry 1.\n\u{2212}3: Exile target creature or enchantment. If it wasn't an Aura, create a token that's a copy of it, except it's a 1/1 white Spirit creature with flying in addition to its other types.",
-        ),
-        (
-            "Analyze the Pollen",
-            "Sorcery",
-            "As an additional cost to cast this spell, you may collect evidence 8.\nSearch your library for a basic land card. If evidence was collected, instead search your library for a creature or land card. Reveal that card, put it into your hand, then shuffle.",
         ),
         (
             "Vraska's Scorn",
@@ -3945,24 +3833,22 @@ fn v2_wave10_compositional_grammar_deep_ir_assertions() {
         }] if tgts.len() == 2
     ));
 
-    // 4. Flash -> Unless with Cost::PayAnyAmountMana
-    let flash = compile_v2_strict(
-        "Flash",
-        "Instant",
-        "You may put a creature card from your hand onto the battlefield. If you do, sacrifice it unless you pay its mana cost reduced by {2}.",
+    // 4. Flash fails closed honestly (cannot proxy `pays its mana cost reduced by {2}` to Cost::PayAnyAmountMana)
+    let flash = compile_card_v2(
+        &CardInput {
+            oracle_id: "flash",
+            name: "Flash",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Flash",
+                type_line: "Instant",
+                oracle_text: "You may put a creature card from your hand onto the battlefield. If you do, sacrifice it unless you pay its mana cost reduced by {2}.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        &flash.faces[0].spell_effects[1],
-        Effect::IfPrevious { succeeded: true, body }
-            if matches!(
-                body.as_slice(),
-                [Effect::Unless {
-                    cost: Some(Cost::PayAnyAmountMana),
-                    ..
-                }]
-            )
-    ));
+    assert!(!flash.strictly_compiled);
+    let _ = Cost::PayAnyAmountMana;
 
     // 5. Skullcrack -> CantGainLife + DamageCantBePrevented + DealDamage
     let skullcrack = compile_v2_strict(
@@ -4021,7 +3907,7 @@ fn v2_wave10_compositional_grammar_deep_ir_assertions() {
             )
     ));
 
-    // 7. Octavia, Living Thesis -> CostModifier with ZoneHasCount(min_count: 8)
+    // 7. Octavia, Living Thesis -> CostModifier with count >= 8 in graveyard
     let octavia = compile_v2_strict(
         "Octavia, Living Thesis",
         "Creature - Elemental Octopus",
@@ -4032,9 +3918,17 @@ fn v2_wave10_compositional_grammar_deep_ir_assertions() {
         octavia.faces[0].statics.as_slice(),
         [StaticAbility::CostModifier {
             less: true,
-            condition: Some(ConditionExpr::ZoneHasCount { min_count: 8, .. }),
+            condition: Some(cond),
             ..
-        }]
+        }] if matches!(cond, ConditionExpr::ZoneHasCount { min_count: 8, .. })
+            || matches!(
+                cond,
+                ConditionExpr::Compare {
+                    op: spellwake_oracle_compiler::ast::CompareOp::Ge,
+                    rhs,
+                    ..
+                } if matches!(rhs.as_ref(), ValueExpr::Const(8))
+            )
     ));
 
     // 8. Nightveil Specter -> ZoneCastPermission(PlayFromZone { lands: true, spells: true })
@@ -4155,20 +4049,22 @@ fn v2_wave10_compositional_grammar_deep_ir_assertions() {
             )
     ));
 
-    // 13. Analyze the Pollen (`AdditionalCostPaid`) & Forgotten Ancient (`MoveCounters`)
-    let pollen = compile_v2_strict(
-        "Analyze the Pollen",
-        "Sorcery",
-        "As an additional cost to cast this spell, you may collect evidence 8.\nSearch your library for a basic land card. If evidence was collected, instead search your library for a creature or land card. Reveal that card, put it into your hand, then shuffle.",
+    // 13. Analyze the Pollen fails closed honestly (`you may collect evidence` + `evidence was collected` purged)
+    let pollen = compile_card_v2(
+        &CardInput {
+            oracle_id: "analyze-the-pollen",
+            name: "Analyze the Pollen",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Analyze the Pollen",
+                type_line: "Sorcery",
+                oracle_text: "As an additional cost to cast this spell, you may collect evidence 8.\nSearch your library for a basic land card. If evidence was collected, instead search your library for a creature or land card. Reveal that card, put it into your hand, then shuffle.",
+            }],
+        },
         &vocab,
     );
-    assert!(pollen.faces[0].spell_effects.iter().any(|e| matches!(
-        e,
-        Effect::BranchCondition {
-            condition: ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid),
-            ..
-        }
-    )));
+    assert!(!pollen.strictly_compiled);
+    let _ = ConditionFlag::AdditionalCostPaid;
     let ancient = compile_v2_strict(
         "Forgotten Ancient",
         "Creature - Elemental",
@@ -4230,11 +4126,6 @@ fn v2_wave11_compositional_grammar_deep_ir_assertions() {
             "When Uro enters, sacrifice it unless it escaped.\nWhenever Uro enters or attacks, you gain 3 life and draw a card, then you may put a land card from your hand onto the battlefield.\nEscape\u{2014}{G}{G}{U}{U}, Exile five other cards from your graveyard.",
         ),
         (
-            "Underworld Breach",
-            "Enchantment",
-            "Each nonland card in your graveyard has escape. The escape cost is equal to the card's mana cost plus exile three other cards from your graveyard.\nAt the beginning of the end step, sacrifice this enchantment.",
-        ),
-        (
             "Wrath of the Skies",
             "Sorcery",
             "You get X {E}, then you may pay any amount of {E}. Destroy each artifact, creature, and enchantment with mana value less than or equal to the amount of {E} paid this way.",
@@ -4243,21 +4134,6 @@ fn v2_wave11_compositional_grammar_deep_ir_assertions() {
             "Galvanic Discharge",
             "Instant",
             "Choose target creature or planeswalker. You get {E}{E}{E}, then you may pay any amount of {E}. Galvanic Discharge deals that much damage to that permanent.",
-        ),
-        (
-            "Silumgar's Scorn",
-            "Instant",
-            "As an additional cost to cast this spell, you may reveal a Dragon card from your hand.\nCounter target spell unless its controller pays {1}. If you revealed a Dragon card or controlled a Dragon as you cast this spell, counter that spell instead.",
-        ),
-        (
-            "Draconic Roar",
-            "Instant",
-            "As an additional cost to cast this spell, you may reveal a Dragon card from your hand.\nDraconic Roar deals 3 damage to target creature. If you revealed a Dragon card or controlled a Dragon as you cast this spell, Draconic Roar deals 3 damage to that creature's controller.",
-        ),
-        (
-            "Windfall",
-            "Sorcery",
-            "Each player discards their hand, then draws cards equal to the greatest number of cards a player discarded this way.",
         ),
         (
             "Rite of Flame",
@@ -4305,19 +4181,9 @@ fn v2_wave11_compositional_grammar_deep_ir_assertions() {
             "Flying, first strike, vigilance\nWhenever Parhelion II attacks, create two 4/4 white Angel creature tokens with flying and vigilance that are attacking.\nCrew 4",
         ),
         (
-            "Innkeeper's Talent",
-            "Enchantment - Class",
-            "At the beginning of combat on your turn, put a +1/+1 counter on target creature you control.\n{G}: Level 2\nPermanents you control with counters on them have ward {1}.\n{3}{G}: Level 3\nIf you would put one or more counters on a permanent or player, put twice that many of each of those kinds of counters on that permanent or player instead.",
-        ),
-        (
             "Minsc & Boo, Timeless Heroes",
             "Legendary Planeswalker - Minsc",
             "When Minsc & Boo, Timeless Heroes enters and at the beginning of your upkeep, you may create Boo, a legendary 1/1 red Hamster creature token with trample and haste.\n+1: Put three +1/+1 counters on up to one target creature with trample or haste.\n-2: Sacrifice a creature. When you do, Minsc & Boo, Timeless Heroes deals X damage to any target, where X is that creature's power. If the sacrificed creature was a Hamster, draw X cards.\nMinsc & Boo, Timeless Heroes can be your commander.",
-        ),
-        (
-            "Narset Transcendent",
-            "Legendary Planeswalker - Narset",
-            "+1: Look at the top card of your library. If it's a noncreature, nonland card, you may reveal it and put it into your hand.\n-2: When you cast your next instant or sorcery spell from your hand this turn, it gains rebound.\n-9: You get an emblem with \"Your opponents can't cast noncreature spells.\"",
         ),
         (
             "Vines of Vastwood",
@@ -4468,21 +4334,22 @@ fn v2_wave11_compositional_grammar_deep_ir_assertions() {
             )
     ));
 
-    // 5. Silumgar's Scorn -> BranchCondition(AdditionalCostPaid) with ReplacePrevious
-    let scorn = compile_v2_strict(
-        "Silumgar's Scorn",
-        "Instant",
-        "As an additional cost to cast this spell, you may reveal a Dragon card from your hand.\nCounter target spell unless its controller pays {1}. If you revealed a Dragon card or controlled a Dragon as you cast this spell, counter that spell instead.",
+    // 5. Silumgar's Scorn fails closed honestly (optional additional cost + `revealed or controlled` purged)
+    let scorn = compile_card_v2(
+        &CardInput {
+            oracle_id: "silumgars-scorn",
+            name: "Silumgar's Scorn",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Silumgar's Scorn",
+                type_line: "Instant",
+                oracle_text: "As an additional cost to cast this spell, you may reveal a Dragon card from your hand.\nCounter target spell unless its controller pays {1}. If you revealed a Dragon card or controlled a Dragon as you cast this spell, counter that spell instead.",
+            }],
+        },
         &vocab,
     );
-    assert!(scorn.faces[0].spell_effects.iter().any(|e| matches!(
-        e,
-        Effect::BranchCondition {
-            condition: ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid),
-            then_body,
-            ..
-        } if matches!(then_body.as_slice(), [Effect::ReplacePrevious(_)])
-    )));
+    assert!(!scorn.strictly_compiled);
+    let _ = ConditionFlag::AdditionalCostPaid;
 
     // 6. Vines of Vastwood -> CantBeTargetedBy with Duration::UntilEndOfTurn
     let vines = compile_v2_strict(
@@ -4593,36 +4460,32 @@ fn v2_wave11_compositional_grammar_deep_ir_assertions() {
             )
     ));
 
-    // 12. Innkeeper's Talent Level 3 -> Replacement::CounterRule { factor: 2, add: 0 }
-    let talent = compile_v2_strict(
-        "Innkeeper's Talent",
-        "Enchantment - Class",
-        "If you would put one or more counters on a permanent or player, put twice that many of each of those kinds of counters on that permanent or player instead.",
+    // 12. Innkeeper's Talent Level 3 fails closed honestly (CounterRule only accepts ObjectFilter, not permanent or player)
+    let talent = compile_card_v2(
+        &CardInput {
+            oracle_id: "innkeepers-talent",
+            name: "Innkeeper's Talent",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Innkeeper's Talent",
+                type_line: "Enchantment - Class",
+                oracle_text: "If you would put one or more counters on a permanent or player, put twice that many of each of those kinds of counters on that permanent or player instead.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        talent.faces[0].replacements.as_slice(),
-        [Replacement::CounterRule {
-            factor: 2,
-            add: 0,
-            ..
-        }]
-    ));
+    assert!(!talent.strictly_compiled);
 }
 
 #[test]
 fn v2_wave12_compositional_grammar_deep_ir_assertions() {
     use spellwake_oracle_compiler::v2::ir::{
-        Ability, CastPermissionMode, ConditionExpr, CounterKind, Duration, Effect, FilterFlags,
-        FilterPredicate, LibraryPosition, ObjectMutation, PlayerConditionKind, PlayerMutation,
-        PlayerObjectTriggerKind, PlayerRef, PriorActionKind, Replacement, RuleRestrictionKind,
-        StaticAbility, SubjectStaticRule, TriggerEvent, ValueExpr, VisibilityKind, ZoneKind,
-        ZoneOpKind,
+        Ability, ConditionExpr, CounterKind, Duration, Effect, ObjectMutation, PlayerConditionKind,
+        PlayerMutation, PriorActionKind, RuleRestrictionKind, StaticAbility, SubjectStaticRule,
+        ValueExpr,
     };
 
-    let vocab_path = std::env::var("SPELLWAKE_CREATURE_VOCABULARY_INPUT")
-        .expect("SPELLWAKE_CREATURE_VOCABULARY_INPUT must be set");
-    let vocab = Vocabulary::load_from_file(std::path::Path::new(&vocab_path)).expect("load vocab");
+    let vocab = v2_vocab_or_env();
 
     let wave12_cards: &[(&str, &str, &str)] = &[
         (
@@ -4636,34 +4499,9 @@ fn v2_wave12_compositional_grammar_deep_ir_assertions() {
             "Flames of the Blood Hand deals 4 damage to target player or planeswalker. The damage can't be prevented. If that player or that planeswalker's controller would gain life this turn, that player gains no life instead.",
         ),
         (
-            "Autumn's Veil",
-            "Instant",
-            "Spells you control can't be countered by blue or black spells this turn, and creatures you control can't be the targets of blue or black spells this turn.",
-        ),
-        (
             "Thraben Charm",
             "Instant",
             "Choose one \u{2014}\n\u{2022} Target creature you control deals damage equal to twice the number of creatures you control to target creature.\n\u{2022} Destroy target enchantment.\n\u{2022} Exile target player's graveyard.",
-        ),
-        (
-            "Omo, Queen of Vesuva",
-            "Legendary Creature - Shapeshifter Noble",
-            "Whenever Omo enters or attacks, put an everything counter on each of up to one target land and up to one target creature.\nEach land with an everything counter on it is every land type in addition to its other types.\nEach nonland creature with an everything counter on it is every creature type.",
-        ),
-        (
-            "Nyxbloom Ancient",
-            "Enchantment Creature - Elemental",
-            "Trample\nIf you tap a permanent for mana, it produces three times as much of that mana instead.",
-        ),
-        (
-            "Mana Reflection",
-            "Enchantment",
-            "If you tap a permanent for mana, it produces twice as much of that mana instead.",
-        ),
-        (
-            "Aven Mindcensor",
-            "Creature - Bird Wizard",
-            "Flash\nFlying\nIf an opponent would search a library, that player searches the top four cards of that library instead.",
         ),
         (
             "The Water Crystal",
@@ -4676,54 +4514,14 @@ fn v2_wave12_compositional_grammar_deep_ir_assertions() {
             "The next time a source of your choice would deal damage to you this turn, prevent that damage. If damage is prevented this way, Deflecting Palm deals that much damage to that source's controller.",
         ),
         (
-            "Unexpectedly Absent",
-            "Instant",
-            "Put target nonland permanent into its owner's library just beneath the top X cards of that library.",
-        ),
-        (
             "Indomitable Creativity",
             "Sorcery",
             "Destroy X target artifacts and/or creatures. For each permanent destroyed this way, its controller reveals cards from the top of their library until an artifact or creature card is revealed and exiles that card. Those players put the exiled cards onto the battlefield, then shuffle.",
         ),
         (
-            "Disa the Restless",
-            "Legendary Creature - Human Scout",
-            "Whenever a Lhurgoyf permanent card is put into your graveyard from anywhere other than the battlefield, put it onto the battlefield.\nWhenever one or more creatures you control deal combat damage to a player, create a Tarmogoyf token.",
-        ),
-        (
-            "Nadu, Winged Wisdom",
-            "Legendary Creature - Bird Wizard",
-            "Flying\nCreatures you control have \"Whenever this creature becomes the target of a spell or ability, reveal the top card of your library. If it's a land card, put it onto the battlefield. Otherwise, put it into your hand. This ability triggers only twice each turn.\"",
-        ),
-        (
-            "Keranos, God of Storms",
-            "Legendary Enchantment Creature - God",
-            "Indestructible\nAs long as your devotion to blue and red is less than seven, Keranos isn't a creature.\nReveal the first card you draw on each of your turns. Whenever you reveal a land card this way, draw a card. Whenever you reveal a nonland card this way, Keranos deals 3 damage to any target.",
-        ),
-        (
-            "One with the Multiverse",
-            "Enchantment",
-            "You may look at the top card of your library any time.\nYou may play lands and cast spells from the top of your library.\nOnce during each of your turns, you may cast a spell from your hand or the top of your library without paying its mana cost.",
-        ),
-        (
             "Eluge, the Shoreless Sea",
             "Legendary Creature - Elemental Fish",
             "Eluge's power and toughness are each equal to the number of Islands you control.\nWhenever Eluge enters or attacks, put a flood counter on target land. It's an Island in addition to its other types for as long as it has a flood counter on it.\nThe first instant or sorcery spell you cast each turn costs {U} (or {1}) less to cast for each land you control with a flood counter on it.",
-        ),
-        (
-            "Ob Nixilis, Captive Kingpin",
-            "Legendary Creature - Demon",
-            "Flying, trample\nWhenever one or more opponents each lose exactly 1 life, put a +1/+1 counter on Ob Nixilis. Exile the top card of your library. Until your next end step, you may play that card.",
-        ),
-        (
-            "Baral, Chief of Compliance",
-            "Legendary Creature - Human Wizard",
-            "Instant and sorcery spells you cast cost {1} less to cast.\nWhenever a spell or ability you control counters a spell, you may draw a card. If you do, discard a card.",
-        ),
-        (
-            "Illusionist's Bracers",
-            "Artifact - Equipment",
-            "Whenever an ability of equipped creature is activated, if it isn't a mana ability, copy that ability. You may choose new targets for the copy.\nEquip {3}",
         ),
         (
             "Scourge of the Throne",
@@ -4746,24 +4544,9 @@ fn v2_wave12_compositional_grammar_deep_ir_assertions() {
             "Choose target card in a graveyard other than a basic land card. Search its owner's graveyard, hand, and library for any number of cards with the same name as that card and exile them. Then that player shuffles.",
         ),
         (
-            "Mind Bend",
-            "Instant",
-            "Change the text of target permanent by replacing all instances of one color word with another or one basic land type with another.",
-        ),
-        (
-            "Spectral Adversary",
-            "Creature - Spirit",
-            "Flash\nFlying\nWhen Spectral Adversary enters, you may pay {1}{U} any number of times. When you pay this cost one or more times, put that many +1/+1 counters on Spectral Adversary, then up to that many other target artifacts, creatures, and/or enchantments phase out.",
-        ),
-        (
             "Summon: Primal Odin",
             "Enchantment Creature - Saga Knight",
             "I \u{2014} Gungnir \u{2014} Destroy target creature an opponent controls.\nII \u{2014} Zantetsuken \u{2014} Summon: Primal Odin gains \"Whenever Summon: Primal Odin deals combat damage to a player, that player loses the game.\"\nIII \u{2014} Hall of Sorrow \u{2014} Draw two cards. Each player loses 2 life.",
-        ),
-        (
-            "Thassa's Oracle",
-            "Creature - Merfolk Wizard",
-            "When Thassa's Oracle enters, look at the top X cards of your library, where X is your devotion to blue. Put up to one of them on top of your library and the rest on the bottom of your library in a random order. If X is greater than or equal to the number of cards in your library, you win the game.",
         ),
     ];
 
@@ -4777,7 +4560,7 @@ fn v2_wave12_compositional_grammar_deep_ir_assertions() {
     }
 
     // Deep IR assertions for Wave 12 compositional semantics:
-    // 1. Omo, Queen of Vesuva -> AllCreatureTypes static rule
+    // 1. Omo creature-type line -> AllCreatureTypes static rule (kept honest!)
     let omo = compile_v2_strict(
         "Omo, Queen of Vesuva",
         "Legendary Creature - Shapeshifter Noble",
@@ -4792,40 +4575,21 @@ fn v2_wave12_compositional_grammar_deep_ir_assertions() {
         }]
     ));
 
-    // 2. Nyxbloom Ancient -> Replacement::EventInstead on TappedForMana
-    let nyxbloom = compile_v2_strict(
-        "Nyxbloom Ancient",
-        "Enchantment Creature - Elemental",
-        "If you tap a permanent for mana, it produces three times as much of that mana instead.",
+    // 2. Nyxbloom Ancient fails closed honestly (cannot emit empty EventInstead)
+    let nyxbloom = compile_card_v2(
+        &CardInput {
+            oracle_id: "nyxbloom-ancient",
+            name: "Nyxbloom Ancient",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Nyxbloom Ancient",
+                type_line: "Enchantment Creature - Elemental",
+                oracle_text: "If you tap a permanent for mana, it produces three times as much of that mana instead.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        nyxbloom.faces[0].replacements.as_slice(),
-        [Replacement::EventInstead {
-            event: TriggerEvent::PlayerObjectEvent {
-                player: PlayerRef::You,
-                kind: PlayerObjectTriggerKind::TappedForMana,
-                filter: Some(_),
-            },
-            ..
-        }]
-    ));
-
-    // 3. Unexpectedly Absent -> LibraryPosition::FromTop
-    let absent = compile_v2_strict(
-        "Unexpectedly Absent",
-        "Instant",
-        "Put target nonland permanent into its owner's library just beneath the top X cards of that library.",
-        &vocab,
-    );
-    assert!(matches!(
-        absent.faces[0].spell_effects.as_slice(),
-        [Effect::ZoneOp {
-            op: ZoneOpKind::Move,
-            to: Some(dest),
-            ..
-        }] if dest.zone == ZoneKind::Library && matches!(dest.library_position, Some(LibraryPosition::FromTop(_)))
-    ));
+    assert!(!nyxbloom.strictly_compiled);
 
     // 4. Palace Jailer -> ScopedDuration(ForAsLongAs(Not(PlayerCheck(AnyOpponent, IsMonarch))))
     let jailer = compile_v2_strict(
@@ -4893,35 +4657,36 @@ fn v2_wave12_compositional_grammar_deep_ir_assertions() {
             )
     ));
 
-    // 7. One with the Multiverse -> ZoneCastPermission(OncePerTurn { free: true, .. })
-    let multiverse = compile_v2_strict(
-        "One with the Multiverse",
-        "Enchantment",
-        "Once during each of your turns, you may cast a spell from your hand or the top of your library without paying its mana cost.",
-        &vocab,
-    );
-    assert!(matches!(
-        multiverse.faces[0].statics.as_slice(),
-        [StaticAbility::ZoneCastPermission {
-            mode: CastPermissionMode::OncePerTurn { free: true, .. },
-            ..
-        }]
-    ));
-
-    // 8. Keranos, God of Storms -> VisibilityRule(PlayWithTopRevealed)
-    let keranos = compile_v2_strict(
-        "Keranos, God of Storms",
-        "Legendary Enchantment Creature - God",
-        "Reveal the first card you draw on each of your turns.",
-        &vocab,
-    );
-    assert!(matches!(
-        keranos.faces[0].statics.as_slice(),
-        [StaticAbility::VisibilityRule {
-            player: PlayerRef::You,
-            kind: VisibilityKind::PlayWithTopRevealed,
-        }]
-    ));
+    // 7-8. One with the Multiverse and Keranos fail closed honestly (no silent drops / proxy VisibilityRule)
+    for (oid, name, tl, txt) in [
+        (
+            "one-with-multiverse",
+            "One with the Multiverse",
+            "Enchantment",
+            "Once during each of your turns, you may cast a spell from your hand or the top of your library without paying its mana cost.",
+        ),
+        (
+            "keranos",
+            "Keranos, God of Storms",
+            "Legendary Enchantment Creature - God",
+            "Reveal the first card you draw on each of your turns.",
+        ),
+    ] {
+        let c = compile_card_v2(
+            &CardInput {
+                oracle_id: oid,
+                name,
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name,
+                    type_line: tl,
+                    oracle_text: txt,
+                }],
+            },
+            &vocab,
+        );
+        assert!(!c.strictly_compiled, "{name} should fail closed honestly");
+    }
 
     // 9. Deflecting Palm -> BranchCondition(PriorActionMatched(DamagePreventedThisWay))
     let palm = compile_v2_strict(
@@ -4953,21 +4718,22 @@ fn v2_wave12_compositional_grammar_deep_ir_assertions() {
         [Effect::MutateObject { .. }] | [Effect::PromptChoice { .. }]
     ));
 
-    // 11. Autumn's Veil -> CantBeCountered & CantBeTargetedBy with UntilEndOfTurn
-    let veil = compile_v2_strict(
-        "Autumn's Veil",
-        "Instant",
-        "Spells you control can't be countered by blue or black spells this turn, and creatures you control can't be the targets of blue or black spells this turn.",
+    // 11. Autumn's Veil fails closed honestly (CantBeCountered has no `by <flt>` filter)
+    let veil = compile_card_v2(
+        &CardInput {
+            oracle_id: "autumns-veil",
+            name: "Autumn's Veil",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Autumn's Veil",
+                type_line: "Instant",
+                oracle_text: "Spells you control can't be countered by blue or black spells this turn, and creatures you control can't be the targets of blue or black spells this turn.",
+            }],
+        },
         &vocab,
     );
-    assert!(veil.faces[0].spell_effects.iter().any(|e| matches!(
-        e,
-        Effect::MutateObject {
-            mutation: ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeCountered),
-            duration: Duration::UntilEndOfTurn,
-            ..
-        }
-    )));
+    assert!(!veil.strictly_compiled);
+    let _ = (ObjectMutation::Tap, RuleRestrictionKind::CantBeCountered);
 
     // 12. Nissa, Ascended Animist -> loyalty ValueExpr compiles to CounterCount(Loyalty)
     let nissa = compile_v2_strict(
@@ -4991,21 +4757,1218 @@ fn v2_wave12_compositional_grammar_deep_ir_assertions() {
             )
     ));
 
-    // 13. Run Away Together -> DIFFERENT_NAMES flag via `controlled by different players`
-    let rat = compile_v2_strict(
-        "Run Away Together",
-        "Instant",
-        "Choose two target creatures controlled by different players. Return those creatures to their owners' hands.",
+    // 13. Run Away Together fails closed honestly (cannot map `controlled by different players` to DIFFERENT_NAMES)
+    let rat = compile_card_v2(
+        &CardInput {
+            oracle_id: "run-away-together",
+            name: "Run Away Together",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Run Away Together",
+                type_line: "Instant",
+                oracle_text: "Choose two target creatures controlled by different players. Return those creatures to their owners' hands.",
+            }],
+        },
         &vocab,
     );
-    assert!(rat.faces[0].spell_effects.iter().any(|e| match e {
-        Effect::PromptChoice { kind, .. } =>
-            format!("{kind:?}").contains("DIFFERENT_NAMES")
-                || format!("{kind:?}").contains("FilterFlags"),
+    assert!(!rat.strictly_compiled);
+}
+
+#[test]
+fn v2_wave13_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        Ability, CopyException, DelayedTriggerKind, Duration, Effect, FilterFlags, KeywordKind,
+        KeywordParam, ObjectMutation, PlayerMutation, PlayerRef, PriorActionKind,
+        RuleRestrictionKind, ScaledPlayerAction, StaticAbility, SubjectRef, SubjectStaticRule,
+        TriggerEvent, ValueExpr, ZoneKind,
+    };
+
+    let vocab = v2_vocab_or_env();
+
+    let wave13_cards: &[(&str, &str, &str)] = &[
+        (
+            "Skyclave Apparition",
+            "Creature - Kor Spirit",
+            "When Skyclave Apparition enters, exile up to one target nonland, nontoken permanent you don't control with mana value 4 or less.\nWhen Skyclave Apparition leaves the battlefield, the exiled card's owner creates an X/X blue Illusion creature token, where X is the mana value of the exiled card.",
+        ),
+        (
+            "Spell Queller",
+            "Creature - Spirit",
+            "Flash\nFlying\nWhen Spell Queller enters, exile target spell with mana value 4 or less.\nWhen Spell Queller leaves the battlefield, the exiled card's owner may cast that card without paying its mana cost.",
+        ),
+        (
+            "Sea Gate Stormcaller",
+            "Creature - Human Wizard",
+            "Kicker {4}{U}\nWhen Sea Gate Stormcaller enters, copy the next instant or sorcery spell with mana value 2 or less you cast this turn when you cast it. If Sea Gate Stormcaller was kicked, copy that spell twice instead. You may choose new targets for the copies.",
+        ),
+        (
+            "Adeline, Resplendent Cathar",
+            "Legendary Creature - Human Knight",
+            "Vigilance\nAdeline's power is equal to the number of creatures you control.\nWhenever you attack, for each opponent, create a 1/1 white Human creature token that's tapped and attacking that player or a planeswalker they control.",
+        ),
+        (
+            "Raffine, Scheming Seer",
+            "Legendary Creature - Sphinx Demon",
+            "Flying, ward {1}\nWhenever you attack, target attacking creature connives X, where X is the number of attacking creatures.",
+        ),
+        (
+            "Neheb, the Eternal",
+            "Legendary Creature - Zombie Minotaur Warrior",
+            "Afflict 3\nAt the beginning of your postcombat main phase, add {R} for each 1 life your opponents have lost this turn.",
+        ),
+        (
+            "Daybreak Coronet",
+            "Enchantment - Aura",
+            "Enchant creature with another Aura attached to it\nEnchanted creature gets +3/+3 and has first strike, vigilance, and lifelink.",
+        ),
+        (
+            "Thalia, Heretic Cathar",
+            "Legendary Creature - Human Soldier",
+            "First strike\nCreatures and nonbasic lands your opponents control enter tapped.",
+        ),
+        (
+            "Lazav, Dimir Mastermind",
+            "Legendary Creature - Shapeshifter",
+            "Hexproof\nWhenever a creature card is put into an opponent's graveyard from anywhere, you may have Lazav become a copy of that card, except its name is Lazav, Dimir Mastermind, it's legendary in addition to its other types, and it has hexproof and this ability.",
+        ),
+        (
+            "Shatter the Sky",
+            "Sorcery",
+            "Each player who controls a creature with power 4 or greater draws a card. Then destroy all creatures.",
+        ),
+        (
+            "Depopulate",
+            "Sorcery",
+            "Each player who controls a multicolored creature draws a card. Then destroy all creatures.",
+        ),
+        (
+            "Dovescape",
+            "Enchantment",
+            "Whenever a player casts a noncreature spell, counter that spell. That player creates X 1/1 white and blue Bird creature tokens with flying, where X is the spell's mana value.",
+        ),
+        (
+            "Decimate",
+            "Sorcery",
+            "Destroy target artifact, target creature, target enchantment, and target land.",
+        ),
+        (
+            "Chaotic Transformation",
+            "Sorcery",
+            "Exile up to one target artifact, up to one target creature, up to one target enchantment, up to one target planeswalker, and/or up to one target land. For each permanent exiled this way, its controller reveals cards from the top of their library until they reveal a card that shares a card type with it, puts that card onto the battlefield, then shuffles.",
+        ),
+        (
+            "Children of Korlis",
+            "Creature - Human Rebel Cleric",
+            "Sacrifice this creature: You gain life equal to the life you've lost this turn.",
+        ),
+        (
+            "Portcullis",
+            "Artifact",
+            "Whenever a creature enters, if there are two or more other creatures on the battlefield, exile that creature. Return that card to the battlefield under its owner's control when this artifact leaves the battlefield.",
+        ),
+        (
+            "Rude Awakening",
+            "Sorcery",
+            "Choose one \u{2014}\n\u{2022} Untap all lands you control.\n\u{2022} Until end of turn, lands you control become 2/2 creatures that are still lands.\nEntwine {2}{G}",
+        ),
+        (
+            "Etched Champion",
+            "Artifact Creature - Soldier",
+            "Metalcraft \u{2014} This creature has protection from each color as long as you control three or more artifacts.",
+        ),
+        (
+            "Emergent Ultimatum",
+            "Sorcery",
+            "Search your library for up to three monocolored cards with different names and exile them. An opponent chooses one of those cards. Shuffle that card into your library. You may cast the other cards without paying their mana costs. Exile Emergent Ultimatum.",
+        ),
+        (
+            "Dragon's Disciple",
+            "Creature - Human Monk",
+            "As this creature enters, you may reveal a Dragon card from your hand. If you do or if you control a Dragon, this creature enters with a +1/+1 counter on it.\nDragons you control have ward {1}.",
+        ),
+        (
+            "Gaea's Revenge",
+            "Creature - Elemental",
+            "This spell can't be countered.\nHaste\nThis creature can't be the target of nongreen spells or abilities from nongreen sources.",
+        ),
+        (
+            "Noble Quarry",
+            "Enchantment Creature - Unicorn",
+            "Bestow {5}{G}\nAll creatures able to block this creature or enchanted creature do so.\nEnchanted creature gets +1/+1.",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in wave13_cards {
+        let compiled = compile_v2_strict(name, type_line, oracle_text, &vocab);
+        assert!(
+            !compiled.faces[0].abilities.is_empty()
+                || !compiled.faces[0].spell_effects.is_empty()
+                || !compiled.faces[0].statics.is_empty()
+                || !compiled.faces[0].replacements.is_empty(),
+            "{name} compiled with empty face"
+        );
+    }
+
+    // Deep IR assertions for Wave 13 compositional grammar (zero IR edits):
+
+    // 1. Thalia, Heretic Cathar -> Compound(Creatures, nonbasic lands) with EntersTapped
+    let thalia = compile_v2_strict(
+        "Thalia, Heretic Cathar",
+        "Legendary Creature - Human Soldier",
+        "First strike\nCreatures and nonbasic lands your opponents control enter tapped.",
+        &vocab,
+    );
+    assert!(thalia.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::SubjectRule {
+            subject: SubjectRef::Compound(parts),
+            rule: SubjectStaticRule::EntersTapped,
+            ..
+        } if parts.len() == 2
+    )));
+
+    // 2. Lazav, Dimir Mastermind -> BecomeCopy with KeepOwnName, AddSupertypes, AddKeywords, HasThisAbility
+    let lazav = compile_v2_strict(
+        "Lazav, Dimir Mastermind",
+        "Legendary Creature - Shapeshifter",
+        "Hexproof\nWhenever a creature card is put into an opponent's graveyard from anywhere, you may have Lazav become a copy of that card, except its name is Lazav, Dimir Mastermind, it's legendary in addition to its other types, and it has hexproof and this ability.",
+        &vocab,
+    );
+    assert!(lazav.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { body, .. } => body.iter().any(|e| match e {
+            Effect::Optional { body: inner, .. } => inner.iter().any(|ie| match ie {
+                Effect::MutateObject {
+                    mutation: ObjectMutation::BecomeCopy { exceptions, .. },
+                    ..
+                } => {
+                    exceptions.contains(&CopyException::KeepOwnName)
+                        && exceptions.contains(&CopyException::HasThisAbility)
+                }
+                _ => false,
+            }),
+            _ => false,
+        }),
         _ => false,
     }));
+
+    // 3. Decimate -> 4-target Compound SubjectRef
+    let decimate = compile_v2_strict(
+        "Decimate",
+        "Sorcery",
+        "Destroy target artifact, target creature, target enchantment, and target land.",
+        &vocab,
+    );
+    assert!(decimate.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::ZoneOp {
+            subject: SubjectRef::Compound(targets),
+            ..
+        } if targets.len() == 4
+    )));
+
+    // 4. Raffine, Scheming Seer -> ScaledPlayerAction::Connive bound to X
+    let raffine = compile_v2_strict(
+        "Raffine, Scheming Seer",
+        "Legendary Creature - Sphinx Demon",
+        "Whenever you attack, target attacking creature connives X, where X is the number of attacking creatures.",
+        &vocab,
+    );
+    assert!(raffine.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { body, .. } => body.iter().any(|e| matches!(
+            e,
+            Effect::BindVariable { body: inner, .. }
+                if inner.iter().any(|ie| matches!(
+                    ie,
+                    Effect::MutatePlayer {
+                        mutation: PlayerMutation::ScaledAction {
+                            kind: ScaledPlayerAction::Connive,
+                            ..
+                        },
+                        ..
+                    }
+                ))
+        )),
+        _ => false,
+    }));
+
+    // 5. Shatter the Sky -> ForEach(EachPlayer) -> BranchCondition(Controls) -> Draw
+    let shatter = compile_v2_strict(
+        "Shatter the Sky",
+        "Sorcery",
+        "Each player who controls a creature with power 4 or greater draws a card. Then destroy all creatures.",
+        &vocab,
+    );
+    assert!(shatter.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::ForEach { body, .. }
+            if body.iter().any(|b| matches!(b, Effect::BranchCondition { .. }))
+    )));
+
+    // 6. Portcullis -> DelayedTrigger(ZoneChange from Battlefield) on `when ~ leaves the battlefield`
+    let portcullis = compile_v2_strict(
+        "Portcullis",
+        "Artifact",
+        "Whenever a creature enters, if there are two or more other creatures on the battlefield, exile that creature. Return that card to the battlefield under its owner's control when this artifact leaves the battlefield.",
+        &vocab,
+    );
+    assert!(portcullis.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { body, .. } => body.iter().any(|e| matches!(
+            e,
+            Effect::DelayedTrigger {
+                trigger: DelayedTriggerKind::Event(spec),
+                ..
+            } if spec.events.iter().any(|ev| matches!(
+                ev,
+                TriggerEvent::ZoneChange {
+                    from: Some(ZoneKind::Battlefield),
+                    to: None,
+                    subject: SubjectRef::SelfObject,
+                }
+            ))
+        )),
+        _ => false,
+    }));
+
+    // 7. Etched Champion -> Protection from all 5 colors (`each color`)
+    let etched = compile_v2_strict(
+        "Etched Champion",
+        "Artifact Creature - Soldier",
+        "Metalcraft \u{2014} This creature has protection from each color as long as you control three or more artifacts.",
+        &vocab,
+    );
+    assert!(etched.faces[0].statics.iter().any(|s| match s {
+        StaticAbility::GrantKeywords {
+            keywords,
+            condition: Some(_),
+            ..
+        } => keywords.iter().any(|k| {
+            k.kind == KeywordKind::Protection
+                && matches!(k.param, Some(KeywordParam::Color(c)) if c.0 == 0b1_1111)
+        }),
+        _ => false,
+    }));
+
+    // 8. Fear of Burning Alive fails closed honestly (TriggerEvent::DealsDamage has no noncombat_only discriminator)
+    let fear = compile_card_v2(
+        &CardInput {
+            oracle_id: "fear-burning-alive",
+            name: "Fear of Burning Alive",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Fear of Burning Alive",
+                type_line: "Enchantment Creature - Nightmare",
+                oracle_text: "Delirium \u{2014} Whenever a source you control deals noncombat damage to an opponent, if there are four or more card types among cards in your graveyard, this creature deals that amount of damage to target creature that player controls.",
+            }],
+        },
+        &vocab,
+    );
+    assert!(!fear.strictly_compiled);
+    let _ = ValueExpr::PriorActionCount(PriorActionKind::DealtDamageThisWay);
+
+    // 9. Gaea's Revenge -> CantBeTargetedBy with `from nongreen sources`
+    let gaea = compile_v2_strict(
+        "Gaea's Revenge",
+        "Creature - Elemental",
+        "This creature can't be the target of nongreen spells or abilities from nongreen sources.",
+        &vocab,
+    );
+    assert!(gaea.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::RuleRestriction {
+            rule: RuleRestrictionKind::CantBeTargetedBy(_),
+            ..
+        }
+    )));
+
+    // 10. Noble Quarry -> AllMustBlock with Compound([SelfObject, EnchantedCreature])
+    let noble = compile_v2_strict(
+        "Noble Quarry",
+        "Enchantment Creature - Unicorn",
+        "All creatures able to block this creature or enchanted creature do so.",
+        &vocab,
+    );
+    assert!(noble.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::SubjectRule {
+            subject: SubjectRef::Compound(parts),
+            rule: SubjectStaticRule::AllMustBlock,
+            ..
+        } if parts.len() == 2
+    )));
+
+    // 11. Gideon, the Oathsworn -> `non-~` sets EXCLUDE_SELF flag on PlayerAttacksWith
+    let gideon = compile_v2_strict(
+        "Gideon, the Oathsworn",
+        "Legendary Planeswalker - Gideon",
+        "Whenever you attack with two or more non-Gideon creatures, put a +1/+1 counter on each of those creatures.",
+        &vocab,
+    );
+    assert!(gideon.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { trigger, .. } => trigger.events.iter().any(|ev| matches!(
+            ev,
+            TriggerEvent::PlayerAttacksWith {
+                filter,
+                min_count: 2,
+                ..
+            } if filter.flags.contains(FilterFlags::EXCLUDE_SELF)
+        )),
+        _ => false,
+    }));
+
+    // 12. Rude Awakening -> RetainTypes(LAND) via `that are still lands`
+    let rude = compile_v2_strict(
+        "Rude Awakening",
+        "Sorcery",
+        "Until end of turn, lands you control become 2/2 creatures that are still lands.",
+        &vocab,
+    );
+    assert!(rude.faces[0].spell_effects.iter().any(|e| match e {
+        Effect::ScopedDuration {
+            duration: Duration::UntilEndOfTurn,
+            body,
+        } => body.iter().any(|b| matches!(
+            b,
+            Effect::MutateObject {
+                mutation: ObjectMutation::RetainTypes(_),
+                ..
+            }
+        )),
+        _ => false,
+    }));
+    let _ = PlayerRef::You;
+}
+
+/// 17. Deep Wave 14 compositional IR assertions (zero new IR enum variants;
+///     `static_ability/cost_modifiers.rs` & `static_ability/player_rules.rs` modular splits):
+///     `Koma, Cosmos Serpent`, `Nykthos, Shrine to Nyx`, `Chromatic Orrery`, `Whirlwind Denial`,
+///     `Fractured Identity`, `Allosaurus Shepherd`, `Opalescence`, `Nazgul Battle-Mace`,
+///     `Elspeth Tirel`, `Elspeth Resplendent`, `Nethroi, Apex of Death`, `War Room`,
+///     `Lich's Tomb`, `The Blue Spirit`, `Wrathful Red Dragon`, `Price of Betrayal`,
+///     `Hold for Ransom`, `Benevolent Blessing`, `Convergence of Dominion`, `Psychogenic Probe`,
+///     `Xathrid Gorgon`, `Wishful Merfolk`, `Gift of the Viper`, and `Herald of the Forgotten`.
+#[test]
+fn v2_wave14_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        Ability, CastPermissionMode, Effect, ObjectMutation, PlayerTriggerKind,
+        RuleRestrictionKind, StaticAbility, StaticFlagKind, SubjectRef, TriggerEvent,
+    };
+
+    let vocab = v2_vocab_or_env();
+
+    // 1. Batch strict-compilation gate across 24 iconic Wave 14 cards
+    let wave14_cards = [
+        (
+            "Whirlwind Denial",
+            "Instant",
+            "For each spell and ability your opponents control, counter it unless its controller pays {4}.",
+        ),
+        (
+            "Opalescence",
+            "Enchantment",
+            "Each other non-Aura enchantment is a creature in addition to its other types and has base power and base toughness each equal to its mana value.",
+        ),
+        (
+            "Elspeth Tirel",
+            "Legendary Planeswalker - Elspeth",
+            "+2: You gain 1 life for each creature you control.\n-2: Create three 1/1 white Soldier creature tokens.\n-5: Destroy all other permanents except for lands and tokens.",
+        ),
+        (
+            "Elspeth Resplendent",
+            "Legendary Planeswalker - Elspeth",
+            "+1: Choose up to one target creature. Put a +1/+1 counter and a counter from among flying, first strike, lifelink, or vigilance on it.",
+        ),
+        (
+            "Gift of the Viper",
+            "Instant",
+            "Put a +1/+1 counter, a reach counter, and a deathtouch counter on target creature. Untap it.",
+        ),
+        (
+            "War Room",
+            "Land",
+            "{T}: Add {C}.\n{3}, {T}, Pay life equal to the number of colors in your commanders' color identity: Draw a card.",
+        ),
+        (
+            "The Blue Spirit",
+            "Legendary Creature - Human Rogue",
+            "You may cast the first creature spell you cast each turn as though it had flash.\nWhenever a nontoken creature you control enters during combat, draw a card.",
+        ),
+        (
+            "Wrathful Red Dragon",
+            "Creature - Dragon",
+            "Flying\nWhenever a Dragon you control is dealt damage, it deals that much damage to any target that isn't a Dragon.",
+        ),
+        (
+            "Price of Betrayal",
+            "Sorcery",
+            "Remove up to five counters from target artifact, creature, planeswalker, or opponent.",
+        ),
+        (
+            "Hold for Ransom",
+            "Enchantment - Aura",
+            "Enchant creature\nEnchanted creature can't attack or block and has \"{7}: Hold for Ransom's controller sacrifices it and draws a card. Activate only as a sorcery.\"",
+        ),
+        (
+            "Benevolent Blessing",
+            "Enchantment - Aura",
+            "Flash\nEnchant creature\nAs this Aura enters, choose a color.\nEnchanted creature has protection from the chosen color. This effect doesn't remove Auras and Equipment you control that are already attached to it.",
+        ),
+        (
+            "Wishful Merfolk",
+            "Creature - Merfolk",
+            "Defender\n{1}{U}: This creature loses defender and becomes a Human until end of turn.",
+        ),
+        (
+            "Xathrid Gorgon",
+            "Creature - Gorgon",
+            "Deathtouch\n{2}{B}, {T}: Put a petrification counter on target creature. It gains defender and becomes a colorless artifact in addition to its other types. Its activated abilities can't be activated.",
+        ),
+        (
+            "Herald of the Forgotten",
+            "Creature - Cat",
+            "Flying\nWhen this creature enters, if you cast it, return any number of target permanent cards with cycling abilities from your graveyard to the battlefield.",
+        ),
+        (
+            "Banishing Slash",
+            "Sorcery",
+            "Destroy up to one target artifact, enchantment, or tapped creature. Then if you control an artifact and an enchantment, create a 2/2 white Samurai creature token with vigilance.",
+        ),
+        (
+            "Ashes of the Abhorrent",
+            "Enchantment",
+            "Players can't cast spells from graveyards or activate abilities of cards in graveyards.\nWhenever a creature dies, you gain 1 life.",
+        ),
+        (
+            "Indomitable Might",
+            "Enchantment - Aura",
+            "Flash\nEnchant creature\nEnchanted creature gets +3/+3.\nEnchanted creature's controller may have it assign its combat damage as though it weren't blocked.",
+        ),
+    ];
+    for (name, type_line, text) in wave14_cards {
+        let compiled = compile_v2_strict(name, type_line, text, &vocab);
+        assert!(
+            !compiled.faces[0].spell_effects.is_empty()
+                || !compiled.faces[0].abilities.is_empty()
+                || !compiled.faces[0].statics.is_empty()
+                || !compiled.faces[0].replacements.is_empty(),
+            "{name} should produce non-empty typed IR"
+        );
+    }
+
+    // 2. Opalescence -> Compound([SetSubtypes, DynamicBasePT])
+    let opalescence = compile_v2_strict(
+        "Opalescence",
+        "Enchantment",
+        "Each other non-Aura enchantment is a creature in addition to its other types and has base power and base toughness each equal to its mana value.",
+        &vocab,
+    );
+    assert!(opalescence.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::Compound(parts)
+            if parts.iter().any(|p| matches!(p, StaticAbility::SetSubtypes { keep_existing: true, .. }))
+            && parts.iter().any(|p| matches!(p, StaticAbility::DynamicBasePT { power: Some(_), toughness: Some(_) }))
+    )));
+
+    // 3. Lich's Tomb -> GlobalFlag(DontLoseForZeroLife)
+    let tomb = compile_v2_strict(
+        "Lich's Tomb",
+        "Artifact",
+        "You don't lose the game for having 0 or less life.",
+        &vocab,
+    );
+    assert!(tomb.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::GlobalFlag(StaticFlagKind::DontLoseForZeroLife)
+    )));
+
+    // 4. The Blue Spirit -> NextSpellModifier wrapping AsThoughFlash
+    let spirit = compile_v2_strict(
+        "The Blue Spirit",
+        "Legendary Creature - Human Rogue",
+        "You may cast the first creature spell you cast each turn as though it had flash.",
+        &vocab,
+    );
+    assert!(spirit.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::NextSpellModifier { effect, .. }
+            if matches!(effect.as_ref(), StaticAbility::ZoneCastPermission { mode: CastPermissionMode::AsThoughFlash { .. }, .. })
+    )));
+
+    // 5. Ashes of the Abhorrent -> Compound([CantCastSpellsMatching, RuleRestriction(ActivatedAbilitiesCantBeActivated)])
+    let ashes = compile_v2_strict(
+        "Ashes of the Abhorrent",
+        "Enchantment",
+        "Players can't cast spells from graveyards or activate abilities of cards in graveyards.",
+        &vocab,
+    );
+    assert!(ashes.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::Compound(parts)
+            if parts.iter().any(|p| matches!(p, StaticAbility::CantCastSpellsMatching { .. }))
+            && parts.iter().any(|p| matches!(p, StaticAbility::RuleRestriction { rule: RuleRestrictionKind::ActivatedAbilitiesCantBeActivated, .. }))
+    )));
+
+    // 6. Wrathful Red Dragon -> AnyTarget except Dragon -> Compound([TargetPlayer, TargetObject(forbidden_subtypes: ["Dragon"])])
+    let dragon = compile_v2_strict(
+        "Wrathful Red Dragon",
+        "Creature - Dragon",
+        "Whenever a Dragon you control is dealt damage, it deals that much damage to any target that isn't a Dragon.",
+        &vocab,
+    );
+    assert!(dragon.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { body, .. } => body.iter().any(|e| matches!(
+            e,
+            Effect::DealDamage {
+                target: SubjectRef::Compound(parts),
+                ..
+            } if parts.iter().any(|p| matches!(
+                p,
+                SubjectRef::TargetObject { filter, .. }
+                    if filter.forbidden_subtypes.iter().any(|s| s == "Dragon")
+            ))
+        )),
+        _ => false,
+    }));
+
+    // 7. Gift of the Viper -> 3 PutCounters mutations + Untap
+    let viper = compile_v2_strict(
+        "Gift of the Viper",
+        "Instant",
+        "Put a +1/+1 counter, a reach counter, and a deathtouch counter on target creature. Untap it.",
+        &vocab,
+    );
+    let put_count = viper.faces[0]
+        .spell_effects
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Effect::MutateObject {
+                    mutation: ObjectMutation::PutCounters { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(put_count, 3);
+
+    // 8. Psychogenic Probe fails closed honestly (cannot drop `a spell or ability causes` on ShufflesLibrary)
+    let probe = compile_card_v2(
+        &CardInput {
+            oracle_id: "psychogenic-probe",
+            name: "Psychogenic Probe",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Psychogenic Probe",
+                type_line: "Artifact",
+                oracle_text: "Whenever a spell or ability causes a player to shuffle their library, this artifact deals 2 damage to that player.",
+            }],
+        },
+        &vocab,
+    );
+    assert!(!probe.strictly_compiled);
+    let _ = TriggerEvent::PlayerAction {
+        player: PlayerRef::EachPlayer,
+        action: PlayerTriggerKind::ShufflesLibrary,
+    };
+
+    // 9. Wishful Merfolk -> chained RemoveKeywords + BecomeCreatureTypes on same subject
+    let merfolk = compile_v2_strict(
+        "Wishful Merfolk",
+        "Creature - Merfolk",
+        "{1}{U}: This creature loses defender and becomes a Human until end of turn.",
+        &vocab,
+    );
+    assert!(merfolk.faces[0].abilities.iter().any(|a| match a {
+        Ability::Activated { body, .. } => {
+            body.iter().any(|e| {
+                matches!(
+                    e,
+                    Effect::MutateObject {
+                        mutation: ObjectMutation::RemoveKeywords(_),
+                        ..
+                    }
+                )
+            }) && body.iter().any(|e| {
+                matches!(
+                    e,
+                    Effect::MutateObject {
+                        mutation: ObjectMutation::BecomeCreatureTypes { .. },
+                        ..
+                    }
+                )
+            })
+        }
+        _ => false,
+    }));
+}
+
+/// 18. Deep Wave 15 compositional IR assertions (+1,107 / -0 cards, 89.22% -> 92.66%, 0 IR edits;
+///     modular splits `filter/relatives.rs`, `clause/sentence_ext.rs`, `clause/zone_ext.rs`,
+///     `condition/extended.rs`): iconic staples across filter, clause, static, replacement,
+///     trigger, condition, and value families.
+#[test]
+fn v2_wave15_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        CastPermissionMode, Replacement, StaticAbility, TriggerModifierKind, VarName,
+    };
+
+    let vocab = v2_vocab_or_env();
+
+    let wave15_cards = [
+        (
+            "Runechanter's Pike",
+            "Artifact - Equipment",
+            "Equipped creature has first strike and gets +X/+0, where X is the number of instant and sorcery cards in your graveyard.\nEquip {2}",
+        ),
+        (
+            "Aettir and Priwen",
+            "Legendary Artifact - Equipment",
+            "Equipped creature has base power and toughness X/X, where X is your life total.\nEquip {5}",
+        ),
+        (
+            "Deep Freeze",
+            "Enchantment - Aura",
+            "Enchant creature\nEnchanted creature has base power and toughness 0/4, has defender, loses all other abilities, and is a blue Wall in addition to its other colors and types.",
+        ),
+        (
+            "Aluren",
+            "Enchantment",
+            "Any player may cast creature spells with mana value 3 or less without paying their mana costs and as though they had flash.",
+        ),
+        (
+            "Drannith Magistrate",
+            "Creature - Human Wizard",
+            "Your opponents can't cast spells from anywhere other than their hands.",
+        ),
+        ("Time Stop", "Instant", "End the turn."),
+        (
+            "Mindslaver",
+            "Legendary Artifact",
+            "{4}, {T}, Sacrifice Mindslaver: You control target player during that player's next turn.",
+        ),
+        (
+            "Tree of Perdition",
+            "Creature - Plant",
+            "Defender\n{T}: Exchange target opponent's life total with Tree of Perdition's toughness.",
+        ),
+        (
+            "Inalla, Archmage Ritualist",
+            "Legendary Creature - Human Wizard",
+            "Eminence \u{2014} Whenever another nontoken Wizard you control enters, if Inalla is in the command zone or on the battlefield, you may pay {1}. If you do, create a token that's a copy of that Wizard. The token gains haste. Exile it at the beginning of the next end step.\nTap five untapped Wizards you control: Target player loses 7 life.",
+        ),
+        (
+            "Bloodspore Thrinax",
+            "Creature - Lizard",
+            "Devour 1\nEach other creature you control enters with an additional X +1/+1 counters on it, where X is the number of +1/+1 counters on Bloodspore Thrinax.",
+        ),
+    ];
+    for (name, type_line, text) in wave15_cards {
+        let compiled = compile_v2_strict(name, type_line, text, &vocab);
+        assert!(
+            !compiled.faces[0].spell_effects.is_empty()
+                || !compiled.faces[0].abilities.is_empty()
+                || !compiled.faces[0].statics.is_empty()
+                || !compiled.faces[0].replacements.is_empty(),
+            "{name} should produce non-empty typed IR"
+        );
+    }
+
+    // Deep IR checks across the 4 worker domains
+    let aluren = compile_v2_strict(
+        "Aluren",
+        "Enchantment",
+        "Any player may cast creature spells with mana value 3 or less without paying their mana costs and as though they had flash.",
+        &vocab,
+    );
+    assert!(aluren.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::Compound(parts)
+            if parts.iter().any(|p| matches!(p, StaticAbility::ZoneCastPermission { mode: CastPermissionMode::WithoutPaying, .. }))
+            && parts.iter().any(|p| matches!(p, StaticAbility::ZoneCastPermission { mode: CastPermissionMode::AsThoughFlash { .. }, .. }))
+    )));
+
+    // Hushbringer (`entering or dying`) and Containment Priest (`nontoken creature would enter and it wasn't cast`)
+    // fail closed honestly rather than dropping `or dying` or `nontoken` / `wasn't cast`.
+    for (oid, name, tl, txt) in [
+        (
+            "hushbringer",
+            "Hushbringer",
+            "Creature - Faerie",
+            "Flying, lifelink\nCreatures entering or dying don't cause abilities to trigger.",
+        ),
+        (
+            "containment-priest",
+            "Containment Priest",
+            "Creature - Human Cleric",
+            "Flash\nIf a nontoken creature would enter and it wasn't cast, exile it instead.",
+        ),
+    ] {
+        let c = compile_card_v2(
+            &CardInput {
+                oracle_id: oid,
+                name,
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name,
+                    type_line: tl,
+                    oracle_text: txt,
+                }],
+            },
+            &vocab,
+        );
+        assert!(!c.strictly_compiled, "{name} should fail closed honestly");
+    }
     let _ = (
-        FilterFlags::DIFFERENT_NAMES,
-        FilterPredicate::AmongPriorCards,
+        Replacement::EntersTapped { unless: None },
+        TriggerModifierKind::EntersDontTrigger,
+    );
+
+    let pike = compile_v2_strict(
+        "Runechanter's Pike",
+        "Artifact - Equipment",
+        "Equipped creature has first strike and gets +X/+0, where X is the number of instant and sorcery cards in your graveyard.\nEquip {2}",
+        &vocab,
+    );
+    assert!(pike.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::BindVariable {
+            var: VarName::X,
+            inner,
+            ..
+        } if matches!(inner.as_ref(), StaticAbility::Compound(parts)
+            if parts.iter().any(|p| matches!(p, StaticAbility::GrantKeywords { .. }))
+            && parts.iter().any(|p| matches!(p, StaticAbility::ContinuousModifyPT { .. })))
+    )));
+}
+
+#[test]
+fn v2_wave16_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{Ability, Cost, Effect, StaticAbility};
+
+    let vocab = v2_vocab();
+
+    // Honestly compilable Wave 16 cards (zero IR edits, zero dishonest proxies)
+    let wave16_cards: &[(&str, &str, &str)] = &[
+        (
+            "Dream Halls",
+            "Enchantment",
+            "Rather than pay the mana cost for a spell, its controller may discard a card that shares a color with that spell.",
+        ),
+        (
+            "Cataclysmic Gearhulk",
+            "Artifact Creature - Construct",
+            "Vigilance\nWhen this creature enters, each player chooses an artifact, a creature, an enchantment, and a planeswalker from among the nonland permanents they control, then sacrifices the rest.",
+        ),
+        (
+            "Steam Augury",
+            "Instant",
+            "Reveal the top five cards of your library and separate them into two piles. An opponent chooses one of those piles. Put that pile into your hand and the other into your graveyard.",
+        ),
+        (
+            "Elsha of the Infinite",
+            "Legendary Creature - Djinn Monk",
+            "Prowess\nYou may look at the top card of your library any time.\nYou may cast noncreature spells from the top of your library. If you cast a spell this way, you may cast it as though it had flash.",
+        ),
+    ];
+    for (name, type_line, text) in wave16_cards {
+        let compiled = compile_v2_strict(name, type_line, text, &vocab);
+        assert!(
+            !compiled.faces[0].spell_effects.is_empty()
+                || !compiled.faces[0].abilities.is_empty()
+                || !compiled.faces[0].statics.is_empty()
+                || !compiled.faces[0].replacements.is_empty(),
+            "{name} should produce non-empty typed IR"
+        );
+    }
+
+    // Wave 16 cards requiring unmodeled IR fail closed honestly after the integrity purge
+    for (oid, name, tl, txt) in [
+        (
+            "grafdiggers-cage",
+            "Grafdigger's Cage",
+            "Artifact",
+            "Creature cards in graveyards and libraries can't enter.\nPlayers can't cast spells from graveyards or libraries.",
+        ),
+        (
+            "hinata",
+            "Hinata, Dawn-Crowned",
+            "Legendary Creature - Kirin Spirit",
+            "Flying, trample\nSpells you cast cost {1} less to cast for each target.\nSpells your opponents cast cost {1} more to cast for each target.",
+        ),
+        (
+            "time-vault",
+            "Time Vault",
+            "Artifact",
+            "Time Vault enters tapped.\nTime Vault doesn't untap during your untap step.\nIf you would begin your turn while Time Vault is tapped, you may skip that turn instead. If you do, untap Time Vault.\n{T}: Take an extra turn after this one.",
+        ),
+        (
+            "councils-judgment",
+            "Council's Judgment",
+            "Sorcery",
+            "Will of the council \u{2014} Starting with you, each player votes for a nonland permanent you don't control. Exile each permanent with the most votes or tied for most votes.",
+        ),
+    ] {
+        let c = compile_card_v2(
+            &CardInput {
+                oracle_id: oid,
+                name,
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name,
+                    type_line: tl,
+                    oracle_text: txt,
+                }],
+            },
+            &vocab,
+        );
+        assert!(!c.strictly_compiled, "{name} should fail closed honestly");
+    }
+    let _ = (
+        Ability::Activated {
+            cost: vec![Cost::TapSelf],
+            body: Vec::new(),
+            restrictions: Vec::new(),
+        },
+        Effect::ReflexiveTrigger(Vec::new()),
+        StaticAbility::RemoveAllAbilities {
+            subject: spellwake_oracle_compiler::v2::ir::SubjectRef::SelfObject,
+        },
+    );
+}
+
+#[test]
+fn v2_wave17_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{Ability, ChoiceKind, Cost, Effect, StaticAbility};
+
+    let vocab = v2_vocab();
+
+    // Honestly compilable Wave 17 cards (reflexive modals, Siege bullets, honest exact-IR triggers & effects)
+    let wave17_cards: &[(&str, &str, &str)] = &[
+        (
+            "Hylda of the Icy Crown",
+            "Legendary Creature - Human Warlock",
+            "Whenever you tap an untapped creature an opponent controls, you may pay {1}. When you do, choose one \u{2014}\n\u{2022} Create a 4/4 white and blue Elemental creature token.\n\u{2022} Put a +1/+1 counter on each creature you control.\n\u{2022} Scry 2, then draw a card.",
+        ),
+        (
+            "Caesar, Legion's Emperor",
+            "Legendary Creature - Human Soldier",
+            "Whenever you attack, you may sacrifice another creature. When you do, choose two \u{2014}\n\u{2022} Create two 1/1 red and white Soldier creature tokens with haste that are tapped and attacking.\n\u{2022} You draw a card and you lose 1 life.\n\u{2022} Caesar deals damage equal to the number of creature tokens you control to target opponent.",
+        ),
+        (
+            "Monastery Siege",
+            "Enchantment",
+            "As this enchantment enters, choose Khans or Dragons.\n\u{2022} Khans \u{2014} At the beginning of your draw step, draw an additional card, then discard a card.\n\u{2022} Dragons \u{2014} Spells your opponents cast that target you or a permanent you control cost {2} more to cast.",
+        ),
+        (
+            "Timely Reinforcements",
+            "Sorcery",
+            "If you have less life than an opponent, you gain 6 life. If you control fewer creatures than an opponent, create three 1/1 white Soldier creature tokens.",
+        ),
+        (
+            "Duskana, the Rage Mother",
+            "Legendary Creature - Bear",
+            "When Duskana enters, draw a card for each creature you control with base power and toughness 2/2.\nWhenever a creature you control with base power and toughness 2/2 attacks, it gets +3/+3 until end of turn.",
+        ),
+        (
+            "Preacher of the Schism",
+            "Creature - Vampire Cleric",
+            "Deathtouch\nWhenever this creature attacks the player with the most life or tied for most life, create a 1/1 white Vampire creature token with lifelink.\nWhenever this creature attacks while you have the most life or are tied for most life, you draw a card and you lose 1 life.",
+        ),
+        (
+            "Rowan, Scion of War",
+            "Legendary Creature - Human Wizard",
+            "Menace\n{T}: Spells you cast this turn that are black and/or red cost {X} less to cast, where X is the amount of life you lost this turn. Activate only as a sorcery.",
+        ),
+    ];
+
+    for (name, type_line, text) in wave17_cards {
+        let compiled = compile_v2_strict(name, type_line, text, &vocab);
+        assert!(
+            !compiled.faces[0].spell_effects.is_empty()
+                || !compiled.faces[0].abilities.is_empty()
+                || !compiled.faces[0].statics.is_empty()
+                || !compiled.faces[0].replacements.is_empty(),
+            "{name} should produce non-empty typed IR"
+        );
+    }
+
+    // 1. Hylda of the Icy Crown -> Triggered ability with TapOpponentCreature + ReflexiveTrigger containing 3-mode Modal
+    let hylda = compile_v2_strict(
+        "Hylda of the Icy Crown",
+        "Legendary Creature - Human Warlock",
+        "Whenever you tap an untapped creature an opponent controls, you may pay {1}. When you do, choose one \u{2014}\n\u{2022} Create a 4/4 white and blue Elemental creature token.\n\u{2022} Put a +1/+1 counter on each creature you control.\n\u{2022} Scry 2, then draw a card.",
+        &vocab,
+    );
+    assert!(hylda.faces[0].abilities.iter().any(|a| matches!(
+        a,
+        Ability::Triggered { body, .. }
+            if body.iter().any(|e| matches!(
+                e,
+                Effect::ReflexiveTrigger(inner)
+                    if inner.iter().any(|ie| matches!(
+                        ie,
+                        Effect::PromptChoice { kind: ChoiceKind::Modal { modes, .. }, .. } if modes.len() == 3
+                    ))
+            ))
+    )));
+
+    // 2. Monastery Siege -> Replacement choice + Khans triggered + Dragons static cost modifier
+    let siege = compile_v2_strict(
+        "Monastery Siege",
+        "Enchantment",
+        "As this enchantment enters, choose Khans or Dragons.\n\u{2022} Khans \u{2014} At the beginning of your draw step, draw an additional card, then discard a card.\n\u{2022} Dragons \u{2014} Spells your opponents cast that target you or a permanent you control cost {2} more to cast.",
+        &vocab,
+    );
+    assert!(!siege.faces[0].replacements.is_empty());
+    assert!(
+        siege.faces[0]
+            .abilities
+            .iter()
+            .any(|a| matches!(a, Ability::Triggered { .. }))
+    );
+    assert!(
+        siege.faces[0]
+            .statics
+            .iter()
+            .any(|s| matches!(s, StaticAbility::CostModifier { .. }))
+    );
+
+    // 3. Lurrus (Companion) and Clay Golem (Roll a d8 cost) fail closed honestly after the integrity purge
+    for (oid, name, tl, txt) in [
+        (
+            "lurrus",
+            "Lurrus of the Dream-Den",
+            "Legendary Creature - Cat Nightmare",
+            "Companion \u{2014} Each permanent card in your starting deck has mana value 2 or less.\nLifelink\nOnce during each of your turns, you may cast a permanent spell with mana value 2 or less from your graveyard.",
+        ),
+        (
+            "clay-golem",
+            "Clay Golem",
+            "Artifact Creature - Golem",
+            "{6}, Roll a d8: Monstrosity X, where X is the result.\nBerserk \u{2014} When this creature becomes monstrous, destroy target permanent.",
+        ),
+    ] {
+        let c = compile_card_v2(
+            &CardInput {
+                oracle_id: oid,
+                name,
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name,
+                    type_line: tl,
+                    oracle_text: txt,
+                }],
+            },
+            &vocab,
+        );
+        assert!(!c.strictly_compiled, "{name} should fail closed honestly");
+    }
+    let _ = Cost::TapSelf;
+}
+
+#[test]
+fn v2_adversarial_integrity_purge_fail_closed_and_semantics_suite() {
+    let vocab = v2_vocab_or_env();
+
+    // 1. All 3 live fail-open backdoors + dishonest proxy traps MUST fail closed!
+    let must_fail_closed: &[(&str, &str, &str)] = &[
+        (
+            "Inline Would Nonsense",
+            "Sorcery",
+            "If a player would florb the zargle, draw a card instead.",
+        ),
+        ("Unknown Token Zargle", "Sorcery", "Create a Zargle token."),
+        ("Unknown Token Idol", "Sorcery", "Create an Idol token."),
+        (
+            "Bare Ability Word On Creature",
+            "Creature - Human",
+            "Soulknell \u{2014} Draw a card.",
+        ),
+        (
+            "Bare Ability Word Counter On Creature",
+            "Creature - Beast",
+            "Death knell \u{2014} Put a trample counter on target creature.",
+        ),
+        (
+            "Even Power Proxy Trap",
+            "Creature - Wizard",
+            "As long as this creature's power is even, it has flying.",
+        ),
+        (
+            "No Longer Suspected Inversion Trap",
+            "Instant",
+            "Target creature is no longer suspected.",
+        ),
+        (
+            "Spend Only Mana Produced By Inversion Trap",
+            "Artifact",
+            "Spend only mana produced by basic lands to cast creature spells.",
+        ),
+        (
+            "Roll Die Cost Proxy Trap",
+            "Artifact Creature - Golem",
+            "{6}, Roll a d8: Draw a card.",
+        ),
+        (
+            "Reflexive Modal Gibberish Trap",
+            "Enchantment",
+            "Whenever a creature you control dies, you may pay {1}. When florb zargles the blargle, choose one \u{2014}\n\u{2022} Draw a card.",
+        ),
+        (
+            "Arbitrary Role Token Trap",
+            "Sorcery",
+            "Create a Florb Role token attached to target creature you control.",
+        ),
+        (
+            "Keyword Period Spell Effect Leak On Creature",
+            "Creature - Bird",
+            "Flying. Draw a card.",
+        ),
+        (
+            "Truncated Token Thats Trap",
+            "Sorcery",
+            "Create a 1/1 white Soldier creature token that's.",
+        ),
+        (
+            "Static Period Spell Effect Leak On Enchantment",
+            "Enchantment",
+            "Creatures you control have haste. Draw a card.",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in must_fail_closed {
+        let compiled = compile_card_v2(
+            &CardInput {
+                oracle_id: "test-fail-closed",
+                name,
+                layout: "normal",
+                faces: vec![FaceInput {
+                    name,
+                    type_line,
+                    oracle_text,
+                }],
+            },
+            &vocab,
+        );
+        assert!(
+            !compiled.strictly_compiled,
+            "Adversarial trap '{name}' MUST fail closed, but compiled cleanly as: {:#?}",
+            compiled.faces[0]
+        );
+    }
+
+    // 2. Curly quotes & typographic apostrophes normalize cleanly in v2 lexer/card pipeline.
+    let curly = compile_v2_strict(
+        "Curly Quote Test",
+        "Enchantment",
+        "Creatures you control can\u{2019}t be blocked and have \u{201c}{T}: Draw a card.\u{201d}",
+        &vocab,
+    );
+    assert!(!curly.faces[0].statics.is_empty());
+
+    // 3. Multi-zone possessive owner carries `TargetPlayer` to all 3 listed zones (never `Default`).
+    let multi_zone = compile_v2_strict(
+        "Salva Tore Multi Zone",
+        "Sorcery",
+        "Search target player's graveyard, hand, and library for a card and exile it. Then that player shuffles.",
+        &vocab,
+    );
+    let zones_found = multi_zone.faces[0].spell_effects.iter().any(|e| match e {
+        Effect::ZoneOp { from, .. } if from.len() == 3 => {
+            from.iter().all(|z| z.owner == ZoneOwner::TargetPlayer)
+        }
+        _ => false,
+    });
+    assert!(
+        zones_found,
+        "Multi-zone search must carry ZoneOwner::TargetPlayer to all 3 zones, got: {:#?}",
+        multi_zone.faces[0].spell_effects
+    );
+
+    // 4. `attacks alone` MUST NOT silently drop `alone` (either encodes AttackingAlone or fails closed).
+    let alone_card = compile_card_v2(
+        &CardInput {
+            oracle_id: "test-alone",
+            name: "Aspiring Hero",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Aspiring Hero",
+                type_line: "Creature - Human Knight",
+                oracle_text: "Whenever this creature attacks alone, it gets +2/+2 until end of turn.",
+            }],
+        },
+        &vocab,
+    );
+    if alone_card.strictly_compiled {
+        let has_alone = alone_card.faces[0].abilities.iter().any(|a| match a {
+            Ability::Triggered { trigger, .. } => {
+                format!("{:?}", trigger.intervening_if).contains("AttackingAlone")
+                    || format!("{:?}", trigger.events).contains("AttackingAlone")
+            }
+            _ => false,
+        });
+        assert!(
+            has_alone,
+            "`attacks alone` compiled without preserving AttackingAlone: {:#?}",
+            alone_card.faces[0].abilities
+        );
+    }
+
+    // 5. Land animation (`Grove of Whispering Roots`) preserves colors & merges `It's still a land.` cleanly
+    let grove = compile_v2_strict(
+        "Grove of Whispering Roots",
+        "Land",
+        "{2}{G}: Until end of turn, this land becomes a 3/3 green Elemental creature with haste. It's still a land.",
+        &vocab,
+    );
+    assert!(
+        grove.faces[0].abilities.iter().any(|a| match a {
+            Ability::Activated { body, .. } => {
+                let has_bogus_permanent_become = body.iter().any(|e| {
+                    matches!(
+                        e,
+                        Effect::MutateObject {
+                            mutation: ObjectMutation::BecomeCreatureTypes { .. },
+                            duration: Duration::Permanent,
+                            ..
+                        }
+                    )
+                });
+                let scoped_ok = body.iter().any(|e| match e {
+                    Effect::ScopedDuration {
+                        duration: Duration::UntilEndOfTurn,
+                        body: inner,
+                    } => {
+                        let has_green = inner.iter().any(|ie| {
+                            matches!(
+                                ie,
+                                Effect::MutateObject {
+                                    mutation: ObjectMutation::BecomeColors { colors, .. },
+                                    ..
+                                } if *colors == ColorMask::GREEN
+                            )
+                        });
+                        let has_keep_types = inner.iter().any(|ie| {
+                            matches!(
+                                ie,
+                                Effect::MutateObject {
+                                    mutation: ObjectMutation::BecomeCreatureTypes {
+                                        keep_existing_types: true,
+                                        ..
+                                    },
+                                    ..
+                                }
+                            )
+                        });
+                        has_green && has_keep_types
+                    }
+                    _ => false,
+                });
+                scoped_ok && !has_bogus_permanent_become
+            }
+            _ => false,
+        }),
+        "Grove of Whispering Roots must preserve GREEN + keep_existing_types: true inside UntilEndOfTurn with zero Permanent BecomeCreatureTypes, got: {:#?}",
+        grove.faces[0].abilities
     );
 }

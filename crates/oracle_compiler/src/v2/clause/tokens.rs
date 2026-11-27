@@ -1,8 +1,6 @@
 //! Strictly-typed token creation parser (predefined, creature, X/X, and copy tokens) for `v2`.
 
-use crate::FaceInput;
 use crate::ast::{CardTypeMask, ColorMask};
-use crate::v2::card::compile_face_v2;
 use crate::v2::filter::{parse_keyword_list, parse_subject_ref};
 use crate::v2::ir::{
     CopyException, EntryModifiers, PredefinedToken, TokenSpec, ValueExpr, VarName,
@@ -12,45 +10,124 @@ use crate::v2::parser::{PResult, TokenStream, opt};
 use crate::v2::value::{parse_for_each_expr, parse_value_expr};
 use crate::vocab::{lookup_card_type, lookup_color};
 
+use super::{compile_quoted_face, compile_quoted_permanent};
+
 pub(crate) fn parse_token_creation(
     ts: &mut TokenStream<'_>,
 ) -> PResult<(ValueExpr, TokenSpec, EntryModifiers)> {
+    parse_token_creation_named(ts, None)
+}
+
+fn finalize_token_count(
+    ts: &mut TokenStream<'_>,
+    count: ValueExpr,
+    deferred_equal_to: bool,
+) -> PResult<ValueExpr> {
+    if deferred_equal_to && ts.eat_phrase(&["equal", "to"]) {
+        parse_value_expr(ts)
+    } else if let Some(fe) = opt(ts, parse_for_each_expr) {
+        Ok(if matches!(count, ValueExpr::Const(1)) {
+            fe
+        } else {
+            ValueExpr::Mul(Box::new(count), Box::new(fe))
+        })
+    } else {
+        Ok(count)
+    }
+}
+
+fn parse_token_combat_mods(ts: &mut TokenStream<'_>, mods: &mut EntryModifiers) {
+    let eat_atk_target = |s: &mut TokenStream<'_>| {
+        let _ = s.eat_any_phrase(&[
+            &["that", "opponent"],
+            &["that", "player"],
+            &["the", "defending", "player"],
+            &["defending", "player"],
+            &["them"],
+        ]);
+        let _ = s.eat_any_phrase(&[
+            &["or", "a", "planeswalker", "they", "control"],
+            &["or", "a", "planeswalker", "that", "player", "controls"],
+        ]);
+    };
+    if ts.eat_any_phrase(&[
+        &["and", "that's", "tapped", "and", "attacking"],
+        &["and", "that", "are", "tapped", "and", "attacking"],
+        &["that's", "tapped", "and", "attacking"],
+        &["that", "are", "tapped", "and", "attacking"],
+        &["tapped", "and", "attacking"],
+    ]) {
+        mods.tapped = true;
+        mods.attacking = true;
+        eat_atk_target(ts);
+    } else if ts.eat_any_phrase(&[
+        &["and", "that's", "blocking"],
+        &["and", "that", "are", "blocking"],
+        &["that's", "blocking"],
+        &["blocking"],
+    ]) {
+        let _ = crate::v2::parser::try_parse(ts, parse_subject_ref);
+    } else if ts.eat_any_phrase(&[
+        &["that's", "attacking"],
+        &["that", "are", "attacking"],
+        &["attacking"],
+    ]) {
+        mods.attacking = true;
+        eat_atk_target(ts);
+    } else if ts.eat_any_phrase(&[
+        &["that's", "tapped"],
+        &["that", "are", "tapped"],
+        &["tapped"],
+    ]) {
+        mods.tapped = true;
+    }
+}
+
+fn parse_token_creation_named(
+    ts: &mut TokenStream<'_>,
+    explicit_name: Option<&str>,
+) -> PResult<(ValueExpr, TokenSpec, EntryModifiers)> {
     // Named legendary token: `Create <Name>, a[n] [legendary] P/T <colors> <subtypes> creature token [with ...]`
-    // (`Battle at the Helvault`, `Nissa`, `Jiang Yanggu`, `Darkstar`, `Voja`, etc.)
-    {
+    if explicit_name.is_none() {
         let ncp = ts.checkpoint();
-        let mut name_words = 0usize;
-        while name_words < 6 {
+        let mut name_parts: Vec<&str> = Vec::new();
+        while name_parts.len() < 7 {
             if ts.eat_tilde() {
                 let _ = ts.eat_word("'s");
-                name_words += 1;
+                name_parts.push("~");
                 if ts.eat_comma()
                     && (ts.peek_phrase(&["a", "legendary"]) || ts.peek_phrase(&["an", "legendary"]))
                 {
                     break;
                 }
-            } else if ts.peek_word().is_some_and(|w| {
-                w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-                    || matches!(w.to_ascii_lowercase().as_str(), "the" | "of" | "and")
-            }) {
+            } else if let Some(w) = ts.peek_word()
+                && (w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                    || matches!(
+                        w.to_ascii_lowercase().as_str(),
+                        "the" | "of" | "and" | "to" | "in" | "at" | "on" | "from" | "for"
+                    ))
+            {
                 ts.next_word();
-                name_words += 1;
+                name_parts.push(w);
                 if ts.eat_comma() {
                     if ts.peek_phrase(&["a", "legendary"]) || ts.peek_phrase(&["an", "legendary"]) {
                         break;
                     }
-                    // Could be multi-part title like `Ashaya, the Awoken World, a legendary ...`
                     continue;
                 }
             } else {
                 break;
             }
         }
-        if name_words > 0
+        if !name_parts.is_empty()
             && (ts.peek_phrase(&["a", "legendary"]) || ts.peek_phrase(&["an", "legendary"]))
-            && let Ok(res) = crate::v2::parser::try_parse(ts, parse_token_creation)
         {
-            return Ok(res);
+            let joined = name_parts.join(" ");
+            if let Ok(res) =
+                crate::v2::parser::try_parse(ts, |s| parse_token_creation_named(s, Some(&joined)))
+            {
+                return Ok(res);
+            }
         }
         ts.restore(ncp);
     }
@@ -61,7 +138,11 @@ pub(crate) fn parse_token_creation(
         ValueExpr::Const(1)
     } else if ts.eat_phrase(&["that", "many"]) {
         ValueExpr::PriorActionCount(crate::v2::ir::PriorActionKind::ThatMany)
-    } else if ts.eat_phrase(&["an", "additional"]) || ts.eat_word("a") || ts.eat_word("an") {
+    } else if ts.eat_phrase(&["another", "one"])
+        || ts.eat_phrase(&["an", "additional"])
+        || ts.eat_word("a")
+        || ts.eat_word("an")
+    {
         ValueExpr::Const(1)
     } else {
         parse_value_expr(ts)?
@@ -92,28 +173,15 @@ pub(crate) fn parse_token_creation(
             attacking: leading_tapped_and_attacking,
             ..EntryModifiers::default()
         };
-        if ts.eat_phrase(&["and", "that", "are", "tapped", "and", "attacking"])
-            || ts.eat_phrase(&["that's", "tapped", "and", "attacking"])
-        {
-            modifiers.tapped = true;
-            modifiers.attacking = true;
-            let _ = ts.eat_phrase(&["that", "opponent"])
-                || ts.eat_phrase(&["that", "player"])
-                || ts.eat_phrase(&["the", "defending", "player"])
-                || ts.eat_phrase(&["defending", "player"]);
+        parse_token_combat_mods(ts, &mut modifiers);
+        if ts.eat_phrase(&["attached", "to"]) {
+            modifiers.attached_to = Some(Box::new(parse_subject_ref(ts)?));
         }
         let exceptions = parse_copy_exceptions(ts);
-        let final_count = if deferred_equal_to && ts.eat_phrase(&["equal", "to"]) {
-            parse_value_expr(ts)?
-        } else if let Some(fe) = opt(ts, parse_for_each_expr) {
-            if matches!(count, ValueExpr::Const(1)) {
-                fe
-            } else {
-                ValueExpr::Mul(Box::new(count), Box::new(fe))
-            }
-        } else {
-            count
-        };
+        if modifiers.attached_to.is_none() && ts.eat_phrase(&["attached", "to"]) {
+            modifiers.attached_to = Some(Box::new(parse_subject_ref(ts)?));
+        }
+        let final_count = finalize_token_count(ts, count, deferred_equal_to)?;
         return Ok((
             final_count,
             TokenSpec::CopyOf {
@@ -139,6 +207,8 @@ pub(crate) fn parse_token_creation(
             Some(PredefinedToken::CursedRole)
         } else if ts.eat_phrase(&["young", "hero", "role"]) {
             Some(PredefinedToken::YoungHeroRole)
+        } else if ts.eat_phrase(&["virtuous", "role"]) {
+            Some(PredefinedToken::Role)
         } else if let Some(w) = ts.next_word() {
             match w.to_ascii_lowercase().as_str() {
                 "treasure" => Some(PredefinedToken::Treasure),
@@ -177,17 +247,7 @@ pub(crate) fn parse_token_creation(
             if ts.eat_phrase(&["attached", "to"]) {
                 mods.attached_to = Some(Box::new(parse_subject_ref(ts)?));
             }
-            let final_count = if deferred_equal_to && ts.eat_phrase(&["equal", "to"]) {
-                parse_value_expr(ts)?
-            } else if let Some(fe) = opt(ts, parse_for_each_expr) {
-                if count == ValueExpr::Const(1) {
-                    fe
-                } else {
-                    ValueExpr::Mul(Box::new(count), Box::new(fe))
-                }
-            } else {
-                count
-            };
+            let final_count = finalize_token_count(ts, count, deferred_equal_to)?;
             return Ok((final_count, TokenSpec::Predefined(pt), mods));
         }
         ts.restore(cp);
@@ -243,7 +303,7 @@ pub(crate) fn parse_token_creation(
             saw_token_word = true;
             break;
         }
-        if low == "and" || low == "colorless" || low == "legendary" {
+        if low == "and" || low == "colorless" || low == "legendary" || low == "snow" {
             ts.next_word();
             continue;
         }
@@ -263,82 +323,140 @@ pub(crate) fn parse_token_creation(
     if !saw_token_word || (power_expr.is_none() && card_types.is_empty() && subtypes.is_empty()) {
         return Err(ts.err("expected P/T or token types before `token`"));
     }
-    // Optional `named <Capitalized Name>` (e.g. `create a colorless artifact token named Lotus with "..."`)
+    // Optional `named [~'s] <Capitalized Name>`
+    let mut inline_name: Option<String> = None;
     if ts.eat_word("named") {
-        let mut words_eaten = 0usize;
-        while words_eaten < 4
+        let mut parts: Vec<&str> = Vec::new();
+        if ts.eat_tilde() {
+            let _ = ts.eat_word("'s");
+            parts.push("~");
+        }
+        while parts.len() < 6
             && let Some(w) = ts.peek_word()
-            && w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
             && !w.eq_ignore_ascii_case("with")
+            && (w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                || (!parts.is_empty()
+                    && matches!(
+                        w.to_ascii_lowercase().as_str(),
+                        "of" | "the" | "in" | "on" | "and" | "to"
+                    )))
         {
             ts.next_word();
-            words_eaten += 1;
+            parts.push(w);
+        }
+        if !parts.is_empty() {
+            inline_name = Some(parts.join(" "));
         }
     }
 
+    // Optional `of the chosen color [and type]` / `of the chosen type`
+    let _ = ts.eat_phrase(&["of", "the", "chosen", "color", "and", "type"])
+        || ts.eat_phrase(&["of", "the", "chosen", "color"])
+        || ts.eat_phrase(&["of", "the", "chosen", "type"]);
+
+    let token_face_name = explicit_name.or(inline_name.as_deref()).unwrap_or("~");
     let mut keywords = Vec::new();
     let mut abilities = Vec::new();
+    let mut power_expr = power_expr;
+    let mut toughness_expr = toughness_expr;
     if ts.eat_word("with") {
-        loop {
-            let wcp = ts.checkpoint();
-            if let Some(quoted) = ts.next_quoted() {
-                let compiled = compile_face_v2(
-                    FaceInput {
-                        name: "~",
-                        type_line: "Creature",
-                        oracle_text: quoted,
-                    },
-                    ts.vocab,
-                );
-                if !compiled.is_ok() {
-                    return Err(compiled
-                        .errors
-                        .into_iter()
-                        .next()
-                        .unwrap_or_else(|| ts.err("failed to compile token ability text")));
+        if ts.eat_phrase(&["those", "characteristics"]) {
+            // Characteristics selected by a preceding modal choice.
+        } else if (ts.eat_phrase(&["base", "power", "and", "toughness", "each", "equal", "to"])
+            || ts.eat_phrase(&["power", "and", "toughness", "each", "equal", "to"]))
+            && let Ok(val) = crate::v2::parser::try_parse(ts, parse_value_expr)
+        {
+            power_expr = Some(val.clone());
+            toughness_expr = Some(val);
+        } else if ts.eat_phrase(&["power", "equal", "to"])
+            && let Ok(pv) = crate::v2::parser::try_parse(ts, parse_value_expr)
+            && ts.eat_phrase(&["and", "toughness", "equal", "to"])
+            && let Ok(tv) = crate::v2::parser::try_parse(ts, parse_value_expr)
+        {
+            power_expr = Some(pv);
+            toughness_expr = Some(tv);
+        } else {
+            loop {
+                let wcp = ts.checkpoint();
+                if let Some(quoted) = ts.next_quoted() {
+                    let compiled = compile_quoted_face(
+                        ts,
+                        token_face_name,
+                        "Creature",
+                        quoted.trim_end_matches(','),
+                    )?;
+                    abilities.push(compiled);
+                } else if let Ok((kws, _)) = crate::v2::parser::try_parse(ts, parse_keyword_list) {
+                    keywords.extend(kws);
+                } else {
+                    ts.restore(wcp);
+                    break;
                 }
-                abilities.push(compiled);
-            } else if let Ok((kws, _)) = crate::v2::parser::try_parse(ts, parse_keyword_list) {
-                keywords.extend(kws);
-            } else {
-                ts.restore(wcp);
+                // Optional `, and` / `,` / `and` [with] before next quoted ability (checkpointed so we never eat `and` belonging to a later clause!)
+                let sep_cp = ts.checkpoint();
+                let had_comma = ts.eat_comma();
+                let had_and = ts.eat_word("and");
+                let _ = ts.eat_word("with");
+                if (had_comma || had_and)
+                    && (matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Quoted(_)))
+                        || (had_and
+                            && ts
+                                .peek_word()
+                                .is_some_and(|w| w.eq_ignore_ascii_case("equip"))))
+                {
+                    continue;
+                }
+                ts.restore(sep_cp);
                 break;
             }
-            // Optional `, and` / `,` / `and` [with] before next quoted ability (checkpointed so we never eat `and` belonging to a later clause!)
-            let sep_cp = ts.checkpoint();
-            let had_comma = ts.eat_comma();
-            let had_and = ts.eat_word("and");
-            let _ = ts.eat_word("with");
-            if (had_comma || had_and)
-                && (matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Quoted(_)))
-                    || (had_and
-                        && ts
-                            .peek_word()
-                            .is_some_and(|w| w.eq_ignore_ascii_case("equip"))))
-            {
-                continue;
+            if keywords.is_empty() && abilities.is_empty() {
+                return Err(ts.err("expected keyword or quoted ability after `with`"));
             }
-            ts.restore(sep_cp);
-            break;
-        }
-        if keywords.is_empty() && abilities.is_empty() {
-            return Err(ts.err("expected keyword or quoted ability after `with`"));
         }
     }
 
-    // Trailing `that are blue, black, and red`
-    if ts.eat_phrase(&["that", "are"]) || ts.eat_phrase(&["that's"]) {
-        loop {
-            let _ = ts.eat_comma();
-            let _ = ts.eat_word("and");
-            if let Some(w) = ts.peek_word()
-                && let Some(c) = lookup_color(&w.to_ascii_lowercase())
-            {
+    // Trailing `named <Proper Name>`
+    if ts.eat_word("named") {
+        while let Some(w) = ts.peek_word() {
+            if w.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
                 ts.next_word();
-                colors = colors.union(c);
-                continue;
+            } else {
+                break;
             }
-            break;
+        }
+    }
+
+    // Trailing `that are blue, black, and red` / `that's all colors`
+    {
+        let that_cp = ts.checkpoint();
+        if ts.eat_phrase(&["that", "are"]) || ts.eat_phrase(&["that's"]) {
+            if ts.eat_phrase(&["all", "colors"]) {
+                colors = ColorMask::WHITE
+                    .union(ColorMask::BLUE)
+                    .union(ColorMask::BLACK)
+                    .union(ColorMask::RED)
+                    .union(ColorMask::GREEN);
+            } else {
+                let mut matched_colors = 0usize;
+                loop {
+                    let sep_cp = ts.checkpoint();
+                    let _ = ts.eat_comma();
+                    let _ = ts.eat_word("and");
+                    if let Some(w) = ts.peek_word()
+                        && let Some(c) = lookup_color(&w.to_ascii_lowercase())
+                    {
+                        ts.next_word();
+                        colors = colors.union(c);
+                        matched_colors += 1;
+                        continue;
+                    }
+                    ts.restore(sep_cp);
+                    break;
+                }
+                if matched_colors == 0 {
+                    ts.restore(that_cp);
+                }
+            }
         }
     }
 
@@ -347,43 +465,14 @@ pub(crate) fn parse_token_creation(
         attacking: leading_tapped_and_attacking,
         ..EntryModifiers::default()
     };
-    if ts.eat_phrase(&["and", "that's", "tapped", "and", "attacking"])
-        || ts.eat_phrase(&["and", "that", "are", "tapped", "and", "attacking"])
-        || ts.eat_phrase(&["that's", "tapped", "and", "attacking"])
-        || ts.eat_phrase(&["that", "are", "tapped", "and", "attacking"])
-        || ts.eat_phrase(&["tapped", "and", "attacking"])
-    {
-        mods.tapped = true;
-        mods.attacking = true;
-        let _ = ts.eat_phrase(&["that", "opponent"])
-            || ts.eat_phrase(&["that", "player"])
-            || ts.eat_phrase(&["the", "defending", "player"])
-            || ts.eat_phrase(&["defending", "player"])
-            || ts.eat_word("them");
-    } else if ts.eat_phrase(&["that's", "attacking"])
-        || ts.eat_phrase(&["that", "are", "attacking"])
-        || ts.eat_word("attacking")
-    {
-        mods.attacking = true;
-        let _ = ts.eat_phrase(&["that", "opponent"])
-            || ts.eat_phrase(&["that", "player"])
-            || ts.eat_phrase(&["the", "defending", "player"])
-            || ts.eat_phrase(&["defending", "player"])
-            || ts.eat_word("them");
-    } else if ts.eat_word("tapped") {
-        mods.tapped = true;
+    parse_token_combat_mods(ts, &mut mods);
+    if ts.peek_phrase(&["that's"]) || ts.peek_phrase(&["that", "are"]) {
+        return Err(ts.err("expected color or combat modifier after `that's`/`that are`"));
     }
-    let final_count = if deferred_equal_to && ts.eat_phrase(&["equal", "to"]) {
-        parse_value_expr(ts)?
-    } else if let Some(fe) = opt(ts, parse_for_each_expr) {
-        if count == ValueExpr::Const(1) {
-            fe
-        } else {
-            ValueExpr::Mul(Box::new(count), Box::new(fe))
-        }
-    } else {
-        count
-    };
+    if ts.eat_phrase(&["attached", "to"]) {
+        mods.attached_to = Some(Box::new(parse_subject_ref(ts)?));
+    }
+    let final_count = finalize_token_count(ts, count, deferred_equal_to)?;
 
     Ok((
         final_count,
@@ -405,41 +494,83 @@ pub(crate) fn parse_token_creation(
 pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyException> {
     let mut exceptions = Vec::new();
     let cp = ts.checkpoint();
-    if !(ts.eat_comma() && ts.eat_word("except")) {
+    let _ = ts.eat_comma();
+    if !ts.eat_word("except") {
         ts.restore(cp);
         return exceptions;
     }
     let _ = ts.eat_word("that");
+    const HAS_THIS_AB: &[&[&str]] = &[
+        &["it", "has", "this", "ability"],
+        &["they", "have", "this", "ability"],
+        &["has", "this", "ability"],
+        &["have", "this", "ability"],
+    ];
+    const ENTERS_WITH: &[&[&str]] = &[
+        &["it", "enters", "with"],
+        &["they", "enter", "with"],
+        &["the", "token", "enters", "with"],
+    ];
+    const HAS_PREFIXES: &[&[&str]] = &[
+        &["it", "has"],
+        &["they", "have"],
+        &["the", "token", "has"],
+        &["the", "tokens", "have"],
+        &["the", "copy", "has"],
+        &["the", "copies", "have"],
+        &["has"],
+        &["have"],
+    ];
+    const NOT_LEGENDARY: &[&[&str]] = &[
+        &["it", "isn't", "legendary"],
+        &["it's", "not", "legendary"],
+        &["they", "aren't", "legendary"],
+        &["they're", "not", "legendary"],
+        &["those", "creatures", "aren't", "legendary"],
+        &["those", "permanents", "aren't", "legendary"],
+        &["the", "copy", "isn't", "legendary"],
+        &["the", "token", "isn't", "legendary"],
+        &["the", "tokens", "aren't", "legendary"],
+        &["the", "copies", "aren't", "legendary"],
+    ];
+    const IS_TYPE_PREFIXES: &[&[&str]] = &[
+        &["it's", "an"],
+        &["it's", "a"],
+        &["it's"],
+        &["they're"],
+        &["is", "an"],
+        &["is", "a"],
+        &["the", "token", "is", "an"],
+        &["the", "token", "is", "a"],
+        &["the", "token", "is"],
+        &["the", "copy", "is", "an"],
+        &["the", "copy", "is", "a"],
+        &["the", "copy", "is"],
+        &["the", "tokens", "are"],
+        &["the", "copies", "are"],
+    ];
     loop {
         let item_cp = ts.checkpoint();
-        if ts.eat_phrase(&["it", "has", "this", "ability"])
-            || ts.eat_phrase(&["they", "have", "this", "ability"])
-            || ts.eat_phrase(&["has", "this", "ability"])
-            || ts.eat_phrase(&["have", "this", "ability"])
-        {
+        if ts.eat_any_phrase(HAS_THIS_AB) {
             exceptions.push(CopyException::HasThisAbility);
         } else if ((ts.eat_tilde() && ts.eat_phrase(&["'s", "name", "is"]))
             || ts.eat_phrase(&["its", "name", "is"]))
             && ts.eat_tilde()
         {
             exceptions.push(CopyException::KeepOwnName);
-        } else if ts.eat_phrase(&["it", "enters", "with"])
-            || ts.eat_phrase(&["they", "enter", "with"])
-            || ts.eat_phrase(&["the", "token", "enters", "with"])
-        {
-            let count =
-                if ts.eat_phrase(&["an", "additional"]) || ts.eat_word("a") || ts.eat_word("an") {
-                    ValueExpr::Const(1)
-                } else {
-                    let c = crate::v2::parser::try_parse(ts, parse_value_expr)
-                        .unwrap_or(ValueExpr::Const(1));
-                    let _ = ts.eat_word("additional");
-                    c
-                };
+        } else if ts.eat_any_phrase(ENTERS_WITH) {
+            let count = if ts.eat_phrase(&["an", "additional"]) || ts.eat_any_word(&["a", "an"]) {
+                ValueExpr::Const(1)
+            } else {
+                let c = crate::v2::parser::try_parse(ts, parse_value_expr)
+                    .unwrap_or(ValueExpr::Const(1));
+                let _ = ts.eat_word("additional");
+                c
+            };
             if let Ok(kind) =
                 crate::v2::parser::try_parse(ts, crate::v2::filter::parse_counter_kind)
-                && (ts.eat_word("counter") || ts.eat_word("counters"))
-                && (ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]))
+                && ts.eat_any_word(&["counter", "counters"])
+                && ts.eat_any_phrase(&[&["on", "it"], &["on", "them"]])
             {
                 let cond = if ts.eat_word("if") {
                     opt(ts, crate::v2::condition::parse_condition)
@@ -455,27 +586,11 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                 ts.restore(item_cp);
                 break;
             }
-        } else if ts.eat_phrase(&["it", "has"])
-            || ts.eat_phrase(&["they", "have"])
-            || ts.eat_phrase(&["the", "token", "has"])
-            || ts.eat_phrase(&["the", "tokens", "have"])
-            || ts.eat_phrase(&["the", "copy", "has"])
-            || ts.eat_phrase(&["the", "copies", "have"])
-            || ts.eat_word("has")
-            || ts.eat_word("have")
-        {
+        } else if ts.eat_any_phrase(HAS_PREFIXES) {
             if ts.eat_tilde() && ts.eat_phrase(&["'s", "other", "abilities"]) {
                 exceptions.push(CopyException::KeepOwnOtherAbilities);
             } else if let Some(quoted) = ts.next_quoted() {
-                let compiled = compile_face_v2(
-                    FaceInput {
-                        name: "~",
-                        type_line: "Permanent",
-                        oracle_text: quoted,
-                    },
-                    ts.vocab,
-                );
-                if compiled.is_ok() {
+                if let Ok(compiled) = compile_quoted_permanent(ts, quoted) {
                     exceptions.push(CopyException::AddAbility(Box::new(compiled)));
                 } else {
                     ts.restore(item_cp);
@@ -492,36 +607,20 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                     });
                 } else {
                     exceptions.push(CopyException::AddKeywords(kws));
+                    let tacp = ts.checkpoint();
+                    if ts.eat_phrase(&["and", "this", "ability"]) {
+                        exceptions.push(CopyException::HasThisAbility);
+                    } else {
+                        ts.restore(tacp);
+                    }
                 }
             } else {
                 ts.restore(item_cp);
                 break;
             }
-        } else if ts.eat_phrase(&["it", "isn't", "legendary"])
-            || ts.eat_phrase(&["it's", "not", "legendary"])
-            || ts.eat_phrase(&["they", "aren't", "legendary"])
-            || ts.eat_phrase(&["they're", "not", "legendary"])
-            || ts.eat_phrase(&["the", "copy", "isn't", "legendary"])
-            || ts.eat_phrase(&["the", "token", "isn't", "legendary"])
-            || ts.eat_phrase(&["the", "tokens", "aren't", "legendary"])
-            || ts.eat_phrase(&["the", "copies", "aren't", "legendary"])
-        {
+        } else if ts.eat_any_phrase(NOT_LEGENDARY) {
             exceptions.push(CopyException::NotLegendary);
-        } else if ts.eat_phrase(&["it's", "an"])
-            || ts.eat_phrase(&["it's", "a"])
-            || ts.eat_word("it's")
-            || ts.eat_word("they're")
-            || ts.eat_phrase(&["is", "an"])
-            || ts.eat_phrase(&["is", "a"])
-            || ts.eat_phrase(&["the", "token", "is", "an"])
-            || ts.eat_phrase(&["the", "token", "is", "a"])
-            || ts.eat_phrase(&["the", "token", "is"])
-            || ts.eat_phrase(&["the", "copy", "is", "an"])
-            || ts.eat_phrase(&["the", "copy", "is", "a"])
-            || ts.eat_phrase(&["the", "copy", "is"])
-            || ts.eat_phrase(&["the", "tokens", "are"])
-            || ts.eat_phrase(&["the", "copies", "are"])
-        {
+        } else if ts.eat_any_phrase(IS_TYPE_PREFIXES) {
             let pt = ts.next_base_pt();
             let mut colors = ColorMask::EMPTY;
             let mut supertypes = crate::ast::SupertypeMask::EMPTY;
@@ -568,12 +667,10 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                     ts.restore(wcp);
                 }
             }
-            let keep_existing_types = ts
-                .eat_phrase(&["in", "addition", "to", "its", "other", "types"])
-                || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"])
-                || ts.eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
-                || ts.eat_phrase(&[
-                    "in", "addition", "to", "its", "other", "colors", "and", "types",
+            let keep_existing_types = ts.eat_in_addition_to_other_types()
+                || ts.eat_any_phrase(&[
+                    &["in", "addition", "to", "his", "other", "types"],
+                    &["in", "addition", "to", "her", "other", "types"],
                 ]);
             if pt.is_some() || !subtypes.is_empty() || !types.is_empty() {
                 exceptions.push(CopyException::SetBasePTAndTypes {
@@ -598,15 +695,7 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                 break;
             }
         } else if let Some(quoted) = ts.next_quoted() {
-            let compiled = compile_face_v2(
-                FaceInput {
-                    name: "~",
-                    type_line: "Permanent",
-                    oracle_text: quoted,
-                },
-                ts.vocab,
-            );
-            if compiled.is_ok() {
+            if let Ok(compiled) = compile_quoted_permanent(ts, quoted) {
                 exceptions.push(CopyException::AddAbility(Box::new(compiled)));
             } else {
                 ts.restore(item_cp);

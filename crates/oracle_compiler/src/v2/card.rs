@@ -5,22 +5,26 @@
 //! Activated abilities, Triggered abilities, Keyword lines, Replacements, Statics, Spell effects),
 //! and records every unparsed clause as an explicit fail-closed [`ParseError`].
 
+use crate::ast::{CardTypeMask, ColorMask};
 use crate::preprocess::{
     BULLET, EM_DASH, normalize_self, split_cost_and_effect, split_loyalty_line, split_saga_line,
     strip_reminder, strip_reminder_multiline,
 };
 use crate::v2::clause::{parse_effect_body_str, parse_effect_sentence};
 use crate::v2::cost::parse_cost_list;
-use crate::v2::filter::parse_keyword_list;
+use crate::v2::filter::{parse_keyword_list, parse_subject_ref};
 use crate::v2::ir::{
-    Ability, ChoiceCount, ChoiceKind, CompiledCardV2, CompiledFaceV2, Effect, LoyaltyDelta,
-    ModalMode, ParseError, ParseStage, PlayerRef, Span, SpreeMode, StickerPayload, TableRowPayload,
+    Ability, ChoiceCount, ChoiceKind, CompiledCardV2, CompiledFaceV2, Cost, DelayedTriggerKind,
+    Duration, Effect, EntryModifiers, LoyaltyDelta, ManaCost, ManaSymbol, ModalMode,
+    ObjectMutation, ParseError, ParseStage, PlayerRef, Replacement, Span, SpreeMode,
+    StickerPayload, SubjectRef, TableRowPayload, TokenSpec, TriggerSpec, ValueExpr,
 };
 use crate::v2::lexer::{TokenKind, tokenize};
-use crate::v2::parser::TokenStream;
+use crate::v2::parser::{TokenStream, try_parse};
 use crate::v2::replacement::parse_replacement;
 use crate::v2::static_ability::parse_static_ability;
 use crate::v2::trigger::parse_trigger_header;
+use crate::vocab::lookup_color;
 use crate::{CardInput, FaceInput, Vocabulary};
 
 /// Compile a multi-face card using the strictly-typed, fail-closed `v2` parser.
@@ -57,7 +61,11 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             || face.type_line.contains("Planeswalker"));
     let is_saga = face.type_line.contains("Saga");
 
-    let stripped_full = strip_reminder_multiline(face.oracle_text);
+    let normalized_quotes = face
+        .oracle_text
+        .replace(['\u{201C}', '\u{201D}'], "\"")
+        .replace(['\u{2018}', '\u{2019}'], "'");
+    let stripped_full = strip_reminder_multiline(&normalized_quotes);
     let lines: Vec<String> = stripped_full
         .split('\n')
         .map(strip_reminder)
@@ -71,8 +79,8 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
         let line_owned = strip_ability_word_prefix(raw_line);
         let line = line_owned.as_str();
 
-        // 0a. Sticker row (`{TK}{TK} — 1/5` or `{TK}{TK}{TK} — Whenever ~ attacks, ...`)
-        if let Some((ticket_cost, rhs)) = split_sticker_row(line) {
+        // 0a. Sticker row (`{TK}{TK} - 1/5` or `{TK}{TK}{TK} - Whenever ~ attacks, ...`)
+        if let Some((ticket_cost, rhs)) = split_repeated_symbol_row(line, "{TK}") {
             if let Some((p, t)) = parse_bare_base_pt(rhs) {
                 out.abilities.push(Ability::StickerRow {
                     ticket_cost,
@@ -100,7 +108,7 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 0b. Die-roll table / Station threshold row (`1—9 | ...`, `20 | ...`, `9+ | Flying`)
+        // 0b. Die-roll table / Station threshold row (`1-9 | ...`, `20 | ...`, `9+ | Flying`)
         if let Some((min, max, open_ended, rhs_raw)) = split_pipe_table_row(line) {
             let rhs_owned = strip_ability_word_prefix(rhs_raw);
             let rhs = rhs_owned.as_str();
@@ -145,7 +153,7 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 0c. Case enchantment rows (`To solve — <cond>` / `Solved — <ability>`)
+        // 0c. Case enchantment rows (`To solve - <cond>` / `Solved - <ability>`)
         if let Some(cond_str) = line.strip_prefix("To solve \u{2014} ") {
             let cond_trimmed = cond_str.trim().trim_end_matches('.');
             match tokenize(cond_trimmed).and_then(|toks| {
@@ -219,110 +227,96 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             }
         }
 
-        // 1. Modal block (`Choose one —`, `Choose one. If ..., choose ... instead.` followed by `• ...` lines)
-        let next_is_bullet = lines.get(i + 1).is_some_and(|l| l.starts_with(BULLET));
-        if let Some(count) = parse_modal_header(line, next_is_bullet) {
-            let mut modes = Vec::new();
+        // 1. Pawprint modal block (`Choose up to five {P} worth of modes...` followed by `{P} - ...` lines)
+        let next_is_pawprint = lines
+            .get(i + 1)
+            .is_some_and(|l| split_repeated_symbol_row(l, "{P}").is_some());
+        if next_is_pawprint && low_line.starts_with("choose ") && low_line.contains("{p}") {
+            let mut paw_modes = Vec::new();
             i += 1;
-            while i < lines.len() && lines[i].starts_with(BULLET) {
-                let raw_mode = lines[i].trim_start_matches(BULLET).trim();
-                let mode_clean = strip_ability_word_prefix(raw_mode);
-                match parse_effect_body_str(&mode_clean, vocab) {
-                    Ok(body) => modes.push(ModalMode { body }),
+            while i < lines.len()
+                && let Some((cost_n, body_raw)) = split_repeated_symbol_row(&lines[i], "{P}")
+            {
+                let cost = vec![Cost::Mana(ManaCost {
+                    symbols: vec![ManaSymbol::Pawprint; usize::from(cost_n)],
+                })];
+                match parse_modal_mode_body(body_raw, vocab) {
+                    Ok(body) => paw_modes.push(SpreeMode { cost, body }),
                     Err(errs) => out.errors.extend(errs),
                 }
                 i += 1;
             }
+            push_spree_choice(&mut out, paw_modes);
+            continue;
+        }
+
+        // 1b. Modal block (`Choose one -`, `An opponent chooses one -`, `Choose five. ...` followed by bullet lines)
+        let next_is_bullet = lines.get(i + 1).is_some_and(|l| l.starts_with(BULLET));
+        if let Some(hdr) = parse_modal_header(line, next_is_bullet) {
+            i += 1;
+            let modes = collect_modal_modes(&lines, &mut i, vocab, &mut out.errors);
             if modes.is_empty() {
-                out.errors.push(ParseError {
-                    span: Span {
-                        start: 0,
-                        end: line.len(),
-                    },
-                    stage: ParseStage::Effect,
-                    message: "modal header with zero modes".to_string(),
-                    text: line.to_string(),
-                });
+                out.errors.push(make_parse_error(
+                    line.len(),
+                    ParseStage::Effect,
+                    "modal header with zero modes",
+                    line,
+                ));
             } else {
-                out.spell_effects.push(Effect::PromptChoice {
-                    chooser: PlayerRef::You,
-                    kind: ChoiceKind::Modal { count, modes },
-                });
+                out.spell_effects
+                    .extend(build_modal_effects(hdr, modes, vocab, &mut out.errors));
             }
             continue;
         }
 
-        // 2. Spree block (`Spree` followed by `+ {cost} — <body>` lines)
+        // 2. Spree block (`Spree` followed by `+ {cost} - <body>` lines)
         if line.eq_ignore_ascii_case("spree") {
-            if let Ok(toks) = tokenize(line) {
-                let mut ts = TokenStream::new(line, &toks, vocab, ParseStage::Face);
-                if let Ok((kws, _)) = parse_keyword_list(&mut ts) {
-                    out.keywords.extend(kws);
-                }
-            }
+            push_header_keywords(line, vocab, &mut out);
             let mut spree_modes = Vec::new();
             i += 1;
             while i < lines.len() && lines[i].starts_with("+ ") {
                 if let Some((cost_raw, body_raw)) = lines[i]["+ ".len()..].split_once(EM_DASH) {
-                    let cost_res = tokenize(cost_raw.trim()).and_then(|toks| {
-                        let mut ts =
-                            TokenStream::new(cost_raw.trim(), &toks, vocab, ParseStage::Cost);
-                        let c = parse_cost_list(&mut ts)?;
-                        ts.expect_eof()?;
-                        Ok(c)
-                    });
-                    let body_res = parse_effect_body_str(body_raw.trim(), vocab);
-                    match (cost_res, body_res) {
+                    match (
+                        parse_cost_str(cost_raw.trim(), vocab),
+                        parse_modal_mode_body(body_raw.trim(), vocab),
+                    ) {
                         (Ok(cost), Ok(body)) => spree_modes.push(SpreeMode { cost, body }),
                         (Err(e), _) => out.errors.push(e),
                         (_, Err(errs)) => out.errors.extend(errs),
                     }
                 } else {
-                    out.errors.push(ParseError {
-                        span: Span {
-                            start: 0,
-                            end: lines[i].len(),
-                        },
-                        stage: ParseStage::Effect,
-                        message: "malformed Spree mode line".to_string(),
-                        text: lines[i].clone(),
-                    });
+                    out.errors.push(make_parse_error(
+                        lines[i].len(),
+                        ParseStage::Effect,
+                        "malformed Spree mode line",
+                        &lines[i],
+                    ));
                 }
                 i += 1;
             }
-            if !spree_modes.is_empty() {
-                out.spell_effects.push(Effect::PromptChoice {
-                    chooser: PlayerRef::You,
-                    kind: ChoiceKind::Spree { modes: spree_modes },
-                });
-            }
+            push_spree_choice(&mut out, spree_modes);
             continue;
         }
 
-        // 3. Saga chapter line (`I — ...`, `II — ...`, `III — ...`, including inline modal `I, II — Choose one —`)
+        // 2b. Tiered block (`Tiered` followed by bullet `<Label> - <Cost> - <Body>` lines)
+        if line.eq_ignore_ascii_case("tiered") {
+            push_header_keywords(line, vocab, &mut out);
+            i += 1;
+            let tiered_modes = collect_tiered_modes(&lines, &mut i, vocab, &mut out.errors);
+            push_spree_choice(&mut out, tiered_modes);
+            continue;
+        }
+
+        // 3. Saga chapter line (`I - ...`, `II - ...`, `III - ...`, including inline modal)
         if is_saga && let Some((chapters_str, body_str)) = split_saga_line(line) {
             let chapters: Vec<u8> = chapters_str.iter().filter_map(|r| roman_to_u8(r)).collect();
             let next_is_bullet = lines.get(i + 1).is_some_and(|l| l.starts_with(BULLET));
-            if let Some(count) = parse_modal_header(body_str, next_is_bullet) {
-                let mut modes = Vec::new();
+            if let Some(hdr) = parse_modal_header(body_str, next_is_bullet) {
                 i += 1;
-                while i < lines.len() && lines[i].starts_with(BULLET) {
-                    let raw_mode = lines[i].trim_start_matches(BULLET).trim();
-                    let mode_clean = strip_ability_word_prefix(raw_mode);
-                    match parse_effect_body_str(&mode_clean, vocab) {
-                        Ok(body) => modes.push(ModalMode { body }),
-                        Err(errs) => out.errors.extend(errs),
-                    }
-                    i += 1;
-                }
+                let modes = collect_modal_modes(&lines, &mut i, vocab, &mut out.errors);
                 if !modes.is_empty() {
-                    out.abilities.push(Ability::SagaChapter {
-                        chapters,
-                        body: vec![Effect::PromptChoice {
-                            chooser: PlayerRef::You,
-                            kind: ChoiceKind::Modal { count, modes },
-                        }],
-                    });
+                    let body = build_modal_effects(hdr, modes, vocab, &mut out.errors);
+                    out.abilities.push(Ability::SagaChapter { chapters, body });
                 }
                 continue;
             }
@@ -334,109 +328,70 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 4. Planeswalker loyalty line (`+1: ...`, `-2: ...`, `-7: ...`, including granted loyalty abilities on Talents/permanents and inline modals!)
+        // 4. Planeswalker loyalty line (`+1: ...`, `-2: ...`, `-7: ...`, including inline modals)
         if !is_spell && let Some((delta_str, body_str)) = split_loyalty_line(line) {
             let delta = parse_loyalty_delta(&delta_str);
             let next_is_bullet = lines.get(i + 1).is_some_and(|l| l.starts_with(BULLET));
-            if let Some(count) = parse_modal_header(body_str, next_is_bullet) {
-                let mut modes = Vec::new();
+            if let Some(hdr) = parse_modal_header(body_str, next_is_bullet) {
                 i += 1;
-                while i < lines.len() && lines[i].starts_with(BULLET) {
-                    let raw_mode = lines[i].trim_start_matches(BULLET).trim();
-                    let mode_text = strip_ability_word_prefix(raw_mode);
-                    match parse_effect_body_str(&mode_text, vocab) {
-                        Ok(body) => modes.push(ModalMode { body }),
-                        Err(errs) => out.errors.extend(errs),
-                    }
-                    i += 1;
-                }
+                let modes = collect_modal_modes(&lines, &mut i, vocab, &mut out.errors);
                 match delta {
-                    Some(d) if !modes.is_empty() => out.abilities.push(Ability::Loyalty {
-                        delta: d,
-                        body: vec![Effect::PromptChoice {
-                            chooser: PlayerRef::You,
-                            kind: ChoiceKind::Modal { count, modes },
-                        }],
-                    }),
-                    Some(_) => out.errors.push(ParseError {
-                        span: Span {
-                            start: 0,
-                            end: line.len(),
-                        },
-                        stage: ParseStage::Effect,
-                        message: "modal loyalty ability with zero modes".to_string(),
-                        text: line.to_string(),
-                    }),
-                    None => out.errors.push(ParseError {
-                        span: Span {
-                            start: 0,
-                            end: delta_str.len(),
-                        },
-                        stage: ParseStage::Cost,
-                        message: format!("invalid loyalty delta `{delta_str}`"),
-                        text: line.to_string(),
-                    }),
+                    Some(d) if !modes.is_empty() => {
+                        let body = build_modal_effects(hdr, modes, vocab, &mut out.errors);
+                        out.abilities.push(Ability::Loyalty { delta: d, body });
+                    }
+                    Some(_) => out.errors.push(make_parse_error(
+                        line.len(),
+                        ParseStage::Effect,
+                        "modal loyalty ability with zero modes",
+                        line,
+                    )),
+                    None => out.errors.push(make_parse_error(
+                        delta_str.len(),
+                        ParseStage::Cost,
+                        format!("invalid loyalty delta `{delta_str}`"),
+                        line,
+                    )),
                 }
                 continue;
             }
             match (delta, parse_effect_body_str(body_str, vocab)) {
                 (Some(d), Ok(body)) => out.abilities.push(Ability::Loyalty { delta: d, body }),
-                (None, _) => out.errors.push(ParseError {
-                    span: Span {
-                        start: 0,
-                        end: delta_str.len(),
-                    },
-                    stage: ParseStage::Cost,
-                    message: format!("invalid loyalty delta `{delta_str}`"),
-                    text: line.to_string(),
-                }),
+                (None, _) => out.errors.push(make_parse_error(
+                    delta_str.len(),
+                    ParseStage::Cost,
+                    format!("invalid loyalty delta `{delta_str}`"),
+                    line,
+                )),
                 (_, Err(errs)) => out.errors.extend(errs),
             }
             i += 1;
             continue;
         }
 
-        // 5. Activated ability (`<cost>: <body>`, including inline modal `Choose one —` + `•` lines,
-        //    and activated abilities on Instants/Sorceries such as Forecast and discard-for-Treasure!)
+        // 5. Activated ability (`<cost>: <body>`, including inline modal and spell-zone activations)
         if let Some((cost_str, body_str)) = split_cost_and_effect(line) {
-            let cost_res = tokenize(cost_str).and_then(|toks| {
-                let mut ts = TokenStream::new(cost_str, &toks, vocab, ParseStage::Cost);
-                let c = parse_cost_list(&mut ts)?;
-                ts.expect_eof()?;
-                Ok(c)
-            });
+            let cost_res = parse_cost_str(cost_str, vocab);
             if !is_spell || cost_res.is_ok() {
                 let next_is_bullet = lines.get(i + 1).is_some_and(|l| l.starts_with(BULLET));
-                if let Some(count) = parse_modal_header(body_str, next_is_bullet) {
-                    let mut modes = Vec::new();
+                if let Some(hdr) = parse_modal_header(body_str, next_is_bullet) {
                     i += 1;
-                    while i < lines.len() && lines[i].starts_with(BULLET) {
-                        let raw_mode = lines[i].trim_start_matches(BULLET).trim();
-                        let mode_text = strip_ability_word_prefix(raw_mode);
-                        match parse_effect_body_str(&mode_text, vocab) {
-                            Ok(body) => modes.push(ModalMode { body }),
-                            Err(errs) => out.errors.extend(errs),
-                        }
-                        i += 1;
-                    }
+                    let modes = collect_modal_modes(&lines, &mut i, vocab, &mut out.errors);
                     match cost_res {
-                        Ok(cost) if !modes.is_empty() => out.abilities.push(Ability::Activated {
-                            cost,
-                            body: vec![Effect::PromptChoice {
-                                chooser: PlayerRef::You,
-                                kind: ChoiceKind::Modal { count, modes },
-                            }],
-                            restrictions: Vec::new(),
-                        }),
-                        Ok(_) => out.errors.push(ParseError {
-                            span: Span {
-                                start: 0,
-                                end: line.len(),
-                            },
-                            stage: ParseStage::Effect,
-                            message: "modal activated ability with zero modes".to_string(),
-                            text: line.to_string(),
-                        }),
+                        Ok(cost) if !modes.is_empty() => {
+                            let body = build_modal_effects(hdr, modes, vocab, &mut out.errors);
+                            out.abilities.push(Ability::Activated {
+                                cost,
+                                body,
+                                restrictions: Vec::new(),
+                            });
+                        }
+                        Ok(_) => out.errors.push(make_parse_error(
+                            line.len(),
+                            ParseStage::Effect,
+                            "modal activated ability with zero modes",
+                            line,
+                        )),
                         Err(e) => out.errors.push(e),
                     }
                     continue;
@@ -465,59 +420,85 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             }
         }
 
-        // 6. Triggered ability (`When/Whenever/At the beginning of ..., <body>`, including inline modal!)
-        if !is_spell && is_trigger_line(line) {
-            if let Some((header_part, modal_count)) = split_triggered_modal_header(line) {
-                let mut modes = Vec::new();
-                i += 1;
-                while i < lines.len() && lines[i].starts_with(BULLET) {
-                    let raw_mode = lines[i].trim_start_matches(BULLET).trim();
-                    let mode_text = strip_ability_word_prefix(raw_mode);
-                    match parse_effect_body_str(&mode_text, vocab) {
-                        Ok(body) => modes.push(ModalMode { body }),
-                        Err(errs) => out.errors.extend(errs),
-                    }
+        // 6. Triggered ability (`When/Whenever/At ..., <body>`, including inline modals, reflexive modals, and Haunt triggers on spells)
+        if is_trigger_line(line) {
+            if is_spell {
+                if let Ok(ab) = parse_triggered_line(line, vocab) {
+                    out.abilities.push(ab);
                     i += 1;
+                    continue;
                 }
-                match tokenize(header_part).and_then(|toks| {
-                    let mut ts = TokenStream::new(header_part, &toks, vocab, ParseStage::Trigger);
-                    let trig = parse_trigger_header(&mut ts)?;
-                    let _ = ts.eat_comma();
-                    ts.expect_eof()?;
-                    Ok(trig)
-                }) {
-                    Ok(trigger) if !modes.is_empty() => out.abilities.push(Ability::Triggered {
-                        trigger,
-                        body: vec![Effect::PromptChoice {
-                            chooser: PlayerRef::You,
-                            kind: ChoiceKind::Modal {
-                                count: modal_count,
-                                modes,
-                            },
-                        }],
-                    }),
-                    Ok(_) => out.errors.push(ParseError {
-                        span: Span {
-                            start: 0,
-                            end: line.len(),
-                        },
-                        stage: ParseStage::Effect,
-                        message: "modal trigger with zero modes".to_string(),
-                        text: line.to_string(),
-                    }),
-                    Err(e) => out.errors.push(e),
+            } else {
+                let next_is_bullet = lines.get(i + 1).is_some_and(|l| l.starts_with(BULLET));
+                if next_is_bullet
+                    && try_compile_triggered_modal(line, &lines, &mut i, vocab, &mut out)
+                {
+                    continue;
                 }
+                match parse_triggered_line(line, vocab) {
+                    Ok(ab) => out.abilities.push(ab),
+                    Err(errs) => out.errors.extend(errs),
+                }
+                i += 1;
                 continue;
             }
-            match parse_triggered_line(line, vocab) {
-                Ok(ab) => out.abilities.push(ab),
-                Err(errs) => out.errors.extend(errs),
+        }
+
+        // 6b. Standalone bullet lines (Tiered modes, die-roll keyword bullets, Siege / named-choice bullets)
+        if line.starts_with(BULLET) {
+            if split_tiered_bullet(line).is_some() {
+                let tiered_modes = collect_tiered_modes(&lines, &mut i, vocab, &mut out.errors);
+                push_spree_choice(&mut out, tiered_modes);
+                continue;
+            }
+            let raw_bullet = line.trim_start_matches(BULLET).trim();
+            if let Some((num_str, rhs)) = raw_bullet.split_once(" \u{2014} ")
+                && let Ok(min) = num_str.trim().parse::<u16>()
+            {
+                let compiled = compile_face_v2(
+                    FaceInput {
+                        name: face.name,
+                        type_line: face.type_line,
+                        oracle_text: rhs.trim(),
+                    },
+                    vocab,
+                );
+                if compiled.is_ok() {
+                    out.abilities.push(Ability::TableRow {
+                        min,
+                        max: Some(min),
+                        open_ended: false,
+                        payload: TableRowPayload::Face(Box::new(compiled)),
+                    });
+                } else {
+                    out.errors.extend(compiled.errors);
+                }
+                i += 1;
+                continue;
+            }
+            let bullet_body = strip_bullet_label(raw_bullet);
+            let compiled = compile_face_v2(
+                FaceInput {
+                    name: face.name,
+                    type_line: face.type_line,
+                    oracle_text: &bullet_body,
+                },
+                vocab,
+            );
+            if compiled.is_ok() {
+                out.keywords.extend(compiled.keywords);
+                out.abilities.extend(compiled.abilities);
+                out.spell_effects.extend(compiled.spell_effects);
+                out.statics.extend(compiled.statics);
+                out.replacements.extend(compiled.replacements);
+            } else {
+                out.errors.extend(compiled.errors);
             }
             i += 1;
             continue;
         }
 
-        // 7. Standalone keyword line (`Flying, vigilance`, `Kicker—Sacrifice an artifact.`, `Equip {3}. This ability costs {1} less to activate ...`)
+        // 7. Standalone keyword line (`Flying, vigilance`, `Kicker - Sacrifice an artifact.`, `Equip {3}. This ability costs {1} less to activate ...`)
         if let Ok(toks) = tokenize(line) {
             let mut ts = TokenStream::new(line, &toks, vocab, ParseStage::Face);
             if let Ok((kws, _)) = parse_keyword_list(&mut ts) {
@@ -527,7 +508,7 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                     i += 1;
                     continue;
                 }
-                if ate_period && !is_spell {
+                if ate_period {
                     let mut tail_ts =
                         TokenStream::new(line, &toks[ts.pos..], vocab, ParseStage::Static);
                     if let Ok(st) = parse_static_ability(&mut tail_ts) {
@@ -535,6 +516,29 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                         out.statics.push(st);
                         i += 1;
                         continue;
+                    }
+                    let mut rep_ts =
+                        TokenStream::new(line, &toks[ts.pos..], vocab, ParseStage::Replacement);
+                    if let Ok(rep) = parse_replacement(&mut rep_ts) {
+                        out.keywords.extend(kws);
+                        out.replacements.push(rep);
+                        i += 1;
+                        continue;
+                    }
+                    if is_spell {
+                        let mut eff_ts =
+                            TokenStream::new(line, &toks[ts.pos..], vocab, ParseStage::Effect);
+                        if let Ok(effs) = crate::v2::clause::parse_effect_sentence(&mut eff_ts)
+                            && {
+                                let _ = eff_ts.eat_period();
+                                eff_ts.is_eof()
+                            }
+                        {
+                            out.keywords.extend(kws);
+                            out.spell_effects.extend(effs);
+                            i += 1;
+                            continue;
+                        }
                     }
                 }
             }
@@ -567,7 +571,9 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                     continue;
                 }
                 // Multi-sentence permanent paragraph fallback: split on top-level `.` (outside quotes)
-                // when sentence 1 is a valid Replacement or Static and remaining sentences are valid Effects/Statics.
+                // when sentence 1 is a valid Replacement or Static. Follow-up effect sentences are
+                // ONLY attached to `EventInstead` / `AsEnters` replacements (never detached into
+                // `out.spell_effects` on non-spell cards).
                 if let Some(first_dot) = toks
                     .iter()
                     .position(|t| matches!(t.kind, TokenKind::Period))
@@ -587,70 +593,61 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                         None
                     };
                     if head_rep.is_some() || head_st.is_some() {
+                        let can_attach_effects = matches!(
+                            head_rep,
+                            Some(Replacement::EventInstead { .. } | Replacement::AsEnters(_))
+                        );
                         let mut tail_effects = Vec::new();
                         let mut tail_statics = Vec::new();
                         let mut tail_reps = Vec::new();
+                        let mut parse_tail_slice = |sl: &[crate::v2::lexer::Token<'_>]| -> bool {
+                            let mut sts = TokenStream::new(line, sl, vocab, ParseStage::Static);
+                            if let Ok(st) = parse_static_ability(&mut sts) {
+                                tail_statics.push(st);
+                                return true;
+                            }
+                            let mut rts =
+                                TokenStream::new(line, sl, vocab, ParseStage::Replacement);
+                            if let Ok(rp) = parse_replacement(&mut rts) {
+                                tail_reps.push(rp);
+                                return true;
+                            }
+                            if can_attach_effects {
+                                let mut sub = TokenStream::new(line, sl, vocab, ParseStage::Effect);
+                                if let Ok(effs) = parse_effect_sentence(&mut sub) {
+                                    tail_effects.extend(effs);
+                                    return true;
+                                }
+                            }
+                            false
+                        };
                         let mut tail_ok = true;
                         let mut cur_start = 0usize;
                         for (idx, tok) in tail_toks.iter().enumerate() {
                             if matches!(tok.kind, TokenKind::Period) {
-                                if idx > cur_start {
-                                    let sl = &tail_toks[cur_start..idx];
-                                    let mut sub =
-                                        TokenStream::new(line, sl, vocab, ParseStage::Effect);
-                                    if let Ok(effs) = parse_effect_sentence(&mut sub) {
-                                        tail_effects.extend(effs);
-                                    } else {
-                                        let mut sts =
-                                            TokenStream::new(line, sl, vocab, ParseStage::Static);
-                                        if let Ok(st) = parse_static_ability(&mut sts) {
-                                            tail_statics.push(st);
-                                        } else {
-                                            let mut rts = TokenStream::new(
-                                                line,
-                                                sl,
-                                                vocab,
-                                                ParseStage::Replacement,
-                                            );
-                                            if let Ok(rp) = parse_replacement(&mut rts) {
-                                                tail_reps.push(rp);
-                                            } else {
-                                                tail_ok = false;
-                                                break;
-                                            }
-                                        }
-                                    }
+                                if idx > cur_start && !parse_tail_slice(&tail_toks[cur_start..idx])
+                                {
+                                    tail_ok = false;
+                                    break;
                                 }
                                 cur_start = idx + 1;
                             }
                         }
                         if tail_ok && cur_start < tail_toks.len() {
-                            let sl = &tail_toks[cur_start..];
-                            let mut sub = TokenStream::new(line, sl, vocab, ParseStage::Effect);
-                            if let Ok(effs) = parse_effect_sentence(&mut sub) {
-                                tail_effects.extend(effs);
-                            } else {
-                                let mut sts = TokenStream::new(line, sl, vocab, ParseStage::Static);
-                                if let Ok(st) = parse_static_ability(&mut sts) {
-                                    tail_statics.push(st);
-                                } else {
-                                    let mut rts =
-                                        TokenStream::new(line, sl, vocab, ParseStage::Replacement);
-                                    if let Ok(rp) = parse_replacement(&mut rts) {
-                                        tail_reps.push(rp);
-                                    } else {
-                                        tail_ok = false;
-                                    }
-                                }
-                            }
+                            tail_ok = parse_tail_slice(&tail_toks[cur_start..]);
                         }
                         if tail_ok {
-                            if let Some(rep) = head_rep {
+                            if let Some(mut rep) = head_rep {
+                                if !tail_effects.is_empty()
+                                    && let Replacement::EventInstead { instead, .. }
+                                    | Replacement::AsEnters(instead) = &mut rep
+                                {
+                                    instead.extend(tail_effects);
+                                }
                                 out.replacements.push(rep);
                             } else if let Some(st) = head_st {
                                 out.statics.push(st);
                             }
-                            out.spell_effects.extend(tail_effects);
                             out.statics.extend(tail_statics);
                             out.replacements.extend(tail_reps);
                             i += 1;
@@ -671,54 +668,439 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
     out
 }
 
-fn split_triggered_modal_header(line: &str) -> Option<(&str, ChoiceCount)> {
-    let trimmed = line.trim();
-    if !trimmed.ends_with(EM_DASH) {
-        return None;
-    }
-    let idx = trimmed.rfind(", choose ")?;
-    let modal_part = &trimmed[idx + 2..];
-    let count = parse_modal_header(modal_part, false)?;
-    Some((&trimmed[..idx], count))
+struct ModalHeaderInfo {
+    chooser: PlayerRef,
+    count: ChoiceCount,
+    optional: bool,
+    extra_effects: Option<String>,
 }
 
-fn parse_modal_header(line: &str, allow_no_dash: bool) -> Option<ChoiceCount> {
-    let low = line.trim().to_ascii_lowercase();
-    let head = if let Some(h) = low.strip_suffix(EM_DASH) {
+const MODAL_CHOOSER_PREFIXES: &[(&str, PlayerRef, bool)] = &[
+    ("an opponent chooses ", PlayerRef::AnyOpponent, false),
+    ("target opponent chooses ", PlayerRef::TargetOpponent, false),
+    ("target player chooses ", PlayerRef::TargetPlayer, false),
+    (
+        "defending player chooses ",
+        PlayerRef::DefendingPlayer,
+        false,
+    ),
+    ("each player chooses ", PlayerRef::EachPlayer, false),
+    ("each opponent chooses ", PlayerRef::EachOpponent, false),
+    ("that player chooses ", PlayerRef::ThatPlayer, false),
+    ("you may choose ", PlayerRef::You, true),
+    ("choose ", PlayerRef::You, false),
+];
+
+const MODAL_COUNT_TABLE: &[(&str, ChoiceCount)] = &[
+    ("one", ChoiceCount::Exact(1)),
+    ("two", ChoiceCount::Exact(2)),
+    ("three", ChoiceCount::Exact(3)),
+    ("four", ChoiceCount::Exact(4)),
+    ("five", ChoiceCount::Exact(5)),
+    ("one or both", ChoiceCount::OneOrBoth),
+    ("one or more", ChoiceCount::OneOrMore),
+    ("up to one", ChoiceCount::UpTo(1)),
+    ("up to two", ChoiceCount::UpTo(2)),
+    ("up to three", ChoiceCount::UpTo(3)),
+    ("up to four", ChoiceCount::UpTo(4)),
+    ("up to five", ChoiceCount::UpTo(5)),
+    ("up to x", ChoiceCount::VariableX),
+    ("x", ChoiceCount::VariableX),
+    ("up to that many", ChoiceCount::VariableX),
+    ("that many", ChoiceCount::VariableX),
+    ("any number", ChoiceCount::AnyNumber),
+];
+
+fn parse_modal_header(line: &str, allow_no_dash: bool) -> Option<ModalHeaderInfo> {
+    let trimmed = line.trim();
+    let head = if let Some(h) = trimmed.strip_suffix(EM_DASH) {
         h.trim()
     } else if allow_no_dash {
-        low.trim_end_matches('.').trim()
+        trimmed.trim_end_matches('.').trim()
     } else {
         return None;
     };
-    // Strip optional `that hasn't been chosen` / conditional `. if ..., choose ... instead.` suffix
-    let core = head
-        .split_once('.')
-        .map_or(head, |(first, _)| first.trim())
-        .trim_end_matches(" that hasn't been chosen")
-        .trim_end_matches(" that hasn't been chosen this turn")
-        .trim_end_matches(" that hasn't been chosen this game")
-        .trim_end_matches(" at random")
+    if head.contains('.') {
+        return None;
+    }
+    let first_low = head.to_ascii_lowercase();
+    let (chooser, optional, prefix_len) = MODAL_CHOOSER_PREFIXES
+        .iter()
+        .find_map(|&(pfx, p, opt)| first_low.starts_with(pfx).then_some((p, opt, pfx.len())))?;
+    let rest_raw = head[prefix_len..].trim();
+    let rest_low = rest_raw.to_ascii_lowercase();
+    let (core, extra_effects) = if let Some(and_idx) = rest_low.find(" and ") {
+        let after = rest_raw[and_idx + 5..].trim();
+        let extra = (!after.is_empty()).then(|| after.to_string());
+        (rest_low[..and_idx].trim(), extra)
+    } else {
+        (rest_low.as_str(), None)
+    };
+    let count = MODAL_COUNT_TABLE
+        .iter()
+        .find_map(|(k, c)| (*k == core).then_some(*c))?;
+    Some(ModalHeaderInfo {
+        chooser,
+        count,
+        optional,
+        extra_effects,
+    })
+}
+
+enum ReflexiveModalHeader {
+    WhenYouDo,
+    DelayedEvent(TriggerSpec),
+}
+
+fn split_reflexive_modal<'a>(
+    rest: &'a str,
+    vocab: &Vocabulary,
+) -> Option<(&'a str, ReflexiveModalHeader, ModalHeaderInfo)> {
+    let low = rest.to_ascii_lowercase();
+    let dot_idx = low.rfind(". when ")?;
+    let pre_str = rest[..dot_idx].trim();
+    if pre_str.is_empty() {
+        return None;
+    }
+    let reflex_str = rest[dot_idx + 2..].trim();
+    for (idx, _) in reflex_str.rmatch_indices(", ") {
+        let header_part = reflex_str[..idx].trim();
+        let modal_part = reflex_str[idx + 2..].trim();
+        let Some(hdr) = parse_modal_header(modal_part, true) else {
+            continue;
+        };
+        if header_part.eq_ignore_ascii_case("when you do") {
+            return Some((pre_str, ReflexiveModalHeader::WhenYouDo, hdr));
+        }
+        if let Ok(htoks) = tokenize(header_part) {
+            let mut hts = TokenStream::new(header_part, &htoks, vocab, ParseStage::Trigger);
+            if let Ok(trig) = parse_trigger_header(&mut hts)
+                && hts.is_eof()
+            {
+                return Some((pre_str, ReflexiveModalHeader::DelayedEvent(trig), hdr));
+            }
+        }
+    }
+    None
+}
+
+fn try_compile_triggered_modal(
+    line: &str,
+    lines: &[String],
+    i: &mut usize,
+    vocab: &Vocabulary,
+    out: &mut CompiledFaceV2,
+) -> bool {
+    let Ok(toks) = tokenize(line) else {
+        return false;
+    };
+    let mut ts = TokenStream::new(line, &toks, vocab, ParseStage::Trigger);
+    let Ok(trigger) = parse_trigger_header(&mut ts) else {
+        return false;
+    };
+    if !ts.eat_comma() {
+        return false;
+    }
+    let rest = ts
+        .peek()
+        .map_or("", |t| line.get(t.span.start..).unwrap_or(""))
         .trim();
-    match core {
-        "choose one" => Some(ChoiceCount::Exact(1)),
-        "choose two" => Some(ChoiceCount::Exact(2)),
-        "choose three" => Some(ChoiceCount::Exact(3)),
-        "choose one or both" => Some(ChoiceCount::OneOrBoth),
-        "choose one or more" => Some(ChoiceCount::OneOrMore),
-        "choose up to one" => Some(ChoiceCount::UpTo(1)),
-        "choose up to two" => Some(ChoiceCount::UpTo(2)),
-        "choose up to three" => Some(ChoiceCount::UpTo(3)),
-        "choose up to four" => Some(ChoiceCount::UpTo(4)),
-        "choose four" => Some(ChoiceCount::Exact(4)),
-        "choose up to x" | "choose x" => Some(ChoiceCount::VariableX),
-        "choose any number" => Some(ChoiceCount::AnyNumber),
-        _ => None,
+
+    if let Some(hdr) = parse_modal_header(rest, true) {
+        *i += 1;
+        let modes = collect_modal_modes(lines, i, vocab, &mut out.errors);
+        if modes.is_empty() {
+            out.errors.push(make_parse_error(
+                line.len(),
+                ParseStage::Effect,
+                "modal trigger with zero modes",
+                line,
+            ));
+        } else {
+            let body = build_modal_effects(hdr, modes, vocab, &mut out.errors);
+            out.abilities.push(Ability::Triggered { trigger, body });
+        }
+        return true;
+    }
+
+    if let Some((pre_str, reflex_hdr, hdr)) = split_reflexive_modal(rest, vocab) {
+        *i += 1;
+        let modes = collect_modal_modes(lines, i, vocab, &mut out.errors);
+        match parse_effect_body_str(pre_str, vocab) {
+            Ok(mut body) if !modes.is_empty() => {
+                let reflex_body = build_modal_effects(hdr, modes, vocab, &mut out.errors);
+                match reflex_hdr {
+                    ReflexiveModalHeader::WhenYouDo => {
+                        body.push(Effect::ReflexiveTrigger(reflex_body));
+                    }
+                    ReflexiveModalHeader::DelayedEvent(delayed_trig) => {
+                        body.push(Effect::DelayedTrigger {
+                            trigger: DelayedTriggerKind::Event(delayed_trig),
+                            body: reflex_body,
+                        });
+                    }
+                }
+                out.abilities.push(Ability::Triggered { trigger, body });
+            }
+            Ok(_) => out.errors.push(make_parse_error(
+                line.len(),
+                ParseStage::Effect,
+                "modal trigger with zero modes",
+                line,
+            )),
+            Err(errs) => out.errors.extend(errs),
+        }
+        return true;
+    }
+
+    false
+}
+
+fn make_parse_error(
+    end: usize,
+    stage: ParseStage,
+    message: impl Into<String>,
+    text: &str,
+) -> ParseError {
+    ParseError {
+        span: Span { start: 0, end },
+        stage,
+        message: message.into(),
+        text: text.to_string(),
     }
 }
 
-/// Strip CR 207.2c flavor-only ability word prefix (`Landfall — ...`, `Threshold — ...`,
-/// `Channel — ...`, `Heroic — ...`, etc.) while preserving modal, saga, spree, case, and sticker lines.
+fn parse_cost_str(cost_raw: &str, vocab: &Vocabulary) -> Result<Vec<Cost>, ParseError> {
+    tokenize(cost_raw).and_then(|toks| {
+        let mut ts = TokenStream::new(cost_raw, &toks, vocab, ParseStage::Cost);
+        let c = parse_cost_list(&mut ts)?;
+        ts.expect_eof()?;
+        Ok(c)
+    })
+}
+
+fn build_modal_effects(
+    hdr: ModalHeaderInfo,
+    modes: Vec<ModalMode>,
+    vocab: &Vocabulary,
+    errors: &mut Vec<ParseError>,
+) -> Vec<Effect> {
+    let prompt = Effect::PromptChoice {
+        chooser: hdr.chooser,
+        kind: ChoiceKind::Modal {
+            count: hdr.count,
+            modes,
+        },
+    };
+    let mut body = vec![if hdr.optional {
+        Effect::Optional {
+            actor: hdr.chooser,
+            body: vec![prompt],
+        }
+    } else {
+        prompt
+    }];
+    if let Some(extra) = hdr.extra_effects {
+        match parse_effect_body_str(&extra, vocab) {
+            Ok(effs) => body.extend(effs),
+            Err(errs) => errors.extend(errs),
+        }
+    }
+    body
+}
+
+fn push_spree_choice(out: &mut CompiledFaceV2, modes: Vec<SpreeMode>) {
+    if !modes.is_empty() {
+        out.spell_effects.push(Effect::PromptChoice {
+            chooser: PlayerRef::You,
+            kind: ChoiceKind::Spree { modes },
+        });
+    }
+}
+
+fn push_header_keywords(line: &str, vocab: &Vocabulary, out: &mut CompiledFaceV2) {
+    if let Ok(toks) = tokenize(line) {
+        let mut ts = TokenStream::new(line, &toks, vocab, ParseStage::Face);
+        if let Ok((kws, _)) = parse_keyword_list(&mut ts) {
+            out.keywords.extend(kws);
+        }
+    }
+}
+
+fn collect_modal_modes(
+    lines: &[String],
+    i: &mut usize,
+    vocab: &Vocabulary,
+    errors: &mut Vec<ParseError>,
+) -> Vec<ModalMode> {
+    let mut modes = Vec::new();
+    while *i < lines.len() && lines[*i].starts_with(BULLET) {
+        let raw_mode = lines[*i].trim_start_matches(BULLET).trim();
+        match parse_modal_mode_body(raw_mode, vocab) {
+            Ok(body) => modes.push(ModalMode { body }),
+            Err(errs) => errors.extend(errs),
+        }
+        *i += 1;
+    }
+    modes
+}
+
+fn split_tiered_bullet(line: &str) -> Option<(&str, &str)> {
+    let rest = line.strip_prefix(BULLET)?.trim();
+    let (_label, after_first) = rest.split_once(" \u{2014} ")?;
+    let (cost_str, body_str) = after_first.split_once(" \u{2014} ")?;
+    let c = cost_str.trim();
+    let b = body_str.trim();
+    if c.is_empty() || b.is_empty() || !c.contains('{') {
+        return None;
+    }
+    Some((c, b))
+}
+
+fn collect_tiered_modes(
+    lines: &[String],
+    i: &mut usize,
+    vocab: &Vocabulary,
+    errors: &mut Vec<ParseError>,
+) -> Vec<SpreeMode> {
+    let mut modes = Vec::new();
+    while *i < lines.len()
+        && let Some((cost_raw, body_raw)) = split_tiered_bullet(&lines[*i])
+    {
+        match (
+            parse_cost_str(cost_raw, vocab),
+            parse_modal_mode_body(body_raw, vocab),
+        ) {
+            (Ok(cost), Ok(body)) => modes.push(SpreeMode { cost, body }),
+            (Err(e), _) => errors.push(e),
+            (_, Err(errs)) => errors.extend(errs),
+        }
+        *i += 1;
+    }
+    modes
+}
+
+fn split_repeated_symbol_row<'a>(line: &'a str, sym: &str) -> Option<(u8, &'a str)> {
+    let (lhs, rhs) = line.split_once(" \u{2014} ")?;
+    let mut rest = lhs.trim();
+    let mut count = 0u8;
+    while let Some(after) = rest.strip_prefix(sym) {
+        count = count.saturating_add(1);
+        rest = after;
+    }
+    (count > 0 && rest.is_empty()).then_some((count, rhs.trim()))
+}
+
+fn strip_bullet_label(raw: &str) -> String {
+    if let Some(after) = raw.strip_prefix("~ \u{2014} ") {
+        return after.trim().to_string();
+    }
+    strip_ability_word_prefix(raw)
+}
+
+fn parse_modal_mode_body(
+    raw_mode: &str,
+    vocab: &Vocabulary,
+) -> Result<Vec<Effect>, Vec<ParseError>> {
+    let mode_clean = strip_bullet_label(raw_mode);
+    match parse_effect_body_str(&mode_clean, vocab) {
+        Ok(effs) => Ok(effs),
+        Err(errs) => {
+            if let Some(char_effs) = parse_characteristic_bullet(&mode_clean, vocab) {
+                return Ok(char_effs);
+            }
+            let trimmed = mode_clean.trim().trim_end_matches('.');
+            if let Ok(toks) = tokenize(trimmed) {
+                let mut ts = TokenStream::new(trimmed, &toks, vocab, ParseStage::Effect);
+                if let Ok(subj) = try_parse(&mut ts, parse_subject_ref)
+                    && ts.is_eof()
+                {
+                    return Ok(vec![Effect::PromptChoice {
+                        chooser: PlayerRef::You,
+                        kind: ChoiceKind::ChooseObject(subj),
+                    }]);
+                }
+            }
+            Err(errs)
+        }
+    }
+}
+
+fn parse_characteristic_bullet(mode: &str, vocab: &Vocabulary) -> Option<Vec<Effect>> {
+    let trimmed = mode.trim().trim_end_matches('.');
+    let toks = tokenize(trimmed).ok()?;
+    let mut ts = TokenStream::new(trimmed, &toks, vocab, ParseStage::Effect);
+    let (p, t) = ts.next_base_pt()?;
+    if ts.is_eof() {
+        return Some(vec![Effect::MutateObject {
+            subject: SubjectRef::SelfObject,
+            mutation: ObjectMutation::SetDynamicBasePT {
+                power: ValueExpr::Const(p),
+                toughness: ValueExpr::Const(t),
+                add_types: CardTypeMask::EMPTY,
+                keep_existing_types: true,
+            },
+            duration: Duration::UntilEndOfTurn,
+        }]);
+    }
+    let mut colors = ColorMask::EMPTY;
+    let mut subtypes = Vec::new();
+    while let Some(w) = ts.peek_word() {
+        let low = w.to_ascii_lowercase();
+        if let Some(c) = lookup_color(&low) {
+            ts.next_word();
+            colors = colors.union(c);
+            let _ = ts.eat_word("and");
+        } else if let Some(sub) = vocab.lookup_subtype(&low) {
+            ts.next_word();
+            subtypes.push(sub.to_string());
+        } else {
+            break;
+        }
+    }
+    let mut keywords = Vec::new();
+    let mut abilities = Vec::new();
+    if ts.eat_word("with") {
+        if let Ok((kws, _)) = try_parse(&mut ts, parse_keyword_list) {
+            keywords.extend(kws);
+        }
+        let _ = ts.eat_word("and");
+        if let Some(quoted) = ts.next_quoted() {
+            let compiled = compile_face_v2(
+                FaceInput {
+                    name: "",
+                    type_line: "Creature",
+                    oracle_text: quoted,
+                },
+                vocab,
+            );
+            if !compiled.is_ok() {
+                return None;
+            }
+            abilities.push(compiled);
+        }
+    }
+    if !ts.is_eof() || (subtypes.is_empty() && keywords.is_empty()) {
+        return None;
+    }
+    Some(vec![Effect::CreateToken {
+        controller: PlayerRef::You,
+        count: ValueExpr::Const(1),
+        spec: TokenSpec::Creature {
+            power: Some(ValueExpr::Const(p)),
+            toughness: Some(ValueExpr::Const(t)),
+            colors,
+            card_types: CardTypeMask::CREATURE,
+            subtypes,
+            keywords,
+            abilities,
+        },
+        modifiers: EntryModifiers::default(),
+    }])
+}
+
+/// Strip CR 207.2c flavor-only ability word prefix (`Landfall`, `Threshold`, `Channel`,
+/// `Heroic`) while preserving modal, saga, spree, case, attraction, and sticker lines.
 fn strip_ability_word_prefix(line: &str) -> String {
     let Some((prefix, rest)) = line.split_once(" \u{2014} ") else {
         return line.to_string();
@@ -728,12 +1110,12 @@ fn strip_ability_word_prefix(line: &str) -> String {
         return line.to_string();
     }
     let low = p.to_ascii_lowercase();
-    // Preserve structural em-dash headers (modal, saga, case, villainous choice)
+    // Preserve structural em-dash headers (modal, saga, case, attraction, villainous choice)
     if low.starts_with("choose ")
         || low.contains("villainous choice")
         || matches!(
             low.as_str(),
-            "i" | "ii" | "iii" | "iv" | "v" | "vi" | "to solve" | "solved"
+            "i" | "ii" | "iii" | "iv" | "v" | "vi" | "to solve" | "solved" | "visit" | "prize"
         )
         || low.contains("i, ")
     {
@@ -781,21 +1163,6 @@ fn parse_loyalty_delta(s: &str) -> Option<LoyaltyDelta> {
     norm.parse::<i16>().ok().map(LoyaltyDelta::Fixed)
 }
 
-fn split_sticker_row(line: &str) -> Option<(u8, &str)> {
-    let (lhs, rhs) = line.split_once(" \u{2014} ")?;
-    let mut rest = lhs.trim();
-    let mut count = 0u8;
-    while let Some(after) = rest.strip_prefix("{TK}") {
-        count = count.saturating_add(1);
-        rest = after;
-    }
-    if count > 0 && rest.is_empty() {
-        Some((count, rhs.trim()))
-    } else {
-        None
-    }
-}
-
 fn parse_bare_base_pt(s: &str) -> Option<(i32, i32)> {
     let (p, t) = s.trim().split_once('/')?;
     Some((p.parse().ok()?, t.parse().ok()?))
@@ -838,6 +1205,7 @@ fn parse_triggered_line(line: &str, vocab: &Vocabulary) -> Result<Ability, Vec<P
     // Parse remaining tokens as one or more sentences (split on `.` outside quotes, which are
     // already tokenized as single `TokenKind::Quoted` tokens!)
     let mut body = Vec::new();
+    let mut prev_sentence_start = 0usize;
     let mut cur_start = ts.pos;
     for idx in ts.pos..toks.len() {
         let is_period = matches!(toks[idx].kind, TokenKind::Period);
@@ -874,18 +1242,34 @@ fn parse_triggered_line(line: &str, vocab: &Vocabulary) -> Result<Ability, Vec<P
         if is_period || is_sentence_ending_quote {
             let end_idx = if is_period { idx } else { idx + 1 };
             if end_idx > cur_start {
-                let mut sub =
-                    TokenStream::new(line, &toks[cur_start..end_idx], vocab, ParseStage::Effect);
-                let effs = parse_effect_sentence(&mut sub).map_err(|e| vec![e])?;
-                body.extend(effs);
+                let slice = &toks[cur_start..end_idx];
+                if !crate::v2::clause::try_merge_still_type_sentence(
+                    &mut body[prev_sentence_start..],
+                    slice,
+                    line,
+                    vocab,
+                ) {
+                    let mut sub = TokenStream::new(line, slice, vocab, ParseStage::Effect);
+                    let effs = parse_effect_sentence(&mut sub).map_err(|e| vec![e])?;
+                    prev_sentence_start = body.len();
+                    body.extend(effs);
+                }
             }
             cur_start = idx + 1;
         }
     }
     if cur_start < toks.len() {
-        let mut sub = TokenStream::new(line, &toks[cur_start..], vocab, ParseStage::Effect);
-        let effs = parse_effect_sentence(&mut sub).map_err(|e| vec![e])?;
-        body.extend(effs);
+        let slice = &toks[cur_start..];
+        if !crate::v2::clause::try_merge_still_type_sentence(
+            &mut body[prev_sentence_start..],
+            slice,
+            line,
+            vocab,
+        ) {
+            let mut sub = TokenStream::new(line, slice, vocab, ParseStage::Effect);
+            let effs = parse_effect_sentence(&mut sub).map_err(|e| vec![e])?;
+            body.extend(effs);
+        }
     }
     Ok(Ability::Triggered { trigger, body })
 }

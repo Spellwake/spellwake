@@ -1,11 +1,13 @@
 //! Strictly-typed [`Cost`] and cost-list parser for `v2`.
 
 use crate::v2::filter::{
-    parse_counter_kind, parse_object_filter, parse_subject_ref, parse_zone_ref,
+    parse_counter_kind, parse_keyword_list, parse_object_filter, parse_subject_ref, parse_zone_ref,
 };
-use crate::v2::ir::{Cost, ManaSymbol, ObjectFilter, ValueExpr};
+use crate::v2::ir::{
+    Cost, FilterPredicate, ManaSymbol, ObjectFilter, PlayerRef, SubjectRef, ValueExpr, VarName,
+};
 use crate::v2::lexer::TokenKind;
-use crate::v2::parser::{PResult, TokenStream, try_parse};
+use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
 use crate::v2::value::parse_value_expr;
 
 /// Parse a comma- or `and`-separated list of activation/additional costs (e.g. `{2}, {T}, Sacrifice ~`,
@@ -29,15 +31,40 @@ pub fn parse_cost_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Cost>> {
             costs.push(next);
             continue;
         }
-        // Conjoined sacrifice targets (`Sacrifice a Swamp and a Forest`, `Sacrifice a creature and ~`,
-        // `Sacrifice a white creature, a blue creature, and a black creature`)
+        // Conjoined mana + life cost (`Pay {B} and 1 life`)
         if matches!(
             costs.last(),
-            Some(Cost::Sacrifice { .. } | Cost::SacrificeSelf)
+            Some(Cost::Mana(_) | Cost::ScaledMana { .. } | Cost::PayLife(_))
         ) {
+            let lcp = ts.checkpoint();
+            if let Ok(amt) = try_parse(ts, parse_value_expr)
+                && ts.eat_word("life")
+            {
+                let amt = if let Some(scale) = opt(ts, crate::v2::value::parse_for_each_expr) {
+                    ValueExpr::Mul(Box::new(amt), Box::new(scale))
+                } else {
+                    amt
+                };
+                costs.push(Cost::PayLife(amt));
+                continue;
+            }
+            ts.restore(lcp);
+        }
+        // Conjoined sacrifice/exile targets (`Sacrifice a Swamp and a Forest`, `Exile two cards from your graveyard and ~`)
+        if matches!(
+            costs.last(),
+            Some(
+                Cost::Sacrifice { .. } | Cost::SacrificeSelf | Cost::Exile { .. } | Cost::ExileSelf
+            )
+        ) {
+            let is_exile = matches!(costs.last(), Some(Cost::Exile { .. } | Cost::ExileSelf));
             let scp = ts.checkpoint();
             if ts.eat_tilde() || ts.eat_word("it") {
-                costs.push(Cost::SacrificeSelf);
+                costs.push(if is_exile {
+                    Cost::ExileSelf
+                } else {
+                    Cost::SacrificeSelf
+                });
                 continue;
             }
             let count = if ts.eat_word("all")
@@ -53,7 +80,15 @@ pub fn parse_cost_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Cost>> {
                 ValueExpr::Const(1)
             };
             if let Ok(filter) = try_parse(ts, parse_object_filter) {
-                costs.push(Cost::Sacrifice { count, filter });
+                costs.push(if is_exile {
+                    Cost::Exile {
+                        count,
+                        filter,
+                        from: Vec::new(),
+                    }
+                } else {
+                    Cost::Sacrifice { count, filter }
+                });
                 continue;
             }
             ts.restore(scp);
@@ -124,13 +159,39 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         if ts.eat_phrase(&["any", "amount", "of", "mana"]) {
             return Ok(Cost::PayAnyAmountMana);
         }
+        // `Pay six {C}`
+        {
+            let mcp = ts.checkpoint();
+            if let Some(n) = ts.next_number(false)
+                && let Some(mana) = ts.eat_mana_cost()
+            {
+                return Ok(Cost::ScaledMana {
+                    base: mana,
+                    scale: ValueExpr::Const(n),
+                });
+            }
+            ts.restore(mcp);
+        }
         if ts.eat_phrase(&["life", "equal", "to"]) {
             let amt = parse_value_expr(ts)?;
             return Ok(Cost::PayLife(amt));
         }
+        if ts
+            .peek_word()
+            .is_some_and(|w| w.eq_ignore_ascii_case("half"))
+            && let Ok(amt) = try_parse(ts, parse_value_expr)
+        {
+            let _ = ts.eat_word("life");
+            return Ok(Cost::PayLife(amt));
+        }
         let amt = parse_value_expr(ts)?;
         if ts.eat_word("life") {
-            return Ok(Cost::PayLife(amt));
+            let final_amt = if let Some(scale) = opt(ts, crate::v2::value::parse_for_each_expr) {
+                ValueExpr::Mul(Box::new(amt), Box::new(scale))
+            } else {
+                amt
+            };
+            return Ok(Cost::PayLife(final_amt));
         }
         if matches!(
             ts.peek().map(|t| &t.kind),
@@ -142,37 +203,38 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Err(ts.err("expected `life`, energy, or mana after `pay`"));
     }
 
-    // `Behold a/an <flt>` (`Osseous Exhale`, Tarkir Dragonstorm)
+    // `Behold a/an <flt>`
     if ts.eat_word("behold") {
         let filter = parse_object_filter(ts)?;
         return Ok(Cost::Behold(filter));
     }
 
-    // `Sacrifice ~` / `Sacrifice it` / `Sacrifice [all | any number of | one or more | N] <filter> [or <filter2>]`
+    // `Sacrifice ~` / `Sacrifice it` / `Sacrifice [up to] [all | any number of | one or more | N] <filter> [or <filter2>]`
     if ts.eat_word("sacrifice") || ts.eat_word("sacrificing") {
         if ts.eat_tilde() || ts.eat_word("it") {
             return Ok(Cost::SacrificeSelf);
         }
+        let _ = ts.eat_phrase(&["up", "to"]);
         let count = if ts.eat_word("all")
             || ts.eat_phrase(&["any", "number", "of"])
             || ts.eat_phrase(&["one", "or", "more"])
         {
-            ValueExpr::Var(crate::v2::ir::VarName::X)
+            ValueExpr::Var(VarName::X)
         } else if let Some(n) = ts.next_number(true) {
             ValueExpr::Const(n)
         } else if ts.eat_word("x") {
-            ValueExpr::Var(crate::v2::ir::VarName::X)
+            ValueExpr::Var(VarName::X)
         } else {
             ValueExpr::Const(1)
         };
         let mut filter = parse_object_filter(ts)?;
-        // Support `Sacrifice a Food or another creature` (`Malevolent Noble`)
+        // Support `Sacrifice a Food or another creature`
         let ocp = ts.checkpoint();
         if ts.eat_word("or") {
             let _ = ts.eat_word("a") || ts.eat_word("an");
             if let Ok(other) = try_parse(ts, parse_object_filter) {
                 filter = ObjectFilter {
-                    predicates: vec![crate::v2::ir::FilterPredicate::AnyOf(vec![filter, other])],
+                    predicates: vec![FilterPredicate::AnyOf(vec![filter, other])],
                     ..Default::default()
                 };
             } else {
@@ -187,9 +249,36 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Ok(Cost::Forage);
     }
 
+    // `Get <N> <kind> counter(s)` (`Ward - Get five poison counters.`)
+    {
+        let gcp = ts.checkpoint();
+        if ts.eat_word("get") {
+            let count = if let Some(n) = ts.next_number(true) {
+                ValueExpr::Const(n)
+            } else if ts.eat_word("x") {
+                ValueExpr::Var(VarName::X)
+            } else {
+                ValueExpr::Const(1)
+            };
+            if let Ok(kind) = try_parse(ts, parse_counter_kind)
+                && (ts.eat_word("counter") || ts.eat_word("counters"))
+            {
+                return Ok(Cost::PutCounters {
+                    kind,
+                    count,
+                    subject: SubjectRef::Player(PlayerRef::You),
+                });
+            }
+        }
+        ts.restore(gcp);
+    }
+
     // `Unattach ~`
-    if ts.eat_word("unattach") && ts.eat_tilde() {
-        return Ok(Cost::UnattachSelf);
+    if ts.eat_word("unattach") {
+        if ts.eat_tilde() {
+            return Ok(Cost::UnattachSelf);
+        }
+        return Err(ts.err("expected `~` after `unattach`"));
     }
 
     // `Blight <val>`
@@ -223,25 +312,43 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
             return Ok(Cost::ExileSelf);
         }
         if ts.eat_phrase(&["the", "top"]) {
+            let t_cp = ts.checkpoint();
             let count = if ts.eat_word("card") {
-                ValueExpr::Const(1)
+                Some(ValueExpr::Const(1))
+            } else if let Ok(n) = try_parse(ts, parse_value_expr)
+                && (ts.eat_word("cards") || ts.eat_word("card"))
+            {
+                Some(n)
             } else {
-                let n = parse_value_expr(ts)?;
-                let _ = ts.eat_word("cards") || ts.eat_word("card");
-                n
+                None
             };
-            if ts.eat_word("of") {
-                let zone = parse_zone_ref(ts)?;
+            if let Some(count) = count
+                && ts.eat_word("of")
+                && let Ok(zone) = try_parse(ts, parse_zone_ref)
+            {
                 return Ok(Cost::ExileTop { zone, count });
             }
+            ts.restore(t_cp);
+            if let Ok(filter) = try_parse(ts, parse_object_filter)
+                && ts.eat_word("of")
+                && let Ok(zone) = try_parse(ts, parse_zone_ref)
+            {
+                return Ok(Cost::Exile {
+                    count: ValueExpr::Const(1),
+                    filter,
+                    from: vec![zone],
+                });
+            }
+            ts.restore(t_cp);
         }
-        let count =
+        let _ = ts.eat_phrase(&["up", "to"]);
+        let mut count =
             if ts.eat_phrase(&["any", "number", "of"]) || ts.eat_phrase(&["one", "or", "more"]) {
-                ValueExpr::Var(crate::v2::ir::VarName::X)
+                ValueExpr::Var(VarName::X)
             } else if let Some(n) = ts.next_number(true) {
                 ValueExpr::Const(n)
             } else if ts.eat_word("x") {
-                ValueExpr::Var(crate::v2::ir::VarName::X)
+                ValueExpr::Var(VarName::X)
             } else {
                 ValueExpr::Const(1)
             };
@@ -250,6 +357,9 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         if ts.eat_word("from") {
             from.push(parse_zone_ref(ts)?);
         }
+        if ts.eat_phrase(&["equal", "to"]) {
+            count = parse_value_expr(ts)?;
+        }
         return Ok(Cost::Exile {
             count,
             filter,
@@ -257,7 +367,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         });
     }
 
-    // `Untap <N> [tapped] <filter>` (`Crackleburr`, etc.)
+    // `Untap <N> [tapped] <filter>`
     if ts.eat_word("untap") {
         if ts.eat_tilde() {
             return Ok(Cost::UntapSelf);
@@ -375,7 +485,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
             }
             ck
         };
-        // Optional `or a/an <kind2> counter` (`Ion Storm`)
+        // Optional `or a/an <kind2> counter`
         let mut kind2_opt = None;
         {
             let ocp = ts.checkpoint();
@@ -395,7 +505,16 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
             let subject = if ts.eat_tilde() {
                 None
             } else {
-                Some(parse_subject_ref(ts)?)
+                let first = parse_subject_ref(ts)?;
+                let or_cp = ts.checkpoint();
+                if ts.eat_word("or")
+                    && let Ok(second) = try_parse(ts, parse_subject_ref)
+                {
+                    Some(SubjectRef::Compound(vec![first, second]))
+                } else {
+                    ts.restore(or_cp);
+                    Some(first)
+                }
             };
             if let Some(kind2) = kind2_opt {
                 return Ok(Cost::RemoveEitherCounter {
@@ -456,8 +575,17 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Err(ts.err("expected `card(s)` after `mill` in cost"));
     }
 
-    // `Reveal ~ from your hand` / `Reveal <N> <filter> from your hand`
+    // `Reveal ~ from your hand` / `Reveal your hand` / `Reveal <N> <filter> from your hand`
     if ts.eat_word("reveal") {
+        if ts.eat_phrase(&["your", "hand"]) {
+            return Ok(Cost::RevealFromHand {
+                count: ValueExpr::Var(VarName::X),
+                filter: ObjectFilter {
+                    any_card: true,
+                    ..Default::default()
+                },
+            });
+        }
         if ts.eat_tilde() {
             let _ = ts.eat_phrase(&["from", "your", "hand"]);
             return Ok(Cost::RevealFromHand {
@@ -471,7 +599,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         let count = if let Some(n) = ts.next_number(true) {
             ValueExpr::Const(n)
         } else if ts.eat_word("x") {
-            ValueExpr::Var(crate::v2::ir::VarName::X)
+            ValueExpr::Var(VarName::X)
         } else {
             ValueExpr::Const(1)
         };
@@ -480,16 +608,24 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Ok(Cost::RevealFromHand { count, filter });
     }
 
-    // `Choose <subj1> [or <subj2>]` (e.g. `As an additional cost to cast ~, choose a creature you control or a warped creature card you own in exile`)
+    // `Choose <keywords>` OR `Choose <subj1> [or <subj2>]`
     if ts.eat_word("choose") {
+        if let Ok((kws, is_or)) = try_parse(ts, parse_keyword_list) {
+            let flt = ObjectFilter {
+                required_keywords: kws.into_iter().map(|k| k.kind).collect(),
+                keywords_match_any: is_or,
+                ..Default::default()
+            };
+            return Ok(Cost::ChooseObject(SubjectRef::Group(Box::new(flt))));
+        }
         let first = parse_subject_ref(ts)?;
         let cp = ts.checkpoint();
         if ts.eat_word("or")
             && let Ok(second) = try_parse(ts, parse_subject_ref)
         {
-            return Ok(Cost::ChooseObject(crate::v2::ir::SubjectRef::Compound(
-                vec![first, second],
-            )));
+            return Ok(Cost::ChooseObject(SubjectRef::Compound(vec![
+                first, second,
+            ])));
         }
         ts.restore(cp);
         return Ok(Cost::ChooseObject(first));
