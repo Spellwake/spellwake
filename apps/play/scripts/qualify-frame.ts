@@ -120,6 +120,8 @@ type Case = {
     | "match-end-view"
     | "match-end-chat"
     | "league-history"
+    | "updates"
+    | "updates-open"
     | "replay"
     | "replay-open"
     | "quests"
@@ -267,6 +269,23 @@ const cases: Case[] = [
       }),
     ),
   ]),
+  // Updates in Messages, on every screen: the header's mark, the pinned
+  // thread marking what it shows as seen, opening one, and none at all.
+  ...viewports.flatMap((viewport): Case[] =>
+    (
+      [
+        ["/league/season", "updates"],
+        ["/league/season", "updates-open"],
+        ["/league/season?updates=none", "updates"],
+      ] as const
+    ).map(([path, state]) => ({
+      viewport,
+      art: "dark",
+      decks: "six",
+      path,
+      state,
+    })),
+  ),
   // The lobby on every screen, then its dialogs and states where space is tightest.
   ...viewports.map((viewport): Case => ({
     viewport,
@@ -2425,6 +2444,39 @@ async function run(browser: Browser, test: Case): Promise<Finding[]> {
       }
     }
     await page.waitForTimeout(900);
+  }
+  if (state === "updates" || state === "updates-open") {
+    const none = test.path.includes("updates=none");
+    // Something new: the header's Messages button says so.
+    const header = page.getByRole("button", {
+      name: none ? "Messages" : "Messages, 2 new updates",
+      exact: true,
+    });
+    await header.click();
+    const thread = page.getByRole("button", {
+      name: none ? "Updates" : "Updates, 2 new",
+      exact: true,
+    });
+    await thread.click();
+    await page.getByRole("heading", { name: "Updates" }).waitFor();
+    if (none) {
+      await page.getByText("No updates", { exact: true }).waitFor();
+    } else {
+      await page.getByText("Trade offer received").waitFor();
+      // Opening the thread marks what it shows as seen; each stays marked
+      // new for this visit.
+      await page
+        .getByRole("button", { name: "Updates", exact: true })
+        .waitFor();
+      await expect(page.getByLabel("New", { exact: true })).toHaveCount(2);
+      if (state === "updates-open") {
+        await page
+          .getByRole("button", { name: /^Marketplace listing sold/ })
+          .click();
+        await page.waitForURL(/\/market\/listings\?mine=true/);
+      }
+    }
+    await page.waitForTimeout(800);
   }
   if (state === "replay-open") {
     // Every row opens its match's replay; Back returns to the list.
