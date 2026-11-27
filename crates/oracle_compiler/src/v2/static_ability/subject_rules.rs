@@ -451,9 +451,13 @@ pub(super) fn parse_subject_static_ability(
         });
     }
 
-    // `<subj> is/are every basic land type [in addition to its/their other types]` (`Dryad of the Ilysian Grove`, `Prismatic Omen`, `Nylea's Presence`)
+    // `<subj> is/are/has/have every [basic] land type [in addition to its/their other types]` (`Dryad of the Ilysian Grove`, `Prismatic Omen`, `Omo, Queen of Vesuva`)
     if ts.eat_phrase(&["is", "every", "basic", "land", "type"])
         || ts.eat_phrase(&["are", "every", "basic", "land", "type"])
+        || ts.eat_phrase(&["is", "every", "land", "type"])
+        || ts.eat_phrase(&["are", "every", "land", "type"])
+        || ts.eat_phrase(&["has", "every", "land", "type"])
+        || ts.eat_phrase(&["have", "every", "land", "type"])
     {
         let keep_existing = ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"])
             || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"])
@@ -469,6 +473,15 @@ pub(super) fn parse_subject_static_ability(
                 "Forest".to_string(),
             ],
             keep_existing,
+        });
+    }
+    if ts.eat_phrase(&["has", "every", "creature", "type"])
+        || ts.eat_phrase(&["have", "every", "creature", "type"])
+    {
+        return Ok(StaticAbility::SubjectRule {
+            subject,
+            rule: SubjectStaticRule::AllCreatureTypes,
+            condition,
         });
     }
 
@@ -768,49 +781,84 @@ pub(super) fn parse_subject_static_ability(
         ts.restore(ecp);
     }
 
-    // `<subj> is/are [also] [a/an] <Subtypes/Types> [in addition to its/their other types]` (`Nonbasic lands are Mountains`, `~ is also a Cleric, Rogue, Warrior, and Wizard`, `... are artifacts in addition to their other types`)
-    if ts.eat_word("are") || ts.eat_word("is") {
-        let _ = ts.eat_word("also");
-        let _ = ts.eat_word("a") || ts.eat_word("an");
-        let mut subtypes = Vec::new();
-        let mut saw_card_type = false;
-        while let Some(w) = ts.peek_word() {
-            let low = w.to_ascii_lowercase();
-            if let Some(sub) = ts.vocab.lookup_subtype(&low) {
-                ts.next_word();
-                subtypes.push(sub.to_string());
-                let _ = ts.eat_comma();
-                let _ = ts.eat_word("and");
-            } else if crate::vocab::lookup_card_type(&low).is_some() {
-                ts.next_word();
-                saw_card_type = true;
-                let _ = ts.eat_comma();
-                let _ = ts.eat_word("and");
-            } else {
-                break;
+    // `<subj> is/are every [basic] land type` / `is/are every creature type` (`Omo, Queen of Vesuva`)
+    {
+        let ev_cp = ts.checkpoint();
+        if (ts.eat_word("are") || ts.eat_word("is")) && ts.eat_word("every") {
+            let _ = ts.eat_word("basic");
+            if ts.eat_phrase(&["land", "type"]) {
+                return Ok(StaticAbility::SetSubtypes {
+                    subject,
+                    subtypes: vec![
+                        "Plains".to_string(),
+                        "Island".to_string(),
+                        "Swamp".to_string(),
+                        "Mountain".to_string(),
+                        "Forest".to_string(),
+                    ],
+                    keep_existing: true,
+                });
+            }
+            if ts.eat_phrase(&["creature", "type"]) {
+                return Ok(StaticAbility::SubjectRule {
+                    subject,
+                    rule: SubjectStaticRule::AllCreatureTypes,
+                    condition,
+                });
             }
         }
-        if !subtypes.is_empty() || saw_card_type {
-            let keep_existing = ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"])
-                || ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"])
-                || ts.eat_phrase(&[
-                    "in", "addition", "to", "their", "other", "creature", "types",
-                ])
-                || ts.eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
-                || ts.eat_phrase(&["in", "addition", "to", "their", "other", "land", "types"])
-                || ts.eat_phrase(&["in", "addition", "to", "its", "other", "land", "types"]);
-            let mut parts = vec![StaticAbility::SetSubtypes {
-                subject: subject.clone(),
-                subtypes,
-                keep_existing,
-            }];
-            parse_static_subject_tail(ts, &subject, &condition, &mut parts);
-            return Ok(if parts.len() == 1 {
-                parts.remove(0)
-            } else {
-                StaticAbility::Compound(parts)
-            });
+        ts.restore(ev_cp);
+    }
+
+    // `<subj> is/are [also] [a/an] <Subtypes/Types> [in addition to its/their other types]` (`Nonbasic lands are Mountains`, `~ is also a Cleric, Rogue, Warrior, and Wizard`, `... are artifacts in addition to their other types`)
+    {
+        let st_cp = ts.checkpoint();
+        if ts.eat_word("are") || ts.eat_word("is") {
+            let _ = ts.eat_word("also");
+            let _ = ts.eat_word("a") || ts.eat_word("an");
+            let mut subtypes = Vec::new();
+            let mut saw_card_type = false;
+            while let Some(w) = ts.peek_word() {
+                let low = w.to_ascii_lowercase();
+                if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+                    ts.next_word();
+                    subtypes.push(sub.to_string());
+                    let _ = ts.eat_comma();
+                    let _ = ts.eat_word("and");
+                } else if crate::vocab::lookup_card_type(&low).is_some() {
+                    ts.next_word();
+                    saw_card_type = true;
+                    let _ = ts.eat_comma();
+                    let _ = ts.eat_word("and");
+                } else {
+                    break;
+                }
+            }
+            if !subtypes.is_empty() || saw_card_type {
+                let keep_existing = ts
+                    .eat_phrase(&["in", "addition", "to", "their", "other", "types"])
+                    || ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"])
+                    || ts.eat_phrase(&[
+                        "in", "addition", "to", "their", "other", "creature", "types",
+                    ])
+                    || ts
+                        .eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
+                    || ts.eat_phrase(&["in", "addition", "to", "their", "other", "land", "types"])
+                    || ts.eat_phrase(&["in", "addition", "to", "its", "other", "land", "types"]);
+                let mut parts = vec![StaticAbility::SetSubtypes {
+                    subject: subject.clone(),
+                    subtypes,
+                    keep_existing,
+                }];
+                parse_static_subject_tail(ts, &subject, &condition, &mut parts);
+                return Ok(if parts.len() == 1 {
+                    parts.remove(0)
+                } else {
+                    StaticAbility::Compound(parts)
+                });
+            }
         }
+        ts.restore(st_cp);
     }
 
     // `<subj> lose all abilities [and have base power and toughness <P>/<T> | and is a <color> <subtype> creature with base power and toughness <P>/<T> | and doesn't untap ...]`

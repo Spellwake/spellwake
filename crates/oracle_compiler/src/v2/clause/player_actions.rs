@@ -210,7 +210,16 @@ pub(super) fn parse_prevent_damage(ts: &mut TokenStream<'_>) -> PResult<Effect> 
             continue;
         }
         if ts.eat_word("to") {
-            target = Some(parse_subject_ref(ts)?);
+            let first = parse_subject_ref(ts)?;
+            let acp = ts.checkpoint();
+            if ts.eat_word("and")
+                && let Ok(second) = try_parse(ts, parse_subject_ref)
+            {
+                target = Some(SubjectRef::Compound(vec![first, second]));
+            } else {
+                ts.restore(acp);
+                target = Some(first);
+            }
             continue;
         }
         if ts.eat_word("by") {
@@ -808,6 +817,160 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
             }]);
         }
         ts.restore(ecp);
+    }
+    // 4. `copy the next <flt> you cast this turn when you cast it` (`Sea Gate Stormcaller`, `Flamehold Grappler`, `Tzaangor Shaman`)
+    {
+        let ccp = ts.checkpoint();
+        if ts.eat_phrase(&["copy", "the", "next"])
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+            && ts.eat_phrase(&["you", "cast", "this", "turn", "when", "you", "cast", "it"])
+        {
+            return Ok(vec![Effect::DelayedTrigger {
+                trigger: crate::v2::ir::DelayedTriggerKind::Event(crate::v2::ir::TriggerSpec {
+                    events: vec![crate::v2::ir::TriggerEvent::SpellCast {
+                        caster: PlayerRef::You,
+                        spell: Some(flt),
+                        from_outside_hand: false,
+                    }],
+                    intervening_if: None,
+                }),
+                body: vec![Effect::CopyObject {
+                    actor: PlayerRef::You,
+                    subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatSpell),
+                    count: ValueExpr::Const(1),
+                    modifiers: crate::v2::ir::EntryModifiers::default(),
+                    exceptions: Vec::new(),
+                }],
+            }]);
+        }
+        ts.restore(ccp);
+    }
+    // 4b. `After [this | the second main] phase [this turn], there's/there is an additional combat phase [followed by an additional main phase]` (`World at War`, `Lightning Runner`, `Scourge of the Throne`)
+    {
+        let acp = ts.checkpoint();
+        if (ts.eat_phrase(&["after", "this", "phase"])
+            || ts.eat_phrase(&["after", "the", "second", "main", "phase", "this", "turn"])
+            || ts.eat_phrase(&["after", "the", "second", "main", "phase"]))
+            && ts.eat_comma()
+            && (ts.eat_phrase(&["there", "is", "an", "additional", "combat", "phase"])
+                || ts.eat_phrase(&["there's", "an", "additional", "combat", "phase"]))
+        {
+            let followed_by_main =
+                ts.eat_phrase(&["followed", "by", "an", "additional", "main", "phase"]);
+            return Ok(vec![Effect::MutatePlayer {
+                player: PlayerRef::You,
+                mutation: PlayerMutation::AdditionalCombat { followed_by_main },
+                duration: Duration::UntilEndOfTurn,
+            }]);
+        }
+        ts.restore(acp);
+    }
+    // 5. `The next time <you/they/player> would draw a card this turn, instead <effect>` (`Aladdin's Lamp`, `Urabrask, Heretic Praetor`)
+    //    AND `The next time damage would be dealt to <from> this turn, that damage is dealt to <to> instead` (`Glarecaster`, `Mirrorwood Treefolk`)
+    //    AND `The next time <src> would deal [combat] damage [to <tgt>] this turn, <instead>` (`Impulsive Maneuvers`, `Goblin Psychopath`, `Aegis of Honor`)
+    {
+        let ncp = ts.checkpoint();
+        if ts.eat_phrase(&["the", "next", "time"]) {
+            // 5a. `damage would be dealt to <from> this turn, that damage is dealt to <to> instead`
+            let dcp = ts.checkpoint();
+            if ts.eat_phrase(&["damage", "would", "be", "dealt", "to"])
+                && let Ok(from) = try_parse(ts, parse_subject_ref)
+            {
+                let _ = ts.eat_phrase(&["and/or", "you"]);
+                if ts.eat_phrase(&["this", "turn"])
+                    && ts.eat_comma()
+                    && ts.eat_phrase(&["that", "damage", "is", "dealt", "to"])
+                    && let Ok(to) = try_parse(ts, parse_subject_ref)
+                    && ts.eat_word("instead")
+                {
+                    return Ok(vec![Effect::ApplyReplacement {
+                        replacement: Box::new(crate::v2::ir::Replacement::DamageRule(
+                            crate::v2::ir::DamageReplacement::RedirectNext {
+                                amount: ValueExpr::Const(0),
+                                from,
+                                to,
+                            },
+                        )),
+                        duration: Duration::UntilEndOfTurn,
+                    }]);
+                }
+            }
+            ts.restore(dcp);
+            // 5b. `<player> would draw a card this turn, instead <effect>`
+            if let Ok(player) = try_parse(ts, crate::v2::filter::parse_player_ref)
+                && ts.eat_phrase(&["would", "draw", "a", "card", "this", "turn"])
+                && ts.eat_comma()
+                && ts.eat_word("instead")
+                && let Ok(instead) = try_parse(ts, super::parse_effect_sentence)
+            {
+                return Ok(vec![Effect::ApplyReplacement {
+                    replacement: Box::new(crate::v2::ir::Replacement::EventInstead {
+                        event: crate::v2::ir::TriggerEvent::PlayerAction {
+                            player,
+                            action: crate::v2::ir::PlayerTriggerKind::CardDrawn,
+                        },
+                        instead,
+                    }),
+                    duration: Duration::UntilEndOfTurn,
+                }]);
+            }
+            ts.restore(dcp);
+            // 5c. `<src> would deal [combat] damage [to <tgt>] this turn/combat, <instead>`
+            if let Ok(src) = try_parse(ts, parse_subject_ref)
+                && ts.eat_phrase(&["would", "deal"])
+            {
+                let combat_only = ts.eat_word("combat");
+                if ts.eat_word("damage") {
+                    let tgt = if ts.eat_word("to") {
+                        let _ = ts.eat_phrase(&["one", "or", "more"]);
+                        try_parse(ts, parse_subject_ref).ok()
+                    } else {
+                        None
+                    };
+                    if (ts.eat_phrase(&["this", "turn"]) || ts.eat_phrase(&["this", "combat"]))
+                        && ts.eat_comma()
+                    {
+                        if ts.eat_phrase(&["prevent", "that", "damage"]) {
+                            return Ok(vec![Effect::PreventDamage {
+                                amount: None,
+                                combat_only,
+                                source: Some(src),
+                                target: tgt,
+                                duration: Duration::UntilEndOfTurn,
+                            }]);
+                        }
+                        if ts.eat_phrase(&["it", "deals", "double", "that", "damage", "instead"]) {
+                            return Ok(vec![Effect::ApplyReplacement {
+                                replacement: Box::new(crate::v2::ir::Replacement::ModifyDamage {
+                                    source: None,
+                                    target: tgt,
+                                    add: 0,
+                                    factor: 2,
+                                }),
+                                duration: Duration::UntilEndOfTurn,
+                            }]);
+                        }
+                        if (ts.eat_phrase(&["it", "deals", "that", "damage", "to"])
+                            || ts.eat_phrase(&["that", "spell", "deals", "that", "damage", "to"]))
+                            && let Ok(to) = try_parse(ts, parse_subject_ref)
+                            && ts.eat_word("instead")
+                        {
+                            return Ok(vec![Effect::ApplyReplacement {
+                                replacement: Box::new(crate::v2::ir::Replacement::DamageRule(
+                                    crate::v2::ir::DamageReplacement::RedirectNext {
+                                        amount: ValueExpr::Const(0),
+                                        from: tgt.unwrap_or(src),
+                                        to,
+                                    },
+                                )),
+                                duration: Duration::UntilEndOfTurn,
+                            }]);
+                        }
+                    }
+                }
+            }
+        }
+        ts.restore(ncp);
     }
     Err(ts.err("not an auxiliary effect sentence"))
 }

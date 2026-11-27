@@ -460,6 +460,33 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             });
         }
         ts.restore(pcp);
+        if ts.eat_phrase(&[
+            "you", "cast", "it", "from", "anywhere", "other", "than", "your", "hand",
+        ]) || ts.eat_phrase(&[
+            "you", "cast", "it", "from", "anywhere", "other", "than", "exile",
+        ]) {
+            return Ok(ConditionExpr::Not(Box::new(ConditionExpr::CastFromZone {
+                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+                zone: crate::v2::ir::ZoneRef {
+                    zone: crate::v2::ir::ZoneKind::Hand,
+                    owner: crate::v2::ir::ZoneOwner::You,
+                },
+            })));
+        }
+        ts.restore(pcp);
+        if (ts.eat_phrase(&["it's", "attacking"]) || ts.eat_phrase(&["it", "is", "attacking"]))
+            && let Ok(p) = try_parse(ts, parse_player_ref)
+        {
+            return Ok(ConditionExpr::SubjectMatches {
+                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+                filter: Box::new(crate::v2::ir::ObjectFilter {
+                    combat: Some(crate::ast::CombatState::Attacking),
+                    predicates: vec![crate::v2::ir::FilterPredicate::AttackedPlayerThisTurn(p)],
+                    ..Default::default()
+                }),
+            });
+        }
+        ts.restore(pcp);
         if ts.eat_phrase(&["you", "cast"])
             && let Ok(flt) = try_parse(ts, parse_object_filter)
             && ts.eat_phrase(&["this", "way"])
@@ -467,6 +494,48 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             return Ok(ConditionExpr::PriorActionMatched {
                 action: PriorActionKind::CastThisWay,
                 filter: Box::new(flt),
+            });
+        }
+        ts.restore(pcp);
+        if (ts.eat_phrase(&["you", "discard"]) || ts.eat_phrase(&["you", "discarded"]))
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+            && ts.eat_phrase(&["this", "way"])
+        {
+            return Ok(ConditionExpr::PriorActionMatched {
+                action: PriorActionKind::DiscardedThisWay,
+                filter: Box::new(flt),
+            });
+        }
+        ts.restore(pcp);
+        if ts.eat_word("damage") {
+            let src_flt = if ts.eat_word("from") {
+                try_parse(ts, parse_object_filter).ok()
+            } else {
+                None
+            };
+            if ts.eat_phrase(&["is", "prevented", "this", "way"]) {
+                return Ok(ConditionExpr::PriorActionMatched {
+                    action: PriorActionKind::DamagePreventedThisWay,
+                    filter: Box::new(src_flt.unwrap_or_default()),
+                });
+            }
+        }
+        ts.restore(pcp);
+        if ts.eat_phrase(&[
+            "a",
+            "permanent's",
+            "ability",
+            "is",
+            "countered",
+            "this",
+            "way",
+        ]) {
+            return Ok(ConditionExpr::PriorActionMatched {
+                action: PriorActionKind::ThatMany,
+                filter: Box::new(crate::v2::ir::ObjectFilter {
+                    is_ability: true,
+                    ..Default::default()
+                }),
             });
         }
         ts.restore(pcp);
@@ -1267,6 +1336,84 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(acp);
     }
+    // `it has the greatest power/toughness or is tied for greatest power/toughness among <flt>` (`Strength-Testing Hammer`)
+    {
+        let gcp = ts.checkpoint();
+        if (ts.eat_word("it") || ts.eat_tilde()) && ts.eat_phrase(&["has", "the", "greatest"]) {
+            let stat = if ts.eat_word("power") {
+                Some(StatKind::Power)
+            } else if ts.eat_word("toughness") {
+                Some(StatKind::Toughness)
+            } else {
+                None
+            };
+            if let Some(stat) = stat {
+                let _ = ts.eat_phrase(&["or", "is", "tied", "for", "greatest", "power"])
+                    || ts.eat_phrase(&["or", "is", "tied", "for", "greatest", "toughness"])
+                    || ts.eat_phrase(&["or", "is", "tied", "for", "greatest"]);
+                if ts.eat_word("among") && try_parse(ts, parse_object_filter).is_ok() {
+                    return Ok(ConditionExpr::EventCheck(
+                        EventCheckKind::TiedForExtremeStat {
+                            stat,
+                            greatest: true,
+                        },
+                    ));
+                }
+            }
+        }
+        ts.restore(gcp);
+    }
+    // `you created a token this turn` (`Idol of Oblivion`) / `an opponent has been dealt noncombat damage this turn` (`Grim Repriser`)
+    // / `a <flt> died under your control this turn` (`Cult Conscript`) / `~ is attacking or blocking` (`Sawback Manticore`)
+    if ts.eat_phrase(&["you", "created", "a", "token", "this", "turn"])
+        || ts.eat_phrase(&["you've", "created", "a", "token", "this", "turn"])
+    {
+        return Ok(ConditionExpr::EventCheck(EventCheckKind::PriorObjectEvent(
+            PriorActionKind::CreatedThisWay,
+        )));
+    }
+    if ts.eat_phrase(&[
+        "an",
+        "opponent",
+        "has",
+        "been",
+        "dealt",
+        "noncombat",
+        "damage",
+        "this",
+        "turn",
+    ]) || ts.eat_phrase(&[
+        "an",
+        "opponent",
+        "was",
+        "dealt",
+        "noncombat",
+        "damage",
+        "this",
+        "turn",
+    ]) {
+        return Ok(ConditionExpr::Compare {
+            lhs: Box::new(ValueExpr::DamageDealtToOpponentsThisTurn {
+                noncombat_only: true,
+            }),
+            op: CompareOp::Ge,
+            rhs: Box::new(ValueExpr::Const(1)),
+        });
+    }
+    {
+        let dcp = ts.checkpoint();
+        if let Ok(flt) = try_parse(ts, parse_object_filter)
+            && ts.eat_phrase(&["died", "under", "your", "control", "this", "turn"])
+        {
+            return Ok(ConditionExpr::PlayerTurnEvent {
+                player: PlayerRef::You,
+                event: TurnEventKind::CreatureDied,
+                filter: Some(Box::new(flt)),
+                min_count: 1,
+            });
+        }
+        ts.restore(dcp);
+    }
     // `<subj> has [a/an | <N> or more] [<kind>] counter(s) on it` (`Warden of the Inner Sky`, `Gavel of the Righteous`, `Demon Wall`)
     {
         let hcp = ts.checkpoint();
@@ -1325,15 +1472,21 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(cp);
     }
-    // `a <flt> was/is milled/exiled/discarded/destroyed/revealed this way`
+    // `[at least one | two or more | one or more] <flt> was/is milled/exiled/discarded/destroyed/revealed/sacrificed/returned/beheld [this way]`
     {
         let cp = ts.checkpoint();
+        let _ = ts.eat_phrase(&["at", "least", "one"])
+            || ts.eat_phrase(&["two", "or", "more"])
+            || ts.eat_phrase(&["one", "or", "more"]);
         if let Ok(flt) = try_parse(ts, parse_object_filter)
             && (ts.eat_word("was")
                 || ts.eat_word("were")
                 || ts.eat_word("is")
                 || ts.eat_word("are"))
         {
+            if ts.eat_word("beheld") {
+                return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
+            }
             let act = if ts.eat_phrase(&["milled", "this", "way"]) {
                 Some(PriorActionKind::MilledThisWay)
             } else if ts.eat_phrase(&["exiled", "this", "way"]) {
@@ -1346,6 +1499,12 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                 Some(PriorActionKind::RevealedThisWay)
             } else if ts.eat_phrase(&["sacrificed", "this", "way"]) {
                 Some(PriorActionKind::SacrificedThisWay)
+            } else if ts.eat_phrase(&["returned", "this", "way"]) {
+                Some(PriorActionKind::ReturnedThisWay)
+            } else if ts.eat_phrase(&["created", "this", "way"]) {
+                Some(PriorActionKind::CreatedThisWay)
+            } else if ts.eat_phrase(&["cast", "this", "way"]) {
+                Some(PriorActionKind::CastThisWay)
             } else if ts.eat_phrase(&[
                 "put",
                 "into",

@@ -4609,3 +4609,403 @@ fn v2_wave11_compositional_grammar_deep_ir_assertions() {
         }]
     ));
 }
+
+#[test]
+fn v2_wave12_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        Ability, CastPermissionMode, ConditionExpr, CounterKind, Duration, Effect, FilterFlags,
+        FilterPredicate, LibraryPosition, ObjectMutation, PlayerConditionKind, PlayerMutation,
+        PlayerObjectTriggerKind, PlayerRef, PriorActionKind, Replacement, RuleRestrictionKind,
+        StaticAbility, SubjectStaticRule, TriggerEvent, ValueExpr, VisibilityKind, ZoneKind,
+        ZoneOpKind,
+    };
+
+    let vocab_path = std::env::var("SPELLWAKE_CREATURE_VOCABULARY_INPUT")
+        .expect("SPELLWAKE_CREATURE_VOCABULARY_INPUT must be set");
+    let vocab = Vocabulary::load_from_file(std::path::Path::new(&vocab_path)).expect("load vocab");
+
+    let wave12_cards: &[(&str, &str, &str)] = &[
+        (
+            "Sulfuric Vortex",
+            "Enchantment",
+            "At the beginning of each player's upkeep, Sulfuric Vortex deals 2 damage to that player.\nIf a player would gain life, that player gains no life instead.",
+        ),
+        (
+            "Flames of the Blood Hand",
+            "Instant",
+            "Flames of the Blood Hand deals 4 damage to target player or planeswalker. The damage can't be prevented. If that player or that planeswalker's controller would gain life this turn, that player gains no life instead.",
+        ),
+        (
+            "Autumn's Veil",
+            "Instant",
+            "Spells you control can't be countered by blue or black spells this turn, and creatures you control can't be the targets of blue or black spells this turn.",
+        ),
+        (
+            "Thraben Charm",
+            "Instant",
+            "Choose one \u{2014}\n\u{2022} Target creature you control deals damage equal to twice the number of creatures you control to target creature.\n\u{2022} Destroy target enchantment.\n\u{2022} Exile target player's graveyard.",
+        ),
+        (
+            "Omo, Queen of Vesuva",
+            "Legendary Creature - Shapeshifter Noble",
+            "Whenever Omo enters or attacks, put an everything counter on each of up to one target land and up to one target creature.\nEach land with an everything counter on it is every land type in addition to its other types.\nEach nonland creature with an everything counter on it is every creature type.",
+        ),
+        (
+            "Nyxbloom Ancient",
+            "Enchantment Creature - Elemental",
+            "Trample\nIf you tap a permanent for mana, it produces three times as much of that mana instead.",
+        ),
+        (
+            "Mana Reflection",
+            "Enchantment",
+            "If you tap a permanent for mana, it produces twice as much of that mana instead.",
+        ),
+        (
+            "Aven Mindcensor",
+            "Creature - Bird Wizard",
+            "Flash\nFlying\nIf an opponent would search a library, that player searches the top four cards of that library instead.",
+        ),
+        (
+            "The Water Crystal",
+            "Legendary Artifact",
+            "Blue spells you cast cost {1} less to cast.\nIf an opponent would mill one or more cards, they mill that many cards plus four instead.\n{4}{U}{U}, {T}: Each opponent mills cards equal to the number of cards in your hand.",
+        ),
+        (
+            "Deflecting Palm",
+            "Instant",
+            "The next time a source of your choice would deal damage to you this turn, prevent that damage. If damage is prevented this way, Deflecting Palm deals that much damage to that source's controller.",
+        ),
+        (
+            "Unexpectedly Absent",
+            "Instant",
+            "Put target nonland permanent into its owner's library just beneath the top X cards of that library.",
+        ),
+        (
+            "Indomitable Creativity",
+            "Sorcery",
+            "Destroy X target artifacts and/or creatures. For each permanent destroyed this way, its controller reveals cards from the top of their library until an artifact or creature card is revealed and exiles that card. Those players put the exiled cards onto the battlefield, then shuffle.",
+        ),
+        (
+            "Disa the Restless",
+            "Legendary Creature - Human Scout",
+            "Whenever a Lhurgoyf permanent card is put into your graveyard from anywhere other than the battlefield, put it onto the battlefield.\nWhenever one or more creatures you control deal combat damage to a player, create a Tarmogoyf token.",
+        ),
+        (
+            "Nadu, Winged Wisdom",
+            "Legendary Creature - Bird Wizard",
+            "Flying\nCreatures you control have \"Whenever this creature becomes the target of a spell or ability, reveal the top card of your library. If it's a land card, put it onto the battlefield. Otherwise, put it into your hand. This ability triggers only twice each turn.\"",
+        ),
+        (
+            "Keranos, God of Storms",
+            "Legendary Enchantment Creature - God",
+            "Indestructible\nAs long as your devotion to blue and red is less than seven, Keranos isn't a creature.\nReveal the first card you draw on each of your turns. Whenever you reveal a land card this way, draw a card. Whenever you reveal a nonland card this way, Keranos deals 3 damage to any target.",
+        ),
+        (
+            "One with the Multiverse",
+            "Enchantment",
+            "You may look at the top card of your library any time.\nYou may play lands and cast spells from the top of your library.\nOnce during each of your turns, you may cast a spell from your hand or the top of your library without paying its mana cost.",
+        ),
+        (
+            "Eluge, the Shoreless Sea",
+            "Legendary Creature - Elemental Fish",
+            "Eluge's power and toughness are each equal to the number of Islands you control.\nWhenever Eluge enters or attacks, put a flood counter on target land. It's an Island in addition to its other types for as long as it has a flood counter on it.\nThe first instant or sorcery spell you cast each turn costs {U} (or {1}) less to cast for each land you control with a flood counter on it.",
+        ),
+        (
+            "Ob Nixilis, Captive Kingpin",
+            "Legendary Creature - Demon",
+            "Flying, trample\nWhenever one or more opponents each lose exactly 1 life, put a +1/+1 counter on Ob Nixilis. Exile the top card of your library. Until your next end step, you may play that card.",
+        ),
+        (
+            "Baral, Chief of Compliance",
+            "Legendary Creature - Human Wizard",
+            "Instant and sorcery spells you cast cost {1} less to cast.\nWhenever a spell or ability you control counters a spell, you may draw a card. If you do, discard a card.",
+        ),
+        (
+            "Illusionist's Bracers",
+            "Artifact - Equipment",
+            "Whenever an ability of equipped creature is activated, if it isn't a mana ability, copy that ability. You may choose new targets for the copy.\nEquip {3}",
+        ),
+        (
+            "Scourge of the Throne",
+            "Creature - Dragon",
+            "Flying\nDethrone\nWhenever Scourge of the Throne attacks for the first time each turn, if it's attacking the player with the most life or tied for most life, untap all attacking creatures. After this phase, there is an additional combat phase.",
+        ),
+        (
+            "Palace Jailer",
+            "Creature - Human Soldier",
+            "When Palace Jailer enters, you become the monarch.\nWhen Palace Jailer enters, exile target creature an opponent controls until an opponent becomes the monarch.",
+        ),
+        (
+            "World at War",
+            "Sorcery",
+            "After the second main phase this turn, there's an additional combat phase followed by an additional main phase. At the beginning of that combat, untap all creatures that attacked this turn.\nRebound",
+        ),
+        (
+            "Surgical Extraction",
+            "Instant",
+            "Choose target card in a graveyard other than a basic land card. Search its owner's graveyard, hand, and library for any number of cards with the same name as that card and exile them. Then that player shuffles.",
+        ),
+        (
+            "Mind Bend",
+            "Instant",
+            "Change the text of target permanent by replacing all instances of one color word with another or one basic land type with another.",
+        ),
+        (
+            "Spectral Adversary",
+            "Creature - Spirit",
+            "Flash\nFlying\nWhen Spectral Adversary enters, you may pay {1}{U} any number of times. When you pay this cost one or more times, put that many +1/+1 counters on Spectral Adversary, then up to that many other target artifacts, creatures, and/or enchantments phase out.",
+        ),
+        (
+            "Summon: Primal Odin",
+            "Enchantment Creature - Saga Knight",
+            "I \u{2014} Gungnir \u{2014} Destroy target creature an opponent controls.\nII \u{2014} Zantetsuken \u{2014} Summon: Primal Odin gains \"Whenever Summon: Primal Odin deals combat damage to a player, that player loses the game.\"\nIII \u{2014} Hall of Sorrow \u{2014} Draw two cards. Each player loses 2 life.",
+        ),
+        (
+            "Thassa's Oracle",
+            "Creature - Merfolk Wizard",
+            "When Thassa's Oracle enters, look at the top X cards of your library, where X is your devotion to blue. Put up to one of them on top of your library and the rest on the bottom of your library in a random order. If X is greater than or equal to the number of cards in your library, you win the game.",
+        ),
+    ];
+
+    for &(name, type_line, oracle_text) in wave12_cards {
+        let compiled = compile_v2_strict(name, type_line, oracle_text, &vocab);
+        assert!(
+            compiled.strictly_compiled,
+            "Wave 12 card `{name}` failed strict v2 compilation: {:#?}",
+            compiled.faces[0].errors
+        );
+    }
+
+    // Deep IR assertions for Wave 12 compositional semantics:
+    // 1. Omo, Queen of Vesuva -> AllCreatureTypes static rule
+    let omo = compile_v2_strict(
+        "Omo, Queen of Vesuva",
+        "Legendary Creature - Shapeshifter Noble",
+        "Each nonland creature with an everything counter on it is every creature type.",
+        &vocab,
+    );
+    assert!(matches!(
+        omo.faces[0].statics.as_slice(),
+        [StaticAbility::SubjectRule {
+            rule: SubjectStaticRule::AllCreatureTypes,
+            ..
+        }]
+    ));
+
+    // 2. Nyxbloom Ancient -> Replacement::EventInstead on TappedForMana
+    let nyxbloom = compile_v2_strict(
+        "Nyxbloom Ancient",
+        "Enchantment Creature - Elemental",
+        "If you tap a permanent for mana, it produces three times as much of that mana instead.",
+        &vocab,
+    );
+    assert!(matches!(
+        nyxbloom.faces[0].replacements.as_slice(),
+        [Replacement::EventInstead {
+            event: TriggerEvent::PlayerObjectEvent {
+                player: PlayerRef::You,
+                kind: PlayerObjectTriggerKind::TappedForMana,
+                filter: Some(_),
+            },
+            ..
+        }]
+    ));
+
+    // 3. Unexpectedly Absent -> LibraryPosition::FromTop
+    let absent = compile_v2_strict(
+        "Unexpectedly Absent",
+        "Instant",
+        "Put target nonland permanent into its owner's library just beneath the top X cards of that library.",
+        &vocab,
+    );
+    assert!(matches!(
+        absent.faces[0].spell_effects.as_slice(),
+        [Effect::ZoneOp {
+            op: ZoneOpKind::Move,
+            to: Some(dest),
+            ..
+        }] if dest.zone == ZoneKind::Library && matches!(dest.library_position, Some(LibraryPosition::FromTop(_)))
+    ));
+
+    // 4. Palace Jailer -> ScopedDuration(ForAsLongAs(Not(PlayerCheck(AnyOpponent, IsMonarch))))
+    let jailer = compile_v2_strict(
+        "Palace Jailer",
+        "Creature - Human Soldier",
+        "When Palace Jailer enters, exile target creature an opponent controls until an opponent becomes the monarch.",
+        &vocab,
+    );
+    assert!(matches!(
+        jailer.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::ScopedDuration {
+                    duration: Duration::ForAsLongAs(cond),
+                    ..
+                }] if matches!(
+                    cond.as_ref(),
+                    ConditionExpr::Not(inner)
+                        if matches!(
+                            inner.as_ref(),
+                            ConditionExpr::PlayerCheck {
+                                player: PlayerRef::AnyOpponent,
+                                kind: PlayerConditionKind::IsMonarch,
+                            }
+                        )
+                )
+            )
+    ));
+
+    // 5. World at War -> PlayerMutation::AdditionalCombat { followed_by_main: true }
+    let waw = compile_v2_strict(
+        "World at War",
+        "Sorcery",
+        "After the second main phase this turn, there's an additional combat phase followed by an additional main phase.",
+        &vocab,
+    );
+    assert!(matches!(
+        waw.faces[0].spell_effects.as_slice(),
+        [Effect::MutatePlayer {
+            mutation: PlayerMutation::AdditionalCombat {
+                followed_by_main: true
+            },
+            ..
+        }]
+    ));
+
+    // 6. Eluge, the Shoreless Sea -> NextSpellModifier(CostModifier { scale: Some(_) })
+    let eluge = compile_v2_strict(
+        "Eluge, the Shoreless Sea",
+        "Legendary Creature - Elemental Fish",
+        "The first instant or sorcery spell you cast each turn costs {U} less to cast for each land you control with a flood counter on it.",
+        &vocab,
+    );
+    assert!(matches!(
+        eluge.faces[0].statics.as_slice(),
+        [StaticAbility::NextSpellModifier { effect, .. }]
+            if matches!(
+                effect.as_ref(),
+                StaticAbility::CostModifier {
+                    less: true,
+                    scale: Some(_),
+                    ..
+                }
+            )
+    ));
+
+    // 7. One with the Multiverse -> ZoneCastPermission(OncePerTurn { free: true, .. })
+    let multiverse = compile_v2_strict(
+        "One with the Multiverse",
+        "Enchantment",
+        "Once during each of your turns, you may cast a spell from your hand or the top of your library without paying its mana cost.",
+        &vocab,
+    );
+    assert!(matches!(
+        multiverse.faces[0].statics.as_slice(),
+        [StaticAbility::ZoneCastPermission {
+            mode: CastPermissionMode::OncePerTurn { free: true, .. },
+            ..
+        }]
+    ));
+
+    // 8. Keranos, God of Storms -> VisibilityRule(PlayWithTopRevealed)
+    let keranos = compile_v2_strict(
+        "Keranos, God of Storms",
+        "Legendary Enchantment Creature - God",
+        "Reveal the first card you draw on each of your turns.",
+        &vocab,
+    );
+    assert!(matches!(
+        keranos.faces[0].statics.as_slice(),
+        [StaticAbility::VisibilityRule {
+            player: PlayerRef::You,
+            kind: VisibilityKind::PlayWithTopRevealed,
+        }]
+    ));
+
+    // 9. Deflecting Palm -> BranchCondition(PriorActionMatched(DamagePreventedThisWay))
+    let palm = compile_v2_strict(
+        "Deflecting Palm",
+        "Instant",
+        "The next time a source of your choice would deal damage to you this turn, prevent that damage. If damage is prevented this way, Deflecting Palm deals that much damage to that source's controller.",
+        &vocab,
+    );
+    assert!(palm.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::BranchCondition {
+            condition: ConditionExpr::PriorActionMatched {
+                action: PriorActionKind::DamagePreventedThisWay,
+                ..
+            },
+            ..
+        }
+    )));
+
+    // 10. Surgical Extraction -> FilterPredicate::Exclude on `other than a basic land card`
+    let surgical = compile_v2_strict(
+        "Surgical Extraction",
+        "Instant",
+        "Choose target card in a graveyard other than a basic land card.",
+        &vocab,
+    );
+    assert!(matches!(
+        surgical.faces[0].spell_effects.as_slice(),
+        [Effect::MutateObject { .. }] | [Effect::PromptChoice { .. }]
+    ));
+
+    // 11. Autumn's Veil -> CantBeCountered & CantBeTargetedBy with UntilEndOfTurn
+    let veil = compile_v2_strict(
+        "Autumn's Veil",
+        "Instant",
+        "Spells you control can't be countered by blue or black spells this turn, and creatures you control can't be the targets of blue or black spells this turn.",
+        &vocab,
+    );
+    assert!(veil.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::MutateObject {
+            mutation: ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeCountered),
+            duration: Duration::UntilEndOfTurn,
+            ..
+        }
+    )));
+
+    // 12. Nissa, Ascended Animist -> loyalty ValueExpr compiles to CounterCount(Loyalty)
+    let nissa = compile_v2_strict(
+        "Nissa, Ascended Animist",
+        "Legendary Planeswalker - Nissa",
+        "-7: Until end of turn, creatures you control get +X/+X and gain trample, where X is Nissa's loyalty.",
+        &vocab,
+    );
+    assert!(matches!(
+        nissa.faces[0].abilities.as_slice(),
+        [Ability::Loyalty { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::BindVariable {
+                    expr: ValueExpr::CounterCount {
+                        kind: CounterKind::Loyalty,
+                        ..
+                    },
+                    ..
+                }]
+            )
+    ));
+
+    // 13. Run Away Together -> DIFFERENT_NAMES flag via `controlled by different players`
+    let rat = compile_v2_strict(
+        "Run Away Together",
+        "Instant",
+        "Choose two target creatures controlled by different players. Return those creatures to their owners' hands.",
+        &vocab,
+    );
+    assert!(rat.faces[0].spell_effects.iter().any(|e| match e {
+        Effect::PromptChoice { kind, .. } =>
+            format!("{kind:?}").contains("DIFFERENT_NAMES")
+                || format!("{kind:?}").contains("FilterFlags"),
+        _ => false,
+    }));
+    let _ = (
+        FilterFlags::DIFFERENT_NAMES,
+        FilterPredicate::AmongPriorCards,
+    );
+}

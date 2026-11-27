@@ -727,9 +727,24 @@ fn parse_static_core(
                     };
                 }
                 if zone.is_none() && ts.eat_word("from") {
-                    let _ = ts.eat_phrase(&["the", "top", "of"]);
-                    zone = opt(ts, parse_zone_ref);
+                    if ts.eat_word("among") {
+                        let _ = ts.eat_word("the");
+                        if let Ok(mut among_flt) = try_parse(ts, parse_object_filter) {
+                            zone = among_flt.zones.pop().or(Some(crate::v2::ir::ZoneRef {
+                                zone: crate::v2::ir::ZoneKind::Exile,
+                                owner: crate::v2::ir::ZoneOwner::Default,
+                            }));
+                        }
+                    } else {
+                        let _ = ts.eat_phrase(&["the", "top", "of"]);
+                        zone = opt(ts, parse_zone_ref);
+                    }
                 }
+                if zone.is_some() && ts.eat_word("or") {
+                    let _ = ts.eat_phrase(&["the", "top", "of"]);
+                    let _ = opt(ts, parse_zone_ref);
+                }
+                let _ = ts.eat_phrase(&["this", "turn"]);
                 let free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
                     || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
                 let alt_cost = if !free && ts.eat_word("by") {
@@ -1722,6 +1737,26 @@ fn parse_static_core(
                         condition,
                     });
                 }
+                if ts.eat_word("among")
+                    && let Ok(mut among_flt) = try_parse(ts, parse_object_filter)
+                {
+                    let zone = among_flt.zones.pop().unwrap_or(crate::v2::ir::ZoneRef {
+                        zone: crate::v2::ir::ZoneKind::Graveyard,
+                        owner: crate::v2::ir::ZoneOwner::You,
+                    });
+                    return Ok(StaticAbility::ZoneCastPermission {
+                        player,
+                        filter: Some(among_flt),
+                        subject: None,
+                        zone: Some(zone),
+                        mode: CastPermissionMode::PlayFromZone {
+                            top_only: false,
+                            lands: true,
+                            spells: true,
+                        },
+                        condition,
+                    });
+                }
                 let top_only = ts.eat_phrase(&["the", "top", "of"]);
                 let zone = parse_zone_ref(ts)?;
                 return Ok(StaticAbility::ZoneCastPermission {
@@ -1922,6 +1957,26 @@ fn parse_static_core(
                         });
                     }
                     if ts.eat_word("from") {
+                        if ts.eat_word("among")
+                            && let Ok(mut among_flt) = try_parse(ts, parse_object_filter)
+                        {
+                            let zone = among_flt.zones.pop().unwrap_or(crate::v2::ir::ZoneRef {
+                                zone: crate::v2::ir::ZoneKind::Graveyard,
+                                owner: crate::v2::ir::ZoneOwner::You,
+                            });
+                            return Ok(StaticAbility::ZoneCastPermission {
+                                player,
+                                filter: Some(filter),
+                                subject: None,
+                                zone: Some(zone),
+                                mode: CastPermissionMode::PlayFromZone {
+                                    top_only: false,
+                                    lands: false,
+                                    spells: true,
+                                },
+                                condition,
+                            });
+                        }
                         let top_only = ts.eat_phrase(&["the", "top", "of"]);
                         if let Ok(zone) = try_parse(ts, parse_zone_ref) {
                             return Ok(StaticAbility::ZoneCastPermission {
@@ -1957,6 +2012,16 @@ fn parse_static_core(
         ts.restore(cp);
     }
 
+    // 0d. `Reveal the first card you draw [on each of your turns | each turn]` (`Keranos, God of Storms`, `Primitive Etchings`, `Rowen`)
+    if ts.eat_phrase(&["reveal", "the", "first", "card", "you", "draw"])
+        && (ts.eat_phrase(&["on", "each", "of", "your", "turns"])
+            || ts.eat_phrase(&["each", "turn"]))
+    {
+        return Ok(StaticAbility::VisibilityRule {
+            player: PlayerRef::You,
+            kind: VisibilityKind::PlayWithTopRevealed,
+        });
+    }
     // 0d. `Damage can't be prevented` / `The "legend rule" doesn't apply [to <flt>]` / `Activated abilities of sources with the chosen name can't be activated`
     if ts.eat_phrase(&["damage", "can't", "be", "prevented"]) {
         return Ok(StaticAbility::RuleRestriction {
@@ -2057,13 +2122,14 @@ fn parse_static_core(
                 && let Some(delta) = ts.eat_mana_cost()
                 && (ts.eat_phrase(&["less", "to", "cast"]) || ts.eat_word("less"))
             {
+                let scale = opt(ts, parse_for_each_expr);
                 return Ok(StaticAbility::NextSpellModifier {
                     filter: flt.clone(),
                     effect: Box::new(StaticAbility::CostModifier {
                         subject: flt,
                         delta,
                         less: true,
-                        scale: None,
+                        scale,
                         min_mana: None,
                         condition,
                     }),

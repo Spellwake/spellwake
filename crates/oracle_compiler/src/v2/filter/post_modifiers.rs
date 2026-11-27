@@ -10,7 +10,7 @@ use crate::v2::ir::{
     StatBound, SubjectRef, ValueExpr, ZoneKind, ZoneOwner, ZoneRef,
 };
 use crate::v2::lexer::TokenKind;
-use crate::v2::parser::{PResult, TokenStream, try_parse};
+use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
 use crate::v2::value::parse_value_expr;
 use crate::vocab::{lookup_card_type, lookup_color, lookup_supertype};
 
@@ -215,6 +215,58 @@ pub(super) fn parse_filter_post_modifiers(
             flt.flags = flt.flags.union(FilterFlags::AT_RANDOM);
             continue;
         }
+        if ts.eat_phrase(&["with", "one", "or", "more", "targets"]) {
+            flt.flags = flt.flags.union(FilterFlags::SINGLE_TARGET);
+            continue;
+        }
+        if ts.eat_phrase(&["from", "among", "those", "exiled", "cards"])
+            || ts.eat_phrase(&["from", "among", "those", "cards"])
+            || ts.eat_phrase(&["from", "among", "them"])
+        {
+            flt.predicates.push(FilterPredicate::AmongPriorCards);
+            continue;
+        }
+        {
+            let bcp = ts.checkpoint();
+            if (ts.eat_phrase(&["that", "blocked", "or", "was", "blocked", "by"])
+                || ts.eat_phrase(&["that", "blocked", "or", "were", "blocked", "by"]))
+                && let Ok(ref_subj) = try_parse(ts, parse_subject_ref)
+            {
+                let _ = ts.eat_phrase(&["this", "turn"]) || ts.eat_phrase(&["this", "combat"]);
+                flt.combat = Some(CombatState::Blocking);
+                flt.predicates
+                    .push(FilterPredicate::TargetsSubject(Box::new(ref_subj)));
+                continue;
+            }
+            ts.restore(bcp);
+        }
+        if ts.eat_phrase(&["controlled", "by", "different", "players"]) {
+            flt.flags = flt.flags.union(FilterFlags::DIFFERENT_NAMES);
+            continue;
+        }
+        if ts.eat_phrase(&["goaded", "this", "way"]) {
+            flt.flags = flt.flags.union(FilterFlags::GOADED);
+            flt.predicates.push(FilterPredicate::AffectedByPriorAction(
+                PriorActionKind::ThatMany,
+            ));
+            continue;
+        }
+        if ts.eat_phrase(&["that", "were", "milled", "this", "turn"])
+            || ts.eat_phrase(&["milled", "this", "turn"])
+        {
+            flt.predicates.push(FilterPredicate::AffectedByPriorAction(
+                PriorActionKind::MilledThisWay,
+            ));
+            continue;
+        }
+        if ts.eat_phrase(&[
+            "that", "were", "put", "there", "from", "your", "library", "this", "turn",
+        ]) {
+            flt.predicates.push(FilterPredicate::AffectedByPriorAction(
+                PriorActionKind::MilledThisWay,
+            ));
+            continue;
+        }
         if ts.eat_phrase(&["from", "anywhere", "other", "than", "your", "hand"])
             || ts.eat_phrase(&["from", "anywhere", "other", "than", "their", "hand"])
             || ts.eat_phrase(&["from", "anywhere", "other", "than", "exile"])
@@ -264,9 +316,30 @@ pub(super) fn parse_filter_post_modifiers(
             flt.controller = Some(ControllerRelation::You);
             continue;
         }
-        if ts.eat_phrase(&["other", "than"]) && ts.eat_tilde() {
-            flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
-            continue;
+        {
+            let ocp = ts.checkpoint();
+            if ts.eat_phrase(&["other", "than"]) {
+                if ts.eat_tilde() {
+                    flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
+                    continue;
+                }
+                if !ts.peek_phrase(&["the", "first"])
+                    && !ts.peek_phrase(&["the", "battlefield"])
+                    && !ts.peek_phrase(&["your", "hand"])
+                    && !ts.peek_phrase(&["their", "hand"])
+                    && !ts
+                        .peek_word()
+                        .is_some_and(|w| w.eq_ignore_ascii_case("exile"))
+                    && let Ok(excl) = try_parse(ts, parse_object_filter)
+                {
+                    flt.predicates
+                        .push(FilterPredicate::Exclude(Box::new(SubjectRef::Group(
+                            Box::new(excl),
+                        ))));
+                    continue;
+                }
+            }
+            ts.restore(ocp);
         }
         if ts.eat_phrase(&["not", "named"]) && ts.eat_tilde() {
             flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
@@ -565,6 +638,47 @@ pub(super) fn parse_filter_post_modifiers(
             continue;
         }
 
+        // `without a/an [<kind>] counter(s) on it` (`Wave Goodbye`, `Oblivion Stone`, `Arcus Acolyte`, `Fraying Line`, `Obsidian Fireheart`)
+        {
+            let wcp = ts.checkpoint();
+            if ts.eat_word("without") {
+                let _ = ts.eat_word("a") || ts.eat_word("an");
+                let has_kind = opt(ts, parse_counter_kind).is_some();
+                if (ts.eat_word("counter") || ts.eat_word("counters"))
+                    && (ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]))
+                {
+                    let _ = has_kind;
+                    flt.flags = flt.flags.union(FilterFlags::WITHOUT_COUNTERS);
+                    continue;
+                }
+            }
+            ts.restore(wcp);
+        }
+        // `from anywhere other than their/your hand(s)` (`Drannith Magistrate`, `Surge of Brilliance`, `Alex Wilder`, `Shadow of the Goblin`)
+        if ts.eat_phrase(&["from", "anywhere", "other", "than", "their", "hands"])
+            || ts.eat_phrase(&["from", "anywhere", "other", "than", "their", "hand"])
+            || ts.eat_phrase(&["from", "anywhere", "other", "than", "your", "hand"])
+        {
+            flt.predicates.push(FilterPredicate::FromOutsideHand);
+            continue;
+        }
+        if ts.eat_phrase(&[
+            "that",
+            "were",
+            "put",
+            "there",
+            "from",
+            "anywhere",
+            "other",
+            "than",
+            "the",
+            "battlefield",
+            "this",
+            "turn",
+        ]) {
+            flt.flags = flt.flags.union(FilterFlags::DIED_THIS_TURN);
+            continue;
+        }
         // `without <kw>` (e.g. `creature without flying`) -- MUST checkpoint so `without paying its mana cost` is never eaten!
         {
             let wcp = ts.checkpoint();

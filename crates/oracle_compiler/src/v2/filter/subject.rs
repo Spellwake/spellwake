@@ -74,7 +74,7 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
         let cp = ts.checkpoint();
         let mut another = false;
         let count_opt = if ts.eat_phrase(&["up", "to"]) {
-            if ts.eat_word("x") {
+            if ts.eat_word("x") || ts.eat_phrase(&["that", "many"]) {
                 Some(TargetCount::UpToX)
             } else {
                 ts.next_number(false)
