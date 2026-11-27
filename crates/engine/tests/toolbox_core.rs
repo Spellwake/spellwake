@@ -1765,6 +1765,7 @@ fn apply_continuous_temporary_rule_and_combat_action() {
             ApplyContinuousSpec::temporary_rule(
                 TemporaryRuleKind::CantCastSpells {
                     players: AffectedPlayers::EachOpponent,
+                    zone: None,
                     filter: None,
                 },
                 ResolvedDuration::UntilEndOfTurn,
@@ -3792,9 +3793,13 @@ fn phase15_next_spell_cast_keyword_storm_copies_next_spell() {
                 BodyTarget::None,
                 vec![Instruction::ApplyContinuous(Box::new(
                     ApplyContinuousSpec::temporary_rule(
-                        TemporaryRuleKind::NextSpellCastKeyword {
-                            filter: ObjectFilter::any(),
-                            keyword: NextSpellCastKeyword::Storm,
+                        TemporaryRuleKind::NextSpellModifier {
+                            player: ResolvingPlayer::Controller,
+                            filter: Some(ObjectFilter::any()),
+                            free: false,
+                            keyword: None,
+                            cast_keyword: Some(NextSpellCastKeyword::Storm),
+                            affinity_filter: None,
                         },
                         ResolvedDuration::UntilEndOfTurn,
                     ),

@@ -1446,7 +1446,10 @@ impl EffectWindow {
                 && self.temporary_rules.iter().any(|active| {
                     matches!(
                         active.rule,
-                        crate::program::TemporaryRuleKind::ExileIfLeavesBattlefield { .. }
+                        crate::program::TemporaryRuleKind::ExileReplacement {
+                            trigger: crate::program::TemporaryExileTrigger::LeavesBattlefield,
+                            ..
+                        }
                     ) && active.resolved_objects.contains(obj_id)
                 })
             {

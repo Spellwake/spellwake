@@ -3979,12 +3979,10 @@ pub(super) fn lower_search_library_group(
                 builder
                     .instructions
                     .push(super::super::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Modifier {
-                                id: ids.static_id(),
-                                rule: StaticModifierRule::RetainMana(mt),
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Modifier {
+                            id: ids.static_id(),
+                            rule: StaticModifierRule::RetainMana(mt),
+                        }),
                         ResolvedDuration::UntilEndOfTurn,
                     ));
             }

@@ -1488,7 +1488,10 @@ impl EffectWindow {
                 for active in &self.temporary_rules {
                     if matches!(
                         active.rule,
-                        crate::program::TemporaryRuleKind::ExileIfLeavesBattlefield { .. }
+                        crate::program::TemporaryRuleKind::ExileReplacement {
+                            trigger: crate::program::TemporaryExileTrigger::LeavesBattlefield,
+                            ..
+                        }
                     ) && active.resolved_objects.contains(&before.id())
                     {
                         let instance = ZoneEffectInstance {

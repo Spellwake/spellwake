@@ -2968,7 +2968,7 @@ impl EffectWindow {
     }
 
     /// Return the active static ability for a temporary rule if it is an unconditional
-    /// `TemporaryStatic` or a `ConditionalTemporaryStatic` whose condition currently holds.
+    /// `TemporaryStatic` or one whose condition currently holds.
     pub(super) fn active_temporary_static<'a>(
         &self,
         active: &'a ActiveTemporaryRule,
@@ -2977,22 +2977,23 @@ impl EffectWindow {
         if active.consumed {
             return None;
         }
-        match &active.rule {
-            crate::program::TemporaryRuleKind::TemporaryStatic(ab)
-            | crate::program::TemporaryRuleKind::OneShotEventReplacement(ab) => Some(ab.as_ref()),
-            crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
-                condition,
-                ability,
-            } => self
+        let crate::program::TemporaryRuleKind::TemporaryStatic {
+            ability, condition, ..
+        } = &active.rule
+        else {
+            return None;
+        };
+        match condition {
+            None => Some(ability.as_ref()),
+            Some(cond) => self
                 .eval_static_source_condition_at(
                     evaluated,
-                    condition,
+                    cond,
                     active.source_object,
                     active.controller,
                     None,
                 )
                 .then_some(ability.as_ref()),
-            _ => None,
         }
     }
 
@@ -3146,32 +3147,26 @@ impl EffectWindow {
             if active.consumed {
                 return false;
             }
-            let (filter, controller_only, next_only) = match &active.rule {
-                crate::program::TemporaryRuleKind::CantBeCountered {
-                    filter,
-                    controller_only,
-                    next_only,
-                } => (filter, *controller_only, *next_only),
-                crate::program::TemporaryRuleKind::CantBeCounteredByColors {
-                    colors,
-                    filter,
-                    controller_only,
-                    next_only,
-                } => {
-                    if !counter_colors
-                        .as_ref()
-                        .is_some_and(|cols| colors.matches_any(cols))
-                    {
-                        return false;
-                    }
-                    (filter, *controller_only, *next_only)
-                }
-                _ => return false,
+            let crate::program::TemporaryRuleKind::CantBeCountered {
+                colors,
+                filter,
+                controller_only,
+                next_only,
+            } = &active.rule
+            else {
+                return false;
             };
-            if next_only {
+            if !colors.is_empty()
+                && !counter_colors
+                    .as_ref()
+                    .is_some_and(|cols| colors.matches_any(cols))
+            {
                 return false;
             }
-            if controller_only && entry.controller() != active.controller {
+            if *next_only {
+                return false;
+            }
+            if *controller_only && entry.controller() != active.controller {
                 return false;
             }
             match filter {
@@ -8471,8 +8466,11 @@ impl EffectWindow {
             None
         };
         let temp_exile_spell = self.temporary_rules.iter().any(|active| {
-            let crate::program::TemporaryRuleKind::ExileSpellOnResolve { filter, .. } =
-                &active.rule
+            let crate::program::TemporaryRuleKind::ExileReplacement {
+                filter,
+                trigger: crate::program::TemporaryExileTrigger::SpellResolves,
+                ..
+            } = &active.rule
             else {
                 return false;
             };

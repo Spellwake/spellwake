@@ -3423,21 +3423,16 @@ pub(super) fn lower_combat_damage_instruction(
                 } else {
                     return Err("oracle:unsupported-prevent-damage");
                 };
-                let rule = match amt_expr {
-                    ValueExpr::Literal(n) if n.is_positive() => {
-                        TemporaryRuleKind::PreventNextDamage {
-                            amount: n,
-                            source: None,
-                            recipient,
-                            combat_only: false,
-                        }
-                    }
-                    expr => TemporaryRuleKind::PreventNextDamageExpr {
-                        amount: Box::new(expr),
-                        source: None,
-                        recipient,
-                        combat_only: false,
-                    },
+                let rule = TemporaryRuleKind::PreventDamageShield {
+                    amount: Some(Box::new(amt_expr)),
+                    source: None,
+                    source_chosen_color: false,
+                    source_chosen_type: false,
+                    source_is_target: false,
+                    half_round_down: false,
+                    recipient,
+                    combat_only: false,
+                    one_shot: false,
                 };
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
@@ -3469,19 +3464,16 @@ pub(super) fn lower_combat_damage_instruction(
                 lower_redirect_from_subject(target, has_source, vocabulary)
                     .ok_or("oracle:unsupported-prevent-damage")?
             };
-            let rule = match amt_expr {
-                ValueExpr::Literal(n) if n.is_positive() => TemporaryRuleKind::PreventNextDamage {
-                    amount: n,
-                    source: None,
-                    recipient,
-                    combat_only: false,
-                },
-                expr => TemporaryRuleKind::PreventNextDamageExpr {
-                    amount: Box::new(expr),
-                    source: None,
-                    recipient,
-                    combat_only: false,
-                },
+            let rule = TemporaryRuleKind::PreventDamageShield {
+                amount: Some(Box::new(amt_expr)),
+                source: None,
+                source_chosen_color: false,
+                source_chosen_type: false,
+                source_is_target: false,
+                half_round_down: false,
+                recipient,
+                combat_only: false,
+                one_shot: false,
             };
             builder.instructions.push(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
@@ -3519,7 +3511,8 @@ pub(super) fn lower_combat_damage_instruction(
             }
             trial.instructions.push(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                    TemporaryRuleKind::PreventNextTimeDamage {
+                    TemporaryRuleKind::PreventDamageShield {
+                        amount: None,
                         source,
                         source_chosen_color,
                         source_chosen_type,
@@ -3527,6 +3520,7 @@ pub(super) fn lower_combat_damage_instruction(
                         half_round_down: false,
                         recipient,
                         combat_only: false,
+                        one_shot: true,
                     },
                     ResolvedDuration::UntilEndOfTurn,
                 ),
@@ -3899,7 +3893,7 @@ pub(super) fn lower_combat_damage_instruction(
                     && let Some((target_colors, target_spells_only)) =
                         parse_cant_be_target_colors(target_clean)
                 {
-                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCounteredByColors {
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCountered {
                             colors: counter_colors,
                             filter: None,
                             controller_only: true,
@@ -3962,7 +3956,7 @@ pub(super) fn lower_combat_damage_instruction(
                             _ => return Err("oracle:unsupported-combat-mod"),
                         }
                     };
-                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCounteredByColors {
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCountered {
                             colors,
                             filter,
                             controller_only,
@@ -4208,12 +4202,10 @@ pub(super) fn lower_combat_damage_instruction(
             {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::DrawRule {
-                                id: ids.static_id(),
-                                rule: spellwake_engine::characteristics::StaticDrawRule::NoMaximumHandSize,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::DrawRule {
+                            id: ids.static_id(),
+                            rule: spellwake_engine::characteristics::StaticDrawRule::NoMaximumHandSize,
+                        }),
                         dur,
                     ),
                 );
@@ -4233,6 +4225,7 @@ pub(super) fn lower_combat_damage_instruction(
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
                         TemporaryRuleKind::CantBeCountered {
+                            colors: ColorMask::EMPTY,
                             filter: flt,
                             controller_only: true,
                             next_only: low == "next_spell_cant_be_countered",
@@ -4274,7 +4267,7 @@ pub(super) fn lower_combat_damage_instruction(
             if low
                 == "you can't lose life this turn, you can't lose the game this turn, and your opponents can't win the game this turn"
             {
-                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
+                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::temporary_static(
                         StaticContinuousAbility::EventReplacement {
                             id: ids.static_id(),
                             event: spellwake_engine::characteristics::ReplaceableEvent::LifeLoss {
@@ -4284,15 +4277,13 @@ pub(super) fn lower_combat_damage_instruction(
                             action:
                                 spellwake_engine::characteristics::StaticReplacementAction::Skip,
                         },
-                    )), dur));
+                    ), dur));
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                        }),
                         dur,
                     ),
                 );
@@ -4305,12 +4296,10 @@ pub(super) fn lower_combat_damage_instruction(
             ) {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                        }),
                         dur,
                     ),
                 );
@@ -4346,12 +4335,10 @@ pub(super) fn lower_combat_damage_instruction(
                 };
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantLoseGame,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseGame,
+                        }),
                         eff_dur,
                     ),
                 );
@@ -4363,7 +4350,7 @@ pub(super) fn lower_combat_damage_instruction(
             ) {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                        TemporaryRuleKind::temporary_static(
                             StaticContinuousAbility::EventReplacement {
                                 id: ids.static_id(),
                                 event: ReplaceableEvent::LifeLoss {
@@ -4372,7 +4359,7 @@ pub(super) fn lower_combat_damage_instruction(
                                 condition: None,
                                 action: StaticReplacementAction::Skip,
                             },
-                        )),
+                        ),
                         dur,
                     ),
                 );
@@ -4387,23 +4374,19 @@ pub(super) fn lower_combat_damage_instruction(
             ) {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                        }),
                         dur,
                     ),
                 );
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
+                        }),
                         dur,
                     ),
                 );
@@ -4414,7 +4397,7 @@ pub(super) fn lower_combat_damage_instruction(
             {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                        TemporaryRuleKind::temporary_static(
                             StaticContinuousAbility::EventReplacement {
                                 id: ids.static_id(),
                                 event: ReplaceableEvent::LifeLoss {
@@ -4423,29 +4406,25 @@ pub(super) fn lower_combat_damage_instruction(
                                 condition: None,
                                 action: StaticReplacementAction::Skip,
                             },
-                        )),
+                        ),
                         dur,
                     ),
                 );
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                        }),
                         dur,
                     ),
                 );
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
+                        }),
                         dur,
                     ),
                 );
@@ -4462,12 +4441,10 @@ pub(super) fn lower_combat_damage_instruction(
             ) {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerLifeTotalCantChange,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerLifeTotalCantChange,
+                        }),
                         dur,
                     ),
                 );
@@ -4500,12 +4477,12 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                 };
                 if let Some(rel) = rel {
-                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::temporary_static(
                             StaticContinuousAbility::Restriction {
                                 id: ids.static_id(),
                                 rule: StaticRestriction::PlayersCantSearchLibraries(rel),
                             },
-                        )), dur));
+                        ), dur));
                     return Ok(());
                 }
             }
@@ -4588,12 +4565,12 @@ pub(super) fn lower_combat_damage_instruction(
                     } else {
                         StaticRestriction::PreventMatchingActivations(Box::new(sel))
                     };
-                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::temporary_static(
                             StaticContinuousAbility::Restriction {
                                 id: ids.static_id(),
                                 rule,
                             },
-                        )), eff_dur));
+                        ), eff_dur));
                     return Ok(());
                 }
                 if let Some((subj_raw, nonmana_only)) = rule_body
@@ -4753,12 +4730,12 @@ pub(super) fn lower_combat_damage_instruction(
                             spellwake_engine::toolbox::MutatePlayerSpec::additional_loyalty_activation(),
                         )));
                     } else {
-                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::temporary_static(
                                 StaticContinuousAbility::Modifier {
                                     id: ids.static_id(),
                                     rule: StaticModifierRule::TwiceLoyaltyPerTurn,
                                 },
-                            )), dur));
+                            ), dur));
                     }
                     return Ok(());
                 }
@@ -4827,6 +4804,7 @@ pub(super) fn lower_combat_damage_instruction(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
                         TemporaryRuleKind::CantCastSpells {
                             players,
+                            zone: None,
                             filter: flt,
                         },
                         dur,
@@ -5592,12 +5570,12 @@ pub(super) fn lower_combat_damage_instruction(
                     if (!sel_needs_source && !br_dur.requires_ability_source()) || has_source {
                         builder.instructions.push(
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                                TemporaryRuleKind::TemporaryStatic(Box::new(
+                                TemporaryRuleKind::temporary_static(
                                     StaticContinuousAbility::Restriction {
                                         id: ids.static_id(),
                                         rule: StaticRestriction::CannotBeSacrificed(Box::new(sel)),
                                     },
-                                )),
+                                ),
                                 br_dur,
                             ),
                         );
@@ -6257,27 +6235,14 @@ pub(super) fn lower_combat_damage_instruction(
             } else {
                 let expr =
                     lower_value_expr_in_context(resolved_amt, &trial, in_trigger, vocabulary)?;
-                match expr {
-                    ValueExpr::Literal(n) if n.is_positive() => {
-                        TemporaryRuleKind::RedirectNextDamage {
-                            source,
-                            source_is_target,
-                            from: from_rec,
-                            to: to_dst,
-                            combat_only: false,
-                            amount: Some(n),
-                            one_shot: false,
-                        }
-                    }
-                    dyn_expr => TemporaryRuleKind::RedirectNextDamageExpr {
-                        source,
-                        source_is_target,
-                        from: from_rec,
-                        to: to_dst,
-                        combat_only: false,
-                        amount: Box::new(dyn_expr),
-                        one_shot: false,
-                    },
+                TemporaryRuleKind::RedirectNextDamage {
+                    source,
+                    source_is_target,
+                    from: from_rec,
+                    to: to_dst,
+                    combat_only: false,
+                    amount: Some(Box::new(expr)),
+                    one_shot: false,
                 }
             };
             trial.instructions.push(
@@ -7849,18 +7814,10 @@ pub(super) fn try_lower_redirect_next_damage(
         if !check_single_target_slot(source_is_target, from, to, false) {
             return None;
         }
-        let rule = if let Some(n) = lit_n {
-            TemporaryRuleKind::RedirectNextDamage {
-                source,
-                source_is_target,
-                from,
-                to,
-                combat_only,
-                amount: Some(i64::from(n).into()),
-                one_shot: false,
-            }
+        let amount_expr = if let Some(n) = lit_n {
+            ValueExpr::Literal(i64::from(n).into())
         } else {
-            let x_expr = match bound_x {
+            match bound_x {
                 Some(expr) => {
                     match lower_value_expr_in_context(expr, &trial, in_trigger, vocabulary) {
                         Ok(v) => v,
@@ -7868,16 +7825,16 @@ pub(super) fn try_lower_redirect_next_damage(
                     }
                 }
                 None => ValueExpr::chosen_x(),
-            };
-            TemporaryRuleKind::RedirectNextDamageExpr {
-                source,
-                source_is_target,
-                from,
-                to,
-                combat_only,
-                amount: Box::new(x_expr),
-                one_shot: false,
             }
+        };
+        let rule = TemporaryRuleKind::RedirectNextDamage {
+            source,
+            source_is_target,
+            from,
+            to,
+            combat_only,
+            amount: Some(Box::new(amount_expr)),
+            one_shot: false,
         };
         trial.instructions.push(
             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(

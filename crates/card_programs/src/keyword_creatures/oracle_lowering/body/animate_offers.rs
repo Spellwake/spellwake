@@ -483,17 +483,19 @@ pub(super) fn rewrite_offer_chosen_to_loop_rule(rule: &mut TemporaryRuleKind) {
         | TemporaryRuleKind::CantCastSpells { players, .. }
         | TemporaryRuleKind::CantActivateAbilities { players, .. }
         | TemporaryRuleKind::CantPlayLands { players }
-        | TemporaryRuleKind::PlayerGrantKeyword { players, .. }
-        | TemporaryRuleKind::SpellCostIncrease { players, .. } => {
+        | TemporaryRuleKind::PlayerGrantKeyword { players, .. } => {
             rewrite_offer_chosen_to_loop_ap(players);
+        }
+        TemporaryRuleKind::SpellCostModifier {
+            players, amount, ..
+        } => {
+            rewrite_offer_chosen_to_loop_ap(players);
+            rewrite_offer_chosen_to_loop_ve(amount);
         }
         TemporaryRuleKind::AdditionalLandPlay { player, .. }
         | TemporaryRuleKind::FilteredFlash { player, .. }
         | TemporaryRuleKind::ZoneCastPermission { player, .. } => {
             rewrite_offer_chosen_to_loop_rp(player);
-        }
-        TemporaryRuleKind::SpellCostReductionExpr { amount, .. } => {
-            rewrite_offer_chosen_to_loop_ve(amount);
         }
         _ => {}
     }

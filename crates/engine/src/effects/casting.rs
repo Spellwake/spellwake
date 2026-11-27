@@ -841,74 +841,61 @@ impl EffectWindow {
                     return true;
                 }
             }
-            if let crate::program::TemporaryRuleKind::CantCastSpells { filter, .. } = &active.rule {
-                if !active.resolved_players.contains(&actor) {
-                    return false;
-                }
-                return match filter {
-                    None => true,
-                    Some(f) => self.matches_object_filter(
-                        *f,
-                        current_spell,
-                        active.controller,
-                        active.source_object,
-                        &BTreeSet::new(),
-                        &current,
-                    ),
-                };
-            }
-            if let crate::program::TemporaryRuleKind::CantCastFromZone { zone, filter, .. } =
+            if let crate::program::TemporaryRuleKind::CantCastSpells { zone, filter, .. } =
                 &active.rule
             {
                 if !active.resolved_players.contains(&actor) {
                     return false;
                 }
-                let src_zone = self.window.cards().get(spell).map(GameObject::zone);
-                let zone_matches = match (zone, src_zone) {
-                    (
-                        crate::program::SourceZoneFilter::Hand
-                        | crate::program::SourceZoneFilter::TargetPlayerHand
-                        | crate::program::SourceZoneFilter::OpponentHand,
-                        Some(ObjectZone::Hand(_)),
-                    ) => true,
-                    (crate::program::SourceZoneFilter::CommandZone, Some(ObjectZone::Command)) => {
-                        true
+                if let Some(zone) = zone {
+                    let src_zone = self.window.cards().get(spell).map(GameObject::zone);
+                    let zone_matches = match (zone, src_zone) {
+                        (
+                            crate::program::SourceZoneFilter::Hand
+                            | crate::program::SourceZoneFilter::TargetPlayerHand
+                            | crate::program::SourceZoneFilter::OpponentHand,
+                            Some(ObjectZone::Hand(_)),
+                        ) => true,
+                        (
+                            crate::program::SourceZoneFilter::CommandZone,
+                            Some(ObjectZone::Command),
+                        ) => true,
+                        (
+                            crate::program::SourceZoneFilter::Graveyard,
+                            Some(ObjectZone::Graveyard(s)),
+                        ) => s == actor,
+                        (
+                            crate::program::SourceZoneFilter::OpponentGraveyard
+                            | crate::program::SourceZoneFilter::TargetPlayerGraveyard,
+                            Some(ObjectZone::Graveyard(s)),
+                        ) => s != actor,
+                        (
+                            crate::program::SourceZoneFilter::AnyGraveyard,
+                            Some(ObjectZone::Graveyard(_)),
+                        ) => true,
+                        (
+                            crate::program::SourceZoneFilter::HandOrGraveyard,
+                            Some(ObjectZone::Hand(_) | ObjectZone::Graveyard(_)),
+                        ) => true,
+                        (
+                            crate::program::SourceZoneFilter::Exile
+                            | crate::program::SourceZoneFilter::OpponentExile
+                            | crate::program::SourceZoneFilter::LinkedExile,
+                            Some(ObjectZone::Exile),
+                        ) => true,
+                        (
+                            crate::program::SourceZoneFilter::YourLibrary,
+                            Some(ObjectZone::Library(_)),
+                        ) => true,
+                        (
+                            crate::program::SourceZoneFilter::Battlefield,
+                            Some(ObjectZone::Battlefield),
+                        ) => true,
+                        _ => false,
+                    };
+                    if !zone_matches {
+                        return false;
                     }
-                    (
-                        crate::program::SourceZoneFilter::Graveyard,
-                        Some(ObjectZone::Graveyard(s)),
-                    ) => s == actor,
-                    (
-                        crate::program::SourceZoneFilter::OpponentGraveyard
-                        | crate::program::SourceZoneFilter::TargetPlayerGraveyard,
-                        Some(ObjectZone::Graveyard(s)),
-                    ) => s != actor,
-                    (
-                        crate::program::SourceZoneFilter::AnyGraveyard,
-                        Some(ObjectZone::Graveyard(_)),
-                    ) => true,
-                    (
-                        crate::program::SourceZoneFilter::HandOrGraveyard,
-                        Some(ObjectZone::Hand(_) | ObjectZone::Graveyard(_)),
-                    ) => true,
-                    (
-                        crate::program::SourceZoneFilter::Exile
-                        | crate::program::SourceZoneFilter::OpponentExile
-                        | crate::program::SourceZoneFilter::LinkedExile,
-                        Some(ObjectZone::Exile),
-                    ) => true,
-                    (
-                        crate::program::SourceZoneFilter::YourLibrary,
-                        Some(ObjectZone::Library(_)),
-                    ) => true,
-                    (
-                        crate::program::SourceZoneFilter::Battlefield,
-                        Some(ObjectZone::Battlefield),
-                    ) => true,
-                    _ => false,
-                };
-                if !zone_matches {
-                    return false;
                 }
                 return match filter {
                     None => true,
@@ -2049,16 +2036,18 @@ impl EffectWindow {
         };
         let mut next_spell_free_used = false;
         for (rule_idx, active) in self.temporary_rules.iter().enumerate() {
-            if active.consumed || active.controller != actor {
+            if active.consumed || !active.resolved_players.contains(&actor) {
                 continue;
             }
-            if let crate::program::TemporaryRuleKind::NextSpellFree { filter } = &active.rule
+            if let crate::program::TemporaryRuleKind::NextSpellModifier {
+                filter, free: true, ..
+            } = &active.rule
                 && filter.is_none_or(|f| {
                     self.matches_object_filter(
                         f,
                         current_spell,
-                        actor,
-                        None,
+                        active.controller,
+                        active.source_object,
                         &BTreeSet::new(),
                         &current,
                     )
@@ -2517,30 +2506,12 @@ impl EffectWindow {
                 continue;
             }
             match &active.rule {
-                crate::program::TemporaryRuleKind::SpellCostReduction {
+                crate::program::TemporaryRuleKind::SpellCostModifier {
                     filter,
-                    generic,
+                    amount,
+                    increase,
                     next_only,
-                } if active.controller == actor
-                    && self.matches_object_filter(
-                        *filter,
-                        current_spell,
-                        actor,
-                        None,
-                        &BTreeSet::new(),
-                        &current,
-                    ) =>
-                {
-                    cost.generic = cost
-                        .generic
-                        .minus(&i64::from(*generic).into())
-                        .max(0.into());
-                    if *next_only {
-                        consumed_temp_rules.push(rule_idx);
-                    }
-                }
-                crate::program::TemporaryRuleKind::SpellCostIncrease {
-                    filter, generic, ..
+                    ..
                 } if active.resolved_players.contains(&actor)
                     && self.matches_object_filter(
                         *filter,
@@ -2551,22 +2522,34 @@ impl EffectWindow {
                         &current,
                     ) =>
                 {
-                    cost.generic = cost.generic.plus(&i64::from(*generic).into());
+                    if let crate::program::ValueExpr::Literal(delta) = amount.as_ref()
+                        && delta.is_positive()
+                    {
+                        if *increase {
+                            cost.generic = cost.generic.plus(delta);
+                        } else {
+                            cost.generic = cost.generic.minus(delta).max(0.into());
+                        }
+                        if *next_only {
+                            consumed_temp_rules.push(rule_idx);
+                        }
+                    }
                 }
-                crate::program::TemporaryRuleKind::NextSpellAffinity {
-                    spell_filter,
-                    affinity_filter,
+                crate::program::TemporaryRuleKind::NextSpellModifier {
+                    filter,
+                    affinity_filter: Some(affinity_filter),
                     ..
-                } if !active.consumed
-                    && active.resolved_players.contains(&actor)
-                    && self.matches_object_filter(
-                        *spell_filter,
-                        current_spell,
-                        active.controller,
-                        active.source_object,
-                        &BTreeSet::new(),
-                        &current,
-                    ) =>
+                } if active.resolved_players.contains(&actor)
+                    && filter.is_none_or(|f| {
+                        self.matches_object_filter(
+                            f,
+                            current_spell,
+                            active.controller,
+                            active.source_object,
+                            &BTreeSet::new(),
+                            &current,
+                        )
+                    }) =>
                 {
                     let count = current
                         .objects
@@ -3265,55 +3248,34 @@ impl EffectWindow {
             if active.consumed {
                 continue;
             }
-            match &active.rule {
-                crate::program::TemporaryRuleKind::CantBeCountered {
-                    filter,
-                    controller_only,
-                    next_only: true,
-                } => {
-                    if *controller_only && active.controller != actor {
-                        continue;
-                    }
-                    let matches_spell = filter.is_none_or(|f| {
-                        self.matches_object_filter(
-                            f,
-                            current_spell,
-                            active.controller,
-                            None,
-                            &BTreeSet::new(),
-                            &current,
-                        )
-                    });
-                    if matches_spell {
-                        consumed_temp_rules.push(rule_idx);
-                        mark_entry_uncounterable = true;
-                    }
+            if let crate::program::TemporaryRuleKind::CantBeCountered {
+                colors,
+                filter,
+                controller_only,
+                next_only: true,
+            } = &active.rule
+            {
+                if *controller_only && active.controller != actor {
+                    continue;
                 }
-                crate::program::TemporaryRuleKind::CantBeCounteredByColors {
-                    colors,
-                    filter,
-                    controller_only,
-                    next_only: true,
-                } => {
-                    if *controller_only && active.controller != actor {
-                        continue;
-                    }
-                    let matches_spell = filter.is_none_or(|f| {
-                        self.matches_object_filter(
-                            f,
-                            current_spell,
-                            active.controller,
-                            None,
-                            &BTreeSet::new(),
-                            &current,
-                        )
-                    });
-                    if matches_spell {
-                        consumed_temp_rules.push(rule_idx);
+                let matches_spell = filter.is_none_or(|f| {
+                    self.matches_object_filter(
+                        f,
+                        current_spell,
+                        active.controller,
+                        None,
+                        &BTreeSet::new(),
+                        &current,
+                    )
+                });
+                if matches_spell {
+                    consumed_temp_rules.push(rule_idx);
+                    if colors.is_empty() {
+                        mark_entry_uncounterable = true;
+                    } else {
                         uncounterable_colors = uncounterable_colors.union(*colors);
                     }
                 }
-                _ => {}
             }
         }
         for rule_idx in consumed_temp_rules {
@@ -3711,20 +3673,26 @@ impl EffectWindow {
         spell: &crate::characteristics::ObjectCharacteristics,
         actor: SeatId,
     ) -> Option<KeywordAbility> {
-        let crate::program::TemporaryRuleKind::NextSpellKeyword { filter, keyword } = &active.rule
+        let crate::program::TemporaryRuleKind::NextSpellModifier {
+            filter,
+            keyword: Some(keyword),
+            ..
+        } = &active.rule
         else {
             return None;
         };
         (!active.consumed
-            && active.controller == actor
-            && self.matches_object_filter(
-                *filter,
-                spell,
-                active.controller,
-                None,
-                &BTreeSet::new(),
-                evaluated,
-            ))
+            && active.resolved_players.contains(&actor)
+            && filter.is_none_or(|f| {
+                self.matches_object_filter(
+                    f,
+                    spell,
+                    active.controller,
+                    active.source_object,
+                    &BTreeSet::new(),
+                    evaluated,
+                )
+            }))
         .then_some(*keyword)
     }
     fn next_spell_cast_keyword_for_cast(
@@ -3734,21 +3702,26 @@ impl EffectWindow {
         spell: &crate::characteristics::ObjectCharacteristics,
         actor: SeatId,
     ) -> Option<crate::program::NextSpellCastKeyword> {
-        let crate::program::TemporaryRuleKind::NextSpellCastKeyword { filter, keyword } =
-            &active.rule
+        let crate::program::TemporaryRuleKind::NextSpellModifier {
+            filter,
+            cast_keyword: Some(keyword),
+            ..
+        } = &active.rule
         else {
             return None;
         };
         (!active.consumed
-            && active.controller == actor
-            && self.matches_object_filter(
-                *filter,
-                spell,
-                active.controller,
-                active.source_object,
-                &BTreeSet::new(),
-                evaluated,
-            ))
+            && active.resolved_players.contains(&actor)
+            && filter.is_none_or(|f| {
+                self.matches_object_filter(
+                    f,
+                    spell,
+                    active.controller,
+                    active.source_object,
+                    &BTreeSet::new(),
+                    evaluated,
+                )
+            }))
         .then_some(*keyword)
     }
     pub(super) fn spell_has_granted_keyword(

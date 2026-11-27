@@ -2363,8 +2363,7 @@ impl EffectWindow {
             let source_entry = Some(entry.id());
             let mut rule = *rule;
             // CR 611.2c: lock ChosenX eagerly when creating a temporary static rule.
-            if let TemporaryRuleKind::TemporaryStatic(ability)
-            | TemporaryRuleKind::ConditionalTemporaryStatic { ability, .. } = &mut rule
+            if let TemporaryRuleKind::TemporaryStatic { ability, .. } = &mut rule
                 && let Ok(resolved_x) =
                     self.resolve_value_expr(entry.controller(), &ValueExpr::chosen_x())
             {
@@ -2373,8 +2372,19 @@ impl EffectWindow {
             match rule {
                 TemporaryRuleKind::DamageCantBePrevented => {
                     self.damage_state.prevention_disallowed_this_turn = true;
+                    return Ok(());
                 }
-                TemporaryRuleKind::PreventAllCombatDamage => {
+                TemporaryRuleKind::PreventDamageShield {
+                    amount: None,
+                    source: None,
+                    source_chosen_color: false,
+                    source_chosen_type: false,
+                    source_is_target: false,
+                    half_round_down: false,
+                    recipient: crate::characteristics::StaticDamageRecipient::Any,
+                    combat_only: true,
+                    one_shot: false,
+                } => {
                     self.damage_state.turn_preventions.insert(
                         (entry.id(), index),
                         crate::damage::ActiveTurnPrevention {
@@ -2385,109 +2395,32 @@ impl EffectWindow {
                             },
                         },
                     );
+                    return Ok(());
                 }
-                TemporaryRuleKind::ExileIfDies { subject } => {
-                    let affected = self.effect_group(entry, *subject)?;
-                    for id in affected {
-                        self.damage_exile_until_cleanup
-                            .entry(id)
-                            .or_default()
-                            .insert((entry.id(), index));
-                    }
-                }
-                TemporaryRuleKind::ExileIfLeavesBattlefield { subject } => {
-                    let affected: BTreeSet<ObjectId> =
-                        self.effect_group(entry, *subject)?.into_iter().collect();
-                    if !affected.is_empty() {
-                        let id = self.next_temp_rule_id;
-                        self.next_temp_rule_id = self.next_temp_rule_id.saturating_add(1);
-                        self.temporary_rules.push(super::ActiveTemporaryRule {
-                            id,
-                            controller: entry.controller(),
-                            source_object,
-                            source_damage: source_damage.clone(),
-                            source_entry,
-                            rule: TemporaryRuleKind::ExileIfLeavesBattlefield { subject },
-                            duration: resolved_dur,
-                            resolved_players: BTreeSet::new(),
-                            resolved_objects: affected,
-                            target: bound_target,
-                            second_target: second_bound_target,
-                            consumed: false,
-                            spell_cast_baselines: BTreeMap::new(),
-                        });
-                    }
-                }
-                TemporaryRuleKind::PreventNextDamageExpr {
-                    amount,
-                    source,
-                    recipient,
-                    combat_only,
+                TemporaryRuleKind::ExileReplacement {
+                    subject,
+                    trigger: crate::program::TemporaryExileTrigger::Dies,
+                    ..
                 } => {
-                    let resolved = self.resolve_value_expr(entry.controller(), &amount)?;
-                    if resolved.is_positive() {
-                        let id = self.next_temp_rule_id;
-                        self.next_temp_rule_id = self.next_temp_rule_id.saturating_add(1);
-                        self.temporary_rules.push(super::ActiveTemporaryRule {
-                            id,
-                            controller: entry.controller(),
-                            source_object,
-                            source_damage: source_damage.clone(),
-                            source_entry,
-                            rule: TemporaryRuleKind::PreventNextDamage {
-                                amount: resolved,
-                                source,
-                                recipient,
-                                combat_only,
-                            },
-                            duration: resolved_dur,
-                            resolved_players: BTreeSet::new(),
-                            resolved_objects: BTreeSet::new(),
-                            target: bound_target,
-                            second_target: second_bound_target,
-                            consumed: false,
-                            spell_cast_baselines: BTreeMap::new(),
-                        });
+                    if let Some(subject) = subject {
+                        let affected = self.effect_group(entry, *subject)?;
+                        for id in affected {
+                            self.damage_exile_until_cleanup
+                                .entry(id)
+                                .or_default()
+                                .insert((entry.id(), index));
+                        }
                     }
+                    return Ok(());
                 }
-                TemporaryRuleKind::SpellCostReductionExpr {
-                    filter,
-                    amount,
-                    next_only,
-                } => {
-                    let resolved = self.resolve_value_expr(entry.controller(), &amount)?;
-                    if resolved.is_positive() {
-                        let generic = resolved
-                            .to_usize()
-                            .map_or(u16::MAX, |v| u16::try_from(v).unwrap_or(u16::MAX));
-                        let id = self.next_temp_rule_id;
-                        self.next_temp_rule_id = self.next_temp_rule_id.saturating_add(1);
-                        self.temporary_rules.push(super::ActiveTemporaryRule {
-                            id,
-                            controller: entry.controller(),
-                            source_object,
-                            source_damage: source_damage.clone(),
-                            source_entry,
-                            rule: TemporaryRuleKind::SpellCostReduction {
-                                filter,
-                                generic,
-                                next_only,
-                            },
-                            duration: resolved_dur,
-                            resolved_players: BTreeSet::new(),
-                            resolved_objects: BTreeSet::new(),
-                            target: None,
-                            second_target: None,
-                            consumed: false,
-                            spell_cast_baselines: BTreeMap::new(),
-                        });
-                    }
-                }
-                TemporaryRuleKind::TemporaryStatic(ability)
-                    if matches!(
-                        ability.as_ref(),
-                        crate::characteristics::StaticContinuousAbility::Battlefield { .. }
-                    ) =>
+                TemporaryRuleKind::TemporaryStatic {
+                    ability,
+                    condition: None,
+                    one_shot: false,
+                } if matches!(
+                    ability.as_ref(),
+                    crate::characteristics::StaticContinuousAbility::Battlefield { .. }
+                ) =>
                 {
                     self.characteristics.add_temporary_static(
                         entry.controller(),
@@ -2495,107 +2428,46 @@ impl EffectWindow {
                         resolved_dur,
                         *ability,
                     )?;
+                    return Ok(());
                 }
-                TemporaryRuleKind::RedirectNextDamageExpr {
-                    source,
-                    source_is_target,
-                    from,
-                    to,
-                    combat_only,
-                    amount,
-                    one_shot,
-                } => {
-                    let resolved = self.resolve_value_expr(entry.controller(), &amount)?;
-                    if resolved.is_positive() {
-                        let resolved_objects = match bound_target {
-                            Some(TargetRef::Object(obj)) => BTreeSet::from([obj]),
-                            _ => BTreeSet::new(),
-                        };
-                        let id = self.next_temp_rule_id;
-                        self.next_temp_rule_id = self.next_temp_rule_id.saturating_add(1);
-                        self.temporary_rules.push(super::ActiveTemporaryRule {
-                            id,
-                            controller: entry.controller(),
-                            source_object,
-                            source_damage: source_damage.clone(),
-                            source_entry,
-                            rule: TemporaryRuleKind::RedirectNextDamage {
-                                source,
-                                source_is_target,
-                                from,
-                                to,
-                                combat_only,
-                                amount: Some(resolved),
-                                one_shot,
-                            },
-                            duration: resolved_dur,
-                            resolved_players: BTreeSet::new(),
-                            resolved_objects,
-                            target: bound_target,
-                            second_target: second_bound_target,
-                            consumed: false,
-                            spell_cast_baselines: BTreeMap::new(),
-                        });
+                mut other => {
+                    // CR 611.2c: freeze dynamic ValueExpr amounts at resolution.
+                    if let TemporaryRuleKind::PreventDamageShield {
+                        amount: Some(expr), ..
                     }
-                }
-                TemporaryRuleKind::RedirectNextDamage {
-                    source,
-                    source_is_target,
-                    from,
-                    to,
-                    combat_only,
-                    amount,
-                    one_shot,
-                } => {
-                    let resolved_objects = match bound_target {
-                        Some(TargetRef::Object(obj)) => BTreeSet::from([obj]),
-                        _ => BTreeSet::new(),
-                    };
-                    let id = self.next_temp_rule_id;
-                    self.next_temp_rule_id = self.next_temp_rule_id.saturating_add(1);
-                    self.temporary_rules.push(super::ActiveTemporaryRule {
-                        id,
-                        controller: entry.controller(),
-                        source_object,
-                        source_damage: source_damage.clone(),
-                        source_entry,
-                        rule: TemporaryRuleKind::RedirectNextDamage {
-                            source,
-                            source_is_target,
-                            from,
-                            to,
-                            combat_only,
-                            amount,
-                            one_shot,
-                        },
-                        duration: resolved_dur,
-                        resolved_players: BTreeSet::new(),
-                        resolved_objects,
-                        target: bound_target,
-                        second_target: second_bound_target,
-                        consumed: false,
-                        spell_cast_baselines: BTreeMap::new(),
-                    });
-                }
-                other => {
+                    | TemporaryRuleKind::RedirectNextDamage {
+                        amount: Some(expr), ..
+                    }
+                    | TemporaryRuleKind::SpellCostModifier { amount: expr, .. } = &mut other
+                    {
+                        let resolved =
+                            self.resolve_value_expr(entry.controller(), expr.as_ref())?;
+                        if !resolved.is_positive() {
+                            return Ok(());
+                        }
+                        **expr = ValueExpr::Literal(resolved);
+                    }
                     let cursor = self.resolution_cursor().cloned();
                     let resolved_players: BTreeSet<SeatId> = match &other {
                         TemporaryRuleKind::PlayerCantGainLife { players }
                         | TemporaryRuleKind::CantCastSpells { players, .. }
-                        | TemporaryRuleKind::CantCastFromZone { players, .. }
                         | TemporaryRuleKind::CantActivateAbilities { players, .. }
                         | TemporaryRuleKind::CantPlayLands { players }
                         | TemporaryRuleKind::PlayerGrantKeyword { players, .. }
-                        | TemporaryRuleKind::SpellCostIncrease { players, .. }
+                        | TemporaryRuleKind::SpellCostModifier { players, .. }
                         | TemporaryRuleKind::CastMaxMoreSpellsThisTurn { players, .. }
-                        | TemporaryRuleKind::ExileSpellOnResolve { players, .. } => self
+                        | TemporaryRuleKind::ExileReplacement {
+                            players,
+                            trigger: crate::program::TemporaryExileTrigger::SpellResolves,
+                            ..
+                        } => self
                             .selection_players(*players, entry.controller(), cursor.as_ref())?
                             .into_iter()
                             .collect(),
                         TemporaryRuleKind::AdditionalLandPlay { player, .. }
                         | TemporaryRuleKind::FilteredFlash { player, .. }
                         | TemporaryRuleKind::ZoneCastPermission { player, .. }
-                        | TemporaryRuleKind::NextSpellAffinity { player, .. } => {
+                        | TemporaryRuleKind::NextSpellModifier { player, .. } => {
                             [self.resolving_player_identity_at(*player, cursor.as_ref())?]
                                 .into_iter()
                                 .collect()
@@ -2603,7 +2475,27 @@ impl EffectWindow {
                         _ => BTreeSet::new(),
                     };
                     let resolved_objects = match &other {
-                        crate::program::TemporaryRuleKind::ZoneCastPermission {
+                        TemporaryRuleKind::ExileReplacement {
+                            subject,
+                            trigger: crate::program::TemporaryExileTrigger::LeavesBattlefield,
+                            ..
+                        } => {
+                            let affected: BTreeSet<ObjectId> = match subject.as_deref() {
+                                Some(subj) => {
+                                    self.effect_group(entry, *subj)?.into_iter().collect()
+                                }
+                                None => BTreeSet::new(),
+                            };
+                            if affected.is_empty() {
+                                return Ok(());
+                            }
+                            affected
+                        }
+                        TemporaryRuleKind::RedirectNextDamage { .. } => match bound_target {
+                            Some(TargetRef::Object(obj)) => BTreeSet::from([obj]),
+                            _ => BTreeSet::new(),
+                        },
+                        TemporaryRuleKind::ZoneCastPermission {
                             zone: crate::program::SourceZoneFilter::LastMoved,
                             ..
                         } => cursor
@@ -2746,12 +2638,12 @@ impl EffectWindow {
                         source_entry: None,
                         target: None,
                         second_target: None,
-                        rule: crate::program::TemporaryRuleKind::TemporaryStatic(Box::new(
+                        rule: crate::program::TemporaryRuleKind::temporary_static(
                             crate::characteristics::StaticContinuousAbility::DamageRule {
                                 id: crate::characteristics::StaticAbilityId(id),
                                 rule: crate::characteristics::StaticDamageRule::PreventSourceCombat,
                             },
-                        )),
+                        ),
                         duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
                         resolved_players: BTreeSet::new(),
                         resolved_objects: BTreeSet::from([object]),

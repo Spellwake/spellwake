@@ -1904,8 +1904,8 @@ fn body_grants_next_spell_storm(body: &crate::program::ExecutableBody) -> bool {
             crate::toolbox::ContinuousPayload::TemporaryRule(rule)
                 if matches!(
                     rule.as_ref(),
-                    crate::program::TemporaryRuleKind::NextSpellCastKeyword {
-                        keyword: crate::program::NextSpellCastKeyword::Storm,
+                    crate::program::TemporaryRuleKind::NextSpellModifier {
+                        cast_keyword: Some(crate::program::NextSpellCastKeyword::Storm),
                         ..
                     }
                 )

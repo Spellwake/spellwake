@@ -146,10 +146,10 @@ impl EffectWindow {
                 } else {
                     let id = self.next_temp_rule_id;
                     self.next_temp_rule_id = self.next_temp_rule_id.saturating_add(1);
-                    let rule_kind = if spec.one_shot {
-                        TemporaryRuleKind::OneShotEventReplacement(rule.clone())
-                    } else {
-                        TemporaryRuleKind::TemporaryStatic(rule.clone())
+                    let rule_kind = TemporaryRuleKind::TemporaryStatic {
+                        ability: rule.clone(),
+                        condition: None,
+                        one_shot: spec.one_shot,
                     };
                     let bound_target = self
                         .instruction_target(entry)

@@ -98,14 +98,17 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
             crate::toolbox::ContinuousPayload::TemporaryRule(rule)
                 if matches!(
                     rule.as_ref(),
-                    crate::program::TemporaryRuleKind::TemporaryStatic(ability)
-                        if matches!(
-                            ability.as_ref(),
-                            StaticContinuousAbility::DrawRule {
-                                rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
-                                ..
-                            }
-                        )
+                    crate::program::TemporaryRuleKind::TemporaryStatic {
+                        ability,
+                        condition: None,
+                        one_shot: false,
+                    } if matches!(
+                        ability.as_ref(),
+                        StaticContinuousAbility::DrawRule {
+                            rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
+                            ..
+                        }
+                    )
                 )
         ),
         Instruction::CreateTokens { creations } => creations.iter().all(|c| {
@@ -178,12 +181,8 @@ impl EffectWindow {
             !active.consumed
                 && matches!(
                     &active.rule,
-                    crate::program::TemporaryRuleKind::TemporaryStatic(ab)
-                        | crate::program::TemporaryRuleKind::OneShotEventReplacement(ab)
-                        | crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
-                            ability: ab,
-                            ..
-                        } if is_draw_body(ab)
+                    crate::program::TemporaryRuleKind::TemporaryStatic { ability: ab, .. }
+                        if is_draw_body(ab)
                 )
         }) || self.programs.values().any(|program| {
             program
@@ -859,8 +858,11 @@ impl EffectWindow {
                 && active.source_object == rep.source
                 && matches!(
                     &active.rule,
-                    crate::program::TemporaryRuleKind::OneShotEventReplacement(ab)
-                        if ab.id() == rep.ability
+                    crate::program::TemporaryRuleKind::TemporaryStatic {
+                        ability: ab,
+                        one_shot: true,
+                        ..
+                    } if ab.id() == rep.ability
                 )
             {
                 active.consumed = true;
@@ -990,7 +992,10 @@ impl EffectWindow {
                     if cond_ok {
                         let one_shot_idx = matches!(
                             &active.rule,
-                            crate::program::TemporaryRuleKind::OneShotEventReplacement(_)
+                            crate::program::TemporaryRuleKind::TemporaryStatic {
+                                one_shot: true,
+                                ..
+                            }
                         )
                         .then_some(idx);
                         found = Some(LoseGameReplacementMatch {
@@ -1587,8 +1592,11 @@ impl EffectWindow {
                 }
                 Instruction::ApplyContinuous(spec) => {
                     if let crate::toolbox::ContinuousPayload::TemporaryRule(rule) = &spec.payload
-                        && let crate::program::TemporaryRuleKind::TemporaryStatic(ability) =
-                            rule.as_ref()
+                        && let crate::program::TemporaryRuleKind::TemporaryStatic {
+                            ability,
+                            condition: None,
+                            one_shot: false,
+                        } = rule.as_ref()
                         && matches!(
                             ability.as_ref(),
                             StaticContinuousAbility::DrawRule {

@@ -1492,16 +1492,20 @@ pub enum NextSpellCastKeyword {
     Storm,
 }
 
+/// Event that triggers a [`TemporaryRuleKind::ExileReplacement`] rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemporaryExileTrigger {
+    Dies,
+    LeavesBattlefield,
+    SpellResolves,
+}
+
 /// Temporary game-rule modification installed by `Instruction::ApplyContinuous` (`ContinuousPayload::TemporaryRule`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemporaryRuleKind {
+    /// Spells matching optional `filter` cannot be countered (or cannot be countered by spells
+    /// or abilities of any color in `colors` when `colors` is non-empty).
     CantBeCountered {
-        filter: Option<ObjectFilter>,
-        controller_only: bool,
-        next_only: bool,
-    },
-    /// Spells matching optional `filter` cannot be countered by spells or abilities of any color in `colors`.
-    CantBeCounteredByColors {
         colors: ColorMask,
         filter: Option<ObjectFilter>,
         controller_only: bool,
@@ -1510,14 +1514,10 @@ pub enum TemporaryRuleKind {
     PlayerCantGainLife {
         players: AffectedPlayers,
     },
+    /// Prevent `players` from casting spells (optionally restricted to `zone` and/or `filter`).
     CantCastSpells {
         players: AffectedPlayers,
-        filter: Option<ObjectFilter>,
-    },
-    /// Prevent `players` from casting spells from `zone` (optionally matching `filter`).
-    CantCastFromZone {
-        players: AffectedPlayers,
-        zone: SourceZoneFilter,
+        zone: Option<SourceZoneFilter>,
         filter: Option<ObjectFilter>,
     },
     /// Affected players can't activate abilities (or non-mana abilities when `nonmana_only` is true).
@@ -1534,61 +1534,44 @@ pub enum TemporaryRuleKind {
         players: AffectedPlayers,
         keywords: BTreeSet<KeywordAbility>,
     },
-    /// The next matching spell the controller casts this turn may be cast without paying its mana cost.
-    NextSpellFree {
+    /// Modifier applied to the next matching spell cast by `player` this turn
+    /// (free cast, keyword grant, cast-trigger keyword grant, or affinity).
+    NextSpellModifier {
+        player: ResolvingPlayer,
         filter: Option<ObjectFilter>,
-    },
-    /// Grant convoke or improvise to the controller's next matching spell.
-    /// A successful matching cast consumes every such grant even if the keyword is not used.
-    NextSpellKeyword {
-        filter: ObjectFilter,
-        keyword: KeywordAbility,
-    },
-    /// Grant cascade or storm to the controller's next matching spell.
-    /// A successful matching cast consumes the rule and schedules the corresponding cast trigger.
-    NextSpellCastKeyword {
-        filter: ObjectFilter,
-        keyword: NextSpellCastKeyword,
+        free: bool,
+        keyword: Option<KeywordAbility>,
+        cast_keyword: Option<NextSpellCastKeyword>,
+        affinity_filter: Option<ObjectFilter>,
     },
     /// Duration-scoped zone replacement effect (e.g. Yawgmoth's Will, Hallowed Moonlight, Cosmic Intervention).
     TemporaryZoneReplacement(Box<ZoneReplacementAbility>),
     DamageCantBePrevented,
-    ExileIfDies {
-        subject: Box<EffectSubject>,
+    /// Temporary exile replacement when matching permanents die or leave the battlefield,
+    /// or when matching spells cast by `players` would be put into a graveyard on resolution.
+    ExileReplacement {
+        subject: Option<Box<EffectSubject>>,
+        players: AffectedPlayers,
+        filter: Option<ObjectFilter>,
+        trigger: TemporaryExileTrigger,
     },
-    SpellCostReduction {
-        filter: ObjectFilter,
-        generic: u16,
-        next_only: bool,
-    },
-    /// Dynamic generic cost reduction evaluated when `CreateTemporaryRule` resolves (CR 611.2c).
-    SpellCostReductionExpr {
+    /// Temporary spell cost reduction (`increase == false`) or increase (`increase == true`)
+    /// evaluated when `ApplyContinuous` resolves (CR 611.2c).
+    SpellCostModifier {
+        players: AffectedPlayers,
         filter: ObjectFilter,
         amount: Box<ValueExpr>,
+        increase: bool,
         next_only: bool,
     },
     AdditionalLandPlay {
         player: ResolvingPlayer,
         count: u8,
     },
-    PreventAllCombatDamage,
-    /// Temporary spell cost tax affecting spells matching `filter` cast by `players`.
-    SpellCostIncrease {
-        players: AffectedPlayers,
-        filter: ObjectFilter,
-        generic: u16,
-    },
     /// Affected players can cast at most `max_more` additional spells this turn (e.g. Irencrag Feat).
     CastMaxMoreSpellsThisTurn {
         players: AffectedPlayers,
         max_more: u8,
-    },
-    /// The next spell matching `spell_filter` cast by `player` costs {1} less for each controlled
-    /// permanent matching `affinity_filter` (e.g. Don & Raph, Hard Science).
-    NextSpellAffinity {
-        player: ResolvingPlayer,
-        spell_filter: ObjectFilter,
-        affinity_filter: ObjectFilter,
     },
     /// Temporary flash permission for spells matching `filter` cast by `player`.
     FilteredFlash {
@@ -1607,31 +1590,17 @@ pub enum TemporaryRuleKind {
         once: bool,
         sorcery_only: bool,
     },
-    /// Duration-scoped non-layer static ability installed by a resolving spell or ability (CR 611.2a).
-    TemporaryStatic(Box<crate::characteristics::StaticContinuousAbility>),
-    /// One-shot duration-scoped event replacement (`StaticContinuousAbility::EventReplacement`) consumed on first application.
-    OneShotEventReplacement(Box<crate::characteristics::StaticContinuousAbility>),
-    /// Duration-scoped non-layer static ability active only while `condition` holds (CR 611.2a).
-    ConditionalTemporaryStatic {
-        condition: Box<crate::characteristics::StaticSourceCondition>,
+    /// Duration-scoped non-layer static ability installed by a resolving spell or ability (CR 611.2a),
+    /// optionally gated by `condition` or consumed on first application when `one_shot` is true.
+    TemporaryStatic {
         ability: Box<crate::characteristics::StaticContinuousAbility>,
+        condition: Option<Box<crate::characteristics::StaticSourceCondition>>,
+        one_shot: bool,
     },
-    /// Duration-scoped finite damage prevention shield matching optional source filter and recipient.
-    PreventNextDamage {
-        amount: RulesInteger,
-        source: Option<ObjectFilter>,
-        recipient: crate::characteristics::StaticDamageRecipient,
-        combat_only: bool,
-    },
-    /// Dynamic finite damage prevention shield evaluated when `CreateTemporaryRule` resolves (CR 611.2c).
-    PreventNextDamageExpr {
-        amount: Box<ValueExpr>,
-        source: Option<ObjectFilter>,
-        recipient: crate::characteristics::StaticDamageRecipient,
-        combat_only: bool,
-    },
-    /// Prevent ALL (or half rounded down when `half_round_down`) damage the next time one matching source would deal damage to `recipient` (CR 615.4).
-    PreventNextTimeDamage {
+    /// Duration-scoped damage prevention shield (all combat damage, finite or dynamic next-N
+    /// prevention, or one-shot next-time prevention per CR 615.4).
+    PreventDamageShield {
+        amount: Option<Box<ValueExpr>>,
         source: Option<ObjectFilter>,
         source_chosen_color: bool,
         source_chosen_type: bool,
@@ -1639,15 +1608,7 @@ pub enum TemporaryRuleKind {
         half_round_down: bool,
         recipient: crate::characteristics::StaticDamageRecipient,
         combat_only: bool,
-    },
-    /// If a matching spell cast by `players` would be put into a graveyard, exile it instead.
-    ExileSpellOnResolve {
-        filter: Option<ObjectFilter>,
-        players: AffectedPlayers,
-    },
-    /// If an affected permanent would leave the battlefield, exile it instead of putting it anywhere else.
-    ExileIfLeavesBattlefield {
-        subject: Box<EffectSubject>,
+        one_shot: bool,
     },
     /// Duration-scoped damage redirection shield (CR 614.9, e.g. Shield Dancer, Blood of the Martyr, Harm's Way).
     RedirectNextDamage {
@@ -1656,22 +1617,152 @@ pub enum TemporaryRuleKind {
         from: crate::characteristics::StaticDamageRecipient,
         to: crate::characteristics::DamageRedirectTarget,
         combat_only: bool,
-        amount: Option<RulesInteger>,
-        one_shot: bool,
-    },
-    /// Dynamic damage redirection shield whose `amount` is evaluated when `CreateTemporaryRule` resolves (CR 611.2c).
-    RedirectNextDamageExpr {
-        source: Option<ObjectFilter>,
-        source_is_target: bool,
-        from: crate::characteristics::StaticDamageRecipient,
-        to: crate::characteristics::DamageRedirectTarget,
-        combat_only: bool,
-        amount: Box<ValueExpr>,
+        amount: Option<Box<ValueExpr>>,
         one_shot: bool,
     },
 }
 
 impl TemporaryRuleKind {
+    /// Construct a shield preventing all combat damage this turn.
+    #[must_use]
+    pub fn prevent_all_combat_damage() -> Self {
+        Self::PreventDamageShield {
+            amount: None,
+            source: None,
+            source_chosen_color: false,
+            source_chosen_type: false,
+            source_is_target: false,
+            half_round_down: false,
+            recipient: crate::characteristics::StaticDamageRecipient::Any,
+            combat_only: true,
+            one_shot: false,
+        }
+    }
+
+    /// Construct an unconditional multi-use temporary static ability.
+    #[must_use]
+    pub fn temporary_static(ability: crate::characteristics::StaticContinuousAbility) -> Self {
+        Self::TemporaryStatic {
+            ability: Box::new(ability),
+            condition: None,
+            one_shot: false,
+        }
+    }
+
+    /// Construct a one-shot duration-scoped event replacement ability.
+    #[must_use]
+    pub fn one_shot_event_replacement(
+        ability: crate::characteristics::StaticContinuousAbility,
+    ) -> Self {
+        Self::TemporaryStatic {
+            ability: Box::new(ability),
+            condition: None,
+            one_shot: true,
+        }
+    }
+
+    /// Construct a conditional temporary static ability active while `condition` holds.
+    #[must_use]
+    pub fn conditional_temporary_static(
+        condition: crate::characteristics::StaticSourceCondition,
+        ability: crate::characteristics::StaticContinuousAbility,
+    ) -> Self {
+        Self::TemporaryStatic {
+            ability: Box::new(ability),
+            condition: Some(Box::new(condition)),
+            one_shot: false,
+        }
+    }
+
+    /// Construct a temporary replacement exiling `subject` if it would die.
+    #[must_use]
+    pub fn exile_if_dies(subject: EffectSubject) -> Self {
+        Self::ExileReplacement {
+            subject: Some(Box::new(subject)),
+            players: AffectedPlayers::EachPlayer,
+            filter: None,
+            trigger: TemporaryExileTrigger::Dies,
+        }
+    }
+
+    /// Construct a temporary replacement exiling `subject` if it would leave the battlefield.
+    #[must_use]
+    pub fn exile_if_leaves_battlefield(subject: EffectSubject) -> Self {
+        Self::ExileReplacement {
+            subject: Some(Box::new(subject)),
+            players: AffectedPlayers::EachPlayer,
+            filter: None,
+            trigger: TemporaryExileTrigger::LeavesBattlefield,
+        }
+    }
+
+    /// Construct a temporary replacement exiling matching spells cast by `players` on resolution.
+    #[must_use]
+    pub fn exile_spell_on_resolve(players: AffectedPlayers, filter: Option<ObjectFilter>) -> Self {
+        Self::ExileReplacement {
+            subject: None,
+            players,
+            filter,
+            trigger: TemporaryExileTrigger::SpellResolves,
+        }
+    }
+
+    /// Construct a rule letting the controller cast their next matching spell without paying its mana cost.
+    #[must_use]
+    pub fn next_spell_free(filter: Option<ObjectFilter>) -> Self {
+        Self::NextSpellModifier {
+            player: ResolvingPlayer::Controller,
+            filter,
+            free: true,
+            keyword: None,
+            cast_keyword: None,
+            affinity_filter: None,
+        }
+    }
+
+    /// Construct a rule granting `keyword` to the controller's next matching spell.
+    #[must_use]
+    pub fn next_spell_keyword(filter: ObjectFilter, keyword: KeywordAbility) -> Self {
+        Self::NextSpellModifier {
+            player: ResolvingPlayer::Controller,
+            filter: Some(filter),
+            free: false,
+            keyword: Some(keyword),
+            cast_keyword: None,
+            affinity_filter: None,
+        }
+    }
+
+    /// Construct a rule granting `keyword` (cascade or storm) to the controller's next matching spell.
+    #[must_use]
+    pub fn next_spell_cast_keyword(filter: ObjectFilter, keyword: NextSpellCastKeyword) -> Self {
+        Self::NextSpellModifier {
+            player: ResolvingPlayer::Controller,
+            filter: Some(filter),
+            free: false,
+            keyword: None,
+            cast_keyword: Some(keyword),
+            affinity_filter: None,
+        }
+    }
+
+    /// Construct a rule granting affinity for `affinity_filter` to `player`'s next matching spell.
+    #[must_use]
+    pub fn next_spell_affinity(
+        player: ResolvingPlayer,
+        spell_filter: ObjectFilter,
+        affinity_filter: ObjectFilter,
+    ) -> Self {
+        Self::NextSpellModifier {
+            player,
+            filter: Some(spell_filter),
+            free: false,
+            keyword: None,
+            cast_keyword: None,
+            affinity_filter: Some(affinity_filter),
+        }
+    }
+
     /// Whether this temporary rule references an announced target of the resolving entry.
     #[must_use]
     pub fn uses_target(&self) -> bool {
@@ -1701,34 +1792,28 @@ impl TemporaryRuleKind {
             | Self::CantActivateAbilities { players, .. }
             | Self::PlayerGrantKeyword { players, .. }
             | Self::CastMaxMoreSpellsThisTurn { players, .. } => players_use_target(*players),
-            Self::CantCastSpells { players, filter }
-            | Self::CantCastFromZone {
+            Self::CantCastSpells {
                 players, filter, ..
+            } => players_use_target(*players) || filter.as_ref().is_some_and(filter_uses_target),
+            Self::CantBeCountered { filter, .. } => {
+                filter.as_ref().is_some_and(filter_uses_target)
             }
-            | Self::ExileSpellOnResolve { filter, players } => {
-                players_use_target(*players) || filter.as_ref().is_some_and(filter_uses_target)
-            }
-            Self::CantBeCountered { filter, .. }
-            | Self::CantBeCounteredByColors { filter, .. }
-            | Self::NextSpellFree { filter } => filter.as_ref().is_some_and(filter_uses_target),
-            Self::NextSpellKeyword { filter, .. }
-            | Self::NextSpellCastKeyword { filter, .. }
-            | Self::SpellCostReduction { filter, .. } => filter_uses_target(filter),
-            Self::SpellCostIncrease {
-                players, filter, ..
-            } => players_use_target(*players) || filter_uses_target(filter),
-            Self::SpellCostReductionExpr { filter, amount, .. } => {
-                filter_uses_target(filter) || amount.uses_target()
-            }
-            Self::NextSpellAffinity {
+            Self::NextSpellModifier {
                 player,
-                spell_filter,
+                filter,
                 affinity_filter,
+                ..
             } => {
                 is_target_player(*player)
-                    || filter_uses_target(spell_filter)
-                    || filter_uses_target(affinity_filter)
+                    || filter.as_ref().is_some_and(filter_uses_target)
+                    || affinity_filter.as_ref().is_some_and(filter_uses_target)
             }
+            Self::SpellCostModifier {
+                players,
+                filter,
+                amount,
+                ..
+            } => players_use_target(*players) || filter_uses_target(filter) || amount.uses_target(),
             Self::FilteredFlash { player, filter, .. } => {
                 is_target_player(*player) || filter_uses_target(filter)
             }
@@ -1736,58 +1821,37 @@ impl TemporaryRuleKind {
                 is_target_player(*player) || filter.as_ref().is_some_and(filter_uses_target)
             }
             Self::AdditionalLandPlay { player, .. } => is_target_player(*player),
-            Self::ExileIfDies { subject } | Self::ExileIfLeavesBattlefield { subject } => {
-                matches!(
-                    subject.as_ref(),
-                    EffectSubject::TargetObject
-                        | EffectSubject::TargetAndSameNameMatching(_)
-                        | EffectSubject::MatchingOtherThanTarget(_)
-                        | EffectSubject::TargetAndSharingColorMatching(_)
-                ) || matches!(subject.as_ref(), EffectSubject::Matching(f) if filter_uses_target(f))
-            }
-            Self::PreventNextDamage {
-                source, recipient, ..
-            } => {
-                source.as_ref().is_some_and(filter_uses_target) || recipient_uses_target(recipient)
-            }
-            Self::PreventNextDamageExpr {
-                amount,
-                source,
-                recipient,
+            Self::ExileReplacement {
+                subject,
+                players,
+                filter,
                 ..
             } => {
-                amount.uses_target()
-                    || source.as_ref().is_some_and(filter_uses_target)
-                    || recipient_uses_target(recipient)
+                players_use_target(*players)
+                    || filter.as_ref().is_some_and(filter_uses_target)
+                    || subject.as_ref().is_some_and(|subject| {
+                        matches!(
+                            subject.as_ref(),
+                            EffectSubject::TargetObject
+                                | EffectSubject::TargetAndSameNameMatching(_)
+                                | EffectSubject::MatchingOtherThanTarget(_)
+                                | EffectSubject::TargetAndSharingColorMatching(_)
+                        ) || matches!(subject.as_ref(), EffectSubject::Matching(f) if filter_uses_target(f))
+                    })
             }
-            Self::PreventNextTimeDamage {
+            Self::PreventDamageShield {
+                amount,
                 source,
                 source_is_target,
                 recipient,
                 ..
             } => {
-                *source_is_target
+                amount.as_deref().is_some_and(ValueExpr::uses_target)
+                    || *source_is_target
                     || source.as_ref().is_some_and(filter_uses_target)
                     || recipient_uses_target(recipient)
             }
             Self::RedirectNextDamage {
-                source,
-                source_is_target,
-                from,
-                to,
-                ..
-            } => {
-                *source_is_target
-                    || source.as_ref().is_some_and(filter_uses_target)
-                    || recipient_uses_target(from)
-                    || matches!(
-                        to,
-                        crate::characteristics::DamageRedirectTarget::TargetObject
-                            | crate::characteristics::DamageRedirectTarget::TargetAny
-                            | crate::characteristics::DamageRedirectTarget::SecondTargetObject
-                    )
-            }
-            Self::RedirectNextDamageExpr {
                 amount,
                 source,
                 source_is_target,
@@ -1795,7 +1859,7 @@ impl TemporaryRuleKind {
                 to,
                 ..
             } => {
-                amount.uses_target()
+                amount.as_deref().is_some_and(ValueExpr::uses_target)
                     || *source_is_target
                     || source.as_ref().is_some_and(filter_uses_target)
                     || recipient_uses_target(from)
@@ -1806,12 +1870,9 @@ impl TemporaryRuleKind {
                             | crate::characteristics::DamageRedirectTarget::SecondTargetObject
                     )
             }
-            Self::TemporaryStatic(_)
-            | Self::ConditionalTemporaryStatic { .. }
+            Self::TemporaryStatic { .. }
             | Self::TemporaryZoneReplacement(_)
-            | Self::OneShotEventReplacement(_)
-            | Self::DamageCantBePrevented
-            | Self::PreventAllCombatDamage => false,
+            | Self::DamageCantBePrevented => false,
         }
     }
 }
@@ -3792,9 +3853,6 @@ impl ExecutableBody {
                             if matches!(
                                 rule.as_ref(),
                                 TemporaryRuleKind::RedirectNextDamage {
-                                    to: crate::characteristics::DamageRedirectTarget::SecondTargetObject,
-                                    ..
-                                } | TemporaryRuleKind::RedirectNextDamageExpr {
                                     to: crate::characteristics::DamageRedirectTarget::SecondTargetObject,
                                     ..
                                 }
@@ -7440,9 +7498,6 @@ impl ExecutableBody {
                                                 TemporaryRuleKind::RedirectNextDamage {
                                                     to: crate::characteristics::DamageRedirectTarget::SecondTargetObject,
                                                     ..
-                                                } | TemporaryRuleKind::RedirectNextDamageExpr {
-                                                    to: crate::characteristics::DamageRedirectTarget::SecondTargetObject,
-                                                    ..
                                                 }
                                             )
                                     )
@@ -8030,146 +8085,135 @@ impl ExecutableBody {
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<Option<OperandFamily>, DefinitionError> {
         let fam = match rule {
-            TemporaryRuleKind::CantBeCountered { filter, .. }
-            | TemporaryRuleKind::CantBeCounteredByColors { filter, .. } => {
+            TemporaryRuleKind::CantBeCountered { filter, .. } => {
                 if let Some(f) = filter {
                     f.validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
                 }
                 None
             }
-            TemporaryRuleKind::PlayerCantGainLife { players } => match players {
-                AffectedPlayers::One(p) => {
-                    p.validate(context, self.target, facts.definitely_exiled_target)?
-                }
-                _ => None,
-            },
-            TemporaryRuleKind::CantCastSpells { players, filter }
-            | TemporaryRuleKind::CantCastFromZone {
+            TemporaryRuleKind::PlayerCantGainLife { players }
+            | TemporaryRuleKind::CantActivateAbilities { players, .. }
+            | TemporaryRuleKind::CantPlayLands { players }
+            | TemporaryRuleKind::CastMaxMoreSpellsThisTurn { players, .. } => {
+                players.validate(context, self.target, facts.definitely_exiled_target)?
+            }
+            TemporaryRuleKind::CantCastSpells {
                 players, filter, ..
             } => {
                 if let Some(f) = filter {
                     f.validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
                 }
-                match players {
-                    AffectedPlayers::One(p) => {
-                        p.validate(context, self.target, facts.definitely_exiled_target)?
-                    }
-                    _ => None,
-                }
+                players.validate(context, self.target, facts.definitely_exiled_target)?
             }
-            TemporaryRuleKind::CantActivateAbilities { players, .. }
-            | TemporaryRuleKind::CantPlayLands { players } => match players {
-                AffectedPlayers::One(p) => {
-                    p.validate(context, self.target, facts.definitely_exiled_target)?
-                }
-                _ => None,
-            },
             TemporaryRuleKind::PlayerGrantKeyword { players, keywords } => {
                 if keywords.is_empty() {
                     return Err(DefinitionError::InvalidInstruction);
                 }
-                match players {
-                    AffectedPlayers::One(p) => {
-                        p.validate(context, self.target, facts.definitely_exiled_target)?
-                    }
-                    _ => None,
-                }
+                players.validate(context, self.target, facts.definitely_exiled_target)?
             }
-            TemporaryRuleKind::NextSpellFree { filter } => {
+            TemporaryRuleKind::NextSpellModifier {
+                player,
+                filter,
+                free,
+                keyword,
+                cast_keyword,
+                affinity_filter,
+            } => {
+                if !*free
+                    && keyword.is_none()
+                    && cast_keyword.is_none()
+                    && affinity_filter.is_none()
+                {
+                    return Err(DefinitionError::InvalidInstruction);
+                }
+                if let Some(keyword) = keyword
+                    && !matches!(
+                        keyword,
+                        KeywordAbility::Convoke
+                            | KeywordAbility::Improvise
+                            | KeywordAbility::Delve
+                            | KeywordAbility::Flash
+                            | KeywordAbility::Bargain
+                            | KeywordAbility::Retrace
+                            | KeywordAbility::JumpStart
+                            | KeywordAbility::Rebound
+                    )
+                {
+                    return Err(DefinitionError::InvalidInstruction);
+                }
                 if let Some(f) = filter {
                     f.validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
                 }
-                None
+                if let Some(f) = affinity_filter {
+                    f.validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
+                }
+                player.validate(context, self.target, facts.definitely_exiled_target)?
             }
             TemporaryRuleKind::TemporaryZoneReplacement(ability) => {
                 zone_replacement::validate_ability(ability, true, vocabulary)?;
                 None
             }
-            TemporaryRuleKind::ExileIfDies { subject } => {
-                subject
-                    .validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
-                if matches!(
-                    subject.as_ref(),
-                    EffectSubject::TargetObject
-                        | EffectSubject::TargetAndSameNameMatching(_)
-                        | EffectSubject::MatchingOtherThanTarget(_)
-                        | EffectSubject::TargetAndSharingColorMatching(_)
-                ) {
-                    Some(OperandFamily::Permanent)
-                } else {
-                    None
-                }
-            }
-            TemporaryRuleKind::SpellCostReduction {
-                filter, generic, ..
+            TemporaryRuleKind::DamageCantBePrevented => None,
+            TemporaryRuleKind::ExileReplacement {
+                subject,
+                players,
+                filter,
+                trigger,
             } => {
-                if *generic == 0 {
+                if matches!(
+                    trigger,
+                    TemporaryExileTrigger::Dies | TemporaryExileTrigger::LeavesBattlefield
+                ) && subject.is_none()
+                {
+                    return Err(DefinitionError::InvalidInstruction);
+                }
+                let mut fam =
+                    players.validate(context, self.target, facts.definitely_exiled_target)?;
+                if let Some(subject) = subject {
+                    subject
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
+                    if matches!(
+                        subject.as_ref(),
+                        EffectSubject::TargetObject
+                            | EffectSubject::TargetAndSameNameMatching(_)
+                            | EffectSubject::MatchingOtherThanTarget(_)
+                            | EffectSubject::TargetAndSharingColorMatching(_)
+                    ) {
+                        fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
+                    }
+                }
+                if let Some(f) = filter {
+                    f.validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
+                }
+                fam
+            }
+            TemporaryRuleKind::SpellCostModifier {
+                players,
+                filter,
+                amount,
+                ..
+            } => {
+                if matches!(amount.as_ref(), ValueExpr::Literal(v) if !v.is_positive()) {
                     return Err(DefinitionError::InvalidInstruction);
                 }
                 filter
                     .validate_vocabulary(vocabulary)
                     .map_err(|_| DefinitionError::InvalidInstruction)?;
-                None
-            }
-            TemporaryRuleKind::SpellCostReductionExpr { filter, amount, .. } => {
-                filter
-                    .validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
                 amount.validate_amount(defined_slots, context, facts, vocabulary)?;
-                None
+                let fam = players.validate(context, self.target, facts.definitely_exiled_target)?;
+                toolbox_merge_family(fam, amount.required_operand_family(self.target)?)?
             }
             TemporaryRuleKind::AdditionalLandPlay { player, count } => {
                 if *count == 0 {
                     return Err(DefinitionError::InvalidInstruction);
                 }
                 player.validate(context, self.target, facts.definitely_exiled_target)?
-            }
-            TemporaryRuleKind::SpellCostIncrease {
-                players,
-                filter,
-                generic,
-            } => {
-                if *generic == 0 {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                filter
-                    .validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
-                match players {
-                    AffectedPlayers::One(p) => {
-                        p.validate(context, self.target, facts.definitely_exiled_target)?
-                    }
-                    _ => None,
-                }
-            }
-            TemporaryRuleKind::NextSpellKeyword { filter, keyword } => {
-                if !matches!(
-                    keyword,
-                    KeywordAbility::Convoke
-                        | KeywordAbility::Improvise
-                        | KeywordAbility::Delve
-                        | KeywordAbility::Flash
-                        | KeywordAbility::Bargain
-                        | KeywordAbility::Retrace
-                        | KeywordAbility::JumpStart
-                        | KeywordAbility::Rebound
-                ) {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                filter
-                    .validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
-                None
-            }
-            TemporaryRuleKind::NextSpellCastKeyword { filter, keyword: _ } => {
-                filter
-                    .validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
-                None
             }
             TemporaryRuleKind::FilteredFlash { player, filter, .. } => {
                 filter
@@ -8184,23 +8228,20 @@ impl ExecutableBody {
                 }
                 player.validate(context, self.target, facts.definitely_exiled_target)?
             }
-            TemporaryRuleKind::DamageCantBePrevented
-            | TemporaryRuleKind::PreventAllCombatDamage => None,
-            TemporaryRuleKind::OneShotEventReplacement(ability) => {
-                if !matches!(
-                    ability.as_ref(),
-                    crate::characteristics::StaticContinuousAbility::EventReplacement { .. }
-                ) {
+            TemporaryRuleKind::TemporaryStatic {
+                ability,
+                condition,
+                one_shot,
+            } => {
+                if *one_shot
+                    && !matches!(
+                        ability.as_ref(),
+                        crate::characteristics::StaticContinuousAbility::EventReplacement { .. }
+                    )
+                {
                     return Err(DefinitionError::InvalidInstruction);
                 }
-                ability
-                    .validate(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
-                None
-            }
-            TemporaryRuleKind::TemporaryStatic(ability)
-            | TemporaryRuleKind::ConditionalTemporaryStatic { ability, .. } => {
-                if let TemporaryRuleKind::ConditionalTemporaryStatic { condition, .. } = rule {
+                if let Some(condition) = condition {
                     crate::characteristics::validate_static_source_condition(condition, vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
                 }
@@ -8248,10 +8289,10 @@ impl ExecutableBody {
                                     StaticDamageRecipient::SelfObject
                                         | StaticDamageRecipient::AttachedHost
                                 ) && !matches!(
-                                to,
-                                crate::characteristics::DamageRedirectTarget::AbilitySource
-                                    | crate::characteristics::DamageRedirectTarget::AttachedHost
-                            ))
+                                    to,
+                                    crate::characteristics::DamageRedirectTarget::AbilitySource
+                                        | crate::characteristics::DamageRedirectTarget::AttachedHost
+                                ))
                         }
                         _ => false,
                     },
@@ -8331,201 +8372,8 @@ impl ExecutableBody {
                 }
                 None
             }
-            TemporaryRuleKind::RedirectNextDamage {
-                source,
-                source_is_target,
-                from,
-                to,
+            TemporaryRuleKind::PreventDamageShield {
                 amount,
-                ..
-            } => {
-                if let Some(amt) = amount
-                    && !amt.is_positive()
-                {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                if let Some(f) = source {
-                    f.validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                }
-                if let crate::characteristics::StaticDamageRecipient::MatchingPermanent(f) = from {
-                    f.validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                }
-                if matches!(
-                    from,
-                    crate::characteristics::StaticDamageRecipient::SelfObject
-                        | crate::characteristics::StaticDamageRecipient::AttachedHost
-                ) && !context.has_source()
-                {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                if matches!(
-                    to,
-                    crate::characteristics::DamageRedirectTarget::AbilitySource
-                        | crate::characteristics::DamageRedirectTarget::AttachedHost
-                ) && !context.has_source()
-                {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                let mut fam = None;
-                if *source_is_target {
-                    fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
-                }
-                match from {
-                    crate::characteristics::StaticDamageRecipient::TargetObject => {
-                        fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
-                    }
-                    crate::characteristics::StaticDamageRecipient::TargetAny => {
-                        fam = toolbox_merge_family(fam, Some(OperandFamily::DamageRecipient))?;
-                    }
-                    _ => {}
-                }
-                match to {
-                    crate::characteristics::DamageRedirectTarget::TargetObject
-                    | crate::characteristics::DamageRedirectTarget::SecondTargetObject => {
-                        fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
-                    }
-                    crate::characteristics::DamageRedirectTarget::TargetAny => {
-                        fam = toolbox_merge_family(fam, Some(OperandFamily::DamageRecipient))?;
-                    }
-                    _ => {}
-                }
-                fam
-            }
-            TemporaryRuleKind::RedirectNextDamageExpr {
-                source,
-                source_is_target,
-                from,
-                to,
-                amount,
-                ..
-            } => {
-                amount.validate_amount(defined_slots, context, facts, vocabulary)?;
-                if let Some(f) = source {
-                    f.validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                }
-                if let crate::characteristics::StaticDamageRecipient::MatchingPermanent(f) = from {
-                    f.validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                }
-                if matches!(
-                    from,
-                    crate::characteristics::StaticDamageRecipient::SelfObject
-                        | crate::characteristics::StaticDamageRecipient::AttachedHost
-                ) && !context.has_source()
-                {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                if matches!(
-                    to,
-                    crate::characteristics::DamageRedirectTarget::AbilitySource
-                        | crate::characteristics::DamageRedirectTarget::AttachedHost
-                ) && !context.has_source()
-                {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                let mut fam = amount.required_operand_family(self.target)?;
-                if *source_is_target {
-                    fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
-                }
-                match from {
-                    crate::characteristics::StaticDamageRecipient::TargetObject => {
-                        fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
-                    }
-                    crate::characteristics::StaticDamageRecipient::TargetAny => {
-                        fam = toolbox_merge_family(fam, Some(OperandFamily::DamageRecipient))?;
-                    }
-                    _ => {}
-                }
-                match to {
-                    crate::characteristics::DamageRedirectTarget::TargetObject
-                    | crate::characteristics::DamageRedirectTarget::SecondTargetObject => {
-                        fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
-                    }
-                    crate::characteristics::DamageRedirectTarget::TargetAny => {
-                        fam = toolbox_merge_family(fam, Some(OperandFamily::DamageRecipient))?;
-                    }
-                    _ => {}
-                }
-                fam
-            }
-            TemporaryRuleKind::PreventNextDamage {
-                amount,
-                source,
-                recipient,
-                ..
-            } => {
-                if !amount.is_positive() {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                if let Some(f) = source {
-                    f.validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                }
-                if let crate::characteristics::StaticDamageRecipient::MatchingPermanent(f) =
-                    recipient
-                {
-                    f.validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                }
-                if matches!(
-                    recipient,
-                    crate::characteristics::StaticDamageRecipient::SelfObject
-                        | crate::characteristics::StaticDamageRecipient::AttachedHost
-                ) && !context.has_source()
-                {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                match recipient {
-                    crate::characteristics::StaticDamageRecipient::TargetObject => {
-                        Some(OperandFamily::Permanent)
-                    }
-                    crate::characteristics::StaticDamageRecipient::TargetAny => {
-                        Some(OperandFamily::DamageRecipient)
-                    }
-                    _ => None,
-                }
-            }
-            TemporaryRuleKind::PreventNextDamageExpr {
-                amount,
-                source,
-                recipient,
-                ..
-            } => {
-                amount.validate_amount(defined_slots, context, facts, vocabulary)?;
-                if let Some(f) = source {
-                    f.validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                }
-                if let crate::characteristics::StaticDamageRecipient::MatchingPermanent(f) =
-                    recipient
-                {
-                    f.validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                }
-                if matches!(
-                    recipient,
-                    crate::characteristics::StaticDamageRecipient::SelfObject
-                        | crate::characteristics::StaticDamageRecipient::AttachedHost
-                ) && !context.has_source()
-                {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                let mut fam = amount.required_operand_family(self.target)?;
-                match recipient {
-                    crate::characteristics::StaticDamageRecipient::TargetObject => {
-                        fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
-                    }
-                    crate::characteristics::StaticDamageRecipient::TargetAny => {
-                        fam = toolbox_merge_family(fam, Some(OperandFamily::DamageRecipient))?;
-                    }
-                    _ => {}
-                }
-                fam
-            }
-            TemporaryRuleKind::PreventNextTimeDamage {
                 source,
                 source_chosen_color,
                 source_chosen_type,
@@ -8536,6 +8384,14 @@ impl ExecutableBody {
                 if (*source_chosen_color || *source_chosen_type) && !context.has_source() {
                     return Err(DefinitionError::InvalidInstruction);
                 }
+                let mut fam = None;
+                if let Some(amt) = amount {
+                    if matches!(amt.as_ref(), ValueExpr::Literal(v) if !v.is_positive()) {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    amt.validate_amount(defined_slots, context, facts, vocabulary)?;
+                    fam = toolbox_merge_family(fam, amt.required_operand_family(self.target)?)?;
+                }
                 if let Some(f) = source {
                     f.validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -8554,11 +8410,9 @@ impl ExecutableBody {
                 {
                     return Err(DefinitionError::InvalidInstruction);
                 }
-                let mut fam = if *source_is_target {
-                    Some(OperandFamily::Permanent)
-                } else {
-                    None
-                };
+                if *source_is_target {
+                    fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
+                }
                 match recipient {
                     crate::characteristics::StaticDamageRecipient::TargetObject => {
                         fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
@@ -8570,49 +8424,69 @@ impl ExecutableBody {
                 }
                 fam
             }
-            TemporaryRuleKind::ExileSpellOnResolve { filter, players } => {
-                if let Some(f) = filter {
+            TemporaryRuleKind::RedirectNextDamage {
+                source,
+                source_is_target,
+                from,
+                to,
+                amount,
+                ..
+            } => {
+                let mut fam = None;
+                if let Some(amt) = amount {
+                    if matches!(amt.as_ref(), ValueExpr::Literal(v) if !v.is_positive()) {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    amt.validate_amount(defined_slots, context, facts, vocabulary)?;
+                    fam = toolbox_merge_family(fam, amt.required_operand_family(self.target)?)?;
+                }
+                if let Some(f) = source {
                     f.validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
                 }
-                match players {
-                    AffectedPlayers::One(p) => {
-                        p.validate(context, self.target, facts.definitely_exiled_target)?
-                    }
-                    _ => None,
+                if let crate::characteristics::StaticDamageRecipient::MatchingPermanent(f) = from {
+                    f.validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
                 }
-            }
-            TemporaryRuleKind::CastMaxMoreSpellsThisTurn { players, .. } => {
-                players.validate(context, self.target, facts.definitely_exiled_target)?
-            }
-            TemporaryRuleKind::NextSpellAffinity {
-                player,
-                spell_filter,
-                affinity_filter,
-            } => {
-                spell_filter
-                    .validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
-                affinity_filter
-                    .validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
-                player.validate(context, self.target, facts.definitely_exiled_target)?
-            }
-            TemporaryRuleKind::ExileIfLeavesBattlefield { subject } => {
-                subject
-                    .validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
                 if matches!(
-                    subject.as_ref(),
-                    EffectSubject::TargetObject
-                        | EffectSubject::TargetAndSameNameMatching(_)
-                        | EffectSubject::MatchingOtherThanTarget(_)
-                        | EffectSubject::TargetAndSharingColorMatching(_)
-                ) {
-                    Some(OperandFamily::Permanent)
-                } else {
-                    None
+                    from,
+                    crate::characteristics::StaticDamageRecipient::SelfObject
+                        | crate::characteristics::StaticDamageRecipient::AttachedHost
+                ) && !context.has_source()
+                {
+                    return Err(DefinitionError::InvalidInstruction);
                 }
+                if matches!(
+                    to,
+                    crate::characteristics::DamageRedirectTarget::AbilitySource
+                        | crate::characteristics::DamageRedirectTarget::AttachedHost
+                ) && !context.has_source()
+                {
+                    return Err(DefinitionError::InvalidInstruction);
+                }
+                if *source_is_target {
+                    fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
+                }
+                match from {
+                    crate::characteristics::StaticDamageRecipient::TargetObject => {
+                        fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
+                    }
+                    crate::characteristics::StaticDamageRecipient::TargetAny => {
+                        fam = toolbox_merge_family(fam, Some(OperandFamily::DamageRecipient))?;
+                    }
+                    _ => {}
+                }
+                match to {
+                    crate::characteristics::DamageRedirectTarget::TargetObject
+                    | crate::characteristics::DamageRedirectTarget::SecondTargetObject => {
+                        fam = toolbox_merge_family(fam, Some(OperandFamily::Permanent))?;
+                    }
+                    crate::characteristics::DamageRedirectTarget::TargetAny => {
+                        fam = toolbox_merge_family(fam, Some(OperandFamily::DamageRecipient))?;
+                    }
+                    _ => {}
+                }
+                fam
             }
         };
         Ok(fam)

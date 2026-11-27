@@ -1131,8 +1131,7 @@ impl EffectWindow {
             let controller = active.controller;
             let excluded = BTreeSet::new();
             match &active.rule {
-                crate::program::TemporaryRuleKind::TemporaryStatic(_)
-                | crate::program::TemporaryRuleKind::ConditionalTemporaryStatic { .. } => {
+                crate::program::TemporaryRuleKind::TemporaryStatic { .. } => {
                     let Some(ability) = self.active_temporary_static(active, evaluated) else {
                         continue;
                     };
@@ -1356,77 +1355,8 @@ impl EffectWindow {
                         }
                     }
                 }
-                crate::program::TemporaryRuleKind::PreventNextDamage {
+                crate::program::TemporaryRuleKind::PreventDamageShield {
                     amount,
-                    source: source_filter,
-                    recipient,
-                    combat_only,
-                } => {
-                    if self.damage_state.prevention_disallowed_this_turn
-                        || !amount.is_positive()
-                        || (*combat_only && batch.kind() != DamageKind::Combat)
-                    {
-                        continue;
-                    }
-                    let opponents = self
-                        .combat_rules
-                        .opponents(self.window.participants(), controller)?;
-                    for component in batch
-                        .components()
-                        .filter(|component| component.remaining().is_positive())
-                    {
-                        if !component.can_prevent_damage() {
-                            continue;
-                        }
-                        let attempt = component.attempt();
-                        if let Some(filter) = source_filter {
-                            let source_ok = match &attempt.source {
-                                crate::damage::DamageSource::Object { object, .. } => {
-                                    evaluated.get(object.id()).is_some_and(|view| {
-                                        self.matches_object_filter(
-                                            *filter,
-                                            view,
-                                            controller,
-                                            active.source_object,
-                                            &excluded,
-                                            evaluated,
-                                        )
-                                    })
-                                }
-                                _ => false,
-                            };
-                            if !source_ok {
-                                continue;
-                            }
-                        }
-                        let affected =
-                            self.damage_recipient_controller_at(evaluated, attempt.target)?;
-                        let recipient_ok = self.damage_recipient_matches_static(
-                            *recipient,
-                            attempt.target,
-                            affected,
-                            controller,
-                            active.source_object,
-                            active.target,
-                            &opponents,
-                            evaluated,
-                        );
-                        if !recipient_ok {
-                            continue;
-                        }
-                        let application = DamageApplication {
-                            effect: DamageEffectId::TemporaryPrevention(active.id),
-                            scope: DamageScope::Component(attempt.id),
-                        };
-                        if !batch.consumed_shields().contains(&application) {
-                            applications
-                                .entry(application)
-                                .or_default()
-                                .push(attempt.id);
-                        }
-                    }
-                }
-                crate::program::TemporaryRuleKind::PreventNextTimeDamage {
                     source: source_filter,
                     source_chosen_color,
                     source_chosen_type,
@@ -1434,9 +1364,16 @@ impl EffectWindow {
                     half_round_down,
                     recipient,
                     combat_only,
+                    ..
                 } => {
                     if self.damage_state.prevention_disallowed_this_turn
                         || (*combat_only && batch.kind() != DamageKind::Combat)
+                        || amount.as_ref().is_some_and(|expr| {
+                            !matches!(
+                                expr.as_ref(),
+                                crate::program::ValueExpr::Literal(a) if a.is_positive()
+                            )
+                        })
                     {
                         continue;
                     }
@@ -1591,8 +1528,12 @@ impl EffectWindow {
                     amount,
                     ..
                 } => {
-                    if amount.as_ref().is_some_and(|a| !a.is_positive())
-                        || (*combat_only && batch.kind() != DamageKind::Combat)
+                    if amount.as_ref().is_some_and(|expr| {
+                        !matches!(
+                            expr.as_ref(),
+                            crate::program::ValueExpr::Literal(a) if a.is_positive()
+                        )
+                    }) || (*combat_only && batch.kind() != DamageKind::Combat)
                     {
                         continue;
                     }
@@ -2394,10 +2335,8 @@ impl EffectWindow {
                             return None;
                         }
                         match &active.rule {
-                            crate::program::TemporaryRuleKind::TemporaryStatic(ability)
-                            | crate::program::TemporaryRuleKind::ConditionalTemporaryStatic {
-                                ability,
-                                ..
+                            crate::program::TemporaryRuleKind::TemporaryStatic {
+                                ability, ..
                             } => {
                                 if let crate::characteristics::StaticContinuousAbility::DamageRule {
                                     id: ab_id,
@@ -2429,15 +2368,22 @@ impl EffectWindow {
                                 amount,
                                 one_shot,
                                 ..
-                            } => Some(TempDamageAction::Redirect {
-                                controller: active.controller,
-                                source_object: active.source_object,
-                                target: active.target,
-                                second_target: active.second_target,
-                                to: *to,
-                                amount: amount.clone(),
-                                one_shot: *one_shot,
-                            }),
+                            } => {
+                                let resolved_amount = match amount.as_deref() {
+                                    Some(crate::program::ValueExpr::Literal(a)) => Some(a.clone()),
+                                    Some(_) => return None,
+                                    None => None,
+                                };
+                                Some(TempDamageAction::Redirect {
+                                    controller: active.controller,
+                                    source_object: active.source_object,
+                                    target: active.target,
+                                    second_target: active.second_target,
+                                    to: *to,
+                                    amount: resolved_amount,
+                                    one_shot: *one_shot,
+                                })
+                            }
                             _ => None,
                         }
                     })
@@ -2483,9 +2429,11 @@ impl EffectWindow {
                                     self.temporary_rules.iter_mut().find(|a| a.id == rule_id)
                                 {
                                     if let crate::program::TemporaryRuleKind::RedirectNextDamage {
-                                        amount: Some(cur),
+                                        amount: Some(expr),
                                         ..
                                     } = &mut active.rule
+                                        && let crate::program::ValueExpr::Literal(cur) =
+                                            expr.as_mut()
                                     {
                                         *cur = cur.minus(&moved);
                                         if !cur.is_positive() {
@@ -2886,18 +2834,22 @@ impl EffectWindow {
                         if active.id != rule_id || active.consumed {
                             return None;
                         }
-                        match &active.rule {
-                            crate::program::TemporaryRuleKind::PreventNextDamage {
-                                amount, ..
-                            } if amount.is_positive() => {
-                                Some((active.source_object, Some(amount.clone()), false))
+                        let crate::program::TemporaryRuleKind::PreventDamageShield {
+                            amount,
+                            half_round_down,
+                            ..
+                        } = &active.rule
+                        else {
+                            return None;
+                        };
+                        let resolved = match amount.as_deref() {
+                            Some(crate::program::ValueExpr::Literal(a)) if a.is_positive() => {
+                                Some(a.clone())
                             }
-                            crate::program::TemporaryRuleKind::PreventNextTimeDamage {
-                                half_round_down,
-                                ..
-                            } => Some((active.source_object, None, *half_round_down)),
-                            _ => None,
-                        }
+                            Some(_) => return None,
+                            None => None,
+                        };
+                        Some((active.source_object, resolved, *half_round_down))
                     })
                     .ok_or(DamageError::InapplicableEffect)?;
                 let prevented = match shield_amount {
@@ -2913,18 +2865,22 @@ impl EffectWindow {
                     .temporary_rules
                     .iter_mut()
                     .find(|active| active.id == rule_id)
+                    && let crate::program::TemporaryRuleKind::PreventDamageShield {
+                        amount,
+                        one_shot,
+                        ..
+                    } = &mut active.rule
                 {
-                    match &mut active.rule {
-                        crate::program::TemporaryRuleKind::PreventNextDamage { amount, .. } => {
-                            *amount = amount.minus(&prevented).max(0.into());
-                            if !amount.is_positive() {
-                                active.consumed = true;
-                            }
-                        }
-                        crate::program::TemporaryRuleKind::PreventNextTimeDamage { .. } => {
+                    if let Some(expr) = amount
+                        && let crate::program::ValueExpr::Literal(cur) = expr.as_mut()
+                    {
+                        *cur = cur.minus(&prevented).max(0.into());
+                        if !cur.is_positive() {
                             active.consumed = true;
                         }
-                        _ => {}
+                    }
+                    if *one_shot {
+                        active.consumed = true;
                     }
                 }
                 source_obj.map(|source| RulesOccurrence::StaticDamagePrevented {

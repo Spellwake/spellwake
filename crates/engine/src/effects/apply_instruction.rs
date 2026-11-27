@@ -152,8 +152,9 @@ impl EffectWindow {
                             .results
                             .countered_spell_controller = Some((countered, controller));
                         let temp_exile_countered = self.temporary_rules.iter().any(|active| {
-                            let crate::program::TemporaryRuleKind::ExileSpellOnResolve {
+                            let crate::program::TemporaryRuleKind::ExileReplacement {
                                 filter,
+                                trigger: crate::program::TemporaryExileTrigger::SpellResolves,
                                 ..
                             } = &active.rule
                             else {
