@@ -10,6 +10,7 @@ pub mod condition;
 pub mod cost;
 pub mod filter;
 pub mod ir;
+pub mod keywords;
 pub mod lexer;
 pub mod parser;
 pub mod replacement;

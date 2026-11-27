@@ -68,9 +68,28 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
 
     let mut i = 0;
     while i < lines.len() {
-        let line = &lines[i];
+        let raw_line = &lines[i];
+        let line_owned = strip_ability_word_prefix(raw_line);
+        let line = line_owned.as_str();
 
-        // 1. Modal block (`Choose two —` followed by `• ...` lines)
+        // 0. `As an additional cost to cast this spell/~, <cost>.` (works on BOTH spells and permanents!)
+        if (line
+            .to_ascii_lowercase()
+            .starts_with("as an additional cost to cast this spell,")
+            || line
+                .to_ascii_lowercase()
+                .starts_with("as an additional cost to cast ~,"))
+            && let Ok(toks) = tokenize(line)
+        {
+            let mut st_ts = TokenStream::new(line, &toks, vocab, ParseStage::Static);
+            if let Ok(st) = parse_static_ability(&mut st_ts) {
+                out.statics.push(st);
+                i += 1;
+                continue;
+            }
+        }
+
+        // 1. Modal block (`Choose one —`, `Choose one or both —`, `Choose two —`, etc. followed by `• ...` lines)
         if let Some(count) = parse_modal_header(line) {
             let mut modes = Vec::new();
             i += 1;
@@ -90,7 +109,7 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                     },
                     stage: ParseStage::Effect,
                     message: "modal header with zero modes".to_string(),
-                    text: line.clone(),
+                    text: line.to_string(),
                 });
             } else {
                 out.spell_effects.push(Effect::PromptChoice {
@@ -171,7 +190,7 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                     },
                     stage: ParseStage::Cost,
                     message: format!("invalid loyalty delta `{delta_str}`"),
-                    text: line.clone(),
+                    text: line.to_string(),
                 }),
                 (_, Err(errs)) => out.errors.extend(errs),
             }
@@ -179,7 +198,7 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 5. Activated ability (`<cost>: <body>`)
+        // 5. Activated ability (`<cost>: <body>`, including inline modal `Choose one —` + `•` lines!)
         if !is_spell && let Some((cost_str, body_str)) = split_cost_and_effect(line) {
             let cost_res = tokenize(cost_str).and_then(|toks| {
                 let mut ts = TokenStream::new(cost_str, &toks, vocab, ParseStage::Cost);
@@ -187,12 +206,45 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                 ts.expect_eof()?;
                 Ok(c)
             });
+            if let Some(count) = parse_modal_header(body_str) {
+                let mut modes = Vec::new();
+                i += 1;
+                while i < lines.len() && lines[i].starts_with(BULLET) {
+                    let mode_text = lines[i].trim_start_matches(BULLET).trim();
+                    match parse_effect_body_str(mode_text, vocab) {
+                        Ok(body) => modes.push(ModalMode { body }),
+                        Err(errs) => out.errors.extend(errs),
+                    }
+                    i += 1;
+                }
+                match cost_res {
+                    Ok(cost) if !modes.is_empty() => out.abilities.push(Ability::Activated {
+                        cost,
+                        body: vec![Effect::PromptChoice {
+                            chooser: PlayerRef::You,
+                            kind: ChoiceKind::Modal { count, modes },
+                        }],
+                        restrictions: Vec::new(),
+                    }),
+                    Ok(_) => out.errors.push(ParseError {
+                        span: Span {
+                            start: 0,
+                            end: line.len(),
+                        },
+                        stage: ParseStage::Effect,
+                        message: "modal activated ability with zero modes".to_string(),
+                        text: line.to_string(),
+                    }),
+                    Err(e) => out.errors.push(e),
+                }
+                continue;
+            }
             match (cost_res, parse_effect_body_str(body_str, vocab)) {
                 (Ok(cost), Ok(mut body)) => {
                     let mut restrictions = Vec::new();
                     body.retain(|eff| match eff {
                         Effect::Restriction(rs) => {
-                            restrictions.extend(rs.iter().copied());
+                            restrictions.extend(rs.iter().cloned());
                             false
                         }
                         _ => true,
@@ -210,8 +262,49 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 6. Triggered ability (`When/Whenever/At the beginning of ..., <body>`)
+        // 6. Triggered ability (`When/Whenever/At the beginning of ..., <body>`, including inline modal!)
         if !is_spell && is_trigger_line(line) {
+            if let Some((header_part, modal_count)) = split_triggered_modal_header(line) {
+                let mut modes = Vec::new();
+                i += 1;
+                while i < lines.len() && lines[i].starts_with(BULLET) {
+                    let mode_text = lines[i].trim_start_matches(BULLET).trim();
+                    match parse_effect_body_str(mode_text, vocab) {
+                        Ok(body) => modes.push(ModalMode { body }),
+                        Err(errs) => out.errors.extend(errs),
+                    }
+                    i += 1;
+                }
+                match tokenize(header_part).and_then(|toks| {
+                    let mut ts = TokenStream::new(header_part, &toks, vocab, ParseStage::Trigger);
+                    let trig = parse_trigger_header(&mut ts)?;
+                    let _ = ts.eat_comma();
+                    ts.expect_eof()?;
+                    Ok(trig)
+                }) {
+                    Ok(trigger) if !modes.is_empty() => out.abilities.push(Ability::Triggered {
+                        trigger,
+                        body: vec![Effect::PromptChoice {
+                            chooser: PlayerRef::You,
+                            kind: ChoiceKind::Modal {
+                                count: modal_count,
+                                modes,
+                            },
+                        }],
+                    }),
+                    Ok(_) => out.errors.push(ParseError {
+                        span: Span {
+                            start: 0,
+                            end: line.len(),
+                        },
+                        stage: ParseStage::Effect,
+                        message: "modal trigger with zero modes".to_string(),
+                        text: line.to_string(),
+                    }),
+                    Err(e) => out.errors.push(e),
+                }
+                continue;
+            }
             match parse_triggered_line(line, vocab) {
                 Ok(ab) => out.abilities.push(ab),
                 Err(errs) => out.errors.extend(errs),
@@ -220,15 +313,16 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 7. Standalone keyword line (`Flying, vigilance`)
+        // 7. Standalone keyword line (`Flying, vigilance`, `Kicker—Sacrifice an artifact.`)
         if let Ok(toks) = tokenize(line) {
             let mut ts = TokenStream::new(line, &toks, vocab, ParseStage::Face);
-            if let Ok((kws, _)) = parse_keyword_list(&mut ts)
-                && ts.is_eof()
-            {
-                out.keywords.extend(kws);
-                i += 1;
-                continue;
+            if let Ok((kws, _)) = parse_keyword_list(&mut ts) {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    out.keywords.extend(kws);
+                    i += 1;
+                    continue;
+                }
             }
         }
 
@@ -265,6 +359,17 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
     out
 }
 
+fn split_triggered_modal_header(line: &str) -> Option<(&str, ChoiceCount)> {
+    let trimmed = line.trim();
+    if !trimmed.ends_with(EM_DASH) {
+        return None;
+    }
+    let idx = trimmed.rfind(", choose ")?;
+    let modal_part = &trimmed[idx + 2..];
+    let count = parse_modal_header(modal_part)?;
+    Some((&trimmed[..idx], count))
+}
+
 fn parse_modal_header(line: &str) -> Option<ChoiceCount> {
     let low = line.trim().to_ascii_lowercase();
     let head = low.strip_suffix(EM_DASH)?.trim();
@@ -272,10 +377,58 @@ fn parse_modal_header(line: &str) -> Option<ChoiceCount> {
         "choose one" => Some(ChoiceCount::Exact(1)),
         "choose two" => Some(ChoiceCount::Exact(2)),
         "choose three" => Some(ChoiceCount::Exact(3)),
+        "choose one or both" => Some(ChoiceCount::OneOrBoth),
+        "choose one or more" => Some(ChoiceCount::OneOrMore),
+        "choose up to one" => Some(ChoiceCount::UpTo(1)),
         "choose up to two" => Some(ChoiceCount::UpTo(2)),
+        "choose up to three" => Some(ChoiceCount::UpTo(3)),
+        "choose x" => Some(ChoiceCount::VariableX),
         "choose any number" => Some(ChoiceCount::AnyNumber),
         _ => None,
     }
+}
+
+/// Strip CR 207.2c flavor-only ability word prefix (`Landfall — ...`, `Threshold — ...`,
+/// `Channel — ...`, `Heroic — ...`, etc.) while preserving modal, saga, spree, case, and sticker lines.
+fn strip_ability_word_prefix(line: &str) -> String {
+    let Some((prefix, rest)) = line.split_once(" \u{2014} ") else {
+        return line.to_string();
+    };
+    let p = prefix.trim();
+    if p.is_empty() || p.len() > 30 || p.contains('{') || p.contains('+') {
+        return line.to_string();
+    }
+    let low = p.to_ascii_lowercase();
+    // Preserve structural em-dash headers (modal, saga, case, villainous choice)
+    if low.starts_with("choose ")
+        || low.contains("villainous choice")
+        || matches!(
+            low.as_str(),
+            "i" | "ii" | "iii" | "iv" | "v" | "vi" | "to solve" | "solved"
+        )
+        || low.contains("i, ")
+    {
+        return line.to_string();
+    }
+    // Only strip recognized CR 207.2c ability words (all words alphabetic/hyphen/digit, <= 3 words)
+    let words: Vec<&str> = p.split_whitespace().collect();
+    if words.len() <= 3
+        && words.iter().all(|w| {
+            w.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '\'')
+        })
+        && words
+            .first()
+            .and_then(|w| w.chars().next())
+            .is_some_and(|c| c.is_ascii_uppercase())
+        && !low.starts_with("when ")
+        && !low.starts_with("whenever ")
+        && !low.starts_with("if ")
+        && !low.starts_with("as ")
+    {
+        return rest.trim().to_string();
+    }
+    line.to_string()
 }
 
 fn roman_to_u8(s: &str) -> Option<u8> {

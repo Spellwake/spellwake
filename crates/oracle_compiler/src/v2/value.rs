@@ -44,6 +44,40 @@ pub fn parse_value_expr(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         ts.restore(cp);
     }
 
+    // `the greatest/least <stat> among <filter>`
+    {
+        let cp = ts.checkpoint();
+        let agg = if ts.eat_phrase(&["the", "greatest"]) || ts.eat_phrase(&["the", "highest"]) {
+            Some(AggregateOp::Max)
+        } else if ts.eat_phrase(&["the", "least"]) || ts.eat_phrase(&["the", "lowest"]) {
+            Some(AggregateOp::Min)
+        } else {
+            None
+        };
+        if let Some(op) = agg {
+            let stat = if ts.eat_phrase(&["mana", "value"]) {
+                Some(StatKind::ManaValue)
+            } else if ts.eat_word("power") {
+                Some(StatKind::Power)
+            } else if ts.eat_word("toughness") {
+                Some(StatKind::Toughness)
+            } else {
+                None
+            };
+            if let Some(stat) = stat
+                && (ts.eat_word("among") || ts.eat_word("of"))
+                && let Ok(flt) = try_parse(ts, parse_object_filter)
+            {
+                return Ok(ValueExpr::AggregateStat {
+                    op,
+                    stat,
+                    filter: Box::new(flt),
+                });
+            }
+        }
+        ts.restore(cp);
+    }
+
     // `the total power/toughness/mana value of <filter>`
     if ts.eat_phrase(&["the", "total", "power", "of"]) {
         let flt = parse_object_filter(ts)?;
@@ -77,6 +111,39 @@ pub fn parse_value_expr(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         // Optional trailing `at that time` (e.g. delayed trigger X binding)
         let _ = ts.eat_phrase(&["at", "that", "time"]);
         return Ok(ValueExpr::Count(Box::new(flt)));
+    }
+
+    // `~'s power` / `~'s toughness` / `that creature's power` / `that creature's toughness`
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_tilde() {
+            let _ = ts.eat_word("'s");
+            if ts.eat_word("power") {
+                return Ok(ValueExpr::ObjectStat {
+                    subject: Box::new(SubjectRef::SelfObject),
+                    stat: StatKind::Power,
+                });
+            }
+            if ts.eat_word("toughness") {
+                return Ok(ValueExpr::ObjectStat {
+                    subject: Box::new(SubjectRef::SelfObject),
+                    stat: StatKind::Toughness,
+                });
+            }
+        }
+        ts.restore(cp);
+    }
+    if ts.eat_phrase(&["that", "creature's", "power"]) {
+        return Ok(ValueExpr::ObjectStat {
+            subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThatCreature)),
+            stat: StatKind::Power,
+        });
+    }
+    if ts.eat_phrase(&["that", "creature's", "toughness"]) {
+        return Ok(ValueExpr::ObjectStat {
+            subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThatCreature)),
+            stat: StatKind::Toughness,
+        });
     }
 
     // `its mana value` / `its power` / `its toughness`
