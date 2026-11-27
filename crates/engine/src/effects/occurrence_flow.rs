@@ -3491,7 +3491,6 @@ impl EffectWindow {
                 work.replacements = None;
             } else {
                 self.linked_return_work = Some(LinkedReturnWork {
-                    library_bottom: None,
                     origin: LinkedReturnOrigin::Exile,
                     wake_entry: None,
                     objects: linked,
@@ -3859,7 +3858,6 @@ impl EffectWindow {
                         )
                 ),
             },
-            library_bottom: None,
             wake_entry: None,
             objects,
             orders: BTreeMap::new(),
@@ -3893,7 +3891,6 @@ impl EffectWindow {
         self.linked_return_work = Some(LinkedReturnWork {
             origin,
             objects,
-            library_bottom: None,
             wake_entry: None,
             orders: BTreeMap::new(),
             graveyard_orders: BTreeMap::new(),

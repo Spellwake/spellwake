@@ -909,7 +909,6 @@ impl EffectWindow {
                 .collect::<Vec<_>>();
             if !objects.is_empty() {
                 self.linked_return_work = Some(LinkedReturnWork {
-                    library_bottom: None,
                     origin: LinkedReturnOrigin::Graveyard {
                         player: Some(player),
                         controller: None,

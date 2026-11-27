@@ -34,7 +34,6 @@ mod library_rewrite;
 mod ninja;
 mod speed;
 mod splice;
-mod votes;
 pub(crate) use combat_flow::AttackAllocationCut;
 mod ability_activation;
 mod apply_instruction;
@@ -556,7 +555,6 @@ impl LinkedReturnOrigin {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LinkedReturnWork {
-    library_bottom: Option<Vec<ObjectId>>,
     origin: LinkedReturnOrigin,
     wake_entry: Option<StackEntryId>,
     objects: Vec<ObjectId>,

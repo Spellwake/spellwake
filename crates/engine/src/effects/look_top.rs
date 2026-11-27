@@ -503,7 +503,6 @@ impl EffectWindow {
                     instruction: frame.instruction(),
                 },
                 objects,
-                library_bottom: None,
                 wake_entry: None,
                 orders: BTreeMap::new(),
                 graveyard_orders: BTreeMap::new(),

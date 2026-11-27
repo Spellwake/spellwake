@@ -1176,7 +1176,6 @@ impl EffectWindow {
                                 instruction: index,
                             },
                             objects: vec![manifest_id],
-                            library_bottom: None,
                             wake_entry: None,
                             orders: BTreeMap::new(),
                             graveyard_orders: BTreeMap::new(),
