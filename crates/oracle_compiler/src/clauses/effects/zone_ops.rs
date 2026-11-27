@@ -1730,6 +1730,7 @@ pub(super) fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<
 
     let any_number = flt_part_raw.starts_with("any number of ") || flt_part_raw.starts_with("all ");
     let up_to = flt_part_raw.starts_with("up to ");
+    let exact = flt_part_raw.starts_with("exactly ");
     let flt_clean = flt_part_raw
         .strip_prefix("any number of ")
         .or_else(|| flt_part_raw.strip_prefix("all "))
@@ -1856,7 +1857,7 @@ pub(super) fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<
         rest_to_zone,
         modifier,
         follow_up,
-        exact: false,
+        exact,
     };
     let wrapped = match opt_player {
         Some(PlayerRefAst::You) => InstructionAst::Optional(vec![search_ins]),

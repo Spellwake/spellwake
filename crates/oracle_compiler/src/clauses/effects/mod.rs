@@ -4520,8 +4520,17 @@ pub fn parse_atomic_effect(
         .split_once(" enters with ")
         .or_else(|| low.split_once(" enter with "))
         && let Some((mid, val_raw)) = rest.split_once(" on it equal to ")
-        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
         && let Ok(val) = parse_value_expr(val_raw.trim(), vocab)
+        && let Some(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
+            .ok()
+            .or_else(|| {
+                subj_raw
+                    .trim()
+                    .strip_prefix("the next ")
+                    .and_then(|r| r.strip_suffix(" you cast this turn"))
+                    .and_then(|f| parse_object_filter(f.trim(), vocab).ok())
+                    .map(|flt| SubjectRefAst::Group(Box::new(flt)))
+            })
     {
         let m = mid
             .trim()

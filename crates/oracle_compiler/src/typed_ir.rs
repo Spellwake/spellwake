@@ -1243,7 +1243,7 @@ pub fn parse_duration_text(raw: &str, vocab: &Vocabulary) -> Option<ParsedDurati
 
     match low.as_str() {
         "now" | "immediate" | "instant" => Some(ParsedDurationAst::Immediate),
-        "until end of turn" | "until_end_of_turn" | "this turn" => {
+        "until end of turn" | "until_end_of_turn" | "this turn" | "this_turn" => {
             Some(ParsedDurationAst::Structured(DurationAst::UntilEndOfTurn))
         }
         "until end of combat" | "until_end_of_combat" | "this combat" => {
@@ -1266,21 +1266,23 @@ pub fn parse_duration_text(raw: &str, vocab: &Vocabulary) -> Option<ParsedDurati
         | "for as long as they remain exiled"
         | "as long as it remains exiled"
         | "for as long as that card remains exiled"
-        | "for as long as those cards remain exiled" => Some(ParsedDurationAst::ForAsLongAsExiled),
-        "for as long as you control ~" | "as long as you control ~" => {
+        | "for as long as those cards remain exiled"
+        | "while_exiled"
+        | "until_next_exile" => Some(ParsedDurationAst::ForAsLongAsExiled),
+        "for as long as you control ~" | "as long as you control ~" | "while_control_self" => {
             Some(ParsedDurationAst::ForAsLongAsControlled)
         }
         "during your turn" => Some(ParsedDurationAst::DuringTurn(PlayerRefAst::You)),
         "during that player's turn" | "during their turn" => {
             Some(ParsedDurationAst::DuringTurn(PlayerRefAst::ThatPlayer))
         }
-        "until your next end step" | "until the beginning of your next end step" => {
-            Some(ParsedDurationAst::UntilStep {
-                player: Some(PlayerRefAst::You),
-                step: TurnStepAst::EndStep,
-                next_turn: true,
-            })
-        }
+        "until your next end step"
+        | "until the beginning of your next end step"
+        | "until_your_next_step" => Some(ParsedDurationAst::UntilStep {
+            player: Some(PlayerRefAst::You),
+            step: TurnStepAst::EndStep,
+            next_turn: true,
+        }),
         "until the beginning of your next upkeep" | "until your next upkeep" => {
             Some(ParsedDurationAst::UntilStep {
                 player: Some(PlayerRefAst::You),
