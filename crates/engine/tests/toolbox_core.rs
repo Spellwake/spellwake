@@ -2968,3 +2968,192 @@ fn phase9_mutate_object_solve_case_and_advance_class_level() {
         "MutateObject::AdvanceClassLevel(2) must emit ClassLevelReached(2)"
     );
 }
+
+#[test]
+fn phase10_mutate_player_bind_resolution_x_and_draw_cards_compose() {
+    let vocab = vocabulary();
+    let spell = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![
+                    Instruction::MutatePlayer(Box::new(MutatePlayerSpec::bind_resolution_x(
+                        ValueExpr::literal(2),
+                    ))),
+                    Instruction::DrawCards(Box::new(DrawCardsSpec::simple(
+                        PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                        ValueExpr::chosen_x(),
+                    ))),
+                ],
+            ),
+        ),
+        &vocab,
+    );
+    let game = init_world(
+        vocab,
+        vec![
+            in_hand(1, P0, spell),
+            in_library(2, P0, bear(2, 2, BTreeSet::new(), &vocabulary())),
+            in_library(3, P0, bear(2, 2, BTreeSet::new(), &vocabulary())),
+        ],
+    );
+    let after = cast_untargeted(&game, 1).into_state();
+    let hand_count = after
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Hand(P0))
+        .count();
+    assert_eq!(
+        hand_count, 2,
+        "MutatePlayer::BindResolutionX(2) followed by DrawCards(X) must draw 2 cards"
+    );
+}
+
+#[test]
+fn phase10_mutate_object_create_token_copy_clones_target_creature() {
+    let vocab = vocabulary();
+    let spell = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![Instruction::MutateObject(Box::new(
+                    MutateObjectSpec::create_token_copy(
+                        ObjectQuery::Targets,
+                        Box::new(spellwake_engine::toolbox::TokenCopySpec {
+                            count: ValueExpr::literal(1),
+                            recipients: spellwake_engine::token::TokenRecipients::Controller,
+                            enters_tapped: false,
+                            enters_attacking: false,
+                            haste: false,
+                            sacrifice_at_end_step: false,
+                            exile_at_end_step: false,
+                            nonlegendary: false,
+                            extra_types: BTreeSet::new(),
+                            extra_subtypes: BTreeSet::new(),
+                            extra_keywords: BTreeSet::new(),
+                            override_pt: None,
+                            extra_colors: BTreeSet::new(),
+                            override_colors: None,
+                            strip_mana_cost: false,
+                            defender_scope:
+                                spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                        }),
+                    ),
+                ))],
+            ),
+        ),
+        &vocab,
+    );
+    let elf = vocab.resolve_label("Elf").expect("Elf in vocab");
+    let creature = validated(
+        Program::creature(None, 3.into(), 3.into(), BTreeSet::from([elf])),
+        &vocab,
+    );
+    let game = init_world(vocab, vec![in_hand(1, P0, spell), bf(2, P0, creature)]);
+    let cast = submit(
+        &game,
+        P0,
+        GameCommand::Cast {
+            spell: object(&game, 1),
+            target: TargetRef::Object(object(&game, 2)),
+        },
+    );
+    let resolved = pass_pair(cast.state());
+    let created_tokens = resolved
+        .state()
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|obj| obj.card_id().is_none() && obj.zone() == ObjectZone::Battlefield)
+        .count();
+    assert_eq!(
+        created_tokens,
+        1,
+        "MutateObject::CreateTokenCopy(Targets, 1) must create 1 token copy; occs={:?}",
+        all_occurrences(&resolved)
+    );
+}
+
+#[test]
+fn phase10_mutate_object_remember_target_and_destroy_gives_controller_token() {
+    let vocab = vocabulary();
+    let saproling = vocab
+        .resolve_label("Saproling")
+        .expect("Saproling in vocab");
+    let token_def = spellwake_engine::token::TokenDefinition::new(
+        Program::creature(None, 3.into(), 3.into(), BTreeSet::from([saproling])),
+        spellwake_engine::token::TokenName::Default {
+            ordered_subtypes: vec![spellwake_engine::token::TokenSubtype::Creature(saproling)],
+        },
+        &vocab,
+    )
+    .expect("token definition");
+    let spell = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![
+                    Instruction::MutateObject(Box::new(
+                        MutateObjectSpec::remember_permanent_target(),
+                    )),
+                    Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                        ObjectQuery::Targets,
+                        ZoneDest::Graveyard {
+                            semantics: GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ))),
+                    Instruction::CreateTokens {
+                        creations: vec![spellwake_engine::token::TokenCreation {
+                            definition: token_def,
+                            amount: ValueExpr::literal(1),
+                            base_size: None,
+                            enters_tapped: false,
+                            recipients:
+                                spellwake_engine::token::TokenRecipients::RememberedTargetController,
+                            attacking_defender: None,
+                        }],
+                    },
+                ],
+            ),
+        ),
+        &vocab,
+    );
+    let creature = bear(2, 2, BTreeSet::new(), &vocab);
+    let game = init_world(vocab, vec![in_hand(1, P0, spell), bf(2, P1, creature)]);
+    let target_id = object(&game, 2);
+    let cast = submit(
+        &game,
+        P0,
+        GameCommand::Cast {
+            spell: object(&game, 1),
+            target: TargetRef::Object(target_id),
+        },
+    );
+    let resolved = pass_pair(cast.state());
+    assert!(
+        all_occurrences(&resolved).iter().any(
+            |occ| matches!(occ, RulesOccurrence::TokenCreated { creator, .. } if *creator == P1)
+        ),
+        "RememberPermanentTarget + Destroy + CreateTokens(RememberedTargetController) must give P1 the token"
+    );
+    let after = resolved.into_state();
+    assert_eq!(
+        after
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Graveyard(P1),
+        "target creature must be destroyed into P1's graveyard"
+    );
+}

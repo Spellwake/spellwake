@@ -80,9 +80,11 @@ pub(super) fn compile(
         let effect = ability.strip_prefix(
             "At the beginning of combat on your turn, if you control your commander, ",
         )?;
-        let mut body = vec![Instruction::RequireCondition(
-            spellwake_engine::program::InterveningCondition::OwnCommander,
-        )];
+        let mut body = vec![Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
+                spellwake_engine::program::InterveningCondition::OwnCommander,
+            ),
+        ))];
         match effect {
             "draw a card." => body.push(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(

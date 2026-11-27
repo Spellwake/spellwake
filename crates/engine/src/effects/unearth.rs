@@ -15,45 +15,52 @@ impl EffectWindow {
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
         let reason = match operation {
-            Instruction::Unearth => ZoneReason::UnearthReturn,
-            Instruction::ExileUnearthed(_) => ZoneReason::UnearthExile,
+            Instruction::MutateObject(spec) => match &spec.op {
+                crate::toolbox::ObjectMutation::Unearth => ZoneReason::UnearthReturn,
+                crate::toolbox::ObjectMutation::ExileUnearthed(_) => ZoneReason::UnearthExile,
+                _ => return Err(EffectError::InconsistentProgram),
+            },
             _ => return Err(EffectError::InconsistentProgram),
         };
+        let is_unearth = reason == ZoneReason::UnearthReturn;
         let cause = EventCause::Instruction {
             entry: entry.id(),
             instruction: index,
         };
         let (object, destination) = match operation {
-            Instruction::Unearth => {
-                let StackKind::ActivatedAbility { source } = entry.kind() else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                if self
-                    .window
-                    .cards()
-                    .get(source.id())
-                    .is_none_or(|c| c.zone() != ObjectZone::Graveyard(entry.controller()))
-                {
-                    return Ok(());
+            Instruction::MutateObject(spec) => match &spec.op {
+                crate::toolbox::ObjectMutation::Unearth => {
+                    let StackKind::ActivatedAbility { source } = entry.kind() else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    if self
+                        .window
+                        .cards()
+                        .get(source.id())
+                        .is_none_or(|c| c.zone() != ObjectZone::Graveyard(entry.controller()))
+                    {
+                        return Ok(());
+                    }
+                    (
+                        source.id(),
+                        ObjectDestination::Battlefield {
+                            controller: entry.controller(),
+                        },
+                    )
                 }
-                (
-                    source.id(),
-                    ObjectDestination::Battlefield {
-                        controller: entry.controller(),
-                    },
-                )
-            }
-            Instruction::ExileUnearthed(object) => {
-                if self
-                    .window
-                    .cards()
-                    .get(*object)
-                    .is_none_or(|c| c.zone() != ObjectZone::Battlefield)
-                {
-                    return Ok(());
+                crate::toolbox::ObjectMutation::ExileUnearthed(object) => {
+                    if self
+                        .window
+                        .cards()
+                        .get(*object)
+                        .is_none_or(|c| c.zone() != ObjectZone::Battlefield)
+                    {
+                        return Ok(());
+                    }
+                    (*object, ObjectDestination::Exile)
                 }
-                (*object, ObjectDestination::Exile)
-            }
+                _ => return Err(EffectError::InconsistentProgram),
+            },
             _ => return Err(EffectError::InconsistentProgram),
         };
         let before = self.rules_snapshot(None)?;
@@ -73,7 +80,7 @@ impl EffectWindow {
             .cards()
             .current_identity(card)
             .ok_or(EffectError::InconsistentProgram)?;
-        if *operation == Instruction::Unearth {
+        if is_unearth {
             self.stage_resolution_entry_choice(object, after)?;
             self.characteristics.register_battlefield_entry(after)?;
             self.apply_entry_counters(&before, after, PowerToughnessCounters::default(), 0)?;
@@ -103,7 +110,7 @@ impl EffectWindow {
                 )?])
             },
         )?;
-        if *operation == Instruction::Unearth {
+        if is_unearth {
             let before_haste = self.rules_snapshot(None)?;
             let parts = ResolvedParts(vec![ResolvedPart::Abilities(AbilityChange {
                 granted_keywords: BTreeSet::from([KeywordAbility::Haste]),

@@ -413,11 +413,22 @@ impl EffectWindow {
         };
         for idx in outer_indices {
             match &mut instructions[idx] {
-                Instruction::FlipCoins {
-                    lose_destination: Some(destination),
-                    ..
-                }
-                | Instruction::BranchIfFalse { destination, .. }
+                Instruction::MutatePlayer(spec) => match &mut spec.op {
+                    crate::toolbox::PlayerMutation::FlipCoins {
+                        lose_destination: Some(destination),
+                        ..
+                    } => remap(destination),
+                    crate::toolbox::PlayerMutation::OfferSourceCounters {
+                        placed_destination,
+                        declined_destination,
+                        ..
+                    } => {
+                        remap(placed_destination);
+                        remap(declined_destination);
+                    }
+                    _ => {}
+                },
+                Instruction::BranchIfFalse { destination, .. }
                 | Instruction::Jump { destination } => remap(destination),
                 Instruction::OfferDynamicManaPayment {
                     paid_destination,
@@ -425,14 +436,6 @@ impl EffectWindow {
                     ..
                 } => {
                     remap(paid_destination);
-                    remap(declined_destination);
-                }
-                Instruction::OfferSourceCounters {
-                    placed_destination,
-                    declined_destination,
-                    ..
-                } => {
-                    remap(placed_destination);
                     remap(declined_destination);
                 }
                 _ => {}

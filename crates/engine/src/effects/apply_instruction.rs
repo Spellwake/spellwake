@@ -50,11 +50,7 @@ impl EffectWindow {
                 InstructionCut::Ready(occurrence)
             }
             Instruction::AffectPermanentTargets { .. }
-            | Instruction::ExileOnePerPlayerUntilSourceLeaves
-            | Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::DamageFromGrantingPermanent { .. }
             | Instruction::Sacrifice { .. }
-            | Instruction::SacrificeRandomUntilLand
             | Instruction::Discard { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
@@ -62,19 +58,11 @@ impl EffectWindow {
             | Instruction::OptionalEffect { .. }
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
-            | Instruction::RememberPermanentTarget
-            | Instruction::ChooseRevealedHandCard { .. }
-            | Instruction::ExileDefeatedSiege
             | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::RollDie { .. }
-            | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Connive { .. }
-            | Instruction::ConniveFinalize { .. }
-            | Instruction::Discover { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
             | Instruction::ZoneOp(_)
@@ -92,60 +80,15 @@ impl EffectWindow {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::BindResolutionX(_)
-            | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
             | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::OfferAnyPlayer { .. }
             | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::CreateTokenCopyExt { .. }
-            | Instruction::ResolvePowerAbility(_)
-            | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::OfferSourceCounters { .. }
-            | Instruction::RequireCondition(_)
-            | Instruction::Encore
-            | Instruction::ReturnExiledTargetCohort { .. }
-            | Instruction::ExileDelayedObjects(_)
-            | Instruction::ReturnEarthbentCard
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Ninjutsu
-            | Instruction::Unearth
-            | Instruction::Cascade
-            | Instruction::CascadeBottom
-            | Instruction::Myriad
-            | Instruction::CopyCapturedAbility
-            | Instruction::CopyOnCast(_)
-            | Instruction::MadnessCast
-            | Instruction::MiracleCast(_)
-            | Instruction::CastDefeatedSiege
-            | Instruction::ReboundCast(_)
-            | Instruction::EndStepCast { .. }
-            | Instruction::SacrificeDelayedObjects(_)
-            | Instruction::ScheduleArtifactReturn(_)
-            | Instruction::ReturnDelayedGraveyardCard(_)
-            | Instruction::ReturnDelayedPermanentToHand(_)
-            | Instruction::ReturnDelayedExileWithCounters(_)
-            | Instruction::ReturnDelayedExile(_)
-            | Instruction::ExileUnearthed(_)
-            | Instruction::ResolveTransfer(_)
-            | Instruction::ExtortDrain
-            | Instruction::ResolveGrowth(_)
-            | Instruction::ResolveCounterKeyword(_)
-            | Instruction::SacrificeEvoked
-            | Instruction::SacrificeStateTriggerSource
-            | Instruction::ResolveKeywordTrigger(_)
-            | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::FixedTargetClause(_)
-            | Instruction::ReturnGraveyardCreatureWithCorpse(_)
-            | Instruction::PutHandPermanentsOntoBattlefield { .. }
-            | Instruction::MayRevealLibraryTop
-            | Instruction::ChooseFoundSpell
-            | Instruction::CastFoundSpell(_)
             | Instruction::SearchLibrary { .. }
             | Instruction::ChooseCreatureType { .. } => {
                 return Err(EffectError::InconsistentProgram);
@@ -401,6 +344,7 @@ impl EffectWindow {
                         let snapshot = self.capture_copy_source(original, 0.into())?;
                         InstructionCut::Ready(self.create_copy(&snapshot, actor, selected)?)
                     }
+                    _ => return Err(EffectError::InconsistentProgram),
                 }
             }
         };

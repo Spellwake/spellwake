@@ -103,15 +103,47 @@ impl EffectWindow {
         instruction: &Instruction,
     ) -> Result<bool, EffectError> {
         match instruction {
-            Instruction::SacrificeDelayedObjects(_)
-            | Instruction::EndStepCast {
-                kind: crate::program::EndStepCast::Blitz,
-                ..
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::SacrificeObjects(_)
+                    )
+                ) =>
+            {
+                Ok(true)
             }
-            | Instruction::SacrificeEvoked
-            | Instruction::SacrificeStateTriggerSource
-            | Instruction::ResolveCounterKeyword(CounterKeyword::VanishingLastCounter) => Ok(true),
-            Instruction::ResolveCounterKeyword(CounterKeyword::Fading(_)) => {
+            Instruction::StackOp(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::StackOpKind::EndStepCast {
+                        kind: crate::program::EndStepCast::Blitz,
+                        ..
+                    }
+                ) =>
+            {
+                Ok(true)
+            }
+            Instruction::MutateObject(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::SacrificeEvoked
+                        | crate::toolbox::ObjectMutation::SacrificeStateTriggerSource
+                        | crate::toolbox::ObjectMutation::ResolveCounterKeyword(
+                            CounterKeyword::VanishingLastCounter
+                        )
+                ) =>
+            {
+                Ok(true)
+            }
+            Instruction::MutateObject(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::ResolveCounterKeyword(CounterKeyword::Fading(
+                        _
+                    ))
+                ) =>
+            {
                 let Some(StackKind::TriggeredAbility { source }) =
                     self.window.resolving().map(StackEntry::kind)
                 else {

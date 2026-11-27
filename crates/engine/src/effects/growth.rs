@@ -41,10 +41,13 @@ fn referenced(
         return Some(source);
     }
     match body.instructions.as_slice() {
-        [Instruction::ResolveGrowth(GrowthKeyword::Mentor | GrowthKeyword::Backup { .. })] => {
-            Some(source)
-        }
-        [Instruction::ResolveGrowth(GrowthKeyword::Evolve)] => entrant(causes),
+        [Instruction::MutateObject(spec)] => match &spec.op {
+            crate::toolbox::ObjectMutation::ResolveGrowth(
+                GrowthKeyword::Mentor | GrowthKeyword::Backup { .. },
+            ) => Some(source),
+            crate::toolbox::ObjectMutation::ResolveGrowth(GrowthKeyword::Evolve) => entrant(causes),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -83,9 +86,13 @@ impl EffectWindow {
                     .is_some_and(|body| {
                         matches!(
                             body.instructions.as_slice(),
-                            [Instruction::ResolvePowerAbility(
-                                crate::activated::PowerAbility::Station
-                            )]
+                            [Instruction::MutateObject(spec)]
+                                if matches!(
+                                    spec.op,
+                                    crate::toolbox::ObjectMutation::ResolvePowerAbility(
+                                        crate::activated::PowerAbility::Station
+                                    )
+                                )
                         )
                     })
             })
@@ -181,7 +188,11 @@ impl EffectWindow {
         }
         if !matches!(
             body.instructions.as_slice(),
-            [Instruction::ResolveGrowth(GrowthKeyword::Mentor)]
+            [Instruction::MutateObject(spec)]
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::ResolveGrowth(GrowthKeyword::Mentor)
+                )
         ) {
             return true;
         }
@@ -202,8 +213,13 @@ impl EffectWindow {
     }
     /// CR 702.165d fixes the granted abilities at stack placement.
     pub(super) fn capture_backup(&self, waiting: &mut WaitingInstance) -> Result<(), EffectError> {
-        let [Instruction::ResolveGrowth(GrowthKeyword::Backup { printed_below, .. })] =
-            waiting.body.instructions.as_mut_slice()
+        let [Instruction::MutateObject(spec)] = waiting.body.instructions.as_mut_slice() else {
+            return Ok(());
+        };
+        let crate::toolbox::ObjectMutation::ResolveGrowth(GrowthKeyword::Backup {
+            printed_below,
+            ..
+        }) = &mut spec.op
         else {
             return Ok(());
         };
@@ -227,7 +243,13 @@ impl EffectWindow {
                 a.id == waiting.definition
                     && matches!(
                         a.body.instructions.as_slice(),
-                        [Instruction::ResolveGrowth(GrowthKeyword::Backup { .. })]
+                        [Instruction::MutateObject(spec)]
+                            if matches!(
+                                spec.op,
+                                crate::toolbox::ObjectMutation::ResolveGrowth(
+                                    GrowthKeyword::Backup { .. }
+                                )
+                            )
                     )
             })
         {

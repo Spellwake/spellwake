@@ -1895,9 +1895,13 @@ fn life_change(value: &LifeChange) -> Value {
 pub fn cast_occurrence(value: &CastOccurrence) -> Value {
     let mut encoded = json!({"entry":opaque(value.entry()),"controller":value.controller().0,"spell":appearance(value.spell())});
     if value.spell().printed_text.triggered.iter().any(|t| {
-        t.body
-            .instructions
-            .contains(&spellwake_engine::program::Instruction::Cascade)
+        t.body.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                spellwake_engine::program::Instruction::StackOp(spec)
+                    if matches!(spec.op, spellwake_engine::toolbox::StackOpKind::Cascade)
+            )
+        })
     }) {
         encoded["mana_value"] = json!(value.mana_value());
     }

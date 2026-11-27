@@ -948,7 +948,9 @@ pub(crate) fn evaluate(
                     },
                     body: crate::program::ExecutableBody::new(
                         crate::program::BodyTarget::None,
-                        vec![crate::program::Instruction::Encore],
+                        vec![crate::program::Instruction::StackOp(Box::new(
+                            crate::toolbox::StackOpSpec::encore(),
+                        ))],
                     ),
                 },
             );

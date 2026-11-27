@@ -223,7 +223,9 @@ impl EffectWindow {
         let mut domain = Vec::new();
         for &spell in &cursor.found_spells {
             if self
-                .exiled_cast_offer(&Instruction::CastFoundSpell(spell))?
+                .exiled_cast_offer(&Instruction::StackOp(Box::new(
+                    crate::toolbox::StackOpSpec::cast_found_spell(spell),
+                )))?
                 .is_some()
             {
                 domain.push(spell);
@@ -247,8 +249,11 @@ impl EffectWindow {
         reply: DecisionReply,
     ) -> Result<RuleProgress, EffectError> {
         let revision = self.next_revision(expected)?;
-        if self.current_instruction()? != &Instruction::ChooseFoundSpell
-            || self.found_spell_selection()?.as_ref() != Some(frame)
+        if !matches!(
+            self.current_instruction()?,
+            Instruction::StackOp(spec)
+                if matches!(spec.op, crate::toolbox::StackOpKind::ChooseFoundSpell)
+        ) || self.found_spell_selection()?.as_ref() != Some(frame)
         {
             return Err(EffectError::WrongResolutionFrame);
         }
@@ -275,7 +280,9 @@ impl EffectWindow {
             else {
                 return Err(EffectError::InconsistentProgram);
             };
-            payload.body.instructions[frame.instruction()] = Instruction::CastFoundSpell(spell);
+            payload.body.instructions[frame.instruction()] = Instruction::StackOp(Box::new(
+                crate::toolbox::StackOpSpec::cast_found_spell(spell),
+            ));
         } else {
             cursor.found_spells.clear();
             next.advance_instruction()?;
@@ -303,48 +310,63 @@ impl EffectWindow {
             _ => None,
         };
         let (ability, spell) = match instruction {
-            Instruction::CastDefeatedSiege => {
-                let Some(id) = self
-                    .resolution_cursor()
-                    .and_then(|cursor| cursor.impulse.exiled)
-                else {
-                    return Ok(None);
-                };
-                (ExileCastAbility::Siege, id)
-            }
-            Instruction::Cascade => {
-                let Some(id) = self
-                    .cascade_batch(entry.id())
-                    .and_then(|batch| batch.candidate)
-                else {
-                    return Ok(None);
-                };
-                (ExileCastAbility::Cascade, id)
-            }
-            Instruction::CastFoundSpell(object) => {
-                let card = self.window.cards().get(*object);
-                let ability =
-                    if card.is_some_and(|card| self.commander_in_command(card, caster).is_some()) {
+            Instruction::StackOp(spec) => match &spec.op {
+                crate::toolbox::StackOpKind::CastDefeatedSiege => {
+                    let Some(id) = self
+                        .resolution_cursor()
+                        .and_then(|cursor| cursor.impulse.exiled)
+                    else {
+                        return Ok(None);
+                    };
+                    (ExileCastAbility::Siege, id)
+                }
+                crate::toolbox::StackOpKind::Cascade => {
+                    let Some(id) = self
+                        .cascade_batch(entry.id())
+                        .and_then(|batch| batch.candidate)
+                    else {
+                        return Ok(None);
+                    };
+                    (ExileCastAbility::Cascade, id)
+                }
+                crate::toolbox::StackOpKind::CastFoundSpell(object) => {
+                    let card = self.window.cards().get(*object);
+                    let ability = if card
+                        .is_some_and(|card| self.commander_in_command(card, caster).is_some())
+                    {
                         ExileCastAbility::Commander
                     } else if card.is_some_and(|card| card.zone() == ObjectZone::Hand(caster)) {
                         ExileCastAbility::MatchingHand
                     } else {
                         ExileCastAbility::FoundSpell
                     };
-                (ability, *object)
+                    (ability, *object)
+                }
+                crate::toolbox::StackOpKind::MiracleCast(object) => {
+                    (ExileCastAbility::Miracle, *object)
+                }
+                crate::toolbox::StackOpKind::ReboundCast(object) => {
+                    (ExileCastAbility::Rebound, *object)
+                }
+                crate::toolbox::StackOpKind::MadnessCast => (
+                    ExileCastAbility::Madness,
+                    source.ok_or(EffectError::InconsistentProgram)?.id(),
+                ),
+                _ => return Err(EffectError::InconsistentProgram),
+            },
+            Instruction::MutateObject(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::ResolveCounterKeyword(
+                        crate::program::CounterKeyword::SuspendLastCounter
+                    )
+                ) =>
+            {
+                (
+                    ExileCastAbility::Suspend,
+                    source.ok_or(EffectError::InconsistentProgram)?.id(),
+                )
             }
-            Instruction::MiracleCast(object) => (ExileCastAbility::Miracle, *object),
-            Instruction::ReboundCast(object) => (ExileCastAbility::Rebound, *object),
-            Instruction::MadnessCast => (
-                ExileCastAbility::Madness,
-                source.ok_or(EffectError::InconsistentProgram)?.id(),
-            ),
-            Instruction::ResolveCounterKeyword(
-                crate::program::CounterKeyword::SuspendLastCounter,
-            ) => (
-                ExileCastAbility::Suspend,
-                source.ok_or(EffectError::InconsistentProgram)?.id(),
-            ),
             _ => return Err(EffectError::InconsistentProgram),
         };
         let Some(card) = self.window.cards().get(spell).filter(|c| {
@@ -503,14 +525,26 @@ impl EffectWindow {
         {
             return Ok(None);
         }
-        if matches!(&program.kind, ProgramKind::Spell(spell) if spell.body.instructions == [Instruction::ReturnChosenXGraveyardCreatures])
-            && (!self
-                .combat_rules
-                .opponents(self.window.participants(), caster)?
-                .contains(&self.window.active_player())
-                || self
-                    .current_step
-                    .is_none_or(|step| step.phase() != crate::turn::Phase::Combat))
+        if matches!(
+            &program.kind,
+            ProgramKind::Spell(spell)
+                if matches!(
+                    spell.body.instructions.as_slice(),
+                    [Instruction::ZoneOp(spec)]
+                        if matches!(
+                            spec.destination,
+                            crate::toolbox::ZoneDest::Delayed(
+                                crate::toolbox::DelayedZoneAction::ReturnChosenXGraveyardCreatures
+                            )
+                        )
+                )
+        ) && (!self
+            .combat_rules
+            .opponents(self.window.participants(), caster)?
+            .contains(&self.window.active_player())
+            || self
+                .current_step
+                .is_none_or(|step| step.phase() != crate::turn::Phase::Combat))
         {
             return Ok(None);
         }
@@ -614,8 +648,21 @@ impl EffectWindow {
             None
         };
         let permanent_targets = if ability != ExileCastAbility::Impulse
-            && matches!(&program.kind, ProgramKind::Spell(spell) if spell.body.instructions == [Instruction::ReturnChosenXGraveyardCreatures] || spell.body.has_x_target_count() || spell.body.has_up_to_x_target_count())
-        {
+            && matches!(
+                &program.kind,
+                ProgramKind::Spell(spell)
+                    if matches!(
+                        spell.body.instructions.as_slice(),
+                        [Instruction::ZoneOp(spec)]
+                            if matches!(
+                                spec.destination,
+                                crate::toolbox::ZoneDest::Delayed(
+                                    crate::toolbox::DelayedZoneAction::ReturnChosenXGraveyardCreatures
+                                )
+                            )
+                    ) || spell.body.has_x_target_count()
+                        || spell.body.has_up_to_x_target_count()
+            ) {
             // Without paying its mana cost X must be zero, so the spell has no targets.
             Some(ExilePermanentTargets {
                 minimum: 0,

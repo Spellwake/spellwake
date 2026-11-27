@@ -170,13 +170,15 @@ fn stage_a_and_b_fidelity_regressions() {
 
     // 1. Bytecode jump relocation via prepend_instruction_at preserves all jump destinations
     let mut jump_ops = vec![
-        Instruction::FlipCoins {
-            player: ResolvingPlayer::Controller,
-            mode: spellwake_engine::program::CoinFlipMode::Single,
-            win_body: None,
-            lose_body: None,
-            lose_destination: Some(2),
-        },
+        Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::flip_coins(
+                ResolvingPlayer::Controller,
+                spellwake_engine::program::CoinFlipMode::Single,
+                None,
+                None,
+                Some(2),
+            ),
+        )),
         crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
             ValueExpr::literal(1),
         ),
@@ -191,11 +193,15 @@ fn stage_a_and_b_fidelity_regressions() {
     );
     assert!(matches!(jump_ops[0], Instruction::OptionalEffect { .. }));
     assert!(matches!(
-        jump_ops[1],
-        Instruction::FlipCoins {
-            lose_destination: Some(3),
-            ..
-        }
+        &jump_ops[1],
+        Instruction::MutatePlayer(spec)
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::PlayerMutation::FlipCoins {
+                    lose_destination: Some(3),
+                    ..
+                }
+            )
     ));
     assert!(matches!(jump_ops[3], Instruction::Jump { destination: 4 }));
 
@@ -214,16 +220,23 @@ fn stage_a_and_b_fidelity_regressions() {
     let ops = &p.triggered[0].body.instructions;
     for (idx, op) in ops.iter().enumerate() {
         match op {
-            Instruction::Jump { destination }
-            | Instruction::BranchIfFalse { destination, .. }
-            | Instruction::FlipCoins {
-                lose_destination: Some(destination),
-                ..
-            } => {
+            Instruction::Jump { destination } | Instruction::BranchIfFalse { destination, .. } => {
                 assert!(
                     *destination > idx && *destination <= ops.len(),
                     "corrupted jump destination {destination} at pc {idx} in {ops:?}"
                 );
+            }
+            Instruction::MutatePlayer(spec) => {
+                if let spellwake_engine::toolbox::PlayerMutation::FlipCoins {
+                    lose_destination: Some(destination),
+                    ..
+                } = &spec.op
+                {
+                    assert!(
+                        *destination > idx && *destination <= ops.len(),
+                        "corrupted jump destination {destination} at pc {idx} in {ops:?}"
+                    );
+                }
             }
             _ => {}
         }

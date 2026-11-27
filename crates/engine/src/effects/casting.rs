@@ -1479,10 +1479,18 @@ impl EffectWindow {
         {
             return Err(EffectError::InvalidCastResource);
         }
-        if payload
-            .body()
-            .is_some_and(|body| body.instructions == [Instruction::ReturnChosenXGraveyardCreatures])
-        {
+        if payload.body().is_some_and(|body| {
+            matches!(
+                body.instructions.as_slice(),
+                [Instruction::ZoneOp(spec)]
+                    if matches!(
+                        spec.destination,
+                        crate::toolbox::ZoneDest::Delayed(
+                            crate::toolbox::DelayedZoneAction::ReturnChosenXGraveyardCreatures
+                        )
+                    )
+            )
+        }) {
             let schedule = turn.ok_or(TimingError::TurnRequired)?;
             if !self
                 .combat_rules
@@ -1520,8 +1528,16 @@ impl EffectWindow {
             .and_then(ExecutableBody::permanent_target_bounds)
             .map(|bounds| {
                 if payload.body().is_some_and(|body| {
-                    body.instructions == [Instruction::ReturnChosenXGraveyardCreatures]
-                        || body.has_x_target_count()
+                    matches!(
+                        body.instructions.as_slice(),
+                        [Instruction::ZoneOp(spec)]
+                            if matches!(
+                                spec.destination,
+                                crate::toolbox::ZoneDest::Delayed(
+                                    crate::toolbox::DelayedZoneAction::ReturnChosenXGraveyardCreatures
+                                )
+                            )
+                    ) || body.has_x_target_count()
                         || body.has_up_to_x_target_count()
                 }) {
                     (
@@ -3341,9 +3357,18 @@ impl EffectWindow {
                                 ..
                             }
                         )
-                        && trigger.body.instructions.contains(&Instruction::CopyOnCast(
-                            crate::program::CastCopyKeyword::OfferCopyToOtherPlayers,
-                        ))
+                        && trigger.body.instructions.iter().any(|op| {
+                            matches!(
+                                op,
+                                Instruction::StackOp(spec)
+                                    if matches!(
+                                        spec.op,
+                                        crate::toolbox::StackOpKind::CopyOnCast(
+                                            crate::program::CastCopyKeyword::OfferCopyToOtherPlayers
+                                        )
+                                    )
+                            )
+                        })
                 })
         });
         let prepared = PreparedCastPayment {

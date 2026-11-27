@@ -1295,37 +1295,36 @@ fn is_self_anaphora_label_local(raw: &str) -> bool {
 }
 
 fn last_instruction_created_tokens_local(ops: &[Instruction]) -> bool {
-    matches!(
-        ops.last(),
-        Some(
-            Instruction::CreateTokens { .. }
-                | Instruction::CreateTokenCopyExt { .. }
-                | Instruction::CreateTokenAndAttach { .. }
-                | Instruction::CreateAuraTokenAttached { .. }
+    matches!(ops.last(), Some(Instruction::CreateTokens { .. }))
+        || matches!(
+            ops.last(),
+            Some(Instruction::MutateObject(spec))
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
+                        | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
+                        | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                ) || matches!(
+                    spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::CreatedTokens
+                ) || matches!(
+                    &spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(s)
+                        if matches!(s.as_ref(), EffectSubject::CreatedTokens)
+                )
         )
-    ) || matches!(
-        ops.last(),
-        Some(Instruction::MutateObject(spec))
-            if matches!(
-                spec.source,
-                spellwake_engine::toolbox::ObjectQuery::CreatedTokens
-            ) || matches!(
-                &spec.source,
-                spellwake_engine::toolbox::ObjectQuery::EffectSubject(s)
-                    if matches!(s.as_ref(), EffectSubject::CreatedTokens)
-            )
-    ) || matches!(
-        ops.last(),
-        Some(Instruction::ApplyContinuous(spec))
-            if matches!(
-                spec.selector.as_ref(),
-                Some(spellwake_engine::toolbox::ObjectQuery::CreatedTokens)
-            ) || matches!(
-                spec.selector.as_ref(),
-                Some(spellwake_engine::toolbox::ObjectQuery::EffectSubject(s))
-                    if matches!(s.as_ref(), EffectSubject::CreatedTokens)
-            )
-    )
+        || matches!(
+            ops.last(),
+            Some(Instruction::ApplyContinuous(spec))
+                if matches!(
+                    spec.selector.as_ref(),
+                    Some(spellwake_engine::toolbox::ObjectQuery::CreatedTokens)
+                ) || matches!(
+                    spec.selector.as_ref(),
+                    Some(spellwake_engine::toolbox::ObjectQuery::EffectSubject(s))
+                        if matches!(s.as_ref(), EffectSubject::CreatedTokens)
+                )
+        )
 }
 
 fn existing_affect_permanent_targets_bounds(ops: &[Instruction]) -> Option<(u16, u16)> {
@@ -2544,13 +2543,15 @@ pub(super) fn lower_resolution_pay_cost_ops(
         }
         CostAtomAst::RollDie(sides) => {
             let nz = std::num::NonZeroU16::new(u16::from(*sides)).ok_or("oracle:zero-die-sides")?;
-            Ok(vec![Instruction::RollDie {
-                player,
-                sides: nz,
-                count: ValueExpr::literal(1),
-                mode: spellwake_engine::program::DieRollMode::Sum,
-                bands: Vec::new(),
-            }])
+            Ok(vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::roll_die(
+                    player,
+                    nz,
+                    ValueExpr::literal(1),
+                    spellwake_engine::program::DieRollMode::Sum,
+                    Vec::new(),
+                ),
+            ))])
         }
         CostAtomAst::DiscardHand => Ok(vec![Instruction::Discard {
             players: AffectedPlayers::One(player),

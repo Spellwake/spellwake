@@ -278,11 +278,15 @@ fn triggered_fixed_target_clause_fight_resolves_and_handles_removed_target() {
             vec![
                 Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
                     BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()),
-                    vec![Instruction::RememberPermanentTarget],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                    ))],
                 ))),
                 Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
                     BodyTarget::FilteredPermanent(ObjectFilter::creature().not_controlled()),
-                    vec![Instruction::RememberPermanentTarget],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                    ))],
                 ))),
                 Instruction::Fight {
                     first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst),

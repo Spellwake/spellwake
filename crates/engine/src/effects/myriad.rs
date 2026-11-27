@@ -182,8 +182,11 @@ impl EffectWindow {
             .window
             .resolving()
             .ok_or(EffectError::WrongResolutionFrame)?;
-        if self.current_instruction()? != &Instruction::Myriad
-            || self.myriad_defender_frame(entry)?.as_ref() != Some(frame)
+        if !matches!(
+            self.current_instruction()?,
+            Instruction::MutateObject(spec)
+                if matches!(spec.op, crate::toolbox::ObjectMutation::Myriad)
+        ) || self.myriad_defender_frame(entry)?.as_ref() != Some(frame)
         {
             return Err(EffectError::WrongResolutionFrame);
         }

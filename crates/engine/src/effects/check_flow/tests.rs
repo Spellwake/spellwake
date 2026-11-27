@@ -2342,8 +2342,10 @@ fn abandoned_siege_chooses_an_active_opponent_at_checks_without_leaving_the_batt
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::ExileDefeatedSiege,
-                Instruction::CastDefeatedSiege,
+                Instruction::MutateObject(Box::new(
+                    crate::toolbox::MutateObjectSpec::exile_defeated_siege(),
+                )),
+                Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::cast_defeated_siege())),
             ],
         ),
     });

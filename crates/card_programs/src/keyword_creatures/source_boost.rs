@@ -218,7 +218,12 @@ pub(super) fn parse(
                 tap_source: false,
                 from_graveyard: true,
             },
-            ExecutableBody::new(BodyTarget::None, vec![Instruction::Encore]),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::encore(),
+                ))],
+            ),
             Some(ActivationRestriction::Sorcery),
         ));
     }
@@ -826,13 +831,15 @@ pub(super) fn parse(
         }
         body.instructions.insert(
             0,
-            Instruction::FlipCoins {
-                player: spellwake_engine::program::ResolvingPlayer::Controller,
-                mode: spellwake_engine::program::CoinFlipMode::Single,
-                win_body: None,
-                lose_body: None,
-                lose_destination: Some(2),
-            },
+            Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::flip_coins(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                    spellwake_engine::program::CoinFlipMode::Single,
+                    None,
+                    None,
+                    Some(2),
+                ),
+            )),
         );
         return Some((mana_cost, source_cost, body, restriction));
     }

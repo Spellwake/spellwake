@@ -91,11 +91,9 @@ impl TokenKeyword {
             Self::Fabricate => {
                 program.effect_defined_colors = Some(BTreeSet::new());
                 program.card_types.insert(CardType::Artifact);
-                instructions.push(Instruction::OfferSourceCounters {
-                    amount: amount.clone(),
-                    placed_destination: 2,
-                    declined_destination: 1,
-                });
+                instructions.push(Instruction::MutatePlayer(Box::new(
+                    crate::toolbox::MutatePlayerSpec::offer_source_counters(amount.clone(), 2, 1),
+                )));
             }
         }
         let definition = TokenDefinition::new(
@@ -142,7 +140,11 @@ impl TokenKeyword {
                 && ability.condition.intervening_if.is_none()
                 && matches!(
                     ability.body.instructions.first(),
-                    Some(Instruction::OfferSourceCounters { .. })
+                    Some(Instruction::MutatePlayer(spec))
+                        if matches!(
+                            spec.op,
+                            crate::toolbox::PlayerMutation::OfferSourceCounters { .. }
+                        )
                 ) =>
             {
                 Self::Fabricate

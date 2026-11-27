@@ -7972,7 +7972,9 @@ fn lower_entry_copy_exception(
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::Myriad,
+                    Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::myriad(),
+                    )),
                     Instruction::ScheduleDelayedStepTrigger {
                         step: Step::EndCombat,
                         own_step_only: false,

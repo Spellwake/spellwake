@@ -37,7 +37,12 @@ impl GrowthKeyword {
             id,
             condition: self.condition(),
             grouping: TriggerGrouping::EachOccurrence,
-            body: ExecutableBody::new(self.target(), vec![Instruction::ResolveGrowth(self)]),
+            body: ExecutableBody::new(
+                self.target(),
+                vec![Instruction::MutateObject(Box::new(
+                    crate::toolbox::MutateObjectSpec::resolve_growth(self),
+                ))],
+            ),
         }
     }
 }

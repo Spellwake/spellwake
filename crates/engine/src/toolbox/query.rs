@@ -266,6 +266,24 @@ impl ObjectQuery {
         }
     }
 
+    /// Convert a simple [`ObjectQuery`] back into a [`crate::program::MoveSubjectRef`], if exact.
+    #[must_use]
+    pub fn to_move_subject(&self) -> Option<crate::program::MoveSubjectRef> {
+        use crate::program::MoveSubjectRef;
+        match self {
+            Self::Source => Some(MoveSubjectRef::AbilitySource),
+            Self::Targets => Some(MoveSubjectRef::TargetObject),
+            Self::AttachedHost => Some(MoveSubjectRef::AttachedHost),
+            Self::TriggerSubject => Some(MoveSubjectRef::TriggeringObject),
+            Self::LastMoved => Some(MoveSubjectRef::LastMoved),
+            Self::CreatedTokens => Some(MoveSubjectRef::CreatedTokens),
+            Self::Revealed => Some(MoveSubjectRef::RevealedCard),
+            Self::LinkedTarget { index: 0 } => Some(MoveSubjectRef::RememberedFirst),
+            Self::LinkedTarget { index: 1 } => Some(MoveSubjectRef::RememberedSecond),
+            _ => None,
+        }
+    }
+
     /// Whether this query depends on an announced target.
     #[must_use]
     pub fn uses_target(&self) -> bool {

@@ -5,7 +5,12 @@
 //! (interactive target reselection or batch copy), target retargeting, and
 //! gaining control of spells on the stack into one orthogonal primitive.
 
-use crate::program::{DefinitionError, SpellFilter, StackCopyTarget, ValueExpr};
+use crate::{
+    object_identity::ObjectId,
+    program::{
+        CastCopyKeyword, DefinitionError, EndStepCast, SpellFilter, StackCopyTarget, ValueExpr,
+    },
+};
 use spellwake_contracts::creature_types::CreatureTypeVocabulary;
 
 /// Selects which stack object(s) a [`StackOpSpec`] operates on.
@@ -24,6 +29,8 @@ pub enum StackTargetSelector {
     },
     /// Legacy/general copy selector (`TargetSpell`, `TriggeringSpell`, `ResolvingSpell`, etc.).
     CopyTarget(StackCopyTarget),
+    /// Resolving source or self-driven keyword cast/copy action (cascade, discover, madness, encore, etc.).
+    Source,
 }
 
 impl StackTargetSelector {
@@ -31,7 +38,7 @@ impl StackTargetSelector {
     pub fn uses_target(&self) -> bool {
         match self {
             Self::Targeted => true,
-            Self::Triggering | Self::Matching { .. } => false,
+            Self::Triggering | Self::Matching { .. } | Self::Source => false,
             Self::CopyTarget(target) => matches!(
                 target,
                 StackCopyTarget::TargetSpell
@@ -86,14 +93,58 @@ pub enum StackOpKind {
     Retarget { single_target_only: bool },
     /// Controller of the resolving effect gains control of the targeted spell on the stack.
     GainControl,
+    /// Encore (CR 702.141): create attacking token copies for each opponent.
+    Encore,
+    /// Cast a defeated Siege battle transformed from exile without paying its mana cost.
+    CastDefeatedSiege,
+    /// Copy the triggering spell on cast (storm, replicate, storm-like copy keywords).
+    CopyOnCast(CastCopyKeyword),
+    /// Copy a captured ability from resolution state.
+    CopyCapturedAbility,
+    /// Choose among found exiled spells (e.g. hideaway/cascade/discover flow).
+    ChooseFoundSpell,
+    /// Cast a specific found exiled spell by object ID.
+    CastFoundSpell(ObjectId),
+    /// Delayed end-step cast trigger (e.g. suspend/rebound/flashback-like end-step cast).
+    EndStepCast {
+        kind: EndStepCast,
+        permanent: ObjectId,
+        turn: u64,
+    },
+    /// Rebound cast (CR 702.88) from exile at upkeep.
+    ReboundCast(ObjectId),
+    /// Madness cast (CR 702.35) from exile.
+    MadnessCast,
+    /// Miracle cast (CR 702.94) of revealed drawn card.
+    MiracleCast(ObjectId),
+    /// Cascade (CR 702.85): exile until cheaper nonland spell, optionally cast free.
+    Cascade,
+    /// Cascade bottom step: put remaining exiled cards on bottom in random order.
+    CascadeBottom,
+    /// Discover N (CR 701.57): exile until nonland MV <= N, optionally cast free or put into hand.
+    Discover { value: ValueExpr },
 }
 
 impl StackOpKind {
     #[must_use]
     pub fn uses_target(&self) -> bool {
         match self {
-            Self::Copy { count, .. } => count.uses_target(),
-            Self::Counter { .. } | Self::Retarget { .. } | Self::GainControl => false,
+            Self::Copy { count, .. } | Self::Discover { value: count } => count.uses_target(),
+            Self::Counter { .. }
+            | Self::Retarget { .. }
+            | Self::GainControl
+            | Self::Encore
+            | Self::CastDefeatedSiege
+            | Self::CopyOnCast(_)
+            | Self::CopyCapturedAbility
+            | Self::ChooseFoundSpell
+            | Self::CastFoundSpell(_)
+            | Self::EndStepCast { .. }
+            | Self::ReboundCast(_)
+            | Self::MadnessCast
+            | Self::MiracleCast(_)
+            | Self::Cascade
+            | Self::CascadeBottom => false,
         }
     }
 
@@ -101,7 +152,7 @@ impl StackOpKind {
         &self,
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
-        if let Self::Copy { count, .. } = self {
+        if let Self::Copy { count, .. } | Self::Discover { value: count } = self {
             count
                 .validate_vocabulary(vocabulary)
                 .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -259,6 +310,135 @@ impl StackOpSpec {
     #[must_use]
     pub fn requires_stack_target(&self) -> bool {
         matches!(self.target, StackTargetSelector::Targeted)
+    }
+
+    /// True if this `StackOp` executes through the progress/choice/suspend/cascade runtime handlers.
+    #[must_use]
+    pub fn is_keyword_cast_or_copy_op(&self) -> bool {
+        matches!(
+            self.op,
+            StackOpKind::Encore
+                | StackOpKind::CastDefeatedSiege
+                | StackOpKind::CopyOnCast(_)
+                | StackOpKind::CopyCapturedAbility
+                | StackOpKind::ChooseFoundSpell
+                | StackOpKind::CastFoundSpell(_)
+                | StackOpKind::EndStepCast { .. }
+                | StackOpKind::ReboundCast(_)
+                | StackOpKind::MadnessCast
+                | StackOpKind::MiracleCast(_)
+                | StackOpKind::Cascade
+                | StackOpKind::CascadeBottom
+                | StackOpKind::Discover { .. }
+        )
+    }
+
+    #[must_use]
+    pub fn encore() -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::Encore,
+        }
+    }
+
+    #[must_use]
+    pub fn cast_defeated_siege() -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::CastDefeatedSiege,
+        }
+    }
+
+    #[must_use]
+    pub fn copy_on_cast(kind: CastCopyKeyword) -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::CopyOnCast(kind),
+        }
+    }
+
+    #[must_use]
+    pub fn copy_captured_ability() -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::CopyCapturedAbility,
+        }
+    }
+
+    #[must_use]
+    pub fn choose_found_spell() -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::ChooseFoundSpell,
+        }
+    }
+
+    #[must_use]
+    pub fn cast_found_spell(object: ObjectId) -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::CastFoundSpell(object),
+        }
+    }
+
+    #[must_use]
+    pub fn end_step_cast(kind: EndStepCast, permanent: ObjectId, turn: u64) -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::EndStepCast {
+                kind,
+                permanent,
+                turn,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn rebound_cast(object: ObjectId) -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::ReboundCast(object),
+        }
+    }
+
+    #[must_use]
+    pub fn madness_cast() -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::MadnessCast,
+        }
+    }
+
+    #[must_use]
+    pub fn miracle_cast(object: ObjectId) -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::MiracleCast(object),
+        }
+    }
+
+    #[must_use]
+    pub fn cascade() -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::Cascade,
+        }
+    }
+
+    #[must_use]
+    pub fn cascade_bottom() -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::CascadeBottom,
+        }
+    }
+
+    #[must_use]
+    pub fn discover(value: ValueExpr) -> Self {
+        Self {
+            target: StackTargetSelector::Source,
+            op: StackOpKind::Discover { value },
+        }
     }
 
     #[must_use]

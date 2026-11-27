@@ -99,10 +99,11 @@ pub(super) fn granted_creature_ability(
                 spellwake_engine::program::BodyTarget::None,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_ability_source(),
-                    spellwake_engine::program::Instruction::ReturnExiledTargetCohort {
-                        next_end_step: false,
-                        owner_controls: false,
-                    },
+                    spellwake_engine::program::Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::return_exiled_target_cohort(
+                            false, false,
+                        ),
+                    )),
                 ],
             ),
         })));

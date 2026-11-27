@@ -28,7 +28,9 @@ pub(super) fn compile(
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::FilteredPermanent(ObjectFilter::nonland().opposing()),
-                vec![Instruction::ExileOnePerPlayerUntilSourceLeaves],
+                vec![Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::exile_one_per_player_until_source_leaves(),
+                ))],
             ),
         });
         return Some(program);

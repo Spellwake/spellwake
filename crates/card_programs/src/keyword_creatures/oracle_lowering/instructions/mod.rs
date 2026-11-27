@@ -486,16 +486,23 @@ fn ensure_target_power_consumed(builder: &mut BodyBuilder, obj: &ObjectFilter) {
             .iter()
             .any(Instruction::uses_mode_target)
         && !builder.instructions.iter().any(|op| {
-            matches!(
-                op,
-                Instruction::RememberPermanentTarget | Instruction::FixedTargetClause(_)
-            )
+            matches!(op, Instruction::FixedTargetClause(_))
+                || matches!(
+                    op,
+                    Instruction::MutateObject(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                        )
+                )
         })
     {
         prepend_instruction_at(
             &mut builder.instructions,
             0,
-            Instruction::RememberPermanentTarget,
+            Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+            )),
         );
     }
 }
@@ -853,12 +860,26 @@ fn has_prior_non_attached_object_op(op: &Instruction) -> bool {
                 )
         }
         Instruction::CreateTokens { .. }
-        | Instruction::CreateTokenCopyExt { .. }
         | Instruction::Sacrifice { .. }
         | Instruction::SearchLibrary { .. }
         | Instruction::LookTopChooseExt { .. }
-        | Instruction::RevealTopTwoPiles { .. }
         | Instruction::RevealUntilMatchExt { .. } => true,
+        Instruction::MutateObject(spec)
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
+            ) =>
+        {
+            true
+        }
+        Instruction::MutatePlayer(spec)
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles { .. }
+            ) =>
+        {
+            true
+        }
         _ => false,
     }
 }
@@ -1075,13 +1096,17 @@ fn is_stack_body_target(target: BodyTarget) -> bool {
 
 fn has_prior_token_creation(ops: &[Instruction]) -> bool {
     ops.iter().any(|op| {
-        matches!(
-            op,
-            Instruction::CreateTokens { .. }
-                | Instruction::CreateTokenCopyExt { .. }
-                | Instruction::CreateTokenAndAttach { .. }
-                | Instruction::CreateAuraTokenAttached { .. }
-        )
+        matches!(op, Instruction::CreateTokens { .. })
+            || matches!(
+                op,
+                Instruction::MutateObject(spec)
+                    if matches!(
+                        spec.op,
+                        spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
+                            | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
+                            | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                    )
+            )
     })
 }
 
@@ -1159,8 +1184,12 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
                         amount, ..
                     }
                     | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
-                    | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount } => {
+                    | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount }
+                    | spellwake_engine::toolbox::ObjectMutation::Connive { count: amount } => {
                         value_expr_uses_chosen_x(amount)
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
+                        value_expr_uses_chosen_x(&copy.count)
                     }
                     spellwake_engine::toolbox::ObjectMutation::MoveCounters { amount, .. } => {
                         amount.as_ref().is_some_and(value_expr_uses_chosen_x)
@@ -1214,22 +1243,26 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
             | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
             | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
-            | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount } => {
-                value_expr_uses_chosen_x(amount)
-            }
+            | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount }
+            | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(amount)
+            | spellwake_engine::toolbox::PlayerMutation::RollDie { count: amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles {
+                count: amount, ..
+            } => value_expr_uses_chosen_x(amount),
             spellwake_engine::toolbox::PlayerMutation::AddMana(yield_spec) => {
                 effect_mana_yield_uses_chosen_x(yield_spec)
             }
             _ => false,
         },
-        Instruction::BindResolutionX(amount) => value_expr_uses_chosen_x(amount),
-        Instruction::CreateTokenCopyExt { count: amount, .. }
-        | Instruction::RollDie { count: amount, .. }
-        | Instruction::Discard { amount, .. }
+        Instruction::StackOp(spec) => matches!(
+            &spec.op,
+            spellwake_engine::toolbox::StackOpKind::Discover { value: amount }
+                if value_expr_uses_chosen_x(amount)
+        ),
+        Instruction::Discard { amount, .. }
         | Instruction::Sacrifice { amount, .. }
         | Instruction::ExileTopPlay { count: amount, .. }
-        | Instruction::LookTopChooseExt { count: amount, .. }
-        | Instruction::RevealTopTwoPiles { count: amount, .. } => value_expr_uses_chosen_x(amount),
+        | Instruction::LookTopChooseExt { count: amount, .. } => value_expr_uses_chosen_x(amount),
 
         Instruction::ChooseObjects {
             min,
@@ -1304,7 +1337,16 @@ fn try_append_fixed_first_target_parts(
                 && first_body
                     .instructions
                     .iter()
-                    .any(|op| matches!(op, Instruction::RememberPermanentTarget))
+                    .any(|op| {
+                        matches!(
+                            op,
+                            Instruction::MutateObject(spec)
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                )
+                        )
+                    })
     );
     if !first_is_remembered_perm {
         return false;
@@ -1362,37 +1404,36 @@ fn try_append_fixed_first_target_parts(
 }
 
 fn last_instruction_created_tokens(ops: &[Instruction]) -> bool {
-    matches!(
-        ops.last(),
-        Some(
-            Instruction::CreateTokens { .. }
-                | Instruction::CreateTokenCopyExt { .. }
-                | Instruction::CreateTokenAndAttach { .. }
-                | Instruction::CreateAuraTokenAttached { .. }
+    matches!(ops.last(), Some(Instruction::CreateTokens { .. }))
+        || matches!(
+            ops.last(),
+            Some(Instruction::MutateObject(spec))
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
+                        | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
+                        | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                ) || matches!(
+                    spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::CreatedTokens
+                ) || matches!(
+                    &spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(s)
+                        if matches!(s.as_ref(), EffectSubject::CreatedTokens)
+                )
         )
-    ) || matches!(
-        ops.last(),
-        Some(Instruction::MutateObject(spec))
-            if matches!(
-                spec.source,
-                spellwake_engine::toolbox::ObjectQuery::CreatedTokens
-            ) || matches!(
-                &spec.source,
-                spellwake_engine::toolbox::ObjectQuery::EffectSubject(s)
-                    if matches!(s.as_ref(), EffectSubject::CreatedTokens)
-            )
-    ) || matches!(
-        ops.last(),
-        Some(Instruction::ApplyContinuous(spec))
-            if matches!(
-                spec.selector.as_ref(),
-                Some(spellwake_engine::toolbox::ObjectQuery::CreatedTokens)
-            ) || matches!(
-                spec.selector.as_ref(),
-                Some(spellwake_engine::toolbox::ObjectQuery::EffectSubject(s))
-                    if matches!(s.as_ref(), EffectSubject::CreatedTokens)
-            )
-    )
+        || matches!(
+            ops.last(),
+            Some(Instruction::ApplyContinuous(spec))
+                if matches!(
+                    spec.selector.as_ref(),
+                    Some(spellwake_engine::toolbox::ObjectQuery::CreatedTokens)
+                ) || matches!(
+                    spec.selector.as_ref(),
+                    Some(spellwake_engine::toolbox::ObjectQuery::EffectSubject(s))
+                        if matches!(s.as_ref(), EffectSubject::CreatedTokens)
+                )
+        )
 }
 
 pub(super) fn lower_instruction(

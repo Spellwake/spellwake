@@ -850,7 +850,9 @@ impl ActivatedAbility {
             },
             body: ExecutableBody::new(
                 crate::program::BodyTarget::None,
-                vec![crate::program::Instruction::ResolvePowerAbility(kind)],
+                vec![crate::program::Instruction::MutateObject(Box::new(
+                    crate::toolbox::MutateObjectSpec::resolve_power_ability(kind),
+                ))],
             ),
         }
     }
@@ -902,7 +904,9 @@ impl ActivatedAbility {
             },
             body: ExecutableBody::new(
                 crate::program::BodyTarget::None,
-                vec![crate::program::Instruction::Ninjutsu],
+                vec![crate::program::Instruction::MutateObject(Box::new(
+                    crate::toolbox::MutateObjectSpec::ninjutsu(),
+                ))],
             ),
         }
     }
@@ -914,7 +918,9 @@ impl ActivatedAbility {
             source_cost: SourceCost::GraveyardSelf { unearth: true },
             body: ExecutableBody::new(
                 crate::program::BodyTarget::None,
-                vec![crate::program::Instruction::Unearth],
+                vec![crate::program::Instruction::MutateObject(Box::new(
+                    crate::toolbox::MutateObjectSpec::unearth(),
+                ))],
             ),
         }
     }

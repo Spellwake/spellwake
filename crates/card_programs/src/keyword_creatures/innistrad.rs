@@ -342,13 +342,15 @@ pub(super) fn spell(
                 spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::CreaturesDiedThisTurn),
                 Comparison::Greater,
                 0,
-                ChooseRevealedHandCard {
-                    minimum_mana_value: 0,
-                    nonland_only: false,
-                    filter: None,
-                    count: std::num::NonZeroU8::new(2)?,
-                    action: spellwake_engine::program::ChosenHandAction::Discard,
-                },
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::choose_revealed_hand_card(
+                        0,
+                        false,
+                        None,
+                        std::num::NonZeroU8::new(2)?,
+                        spellwake_engine::program::ChosenHandAction::Discard,
+                    ),
+                )),
                 Discard {
                     players: spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
                     amount: amount(2),
@@ -645,13 +647,15 @@ pub(super) fn spell(
         }
         "Target player reveals their hand. You choose a nonland card from it. Exile that card." => (
             SinglePlayer,
-            vec![ChooseRevealedHandCard {
-                count: std::num::NonZeroU8::MIN,
-                minimum_mana_value: 0,
-                nonland_only: true,
-                filter: None,
-                action: spellwake_engine::program::ChosenHandAction::Exile,
-            }],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::choose_revealed_hand_card(
+                    0,
+                    true,
+                    None,
+                    std::num::NonZeroU8::MIN,
+                    spellwake_engine::program::ChosenHandAction::Exile,
+                ),
+            ))],
         ),
         "Search your library for a card and put that card into your hand. If this spell was cast from a graveyard, instead search your library for two cards and put those cards into your hand. Then shuffle." => {
             use spellwake_engine::program::LibrarySearch;
@@ -785,11 +789,15 @@ pub(super) fn spell(
             vec![
                 clause(
                     FilteredPermanent(ObjectFilter::creature().controlled()),
-                    RememberPermanentTarget,
+                    Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                    )),
                 ),
                 clause(
                     FilteredPermanent(ObjectFilter::creature().not_controlled()),
-                    RememberPermanentTarget,
+                    Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                    )),
                 ),
                 Instruction::Fight { first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst), second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond) },
             ],
@@ -797,8 +805,18 @@ pub(super) fn spell(
         "Target creature fights another target creature." => (
             NoTarget,
             vec![
-                clause(SingleCreature, RememberPermanentTarget),
-                clause(SingleCreature, RememberPermanentTarget),
+                clause(
+                    SingleCreature,
+                    Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                    )),
+                ),
+                clause(
+                    SingleCreature,
+                    Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                    )),
+                ),
                 Instruction::Fight { first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst), second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond) },
             ],
         ),
@@ -1189,7 +1207,9 @@ pub(super) fn compile(
                     from_graveyard: false,
                 },
                 SingleAnyTarget,
-                vec![DamageFromGrantingPermanent { amount: 2.into() }],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::from_granting_permanent(2.into()),
+                ))],
             )))]))?;
             return Some(program);
         }
@@ -1398,7 +1418,15 @@ pub(super) fn compile(
                 spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::DamageTriggerRecipient::Creature, true),
                 NoTarget,
                 vec![
-                    Instruction::FlipCoins { player: ResolvingPlayer::Controller, mode: spellwake_engine::program::CoinFlipMode::Single, win_body: None, lose_body: None, lose_destination: Some(2) },
+                    Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::flip_coins(
+                            ResolvingPlayer::Controller,
+                            spellwake_engine::program::CoinFlipMode::Single,
+                            None,
+                            None,
+                            Some(2),
+                        ),
+                    )),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_subject(
                         spellwake_engine::program::EffectSubject::TriggerSubject,
                         false,

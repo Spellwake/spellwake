@@ -400,6 +400,102 @@ impl EffectWindow {
                     self.advance_instruction()?;
                     Ok(StepOutcome::Continue)
                 }
+                crate::toolbox::ObjectMutation::Connive { count } => {
+                    let amount = self.resolve_value_expr(entry.controller(), count)?;
+                    let subject = spec
+                        .source
+                        .to_move_subject()
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let obj_opt = self.resolve_pass_c_move_subject(entry, subject)?;
+                    let Some(obj_id) = obj_opt else {
+                        self.advance_instruction()?;
+                        return Ok(StepOutcome::Continue);
+                    };
+                    if !amount.is_positive() {
+                        self.advance_instruction()?;
+                        return Ok(StepOutcome::Continue);
+                    }
+                    let subj_ctrl = self
+                        .evaluated_characteristics()?
+                        .get(obj_id)
+                        .and_then(|c| c.controller)
+                        .unwrap_or_else(|| entry.controller());
+                    if let Some(cur) = self.resolution_cursor_mut() {
+                        cur.results.last_nonland_discarded = 0;
+                        cur.chosen_opponent = Some(subj_ctrl);
+                    }
+                    self.emit_keyword_action_event(
+                        entry.id(),
+                        index,
+                        subj_ctrl,
+                        PlayerTriggerAction::Connived,
+                        ctx.append,
+                    )?;
+                    let draw_op = if subj_ctrl == entry.controller() {
+                        crate::program::Instruction::DrawCards(Box::new(
+                            crate::toolbox::DrawCardsSpec::simple(
+                                crate::toolbox::PlayerSelector::Resolving(
+                                    crate::program::ResolvingPlayer::Controller,
+                                ),
+                                ValueExpr::Literal(amount.clone()),
+                            ),
+                        ))
+                    } else {
+                        Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec {
+                            players: crate::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::ChosenPlayer,
+                            ),
+                            amount: ValueExpr::Literal(amount.clone()),
+                            bind_drawn: None,
+                        }))
+                    };
+                    let discard_role = if subj_ctrl == entry.controller() {
+                        ResolvingPlayer::Controller
+                    } else {
+                        ResolvingPlayer::ChosenPlayer
+                    };
+                    let ops = vec![
+                        draw_op,
+                        Instruction::Discard {
+                            players: AffectedPlayers::One(discard_role),
+                            amount: ValueExpr::Literal(amount),
+                        },
+                        Instruction::MutateObject(Box::new(
+                            crate::toolbox::MutateObjectSpec::connive_finalize(spec.source.clone()),
+                        )),
+                    ];
+                    self.splice_replacing_current(entry.id(), index, &ops)?;
+                    Ok(StepOutcome::Continue)
+                }
+                crate::toolbox::ObjectMutation::ConniveFinalize => {
+                    let subject = spec
+                        .source
+                        .to_move_subject()
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let nonlands = self
+                        .resolution_cursor()
+                        .map_or(0, |c| c.results.last_nonland_discarded);
+                    if nonlands > 0
+                        && let Some(obj_id) = self.resolve_pass_c_move_subject(entry, subject)?
+                        && self
+                            .window
+                            .cards()
+                            .get(obj_id)
+                            .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
+                    {
+                        self.place_plus_one_counter_amount(
+                            vec![obj_id],
+                            i64::from(nonlands).into(),
+                            EventCause::Instruction {
+                                entry: entry.id(),
+                                instruction: index,
+                            },
+                            ctx.append,
+                        )?;
+                    }
+                    self.advance_instruction()?;
+                    Ok(StepOutcome::Continue)
+                }
                 _ => Ok(StepOutcome::Next(Instruction::MutateObject(spec))),
             },
             Instruction::MutatePlayer(spec) => {
@@ -1237,111 +1333,118 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    _ => Ok(StepOutcome::Next(Instruction::MutatePlayer(spec))),
-                }
-            }
-            Instruction::RollDie {
-                player,
-                sides: _,
-                count,
-                mode,
-                bands,
-            } => {
-                let cursor_snap = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let roller = self.resolving_player_identity_at(player, Some(&cursor_snap))?;
-                if !cursor_snap.results.die_roll_ready {
-                    let raw_n = self.resolve_value_expr(entry.controller(), &count)?;
-                    if !raw_n.is_positive() {
+                    crate::toolbox::PlayerMutation::RollDie {
+                        sides: _,
+                        count,
+                        mode,
+                        bands,
+                    } => {
+                        let cursor_snap = self
+                            .resolution_cursor()
+                            .ok_or(EffectError::WrongResolutionFrame)?
+                            .clone();
+                        let roller =
+                            self.resolving_player_identity_at(player, Some(&cursor_snap))?;
+                        if !cursor_snap.results.die_roll_ready {
+                            let raw_n = self.resolve_value_expr(entry.controller(), count)?;
+                            if !raw_n.is_positive() {
+                                if let Some(cur) = self.resolution_cursor_mut() {
+                                    cur.results.last_die_roll = Some(0.into());
+                                    cur.results.last_die_rolls.clear();
+                                }
+                                self.advance_instruction()?;
+                                return Ok(StepOutcome::Continue);
+                            }
+                            self.suspend_for_random_resolution(roller)?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                        let rolls = cursor_snap.results.last_die_rolls.clone();
+                        let final_result: u16 = match mode {
+                            DieRollMode::Sum => {
+                                rolls.iter().copied().fold(0u16, u16::saturating_add)
+                            }
+                            DieRollMode::KeepHighest => rolls.iter().copied().max().unwrap_or(0),
+                            DieRollMode::ChooseOne => {
+                                if rolls.len() <= 1 {
+                                    rolls.first().copied().unwrap_or(0)
+                                } else {
+                                    let chosen = self
+                                        .resolution_cursor_mut()
+                                        .and_then(|c| c.chosen_option_index.take());
+                                    let Some(idx) = chosen else {
+                                        let labels =
+                                            rolls.iter().map(|v| format!("Result: {v}")).collect();
+                                        return Ok(StepOutcome::Pending(self.option_frame(
+                                            entry.id(),
+                                            index,
+                                            roller,
+                                            labels,
+                                        )?));
+                                    };
+                                    rolls.get(usize::from(idx)).copied().unwrap_or(0)
+                                }
+                            }
+                        };
                         if let Some(cur) = self.resolution_cursor_mut() {
-                            cur.results.last_die_roll = Some(0.into());
+                            cur.results.die_roll_ready = false;
                             cur.results.last_die_rolls.clear();
+                            cur.results.last_die_roll = Some(i64::from(final_result).into());
+                        }
+                        if let Some(band) = bands
+                            .iter()
+                            .find(|b| final_result >= b.min && final_result <= b.max)
+                            && !band.body.instructions.is_empty()
+                        {
+                            self.splice_replacing_current(
+                                entry.id(),
+                                index,
+                                &band.body.instructions,
+                            )?;
+                            return Ok(StepOutcome::Continue);
                         }
                         self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
+                        Ok(StepOutcome::Continue)
                     }
-                    self.suspend_for_random_resolution(roller)?;
-                    return Ok(StepOutcome::Continue);
-                }
-                let rolls = cursor_snap.results.last_die_rolls.clone();
-                let final_result: u16 = match mode {
-                    DieRollMode::Sum => rolls.iter().copied().fold(0u16, u16::saturating_add),
-                    DieRollMode::KeepHighest => rolls.iter().copied().max().unwrap_or(0),
-                    DieRollMode::ChooseOne => {
-                        if rolls.len() <= 1 {
-                            rolls.first().copied().unwrap_or(0)
-                        } else {
-                            let chosen = self
-                                .resolution_cursor_mut()
-                                .and_then(|c| c.chosen_option_index.take());
-                            let Some(idx) = chosen else {
-                                let labels = rolls.iter().map(|v| format!("Result: {v}")).collect();
-                                return Ok(StepOutcome::Pending(self.option_frame(
-                                    entry.id(),
-                                    index,
-                                    roller,
-                                    labels,
-                                )?));
-                            };
-                            rolls.get(usize::from(idx)).copied().unwrap_or(0)
+                    crate::toolbox::PlayerMutation::FlipCoins {
+                        mode: _,
+                        win_body,
+                        lose_body,
+                        lose_destination,
+                    } => {
+                        let cursor_snap = self
+                            .resolution_cursor()
+                            .ok_or(EffectError::WrongResolutionFrame)?
+                            .clone();
+                        let flipper =
+                            self.resolving_player_identity_at(player, Some(&cursor_snap))?;
+                        if !cursor_snap.results.coin_flip_ready {
+                            self.suspend_for_random_resolution(flipper)?;
+                            return Ok(StepOutcome::Continue);
                         }
+                        let won = cursor_snap.results.last_coin_flip_won == Some(true);
+                        if let Some(cur) = self.resolution_cursor_mut() {
+                            cur.results.coin_flip_ready = false;
+                        }
+                        if !won && let Some(dest) = *lose_destination {
+                            self.set_instruction(dest)?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                        let chosen_body = if won {
+                            win_body.as_deref()
+                        } else {
+                            lose_body.as_deref()
+                        };
+                        if let Some(body) = chosen_body
+                            && !body.instructions.is_empty()
+                        {
+                            self.splice_replacing_current(entry.id(), index, &body.instructions)?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                        self.advance_instruction()?;
+                        Ok(StepOutcome::Continue)
                     }
-                };
-                if let Some(cur) = self.resolution_cursor_mut() {
-                    cur.results.die_roll_ready = false;
-                    cur.results.last_die_rolls.clear();
-                    cur.results.last_die_roll = Some(i64::from(final_result).into());
+                    _ => Ok(StepOutcome::Next(Instruction::MutatePlayer(spec))),
                 }
-                if let Some(band) = bands
-                    .iter()
-                    .find(|b| final_result >= b.min && final_result <= b.max)
-                    && !band.body.instructions.is_empty()
-                {
-                    self.splice_replacing_current(entry.id(), index, &band.body.instructions)?;
-                    return Ok(StepOutcome::Continue);
-                }
-                self.advance_instruction()?;
-                Ok(StepOutcome::Continue)
-            }
-            Instruction::FlipCoins {
-                player,
-                mode: _,
-                win_body,
-                lose_body,
-                lose_destination,
-            } => {
-                let cursor_snap = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let flipper = self.resolving_player_identity_at(player, Some(&cursor_snap))?;
-                if !cursor_snap.results.coin_flip_ready {
-                    self.suspend_for_random_resolution(flipper)?;
-                    return Ok(StepOutcome::Continue);
-                }
-                let won = cursor_snap.results.last_coin_flip_won == Some(true);
-                if let Some(cur) = self.resolution_cursor_mut() {
-                    cur.results.coin_flip_ready = false;
-                }
-                if !won && let Some(dest) = lose_destination {
-                    self.set_instruction(dest)?;
-                    return Ok(StepOutcome::Continue);
-                }
-                let chosen_body = if won {
-                    win_body.as_deref()
-                } else {
-                    lose_body.as_deref()
-                };
-                if let Some(body) = chosen_body
-                    && !body.instructions.is_empty()
-                {
-                    self.splice_replacing_current(entry.id(), index, &body.instructions)?;
-                    return Ok(StepOutcome::Continue);
-                }
-                self.advance_instruction()?;
-                Ok(StepOutcome::Continue)
             }
             Instruction::ChooseValue { chooser, domain } => {
                 let cursor_snap = self
@@ -1578,274 +1681,195 @@ impl EffectWindow {
                 self.advance_instruction()?;
                 Ok(StepOutcome::Continue)
             }
-            Instruction::Connive { subject, count } => {
-                let amount = self.resolve_value_expr(entry.controller(), &count)?;
-                let obj_opt = self.resolve_pass_c_move_subject(entry, subject)?;
-                let Some(obj_id) = obj_opt else {
-                    self.advance_instruction()?;
-                    return Ok(StepOutcome::Continue);
-                };
-                if !amount.is_positive() {
-                    self.advance_instruction()?;
-                    return Ok(StepOutcome::Continue);
-                }
-                let subj_ctrl = self
-                    .evaluated_characteristics()?
-                    .get(obj_id)
-                    .and_then(|c| c.controller)
-                    .unwrap_or_else(|| entry.controller());
-                if let Some(cur) = self.resolution_cursor_mut() {
-                    cur.results.last_nonland_discarded = 0;
-                    cur.chosen_opponent = Some(subj_ctrl);
-                }
-                self.emit_keyword_action_event(
-                    entry.id(),
-                    index,
-                    subj_ctrl,
-                    PlayerTriggerAction::Connived,
-                    ctx.append,
-                )?;
-                let draw_op = if subj_ctrl == entry.controller() {
-                    crate::program::Instruction::DrawCards(Box::new(
-                        crate::toolbox::DrawCardsSpec::simple(
-                            crate::toolbox::PlayerSelector::Resolving(
-                                crate::program::ResolvingPlayer::Controller,
-                            ),
-                            ValueExpr::Literal(amount.clone()),
-                        ),
-                    ))
-                } else {
-                    Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec {
-                        players: crate::toolbox::PlayerSelector::Resolving(
-                            ResolvingPlayer::ChosenPlayer,
-                        ),
-                        amount: ValueExpr::Literal(amount.clone()),
-                        bind_drawn: None,
-                    }))
-                };
-                let discard_role = if subj_ctrl == entry.controller() {
-                    ResolvingPlayer::Controller
-                } else {
-                    ResolvingPlayer::ChosenPlayer
-                };
-                let ops = vec![
-                    draw_op,
-                    Instruction::Discard {
-                        players: AffectedPlayers::One(discard_role),
-                        amount: ValueExpr::Literal(amount),
-                    },
-                    Instruction::ConniveFinalize { subject },
-                ];
-                self.splice_replacing_current(entry.id(), index, &ops)?;
-                Ok(StepOutcome::Continue)
-            }
-            Instruction::ConniveFinalize { subject } => {
-                let nonlands = self
-                    .resolution_cursor()
-                    .map_or(0, |c| c.results.last_nonland_discarded);
-                if nonlands > 0
-                    && let Some(obj_id) = self.resolve_pass_c_move_subject(entry, subject)?
-                    && self
-                        .window
-                        .cards()
-                        .get(obj_id)
-                        .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
-                {
-                    self.place_plus_one_counter_amount(
-                        vec![obj_id],
-                        i64::from(nonlands).into(),
-                        EventCause::Instruction {
-                            entry: entry.id(),
-                            instruction: index,
-                        },
-                        ctx.append,
-                    )?;
-                }
-                self.advance_instruction()?;
-                Ok(StepOutcome::Continue)
-            }
-            Instruction::Discover { value } => {
-                let controller = entry.controller();
-                let has_state = self
-                    .resolution_cursor()
-                    .is_some_and(|c| c.results.discover_state.is_some());
-                if !has_state {
-                    let limit = self.resolve_value_expr(controller, &value)?;
-                    let mut exiled = Vec::new();
-                    let mut candidate = None;
-                    while let Some(&top) = self.window.cards().library(controller).first() {
-                        let before = self.rules_snapshot(None)?;
-                        let (window, exit) = self.window.resolution_move_with_exit(
-                            self.window.revision(),
-                            top,
-                            ObjectDestination::Exile,
-                        )?;
-                        let crate::stack_window::StackExit::Object(movement) = exit else {
-                            return Err(EffectError::InconsistentProgram);
-                        };
-                        self.window = window;
-                        let object = movement.after.id();
-                        let program = self
-                            .copiable_program(object)
-                            .ok_or(EffectError::InconsistentProgram)?;
-                        let eligible =
-                            !program.has_type(CardType::Land) && program.mana_value() <= limit;
-                        self.emit_from(
-                            EventCause::Instruction {
-                                entry: entry.id(),
-                                instruction: index,
-                            },
-                            &before,
-                            None,
-                            ctx.append,
-                            |prev, now, controllers| {
-                                Ok(vec![occurrence_flow::zone_occurrence_at(
-                                    prev,
-                                    now,
-                                    &movement,
-                                    ZoneReason::CascadeExile,
-                                    controllers,
-                                )?])
-                            },
-                        )?;
-                        exiled.push(object);
-                        if eligible {
-                            candidate = Some(object);
-                            break;
+            Instruction::StackOp(spec) => match &spec.op {
+                crate::toolbox::StackOpKind::Discover { value } => {
+                    let controller = entry.controller();
+                    let has_state = self
+                        .resolution_cursor()
+                        .is_some_and(|c| c.results.discover_state.is_some());
+                    if !has_state {
+                        let limit = self.resolve_value_expr(controller, value)?;
+                        let mut exiled = Vec::new();
+                        let mut candidate = None;
+                        while let Some(&top) = self.window.cards().library(controller).first() {
+                            let before = self.rules_snapshot(None)?;
+                            let (window, exit) = self.window.resolution_move_with_exit(
+                                self.window.revision(),
+                                top,
+                                ObjectDestination::Exile,
+                            )?;
+                            let crate::stack_window::StackExit::Object(movement) = exit else {
+                                return Err(EffectError::InconsistentProgram);
+                            };
+                            self.window = window;
+                            let object = movement.after.id();
+                            let program = self
+                                .copiable_program(object)
+                                .ok_or(EffectError::InconsistentProgram)?;
+                            let eligible =
+                                !program.has_type(CardType::Land) && program.mana_value() <= limit;
+                            self.emit_from(
+                                EventCause::Instruction {
+                                    entry: entry.id(),
+                                    instruction: index,
+                                },
+                                &before,
+                                None,
+                                ctx.append,
+                                |prev, now, controllers| {
+                                    Ok(vec![occurrence_flow::zone_occurrence_at(
+                                        prev,
+                                        now,
+                                        &movement,
+                                        ZoneReason::CascadeExile,
+                                        controllers,
+                                    )?])
+                                },
+                            )?;
+                            exiled.push(object);
+                            if eligible {
+                                candidate = Some(object);
+                                break;
+                            }
                         }
-                    }
-                    if let Some(cur) = self.resolution_cursor_mut() {
-                        cur.results.discover_state = Some(DiscoverState {
-                            candidate,
-                            exiled,
-                            awaiting_random_bottom: false,
-                            bottom_order: None,
-                        });
-                    }
-                    self.emit_keyword_action_event(
-                        entry.id(),
-                        index,
-                        controller,
-                        PlayerTriggerAction::Discovered,
-                        ctx.append,
-                    )?;
-                    return Ok(StepOutcome::Continue);
-                }
-                let candidate = self
-                    .resolution_cursor()
-                    .and_then(|c| c.results.discover_state.as_ref())
-                    .and_then(|d| d.candidate);
-                if let Some(card_id) = candidate {
-                    let can_cast = self
-                        .exiled_cast_offer(&Instruction::CastFoundSpell(card_id))?
-                        .is_some();
-                    if !can_cast {
-                        let _ = self.move_objects_to_subject_destination(
-                            entry,
+                        if let Some(cur) = self.resolution_cursor_mut() {
+                            cur.results.discover_state = Some(DiscoverState {
+                                candidate,
+                                exiled,
+                                awaiting_random_bottom: false,
+                                bottom_order: None,
+                            });
+                        }
+                        self.emit_keyword_action_event(
+                            entry.id(),
                             index,
                             controller,
-                            &[card_id],
-                            SubjectDestination::Hand,
+                            PlayerTriggerAction::Discovered,
                             ctx.append,
                         )?;
+                        return Ok(StepOutcome::Continue);
+                    }
+                    let candidate = self
+                        .resolution_cursor()
+                        .and_then(|c| c.results.discover_state.as_ref())
+                        .and_then(|d| d.candidate);
+                    if let Some(card_id) = candidate {
+                        let can_cast = self
+                            .exiled_cast_offer(&Instruction::StackOp(Box::new(
+                                crate::toolbox::StackOpSpec::cast_found_spell(card_id),
+                            )))?
+                            .is_some();
+                        if !can_cast {
+                            let _ = self.move_objects_to_subject_destination(
+                                entry,
+                                index,
+                                controller,
+                                &[card_id],
+                                SubjectDestination::Hand,
+                                ctx.append,
+                            )?;
+                            if let Some(d) = self
+                                .resolution_cursor_mut()
+                                .and_then(|c| c.results.discover_state.as_mut())
+                            {
+                                d.candidate = None;
+                            }
+                            return Ok(StepOutcome::Continue);
+                        }
+                        let chosen = self
+                            .resolution_cursor_mut()
+                            .and_then(|c| c.chosen_option_index.take());
+                        let Some(idx) = chosen else {
+                            let labels = vec![
+                                "Cast without paying its mana cost".to_owned(),
+                                "Put into your hand".to_owned(),
+                            ];
+                            return Ok(StepOutcome::Pending(self.option_frame(
+                                entry.id(),
+                                index,
+                                controller,
+                                labels,
+                            )?));
+                        };
                         if let Some(d) = self
                             .resolution_cursor_mut()
                             .and_then(|c| c.results.discover_state.as_mut())
                         {
                             d.candidate = None;
                         }
+                        if idx == 0 {
+                            self.splice_before_current(
+                                entry.id(),
+                                index,
+                                &[Instruction::StackOp(Box::new(
+                                    crate::toolbox::StackOpSpec::cast_found_spell(card_id),
+                                ))],
+                            )?;
+                        } else {
+                            let _ = self.move_objects_to_subject_destination(
+                                entry,
+                                index,
+                                controller,
+                                &[card_id],
+                                SubjectDestination::Hand,
+                                ctx.append,
+                            )?;
+                        }
                         return Ok(StepOutcome::Continue);
                     }
-                    let chosen = self
-                        .resolution_cursor_mut()
-                        .and_then(|c| c.chosen_option_index.take());
-                    let Some(idx) = chosen else {
-                        let labels = vec![
-                            "Cast without paying its mana cost".to_owned(),
-                            "Put into your hand".to_owned(),
-                        ];
-                        return Ok(StepOutcome::Pending(self.option_frame(
-                            entry.id(),
-                            index,
-                            controller,
-                            labels,
-                        )?));
-                    };
-                    if let Some(d) = self
+                    let ready_order = self
                         .resolution_cursor_mut()
                         .and_then(|c| c.results.discover_state.as_mut())
-                    {
-                        d.candidate = None;
-                    }
-                    if idx == 0 {
-                        self.splice_before_current(
-                            entry.id(),
-                            index,
-                            &[Instruction::CastFoundSpell(card_id)],
-                        )?;
+                        .and_then(|d| d.bottom_order.take());
+                    let remaining: Vec<ObjectId> = if let Some(order) = ready_order {
+                        order
                     } else {
+                        let rem: Vec<ObjectId> = self
+                            .resolution_cursor()
+                            .and_then(|c| c.results.discover_state.as_ref())
+                            .map(|d| {
+                                d.exiled
+                                    .iter()
+                                    .copied()
+                                    .filter(|id| {
+                                        self.window
+                                            .cards()
+                                            .get(*id)
+                                            .is_some_and(|o| o.zone() == ObjectZone::Exile)
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if rem.len() > 1 {
+                            if let Some(d) = self
+                                .resolution_cursor_mut()
+                                .and_then(|c| c.results.discover_state.as_mut())
+                            {
+                                d.awaiting_random_bottom = true;
+                            }
+                            self.suspend_for_random_resolution(controller)?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                        rem
+                    };
+                    if !remaining.is_empty() {
                         let _ = self.move_objects_to_subject_destination(
                             entry,
                             index,
                             controller,
-                            &[card_id],
-                            SubjectDestination::Hand,
+                            &remaining,
+                            SubjectDestination::Library(LibraryPlacement::Bottom),
                             ctx.append,
                         )?;
                     }
-                    return Ok(StepOutcome::Continue);
-                }
-                let ready_order = self
-                    .resolution_cursor_mut()
-                    .and_then(|c| c.results.discover_state.as_mut())
-                    .and_then(|d| d.bottom_order.take());
-                let remaining: Vec<ObjectId> = if let Some(order) = ready_order {
-                    order
-                } else {
-                    let rem: Vec<ObjectId> = self
-                        .resolution_cursor()
-                        .and_then(|c| c.results.discover_state.as_ref())
-                        .map(|d| {
-                            d.exiled
-                                .iter()
-                                .copied()
-                                .filter(|id| {
-                                    self.window
-                                        .cards()
-                                        .get(*id)
-                                        .is_some_and(|o| o.zone() == ObjectZone::Exile)
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    if rem.len() > 1 {
-                        if let Some(d) = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.results.discover_state.as_mut())
-                        {
-                            d.awaiting_random_bottom = true;
-                        }
-                        self.suspend_for_random_resolution(controller)?;
-                        return Ok(StepOutcome::Continue);
+                    if let Some(cur) = self.resolution_cursor_mut() {
+                        cur.results.discover_state = None;
                     }
-                    rem
-                };
-                if !remaining.is_empty() {
-                    let _ = self.move_objects_to_subject_destination(
-                        entry,
-                        index,
-                        controller,
-                        &remaining,
-                        SubjectDestination::Library(LibraryPlacement::Bottom),
-                        ctx.append,
-                    )?;
+                    self.advance_instruction()?;
+                    Ok(StepOutcome::Continue)
                 }
-                if let Some(cur) = self.resolution_cursor_mut() {
-                    cur.results.discover_state = None;
-                }
-                self.advance_instruction()?;
-                Ok(StepOutcome::Continue)
-            }
+                _ => Ok(StepOutcome::Next(Instruction::StackOp(spec))),
+            },
             Instruction::Fight { first, second } => {
                 let first_objs = self.resolve_pass_c_move_subjects(entry, *first)?;
                 let second_objs = self.resolve_pass_c_move_subjects(entry, *second)?;

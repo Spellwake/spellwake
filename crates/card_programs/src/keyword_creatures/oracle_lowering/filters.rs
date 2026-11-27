@@ -6658,8 +6658,12 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
             spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
             | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. }
             | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
-            | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount } => {
+            | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount }
+            | spellwake_engine::toolbox::ObjectMutation::Connive { count: amount } => {
                 find_value_expr_cost_object_ref(amount)
+            }
+            spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
+                find_value_expr_cost_object_ref(&copy.count)
             }
             spellwake_engine::toolbox::ObjectMutation::MoveCounters {
                 amount: Some(amount),
@@ -6708,9 +6712,12 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
             | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
             | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
             | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
-            | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount } => {
-                find_value_expr_cost_object_ref(amount)
-            }
+            | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount }
+            | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(amount)
+            | spellwake_engine::toolbox::PlayerMutation::RollDie { count: amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles {
+                count: amount, ..
+            } => find_value_expr_cost_object_ref(amount),
             _ => None,
         },
         Instruction::CreateTokens { creations } => creations
@@ -6728,7 +6735,14 @@ fn has_prior_reveal_top(context: Option<(&BodyBuilder, bool)>) -> bool {
                 Instruction::LookTopChooseExt {
                     reveal_only: true,
                     ..
-                } | Instruction::MayRevealLibraryTop
+                }
+            ) || matches!(
+                op,
+                Instruction::MutatePlayer(spec)
+                    if matches!(
+                        spec.op,
+                        spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                    )
             )
         })
     })

@@ -988,6 +988,7 @@ impl EffectWindow {
             | ObjectMutation::ReselectAttackDefender
             | ObjectMutation::SoulbondPair { .. }
             | ObjectMutation::Explore => unreachable!("handled before candidate selection"),
+            _ => return Err(EffectError::InconsistentProgram),
         }
 
         if let Some(cur) = self.resolution_cursor_mut() {

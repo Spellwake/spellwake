@@ -200,18 +200,21 @@ impl EffectWindow {
             _ => None,
         };
         let reveal_two_piles = match self.current_instruction()? {
-            Instruction::RevealTopTwoPiles {
-                controller_divides,
-                target_opponent,
-                chosen_dest,
-                other_dest,
-                ..
-            } => Some((
-                *controller_divides,
-                *target_opponent,
-                *chosen_dest,
-                *other_dest,
-            )),
+            Instruction::MutatePlayer(spec) => match &spec.op {
+                crate::toolbox::PlayerMutation::RevealTopTwoPiles {
+                    controller_divides,
+                    target_opponent,
+                    chosen_dest,
+                    other_dest,
+                    ..
+                } => Some((
+                    *controller_divides,
+                    *target_opponent,
+                    *chosen_dest,
+                    *other_dest,
+                )),
+                _ => None,
+            },
             _ => None,
         };
         let ext_keep_dest = look_top_choose_ext
@@ -233,28 +236,39 @@ impl EffectWindow {
             })
             .or_else(|| reveal_two_piles.map(|(_, _, _, other_dest)| other_dest));
         let (count, private, take_all, other_pile_to_bottom) = match self.current_instruction()? {
-            Instruction::RevealTopTwoPiles {
-                count, other_dest, ..
-            } => (
-                self.resolve_value_expr(
-                    self.window.resolving().map_or(player, |e| e.controller()),
-                    count,
-                )?
-                .max(0.into())
-                .min(RulesInteger::from_usize(
-                    self.window.cards().library(player).len(),
-                ))
-                .to_usize()
-                .ok_or(EffectError::InconsistentProgram)?,
-                false,
-                false,
-                matches!(
-                    other_dest,
-                    crate::program::LookTopRestDest::BottomRandom
-                        | crate::program::LookTopRestDest::BottomOrder
-                        | crate::program::LookTopRestDest::TopOrder
-                ),
-            ),
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::RevealTopTwoPiles { .. }
+                ) =>
+            {
+                let crate::toolbox::PlayerMutation::RevealTopTwoPiles {
+                    count, other_dest, ..
+                } = &spec.op
+                else {
+                    unreachable!()
+                };
+                (
+                    self.resolve_value_expr(
+                        self.window.resolving().map_or(player, |e| e.controller()),
+                        count,
+                    )?
+                    .max(0.into())
+                    .min(RulesInteger::from_usize(
+                        self.window.cards().library(player).len(),
+                    ))
+                    .to_usize()
+                    .ok_or(EffectError::InconsistentProgram)?,
+                    false,
+                    false,
+                    matches!(
+                        other_dest,
+                        crate::program::LookTopRestDest::BottomRandom
+                            | crate::program::LookTopRestDest::BottomOrder
+                            | crate::program::LookTopRestDest::TopOrder
+                    ),
+                )
+            }
             Instruction::LookTopChooseExt {
                 count,
                 rest_dest,

@@ -830,25 +830,33 @@ fn create_token_copy_ext_enters_attacking_and_defender_scope_and_pair_pt() {
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::CreateTokenCopyExt {
-                source: MoveSubjectRef::AbilitySource,
-                count: ValueExpr::literal(1),
-                recipients: TokenRecipients::Controller,
-                enters_tapped: true,
-                enters_attacking: true,
-                haste: false,
-                sacrifice_at_end_step: false,
-                exile_at_end_step: false,
-                nonlegendary: false,
-                extra_types: BTreeSet::new(),
-                extra_subtypes: BTreeSet::new(),
-                extra_keywords: BTreeSet::new(),
-                override_pt: None,
-                extra_colors: BTreeSet::new(),
-                defender_scope: AttackingDefenderScope::Player(ResolvingPlayer::DefendingPlayer),
-                override_colors: None,
-                strip_mana_cost: false,
-            }],
+            vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::create_token_copy(
+                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                        MoveSubjectRef::AbilitySource,
+                    ),
+                    Box::new(spellwake_engine::toolbox::TokenCopySpec {
+                        count: ValueExpr::literal(1),
+                        recipients: TokenRecipients::Controller,
+                        enters_tapped: true,
+                        enters_attacking: true,
+                        haste: false,
+                        sacrifice_at_end_step: false,
+                        exile_at_end_step: false,
+                        nonlegendary: false,
+                        extra_types: BTreeSet::new(),
+                        extra_subtypes: BTreeSet::new(),
+                        extra_keywords: BTreeSet::new(),
+                        override_pt: None,
+                        extra_colors: BTreeSet::new(),
+                        defender_scope: AttackingDefenderScope::Player(
+                            ResolvingPlayer::DefendingPlayer,
+                        ),
+                        override_colors: None,
+                        strip_mana_cost: false,
+                    }),
+                ),
+            ))],
         ),
     });
     let raider = validated(raider, &vocab);

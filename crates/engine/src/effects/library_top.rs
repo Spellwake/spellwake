@@ -495,12 +495,7 @@ impl EffectWindow {
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::RollDie { .. }
-            | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Connive { .. }
-            | Instruction::ConniveFinalize { .. }
-            | Instruction::Discover { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
             | Instruction::ZoneOp(_)
@@ -514,73 +509,21 @@ impl EffectWindow {
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
             | Instruction::StackOp(_)
-            | Instruction::BindResolutionX(_)
-            | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
             | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::ResolvePowerAbility(_)
-            | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::ChooseCreatureType { .. }
-            | Instruction::RememberPermanentTarget
-            | Instruction::ExileDefeatedSiege
-            | Instruction::OfferSourceCounters { .. }
-            | Instruction::ResolveKeywordTrigger(_)
-            | Instruction::RequireCondition(_)
-            | Instruction::Encore
-            | Instruction::ReturnExiledTargetCohort { .. }
-            | Instruction::ExileDelayedObjects(_)
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Ninjutsu
-            | Instruction::Unearth
-            | Instruction::Cascade
-            | Instruction::CascadeBottom
-            | Instruction::Myriad
-            | Instruction::CopyCapturedAbility
-            | Instruction::CopyOnCast(_)
-            | Instruction::MadnessCast
-            | Instruction::MiracleCast(_)
-            | Instruction::CastDefeatedSiege
-            | Instruction::ReboundCast(_)
-            | Instruction::EndStepCast { .. }
-            | Instruction::SacrificeDelayedObjects(_)
-            | Instruction::ScheduleArtifactReturn(_)
-            | Instruction::ReturnDelayedGraveyardCard(_)
-            | Instruction::ReturnDelayedPermanentToHand(_)
-            | Instruction::ReturnDelayedExileWithCounters(_)
-            | Instruction::ReturnDelayedExile(_)
-            | Instruction::ExileUnearthed(_)
-            | Instruction::ResolveTransfer(_)
-            | Instruction::ExtortDrain
-            | Instruction::ResolveGrowth(_)
-            | Instruction::ResolveCounterKeyword(_)
-            | Instruction::SacrificeEvoked
-            | Instruction::SacrificeStateTriggerSource
             | Instruction::Attach(_)
-            | Instruction::ChooseRevealedHandCard { .. }
-            | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::FixedTargetClause(_)
-            | Instruction::ReturnGraveyardCreatureWithCorpse(_)
-            | Instruction::PutHandPermanentsOntoBattlefield { .. }
-            | Instruction::MayRevealLibraryTop
-            | Instruction::ChooseFoundSpell
-            | Instruction::CastFoundSpell(_)
             | Instruction::SearchLibrary { .. }
             | Instruction::AffectPermanentTargets { .. }
-            | Instruction::ExileOnePerPlayerUntilSourceLeaves
-            | Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::DamageFromGrantingPermanent { .. }
             | Instruction::Sacrifice { .. }
-            | Instruction::SacrificeRandomUntilLand
             | Instruction::Discard { .. }
-            | Instruction::OfferAnyPlayer { .. }
             | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::CreateTokenCopyExt { .. }
-            | Instruction::ReturnEarthbentCard
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
             | Instruction::AdjustLife(_)

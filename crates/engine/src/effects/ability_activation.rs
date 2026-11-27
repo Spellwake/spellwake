@@ -1247,12 +1247,20 @@ impl EffectWindow {
                         SourceCost::HandDiscardSelf(crate::activated::HandDiscardKeyword::Cycling)
                     ),
                     ActivatedCostScope::Ninjutsu => selected.source_cost.is_ninjutsu(),
-                    ActivatedCostScope::Unearth => {
-                        selected.body.instructions.contains(&Instruction::Unearth)
-                    }
-                    ActivatedCostScope::Encore => {
-                        selected.body.instructions.contains(&Instruction::Encore)
-                    }
+                    ActivatedCostScope::Unearth => selected.body.instructions.iter().any(|op| {
+                        matches!(
+                            op,
+                            Instruction::MutateObject(spec)
+                                if matches!(spec.op, crate::toolbox::ObjectMutation::Unearth)
+                        )
+                    }),
+                    ActivatedCostScope::Encore => selected.body.instructions.iter().any(|op| {
+                        matches!(
+                            op,
+                            Instruction::StackOp(spec)
+                                if matches!(spec.op, crate::toolbox::StackOpKind::Encore)
+                        )
+                    }),
                     ActivatedCostScope::Loyalty => loyalty_cost.is_some(),
                     ActivatedCostScope::Targeting(filter) => {
                         let mut targeted_objects: Vec<ObjectId> = Vec::new();
@@ -1742,18 +1750,13 @@ impl EffectWindow {
         };
         body.target = body.target.with_ability_source(source);
         for instruction in &mut body.instructions {
-            if let Instruction::DamageFromGrantingPermanent { amount } = instruction {
+            if let Instruction::DealDamage(spec) = instruction
+                && spec.recipients == crate::toolbox::DamageTargetQuery::FromGrantingPermanent
+            {
                 if granting_damage_source.is_none() {
                     return Err(EffectError::InconsistentProgram);
                 }
-                *instruction = Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
-                    source: crate::toolbox::DamageSourceQuery::EntrySource,
-                    recipients: crate::toolbox::DamageTargetQuery::Targets,
-                    amount: crate::program::DamageAmountSpec::Expr(ValueExpr::Literal(
-                        amount.clone(),
-                    )),
-                    exile_if_dies: false,
-                }));
+                spec.recipients = crate::toolbox::DamageTargetQuery::Targets;
             }
             if let Instruction::SearchLibrary { filter } = instruction
                 && filter.is_transfigure()
@@ -1787,7 +1790,11 @@ impl EffectWindow {
             value.spell_target_mana_value = spell_target_mana_value;
         }
         if let StackPayload::Instructions(value) = &mut payload
-            && value.body.instructions == [Instruction::Encore]
+            && matches!(
+                value.body.instructions.as_slice(),
+                [Instruction::StackOp(spec)]
+                    if matches!(spec.op, crate::toolbox::StackOpKind::Encore)
+            )
         {
             value.encore_source = Some(Box::new(
                 self.rules_snapshot(None)?

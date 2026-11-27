@@ -7,7 +7,8 @@ use crate::{
     effects::CounterKind,
     object_identity::ObjectId,
     program::{
-        DefinitionError, DelayedReturnTiming, LibraryPlacement, LinkedExileGroup, ValueExpr,
+        CardType, DefinitionError, DelayedReturnTiming, LibraryPlacement, LinkedExileGroup,
+        ResolvingPlayer, ValueExpr,
     },
     toolbox::{
         choice::ChoiceCategory,
@@ -16,7 +17,8 @@ use crate::{
         tags::{TagKey, TagValue},
     },
 };
-use spellwake_contracts::creature_types::CreatureTypeVocabulary;
+use spellwake_contracts::{RulesInteger, creature_types::CreatureTypeVocabulary};
+use std::collections::BTreeSet;
 
 /// Optional constraint enforced on multi-object selection prompts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,6 +184,32 @@ pub enum ZoneDest {
     LookOnly {
         viewer: PlayerSelector,
     },
+    /// Specialized delayed, cohort, or hand/graveyard return zone operation.
+    Delayed(DelayedZoneAction),
+}
+
+/// Specialized delayed, cohort, or hand/graveyard return semantics executed via `ZoneOp`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DelayedZoneAction {
+    ReturnGraveyardToHand(ObjectId),
+    ReturnPermanentToHand(ObjectId),
+    ReturnGraveyardCard(ObjectId),
+    ExileObjects(Vec<ObjectId>),
+    SacrificeObjects(Vec<ObjectId>),
+    ReturnExile(Vec<ObjectId>),
+    ReturnExileWithCounters(Vec<ObjectId>),
+    ReturnExiledTargetCohort {
+        next_end_step: bool,
+        owner_controls: bool,
+    },
+    ReturnChosenXGraveyardCreatures,
+    ReturnGraveyardCreatureWithCorpse(RulesInteger),
+    PutHandPermanentsOntoBattlefield {
+        player: ResolvingPlayer,
+        types: BTreeSet<CardType>,
+        maximum: u16,
+        tapped: bool,
+    },
 }
 
 impl ZoneDest {
@@ -271,6 +299,112 @@ impl ZoneOpSpec {
         }
     }
 
+    #[must_use]
+    pub fn is_delayed_special_op(&self) -> bool {
+        matches!(self.destination, ZoneDest::Delayed(_))
+    }
+
+    #[must_use]
+    pub fn return_delayed_graveyard_to_hand(object: ObjectId) -> Self {
+        Self::move_all(
+            ObjectQuery::Fixed(vec![object]),
+            ZoneDest::Delayed(DelayedZoneAction::ReturnGraveyardToHand(object)),
+        )
+    }
+
+    #[must_use]
+    pub fn return_delayed_permanent_to_hand(object: ObjectId) -> Self {
+        Self::move_all(
+            ObjectQuery::Fixed(vec![object]),
+            ZoneDest::Delayed(DelayedZoneAction::ReturnPermanentToHand(object)),
+        )
+    }
+
+    #[must_use]
+    pub fn return_delayed_graveyard_card(object: ObjectId) -> Self {
+        Self::move_all(
+            ObjectQuery::Fixed(vec![object]),
+            ZoneDest::Delayed(DelayedZoneAction::ReturnGraveyardCard(object)),
+        )
+    }
+
+    #[must_use]
+    pub fn exile_delayed_objects(objects: Vec<ObjectId>) -> Self {
+        Self::move_all(
+            ObjectQuery::Fixed(objects.clone()),
+            ZoneDest::Delayed(DelayedZoneAction::ExileObjects(objects)),
+        )
+    }
+
+    #[must_use]
+    pub fn sacrifice_delayed_objects(objects: Vec<ObjectId>) -> Self {
+        Self::move_all(
+            ObjectQuery::Fixed(objects.clone()),
+            ZoneDest::Delayed(DelayedZoneAction::SacrificeObjects(objects)),
+        )
+    }
+
+    #[must_use]
+    pub fn return_delayed_exile(objects: Vec<ObjectId>) -> Self {
+        Self::move_all(
+            ObjectQuery::Fixed(objects.clone()),
+            ZoneDest::Delayed(DelayedZoneAction::ReturnExile(objects)),
+        )
+    }
+
+    #[must_use]
+    pub fn return_delayed_exile_with_counters(objects: Vec<ObjectId>) -> Self {
+        Self::move_all(
+            ObjectQuery::Fixed(objects.clone()),
+            ZoneDest::Delayed(DelayedZoneAction::ReturnExileWithCounters(objects)),
+        )
+    }
+
+    #[must_use]
+    pub fn return_exiled_target_cohort(next_end_step: bool, owner_controls: bool) -> Self {
+        Self::move_all(
+            ObjectQuery::Empty,
+            ZoneDest::Delayed(DelayedZoneAction::ReturnExiledTargetCohort {
+                next_end_step,
+                owner_controls,
+            }),
+        )
+    }
+
+    #[must_use]
+    pub fn return_chosen_x_graveyard_creatures() -> Self {
+        Self::move_all(
+            ObjectQuery::Empty,
+            ZoneDest::Delayed(DelayedZoneAction::ReturnChosenXGraveyardCreatures),
+        )
+    }
+
+    #[must_use]
+    pub fn return_graveyard_creature_with_corpse(amount: RulesInteger) -> Self {
+        Self::move_all(
+            ObjectQuery::Empty,
+            ZoneDest::Delayed(DelayedZoneAction::ReturnGraveyardCreatureWithCorpse(amount)),
+        )
+    }
+
+    #[must_use]
+    pub fn put_hand_permanents_onto_battlefield(
+        player: ResolvingPlayer,
+        types: BTreeSet<CardType>,
+        maximum: u16,
+        tapped: bool,
+    ) -> Self {
+        Self::move_all(
+            ObjectQuery::Empty,
+            ZoneDest::Delayed(DelayedZoneAction::PutHandPermanentsOntoBattlefield {
+                player,
+                types,
+                maximum,
+                tapped,
+            }),
+        )
+    }
+
     /// Construct a delayed return of fixed object IDs to the battlefield under owner's control.
     #[must_use]
     pub fn return_fixed_to_battlefield(objects: Vec<ObjectId>, transformed: bool) -> Self {
@@ -327,6 +461,14 @@ impl ZoneOpSpec {
                 position: LibraryOrderPos::ChoiceTopOrBottom { chooser },
             } => chooser.uses_target(),
             ZoneDest::LookOnly { viewer } => viewer.uses_target(),
+            ZoneDest::Delayed(action) => match action {
+                DelayedZoneAction::PutHandPermanentsOntoBattlefield { player, .. } => {
+                    PlayerSelector::Resolving(*player).uses_target()
+                }
+                DelayedZoneAction::ReturnChosenXGraveyardCreatures
+                | DelayedZoneAction::ReturnGraveyardCreatureWithCorpse(_) => true,
+                _ => false,
+            },
             ZoneDest::None
             | ZoneDest::Graveyard { .. }
             | ZoneDest::Hand
@@ -424,7 +566,8 @@ impl ZoneOpSpec {
             | ZoneDest::Graveyard { .. }
             | ZoneDest::Hand
             | ZoneDest::Library { .. }
-            | ZoneDest::RevealOnly => {}
+            | ZoneDest::RevealOnly
+            | ZoneDest::Delayed(_) => {}
         }
         if let Some(shuf) = &self.shuffle_library {
             shuf.validate_vocabulary(vocabulary)?;

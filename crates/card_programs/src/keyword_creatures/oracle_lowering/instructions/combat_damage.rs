@@ -399,7 +399,7 @@ pub(super) fn lower_combat_damage_instruction(
                                 .push(Instruction::FixedTargetClause(Box::new(
                                     ExecutableBody::new(
                                         src_bt,
-                                        vec![Instruction::RememberPermanentTarget],
+                                        vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))],
                                     ),
                                 )));
                             builder
@@ -407,7 +407,7 @@ pub(super) fn lower_combat_damage_instruction(
                                 .push(Instruction::FixedTargetClause(Box::new(
                                     ExecutableBody::new(
                                         dst_bt,
-                                        vec![Instruction::RememberPermanentTarget],
+                                        vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))],
                                     ),
                                 )));
                             builder.instructions.push(Instruction::DealDamage(Box::new(
@@ -428,7 +428,13 @@ pub(super) fn lower_combat_damage_instruction(
                                     op,
                                     Instruction::FixedTargetClause(_)
                                         | Instruction::AffectPermanentTargets { .. }
-                                        | Instruction::RememberPermanentTarget
+                                ) || matches!(
+                                    op,
+                                    Instruction::MutateObject(spec)
+                                        if matches!(
+                                            spec.op,
+                                            spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                        )
                                 )
                             })
                         {
@@ -436,7 +442,7 @@ pub(super) fn lower_combat_damage_instruction(
                             prepend_instruction_at(
                                 &mut first_ops,
                                 0,
-                                Instruction::RememberPermanentTarget,
+                                Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target())),
                             );
                             let first_bt = std::mem::replace(&mut builder.target, BodyTarget::None);
                             builder
@@ -449,7 +455,7 @@ pub(super) fn lower_combat_damage_instruction(
                                 .push(Instruction::FixedTargetClause(Box::new(
                                     ExecutableBody::new(
                                         dst_bt,
-                                        vec![Instruction::RememberPermanentTarget],
+                                        vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))],
                                     ),
                                 )));
                             builder.instructions.push(Instruction::DealDamage(Box::new(
@@ -522,7 +528,7 @@ pub(super) fn lower_combat_damage_instruction(
                                 .push(Instruction::FixedTargetClause(Box::new(
                                     ExecutableBody::new(
                                         src_bt,
-                                        vec![Instruction::RememberPermanentTarget],
+                                        vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))],
                                     ),
                                 )));
                             builder
@@ -530,7 +536,7 @@ pub(super) fn lower_combat_damage_instruction(
                                 .push(Instruction::FixedTargetClause(Box::new(
                                     ExecutableBody::new(
                                         dst_bt,
-                                        vec![Instruction::RememberPermanentTarget],
+                                        vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))],
                                     ),
                                 )));
                             builder.instructions.push(
@@ -2932,12 +2938,24 @@ pub(super) fn lower_combat_damage_instruction(
                 builder
                     .instructions
                     .push(Instruction::FixedTargetClause(Box::new(
-                        ExecutableBody::new(bt_a, vec![Instruction::RememberPermanentTarget]),
+                        ExecutableBody::new(
+                            bt_a,
+                            vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
+                        ),
                     )));
                 builder
                     .instructions
                     .push(Instruction::FixedTargetClause(Box::new(
-                        ExecutableBody::new(bt_b, vec![Instruction::RememberPermanentTarget]),
+                        ExecutableBody::new(
+                            bt_b,
+                            vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
+                        ),
                     )));
                 builder.instructions.push(Instruction::Fight {
                     first: Box::new(MoveSubjectRef::RememberedFirst),
@@ -2962,7 +2980,13 @@ pub(super) fn lower_combat_damage_instruction(
                         op,
                         Instruction::FixedTargetClause(_)
                             | Instruction::AffectPermanentTargets { .. }
-                            | Instruction::RememberPermanentTarget
+                    ) || matches!(
+                        op,
+                        Instruction::MutateObject(spec)
+                            if matches!(
+                                spec.op,
+                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                            )
                     )
                 })
             {
@@ -2970,7 +2994,13 @@ pub(super) fn lower_combat_damage_instruction(
                     rewrite_bt_related_to_first_target_controller(&mut bt_b);
                 }
                 let mut first_ops = std::mem::take(&mut builder.instructions);
-                prepend_instruction_at(&mut first_ops, 0, Instruction::RememberPermanentTarget);
+                prepend_instruction_at(
+                    &mut first_ops,
+                    0,
+                    Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                    )),
+                );
                 let first_bt = std::mem::replace(&mut builder.target, BodyTarget::None);
                 builder
                     .instructions
@@ -2980,7 +3010,13 @@ pub(super) fn lower_combat_damage_instruction(
                 builder
                     .instructions
                     .push(Instruction::FixedTargetClause(Box::new(
-                        ExecutableBody::new(bt_b, vec![Instruction::RememberPermanentTarget]),
+                        ExecutableBody::new(
+                            bt_b,
+                            vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(
+                            ),
+                        ))],
+                        ),
                     )));
                 builder.instructions.push(Instruction::Fight {
                     first: Box::new(MoveSubjectRef::RememberedFirst),
@@ -5903,7 +5939,13 @@ pub(super) fn lower_combat_damage_instruction(
                                     op,
                                     Instruction::FixedTargetClause(_)
                                         | Instruction::AffectPermanentTargets { .. }
-                                        | Instruction::RememberPermanentTarget
+                                ) || matches!(
+                                    op,
+                                    Instruction::MutateObject(spec)
+                                        if matches!(
+                                            spec.op,
+                                            spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                        )
                                 )
                             })
                         {
@@ -5911,7 +5953,7 @@ pub(super) fn lower_combat_damage_instruction(
                             prepend_instruction_at(
                                 &mut first_ops,
                                 0,
-                                Instruction::RememberPermanentTarget,
+                                Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target())),
                             );
                             let first_bt = std::mem::replace(&mut builder.target, BodyTarget::None);
                             builder
@@ -5956,7 +5998,7 @@ pub(super) fn lower_combat_damage_instruction(
                                 builder.instructions.push(Instruction::FixedTargetClause(
                                     Box::new(ExecutableBody::new(
                                         attacker_bt,
-                                        vec![Instruction::RememberPermanentTarget],
+                                        vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))],
                                     )),
                                 ));
                                 builder.instructions.push(Instruction::FixedTargetClause(

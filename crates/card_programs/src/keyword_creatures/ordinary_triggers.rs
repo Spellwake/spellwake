@@ -48,7 +48,9 @@ pub(super) fn compile(
             condition: spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Targeted { subject: spellwake_engine::program::ObjectFilter::self_object(), by_opponent: false, spell_only: true, instant_or_sorcery_only: false }),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(BodyTarget::None, vec![
-                Instruction::SacrificeStateTriggerSource,
+                Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::sacrifice_state_trigger_source(),
+                )),
                 Instruction::CreateTokens { creations },
             ]),
         });
@@ -104,7 +106,7 @@ pub(super) fn compile(
             Some((condition, minimum, maximum, distinct_targets))
         });
         if line=="Myriad" {
-            triggers.push((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::AttackTriggerMode::Individual { capture_defender: true }),ExecutableBody::new(BodyTarget::None,vec![Instruction::Myriad,Instruction::ScheduleDelayedStepTrigger { step: spellwake_engine::turn::Step::EndCombat, own_step_only: false, body: Box::new(ExecutableBody::new(BodyTarget::None, vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::CreatedTokens, spellwake_engine::toolbox::ZoneDest::exile())))])) }])));
+            triggers.push((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::AttackTriggerMode::Individual { capture_defender: true }),ExecutableBody::new(BodyTarget::None,vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::myriad())),Instruction::ScheduleDelayedStepTrigger { step: spellwake_engine::turn::Step::EndCombat, own_step_only: false, body: Box::new(ExecutableBody::new(BodyTarget::None, vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::CreatedTokens, spellwake_engine::toolbox::ZoneDest::exile())))])) }])));
         } else if line == "Whenever you cast a planeswalker spell, you may return this card from your graveyard to the battlefield." {
             triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(spellwake_engine::program::PlayerRelation::Controller, spellwake_engine::program::SpellFilter::of_type(spellwake_engine::program::CardType::Planeswalker)).in_zone(spellwake_engine::program::TriggerZone::Graveyard),ExecutableBody::new(BodyTarget::None,vec![
                 Instruction::OptionalEffect {chooser:ResolvingPlayer::Controller},crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_battlefield(false),
@@ -137,7 +139,7 @@ pub(super) fn compile(
         } else if line == "Whenever a planeswalker you control enters, if this artifact has loyalty counters on it, you may move a loyalty counter from this artifact onto that planeswalker." {
             triggers.push((spellwake_engine::program::TriggerSpec::enters(spellwake_engine::program::ObjectFilter::any_types(spellwake_engine::program::CardTypeMask::from_card_type(CardType::Planeswalker)).controlled()).only_if(spellwake_engine::program::TriggerCondition::SourceHasLoyalty),
                 ExecutableBody::new(BodyTarget::None, vec![
-                    Instruction::RequireCondition(spellwake_engine::program::InterveningCondition::SourceLoyalty),
+                    Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::require_condition(spellwake_engine::program::InterveningCondition::SourceLoyalty))),
                     Instruction::OptionalEffect { chooser: ResolvingPlayer::Controller },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::move_counters(
                         spellwake_engine::toolbox::ObjectQuery::Source,
@@ -154,7 +156,7 @@ pub(super) fn compile(
             let subtype = vocabulary.resolve_label(kind.strip_suffix('s')?)?;
             let minimum = u16::try_from(amount(quantity)?).ok()?;
             triggers.push((spellwake_engine::program::TriggerSpec::state_threshold(spellwake_engine::program::StateThresholdKind::ControlledSubtype { subtype, minimum }),
-                ExecutableBody::new(BodyTarget::None, vec![Instruction::SacrificeStateTriggerSource])));
+                ExecutableBody::new(BodyTarget::None, vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::sacrifice_state_trigger_source()))])));
         } else if let Some(subtype) = line.strip_prefix("Whenever a ")
             .or_else(|| line.strip_prefix("Whenever an "))
             .and_then(|text| text.strip_suffix(" deals damage to you, destroy it."))
@@ -185,7 +187,7 @@ pub(super) fn compile(
             && consequence=="you may put a quest counter on this enchantment." {
             let n=threshold.parse::<u8>().ok().filter(|v|*v>0)?;
             let mut effect=body(consequence,&card.name,vocabulary)?;
-            effect.instructions.insert(0,Instruction::RequireCondition(spellwake_engine::program::InterveningCondition::OpponentLifeLoss(n)));
+            effect.instructions.insert(0,Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::require_condition(spellwake_engine::program::InterveningCondition::OpponentLifeLoss(n)))));
             triggers.push((spellwake_engine::program::TriggerSpec::step_began(spellwake_engine::turn::Step::End, spellwake_engine::program::PlayerRelation::Controller).only_if(spellwake_engine::program::TriggerCondition::OpponentLostLifeAtLeast(n)),effect));
         } else if let Some((threshold,consequence))=line.strip_prefix("Whenever a card is put into an opponent's graveyard from anywhere, if this enchantment has ")
             .and_then(|text|text.split_once(" or more quest counters on it, you may have that player lose ")) {
@@ -194,7 +196,7 @@ pub(super) fn compile(
             let lose=lose.parse::<u8>().ok().filter(|n|*n>0)?;
             let gain=gain.strip_suffix(" life.")?.parse::<u8>().ok().filter(|n|*n>0)?;
             triggers.push((spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::PutIntoGraveyard { subject: spellwake_engine::program::ObjectFilter::any(), player: spellwake_engine::program::PlayerRelation::Opponent, from_library: false, own_turn_only: false }).only_if(spellwake_engine::program::TriggerCondition::SourceCounterAtLeast { kind: spellwake_engine::effects::CounterKind::Quest, minimum: threshold }),ExecutableBody::new(BodyTarget::None,vec![
-                Instruction::RequireCondition(spellwake_engine::program::InterveningCondition::SourceQuestCounters(threshold)),Instruction::OptionalSequence {chooser:ResolvingPlayer::Controller,instructions:2},
+                Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::require_condition(spellwake_engine::program::InterveningCondition::SourceQuestCounters(threshold)))),Instruction::OptionalSequence {chooser:ResolvingPlayer::Controller,instructions:2},
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::UniqueRelatedPlayer,
@@ -1451,11 +1453,15 @@ pub(super) fn body(
         text.strip_prefix("you may put a land card from your hand onto the battlefield tapped.")
     {
         use spellwake_engine::program::{Comparison, ResolutionCondition};
-        let put = |types| Instruction::PutHandPermanentsOntoBattlefield {
-            player: ResolvingPlayer::Controller,
-            types,
-            maximum: 1,
-            tapped: true,
+        let put = |types| {
+            Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::put_hand_permanents_onto_battlefield(
+                    ResolvingPlayer::Controller,
+                    types,
+                    1,
+                    true,
+                ),
+            ))
         };
         let instructions = if rest.is_empty() {
             vec![put([CardType::Land].into())]
@@ -2120,12 +2126,14 @@ pub(super) fn body(
             .collect::<Option<BTreeSet<_>>>()?;
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::PutHandPermanentsOntoBattlefield {
-                player: ResolvingPlayer::UniqueRelatedPlayer,
-                types,
-                maximum: 1,
-                tapped: false,
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::put_hand_permanents_onto_battlefield(
+                    ResolvingPlayer::UniqueRelatedPlayer,
+                    types,
+                    1,
+                    false,
+                ),
+            ))],
         ));
     }
     if let Some(count)=text.strip_prefix("exile the top ").and_then(|s|s.strip_suffix(" cards of your library. Until end of turn, you may cast noncreature spells from among those cards without paying their mana costs.")) {

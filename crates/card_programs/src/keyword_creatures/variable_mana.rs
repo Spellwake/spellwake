@@ -142,7 +142,9 @@ fn spell_body(
                 BodyTarget::FilteredOwnGraveyardCard(
                     spellwake_engine::program::ObjectFilter::creature(),
                 ),
-                Instruction::ReturnChosenXGraveyardCreatures,
+                Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::return_chosen_x_graveyard_creatures(),
+                )),
             )
         }
         "Each opponent loses X life. You gain life equal to the life lost this way." => (

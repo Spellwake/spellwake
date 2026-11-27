@@ -113,7 +113,13 @@ impl ObjectCharacteristics {
             let restriction = self
                 .granted_activated
                 .get(&key)
-                .filter(|a| a.body.instructions == [crate::program::Instruction::Encore])
+                .filter(|a| {
+                    matches!(
+                        a.body.instructions.as_slice(),
+                        [crate::program::Instruction::StackOp(spec)]
+                            if matches!(spec.op, crate::toolbox::StackOpKind::Encore)
+                    )
+                })
                 .map(|_| ActivationRestriction::Sorcery);
             return ActivationTerms {
                 restriction,

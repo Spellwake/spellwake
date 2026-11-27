@@ -1489,7 +1489,12 @@ fn energy_counter_myriad_keyword_and_extended_counter_kinds_project_cleanly() {
             },
         }),
         grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Myriad]),
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::myriad(),
+            ))],
+        ),
     });
     let energy_spell = instant(
         BodyTarget::None,
@@ -1942,13 +1947,15 @@ fn reveal_top_two_piles_fact_or_fiction_and_steam_augury_round_trip_and_reject_i
     // -> chosen pile goes to A's hand, other pile goes to A's graveyard.
     let steam_augury = instant(
         BodyTarget::None,
-        vec![Instruction::RevealTopTwoPiles {
-            count: ValueExpr::Literal(3.into()),
-            controller_divides: true,
-            target_opponent: false,
-            chosen_dest: LookTopKeepDest::Hand,
-            other_dest: LookTopRestDest::Graveyard,
-        }],
+        vec![Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::reveal_top_two_piles(
+                ValueExpr::Literal(3.into()),
+                true,
+                false,
+                LookTopKeepDest::Hand,
+                LookTopRestDest::Graveyard,
+            ),
+        ))],
     );
     let vanilla = || Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
     let source = main_state(vec![

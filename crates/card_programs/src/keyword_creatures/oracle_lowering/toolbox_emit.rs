@@ -662,7 +662,17 @@ pub(crate) fn rewrite_zone_op(
             _ => {}
         },
         ZoneDest::LookOnly { viewer } => rewrite_player_selector(viewer, map_rp, map_ap, map_ve),
-        ZoneDest::None | ZoneDest::Graveyard { .. } | ZoneDest::Hand | ZoneDest::RevealOnly => {}
+        ZoneDest::Delayed(
+            spellwake_engine::toolbox::DelayedZoneAction::PutHandPermanentsOntoBattlefield {
+                player,
+                ..
+            },
+        ) => map_rp(player),
+        ZoneDest::Delayed(_)
+        | ZoneDest::None
+        | ZoneDest::Graveyard { .. }
+        | ZoneDest::Hand
+        | ZoneDest::RevealOnly => {}
     }
     if let Some(shuf) = &mut spec.shuffle_library {
         rewrite_player_selector(shuf, map_rp, map_ap, map_ve);

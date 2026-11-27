@@ -275,12 +275,16 @@ pub(super) fn lower_control_misc_instruction(
                     self_pronoun_valid,
                     bound_x,
                 )?;
-                builder.instructions.push(Instruction::OfferAnyPlayer {
-                    players,
-                    cost_body,
-                    paid_body: ExecutableBody::new(BodyTarget::None, Vec::new()),
-                    declined_body: None,
-                });
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::offer_any_player(
+                            players,
+                            cost_body,
+                            ExecutableBody::new(BodyTarget::None, Vec::new()),
+                            None,
+                        ),
+                    )));
                 return Ok(());
             }
             if matches!(
@@ -835,13 +839,17 @@ pub(super) fn lower_control_misc_instruction(
         }
         InstructionAst::RollDie { sides } => {
             let nz = std::num::NonZeroU16::new(*sides).ok_or("oracle:zero-die-sides")?;
-            builder.instructions.push(Instruction::RollDie {
-                player: ResolvingPlayer::Controller,
-                sides: nz,
-                count: ValueExpr::literal(1),
-                mode: spellwake_engine::program::DieRollMode::Sum,
-                bands: Vec::new(),
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::roll_die(
+                        ResolvingPlayer::Controller,
+                        nz,
+                        ValueExpr::literal(1),
+                        spellwake_engine::program::DieRollMode::Sum,
+                        Vec::new(),
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::RollDiceChooseOne { count, sides } => {
@@ -849,23 +857,31 @@ pub(super) fn lower_control_misc_instruction(
             if *count == 0 {
                 return Err("oracle:zero-die-count");
             }
-            builder.instructions.push(Instruction::RollDie {
-                player: ResolvingPlayer::Controller,
-                sides: nz,
-                count: ValueExpr::literal(i64::from(*count)),
-                mode: spellwake_engine::program::DieRollMode::ChooseOne,
-                bands: Vec::new(),
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::roll_die(
+                        ResolvingPlayer::Controller,
+                        nz,
+                        ValueExpr::literal(i64::from(*count)),
+                        spellwake_engine::program::DieRollMode::ChooseOne,
+                        Vec::new(),
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::FlipCoin => {
-            builder.instructions.push(Instruction::FlipCoins {
-                player: ResolvingPlayer::Controller,
-                mode: spellwake_engine::program::CoinFlipMode::Single,
-                win_body: None,
-                lose_body: None,
-                lose_destination: None,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::flip_coins(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::program::CoinFlipMode::Single,
+                        None,
+                        None,
+                        None,
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::ChooseOption(raw) => {
@@ -1454,12 +1470,16 @@ pub(super) fn lower_control_misc_instruction(
                     }
                     ExecutableBody::new(BodyTarget::None, dec.instructions)
                 };
-                builder.instructions.push(Instruction::OfferAnyPlayer {
-                    players,
-                    cost_body,
-                    paid_body: ExecutableBody::new(BodyTarget::None, Vec::new()),
-                    declined_body: Some(declined_body),
-                });
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::offer_any_player(
+                            players,
+                            cost_body,
+                            ExecutableBody::new(BodyTarget::None, Vec::new()),
+                            Some(declined_body),
+                        ),
+                    )));
                 return Ok(());
             }
             if let Some(CostAtomAst::PayMana(raw)) = unless_cost
@@ -5613,7 +5633,8 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                         ..
                     }
                     | spellwake_engine::toolbox::DamageTargetQuery::OrderedTargets { .. }
-                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree => {}
+                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree
+                    | spellwake_engine::toolbox::DamageTargetQuery::FromGrantingPermanent => {}
                 }
                 if let DamageAmountSpec::Expr(e) = &mut spec.amount {
                     rewrite_chosen_to_loop_ve(e);
@@ -5637,11 +5658,42 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
                     | spellwake_engine::toolbox::PlayerMutation::CollectEvidence {
                         minimum: amount,
-                    } => {
+                    }
+                    | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles {
+                        count: amount,
+                        ..
+                    }
+                    | spellwake_engine::toolbox::PlayerMutation::RollDie {
+                        count: amount, ..
+                    }
+                    | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(amount) => {
                         rewrite_chosen_to_loop_ve(amount);
                     }
                     spellwake_engine::toolbox::PlayerMutation::AddMana(yield_kind) => {
                         rewrite_chosen_to_loop_mana_yield(yield_kind);
+                    }
+                    spellwake_engine::toolbox::PlayerMutation::OfferAnyPlayer {
+                        cost_body,
+                        paid_body,
+                        declined_body,
+                    } => {
+                        rewrite_chosen_to_loop_ops(&mut cost_body.instructions);
+                        rewrite_chosen_to_loop_ops(&mut paid_body.instructions);
+                        if let Some(dec) = declined_body {
+                            rewrite_chosen_to_loop_ops(&mut dec.instructions);
+                        }
+                    }
+                    spellwake_engine::toolbox::PlayerMutation::FlipCoins {
+                        win_body,
+                        lose_body,
+                        ..
+                    } => {
+                        if let Some(wb) = win_body {
+                            rewrite_chosen_to_loop_ops(&mut wb.instructions);
+                        }
+                        if let Some(lb) = lose_body {
+                            rewrite_chosen_to_loop_ops(&mut lb.instructions);
+                        }
                     }
                     _ => {}
                 }
@@ -5801,8 +5853,22 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                         amount, ..
                     }
                     | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
-                    | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount } => {
+                    | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount }
+                    | spellwake_engine::toolbox::ObjectMutation::Connive { count: amount } => {
                         rewrite_chosen_to_loop_ve(amount);
+                    }
+                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
+                        rewrite_chosen_to_loop_ve(&mut copy.count);
+                        if let TokenRecipients::Player(rp) = &mut copy.recipients {
+                            rewrite_chosen_to_loop_rp(rp);
+                        }
+                        if let spellwake_engine::token::AttackingDefenderScope::Player(rp)
+                        | spellwake_engine::token::AttackingDefenderScope::PlayerOrTheirPlaneswalker(
+                            rp,
+                        ) = &mut copy.defender_scope
+                        {
+                            rewrite_chosen_to_loop_rp(rp);
+                        }
                     }
                     spellwake_engine::toolbox::ObjectMutation::MoveCounters {
                         to, amount, ..
@@ -5906,9 +5972,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_chosen_to_loop_rp(chooser);
                 rewrite_chosen_to_loop_ve(count);
             }
-            Instruction::RevealTopTwoPiles { count, .. } => {
-                rewrite_chosen_to_loop_ve(count);
-            }
+
             Instruction::OfferDynamicManaPayment {
                 payer,
                 extra_generic,
@@ -5945,24 +6009,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     }
                 }
             }
-            Instruction::CreateTokenCopyExt {
-                count,
-                recipients,
-                defender_scope,
-                ..
-            } => {
-                rewrite_chosen_to_loop_ve(count);
-                if let TokenRecipients::Player(rp) = recipients {
-                    rewrite_chosen_to_loop_rp(rp);
-                }
-                if let spellwake_engine::token::AttackingDefenderScope::Player(rp)
-                | spellwake_engine::token::AttackingDefenderScope::PlayerOrTheirPlaneswalker(
-                    rp,
-                ) = defender_scope
-                {
-                    rewrite_chosen_to_loop_rp(rp);
-                }
-            }
+
             Instruction::BranchIfFalse { condition, .. } => {
                 rewrite_chosen_to_loop_cond(condition);
             }
@@ -5970,19 +6017,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_chosen_to_loop_ve(count);
                 rewrite_chosen_to_loop_ops(&mut body.instructions);
             }
-            Instruction::OfferAnyPlayer {
-                players,
-                cost_body,
-                paid_body,
-                declined_body,
-            } => {
-                rewrite_chosen_to_loop_ap(players);
-                rewrite_chosen_to_loop_ops(&mut cost_body.instructions);
-                rewrite_chosen_to_loop_ops(&mut paid_body.instructions);
-                if let Some(dec) = declined_body {
-                    rewrite_chosen_to_loop_ops(&mut dec.instructions);
-                }
-            }
+
             Instruction::Exchange(spec) => match spec {
                 ExchangeSpec::LifeTotals { first, second } => {
                     rewrite_chosen_to_loop_rp(first);
@@ -5993,27 +6028,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 }
                 ExchangeSpec::Control { .. } => {}
             },
-            Instruction::RollDie { player, count, .. } => {
-                rewrite_chosen_to_loop_rp(player);
-                rewrite_chosen_to_loop_ve(count);
-            }
-            Instruction::FlipCoins {
-                player,
-                win_body,
-                lose_body,
-                ..
-            } => {
-                rewrite_chosen_to_loop_rp(player);
-                if let Some(wb) = win_body {
-                    rewrite_chosen_to_loop_ops(&mut wb.instructions);
-                }
-                if let Some(lb) = lose_body {
-                    rewrite_chosen_to_loop_ops(&mut lb.instructions);
-                }
-            }
-            Instruction::BindResolutionX(amount) => {
-                rewrite_chosen_to_loop_ve(amount);
-            }
+
             Instruction::SearchLibrary { filter } => {
                 rewrite_chosen_to_loop_rp(&mut filter.searcher);
             }
@@ -6809,20 +6824,27 @@ pub(super) fn lower_shuffle_that_player_fallback(
                     }
                 }
             }
-            Instruction::OfferAnyPlayer { players, .. } => {
-                let ok = match players {
-                    AffectedPlayers::One(rp) => {
-                        is_safe_resolving_player_for_shuffle(*rp, builder, in_trigger)
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::OfferAnyPlayer { .. }
+                ) =>
+            {
+                if let PlayerSelector::Group(players) = &spec.players {
+                    let ok = match players {
+                        AffectedPlayers::One(rp) => {
+                            is_safe_resolving_player_for_shuffle(*rp, builder, in_trigger)
+                        }
+                        _ => true,
+                    };
+                    if ok {
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                ZoneOpSpec::shuffle(PlayerSelector::Group(*players)),
+                            ),
+                        );
+                        return Ok(());
                     }
-                    _ => true,
-                };
-                if ok {
-                    builder.instructions.push(
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                            ZoneOpSpec::shuffle(PlayerSelector::Group(*players)),
-                        ),
-                    );
-                    return Ok(());
                 }
             }
             Instruction::AdjustLife(spec) => match &spec.players {

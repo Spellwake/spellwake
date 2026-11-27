@@ -77,7 +77,10 @@ fn compiled_die_roll_bands_preserve_legacy_ranges_and_bodies() {
     let ProgramKind::Spell(spell) = &typed.kind else {
         panic!("spell")
     };
-    let Instruction::RollDie { bands, .. } = &spell.body.instructions[0] else {
+    let Instruction::MutatePlayer(spec) = &spell.body.instructions[0] else {
+        panic!("roll")
+    };
+    let spellwake_engine::toolbox::PlayerMutation::RollDie { bands, .. } = &spec.op else {
         panic!("roll")
     };
     assert_eq!(

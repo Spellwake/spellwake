@@ -385,12 +385,14 @@ fn cmm_zacama_untaps_only_its_controllers_lands_if_cast_and_has_three_separate_c
     let mut other = super::loyalty::mana_source(4, &[(Blue, 1)]);
     other.owner = B;
     other.destination = battlefield(B);
-    let enter = Instruction::PutHandPermanentsOntoBattlefield {
-        player: spellwake_engine::program::ResolvingPlayer::Controller,
-        types: [CardType::Creature].into(),
-        maximum: 1,
-        tapped: false,
-    };
+    let enter = Instruction::ZoneOp(Box::new(
+        spellwake_engine::toolbox::ZoneOpSpec::put_hand_permanents_onto_battlefield(
+            spellwake_engine::program::ResolvingPlayer::Controller,
+            [CardType::Creature].into(),
+            1,
+            false,
+        ),
+    ));
     let cards = vec![
         named("Zacama, Primal Calamity", 1, A, ObjectDestination::Hand),
         super::loyalty::mana_source(2, &[(Green, 1)]),

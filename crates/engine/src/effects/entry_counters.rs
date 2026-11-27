@@ -20,10 +20,13 @@ pub(super) fn definition_or_token_matches(
             })
             .flat_map(|b| &b.instructions)
             .any(|op| match op {
-                Instruction::CreateTokenAndAttach { definition }
-                | Instruction::CreateAuraTokenAttached { definition, .. } => {
-                    definition_or_token_matches(definition.program(), matches)
-                }
+                Instruction::MutateObject(spec) => match &spec.op {
+                    crate::toolbox::ObjectMutation::CreateTokenAndAttach { definition }
+                    | crate::toolbox::ObjectMutation::CreateAuraTokenAttached {
+                        definition, ..
+                    } => definition_or_token_matches(definition.program(), matches),
+                    _ => false,
+                },
                 Instruction::CreateTokens { creations } => creations
                     .iter()
                     .any(|c| definition_or_token_matches(c.definition.program(), matches)),
@@ -213,16 +216,18 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
             | Instruction::EmitReflexiveTrigger { body, .. }
             | Instruction::FixedTargetClause(body) => body_uses_damage_pairs(body),
             Instruction::ForEachPlayerQuery { body, .. } => body_uses_damage_pairs(body),
-            Instruction::OfferAnyPlayer {
-                cost_body,
-                paid_body,
-                declined_body,
-                ..
-            } => {
-                body_uses_damage_pairs(cost_body)
-                    || body_uses_damage_pairs(paid_body)
-                    || declined_body.as_ref().is_some_and(body_uses_damage_pairs)
-            }
+            Instruction::MutatePlayer(spec) => match &spec.op {
+                crate::toolbox::PlayerMutation::OfferAnyPlayer {
+                    cost_body,
+                    paid_body,
+                    declined_body,
+                } => {
+                    body_uses_damage_pairs(cost_body)
+                        || body_uses_damage_pairs(paid_body)
+                        || declined_body.as_deref().is_some_and(body_uses_damage_pairs)
+                }
+                _ => false,
+            },
             Instruction::ChooseOption { options, .. } => {
                 options.iter().any(|b| body_uses_damage_pairs(&b.body))
             }
@@ -569,18 +574,6 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
         | Instruction::ScheduleDelayedEventTrigger { body, .. }
         | Instruction::EmitReflexiveTrigger { body, .. }
         | Instruction::FixedTargetClause(body) => body_uses_damage_dealt_by(body),
-        Instruction::OfferAnyPlayer {
-            cost_body,
-            paid_body,
-            declined_body,
-            ..
-        } => {
-            body_uses_damage_dealt_by(cost_body)
-                || body_uses_damage_dealt_by(paid_body)
-                || declined_body
-                    .as_ref()
-                    .is_some_and(body_uses_damage_dealt_by)
-        }
         Instruction::ChooseOption { options, .. } => {
             options.iter().any(|b| body_uses_damage_dealt_by(&b.body))
         }
@@ -604,8 +597,20 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
         }
         Instruction::MutatePlayer(spec) => match &spec.op {
             crate::toolbox::PlayerMutation::AddCounter { amount, .. }
-            | crate::toolbox::PlayerMutation::PayCounter { amount, .. } => {
+            | crate::toolbox::PlayerMutation::PayCounter { amount, .. }
+            | crate::toolbox::PlayerMutation::BindResolutionX(amount) => {
                 value_expr_uses_damage_dealt_by(amount)
+            }
+            crate::toolbox::PlayerMutation::OfferAnyPlayer {
+                cost_body,
+                paid_body,
+                declined_body,
+            } => {
+                body_uses_damage_dealt_by(cost_body)
+                    || body_uses_damage_dealt_by(paid_body)
+                    || declined_body
+                        .as_deref()
+                        .is_some_and(body_uses_damage_dealt_by)
             }
             _ => false,
         },
@@ -626,7 +631,6 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
             }
             _ => false,
         },
-        Instruction::BindResolutionX(amount) => value_expr_uses_damage_dealt_by(amount),
         Instruction::CreateTokens { creations } => creations
             .iter()
             .any(|c| value_expr_uses_damage_dealt_by(&c.amount)),

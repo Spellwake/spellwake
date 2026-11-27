@@ -439,7 +439,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     | crate::toolbox::DamageTargetQuery::CreaturePowerToOther { .. }
                     | crate::toolbox::DamageTargetQuery::TargetControllersCreatures { .. }
                     | crate::toolbox::DamageTargetQuery::OrderedTargets { .. }
-                    | crate::toolbox::DamageTargetQuery::DivideThree => {}
+                    | crate::toolbox::DamageTargetQuery::DivideThree
+                    | crate::toolbox::DamageTargetQuery::FromGrantingPermanent => {}
                 }
                 if let crate::program::DamageAmountSpec::Expr(e) = &mut spec.amount {
                     rewrite_amount(e);
@@ -485,6 +486,40 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                         rewrite_amount(amount);
                     }
                 }
+                crate::toolbox::PlayerMutation::BindResolutionX(expr) => {
+                    expr.rewrite_creature_type(change.from, change.to);
+                }
+                crate::toolbox::PlayerMutation::RevealTopTwoPiles { count, .. } => {
+                    rewrite_amount(count);
+                }
+                crate::toolbox::PlayerMutation::RollDie { bands, .. } => {
+                    for band in bands {
+                        body(change, &mut band.body);
+                    }
+                }
+                crate::toolbox::PlayerMutation::FlipCoins {
+                    win_body,
+                    lose_body,
+                    ..
+                } => {
+                    if let Some(inner) = win_body {
+                        body(change, inner);
+                    }
+                    if let Some(inner) = lose_body {
+                        body(change, inner);
+                    }
+                }
+                crate::toolbox::PlayerMutation::OfferAnyPlayer {
+                    cost_body,
+                    paid_body,
+                    declined_body,
+                } => {
+                    body(change, cost_body);
+                    body(change, paid_body);
+                    if let Some(declined) = declined_body {
+                        body(change, declined);
+                    }
+                }
                 _ => {}
             },
             Instruction::MutateObject(spec) => {
@@ -498,6 +533,16 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                         amount: Some(amount),
                         ..
                     } => rewrite_amount(amount),
+                    crate::toolbox::ObjectMutation::CreateAuraTokenAttached {
+                        definition, ..
+                    }
+                    | crate::toolbox::ObjectMutation::CreateTokenAndAttach { definition } => {
+                        definition.rewrite_creature_types(change);
+                    }
+                    crate::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
+                        rewrite_amount(&mut copy.count);
+                        words(change, &mut copy.extra_subtypes);
+                    }
                     _ => {}
                 }
             }
@@ -533,12 +578,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     _ => {}
                 }
             }
-            Instruction::BindResolutionX(expr) => {
-                expr.rewrite_creature_type(change.from, change.to);
-            }
-            Instruction::CreateAuraTokenAttached { definition, .. } => {
-                definition.rewrite_creature_types(change);
-            }
             Instruction::ScheduleDelayedEventTrigger { body: inner, .. } => {
                 body(change, inner);
             }
@@ -554,28 +593,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
             | Instruction::StackOp(_)
-            | Instruction::Connive { .. }
-            | Instruction::ConniveFinalize { .. }
-            | Instruction::Discover { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_) => {}
-            Instruction::RollDie { bands, .. } => {
-                for band in bands {
-                    body(change, &mut band.body);
-                }
-            }
-            Instruction::FlipCoins {
-                win_body,
-                lose_body,
-                ..
-            } => {
-                if let Some(inner) = win_body {
-                    body(change, inner);
-                }
-                if let Some(inner) = lose_body {
-                    body(change, inner);
-                }
-            }
             Instruction::BecomeCopy {
                 receiver,
                 exceptions,
@@ -599,9 +618,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     .rewrite_creature_type(change.from, change.to);
             }
             Instruction::FixedTargetClause(clause) => body(change, clause),
-            Instruction::CreateTokenAndAttach { definition } => {
-                definition.rewrite_creature_types(change)
-            }
             Instruction::CreateTokens { creations } => {
                 for creation in creations {
                     match &mut creation.base_size {
@@ -657,18 +673,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
                 _ => {}
             },
-            Instruction::OfferAnyPlayer {
-                cost_body,
-                paid_body,
-                declined_body,
-                ..
-            } => {
-                body(change, cost_body);
-                body(change, paid_body);
-                if let Some(declined) = declined_body {
-                    body(change, declined);
-                }
-            }
             Instruction::RevealUntilMatchExt { filter, count, .. } => {
                 filter.rewrite_creature_type(change.from, change.to);
                 rewrite_amount(count);
@@ -687,72 +691,15 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     sec.filter.rewrite_creature_type(change.from, change.to);
                 }
             }
-            Instruction::RevealTopTwoPiles { count, .. } => {
-                rewrite_amount(count);
-            }
-            Instruction::CreateTokenCopyExt {
-                count,
-                extra_subtypes,
-                ..
-            } => {
-                rewrite_amount(count);
-                words(change, extra_subtypes);
-            }
             // These admitted instructions contain no literal creature-type words.
             // Draw's chosen-type reference remains a runtime local value.
             Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
-            | Instruction::ExileOnePerPlayerUntilSourceLeaves
-            | Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::DamageFromGrantingPermanent { .. }
-            | Instruction::SacrificeRandomUntilLand
             | Instruction::Discard { .. }
             | Instruction::Jump { .. }
-            | Instruction::RememberPermanentTarget
-            | Instruction::ExileDefeatedSiege
-            | Instruction::OfferSourceCounters { .. }
-            | Instruction::ResolveKeywordTrigger(_)
-            | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::ReturnGraveyardCreatureWithCorpse(_)
-            | Instruction::PutHandPermanentsOntoBattlefield { .. }
-            | Instruction::MayRevealLibraryTop
-            | Instruction::ChooseFoundSpell
-            | Instruction::CastFoundSpell(_)
-            | Instruction::RequireCondition(_)
-            | Instruction::Encore
-            | Instruction::ReturnExiledTargetCohort { .. }
-            | Instruction::ExileDelayedObjects(_)
-            | Instruction::ReturnEarthbentCard
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Ninjutsu
-            | Instruction::Unearth
-            | Instruction::Cascade
-            | Instruction::CascadeBottom
-            | Instruction::Myriad
-            | Instruction::CopyCapturedAbility
-            | Instruction::CopyOnCast(_)
-            | Instruction::MadnessCast
-            | Instruction::MiracleCast(_)
-            | Instruction::CastDefeatedSiege
-            | Instruction::ReboundCast(_)
-            | Instruction::EndStepCast { .. }
-            | Instruction::SacrificeDelayedObjects(_)
-            | Instruction::ScheduleArtifactReturn(_)
-            | Instruction::ReturnDelayedGraveyardCard(_)
-            | Instruction::ReturnDelayedPermanentToHand(_)
-            | Instruction::ReturnDelayedExileWithCounters(_)
-            | Instruction::ReturnDelayedExile(_)
-            | Instruction::ExileUnearthed(_)
-            | Instruction::ResolveTransfer(_)
-            | Instruction::ExtortDrain
-            | Instruction::ResolveGrowth(_)
-            | Instruction::ResolveCounterKeyword(_)
-            | Instruction::SacrificeEvoked
-            | Instruction::SacrificeStateTriggerSource
-            | Instruction::ChooseRevealedHandCard { .. }
-            | Instruction::ResolvePowerAbility(_)
             | Instruction::Attach(_) => {}
         }
     }

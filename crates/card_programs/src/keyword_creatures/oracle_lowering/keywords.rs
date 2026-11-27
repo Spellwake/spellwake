@@ -518,7 +518,9 @@ pub(super) fn lower_keyword(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::Myriad,
+                        Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::myriad(),
+                        )),
                         Instruction::ScheduleDelayedStepTrigger {
                             step: Step::EndCombat,
                             own_step_only: false,
@@ -823,7 +825,12 @@ pub(super) fn lower_keyword(
                 id,
                 mana_cost: cost,
                 source_cost: SourceCost::GraveyardSelf { unearth: true },
-                body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Unearth]),
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::unearth(),
+                    ))],
+                ),
             });
             program
                 .activation_restrictions
@@ -1005,7 +1012,12 @@ pub(super) fn lower_keyword(
                 source_cost: SourceCost::Ninjutsu {
                     from_command: lower == "commander ninjutsu",
                 },
-                body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Ninjutsu]),
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::ninjutsu(),
+                    ))],
+                ),
             });
             Ok(())
         }
@@ -1404,7 +1416,12 @@ pub(super) fn lower_keyword(
                     tap_source: false,
                     from_graveyard: true,
                 },
-                body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Encore]),
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::encore(),
+                    ))],
+                ),
             });
             program
                 .activation_restrictions
@@ -1558,9 +1575,11 @@ pub(super) fn lower_keyword(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::CreateTokenAndAttach {
-                        definition: Box::new(definition),
-                    }],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::create_token_and_attach(
+                            Box::new(definition),
+                        ),
+                    ))],
                 ),
             });
             Ok(())
@@ -1848,25 +1867,30 @@ pub(super) fn lower_keyword(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::CreateTokenCopyExt {
-                        source: MoveSubjectRef::AbilitySource,
-                        count: ValueExpr::literal(1),
-                        recipients: TokenRecipients::Controller,
-                        enters_tapped: false,
-                        enters_attacking: false,
-                        haste: false,
-                        sacrifice_at_end_step: false,
-                        exile_at_end_step: false,
-                        nonlegendary: false,
-                        extra_types: BTreeSet::new(),
-                        extra_subtypes: BTreeSet::new(),
-                        extra_keywords: BTreeSet::new(),
-                        override_pt: Some((1.into(), 1.into())),
-                        extra_colors: BTreeSet::new(),
-                        override_colors: None,
-                        strip_mana_cost: false,
-                        defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
-                    }],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::create_token_copy(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            Box::new(spellwake_engine::toolbox::TokenCopySpec {
+                                count: ValueExpr::literal(1),
+                                recipients: TokenRecipients::Controller,
+                                enters_tapped: false,
+                                enters_attacking: false,
+                                haste: false,
+                                sacrifice_at_end_step: false,
+                                exile_at_end_step: false,
+                                nonlegendary: false,
+                                extra_types: BTreeSet::new(),
+                                extra_subtypes: BTreeSet::new(),
+                                extra_keywords: BTreeSet::new(),
+                                override_pt: Some((1.into(), 1.into())),
+                                extra_colors: BTreeSet::new(),
+                                override_colors: None,
+                                strip_mana_cost: false,
+                                defender_scope:
+                                    spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                            }),
+                        ),
+                    ))],
                 ),
             });
             Ok(())
@@ -1889,25 +1913,30 @@ pub(super) fn lower_keyword(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::CreateTokenCopyExt {
-                        source: MoveSubjectRef::AbilitySource,
-                        count: ValueExpr::event(EventValueKind::EnteredKickerCount(idx)),
-                        recipients: TokenRecipients::Controller,
-                        enters_tapped: false,
-                        enters_attacking: false,
-                        haste: false,
-                        sacrifice_at_end_step: false,
-                        exile_at_end_step: false,
-                        nonlegendary: false,
-                        extra_types: BTreeSet::new(),
-                        extra_subtypes: BTreeSet::new(),
-                        extra_keywords: BTreeSet::new(),
-                        override_pt: None,
-                        extra_colors: BTreeSet::new(),
-                        override_colors: None,
-                        strip_mana_cost: false,
-                        defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
-                    }],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::create_token_copy(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            Box::new(spellwake_engine::toolbox::TokenCopySpec {
+                                count: ValueExpr::event(EventValueKind::EnteredKickerCount(idx)),
+                                recipients: TokenRecipients::Controller,
+                                enters_tapped: false,
+                                enters_attacking: false,
+                                haste: false,
+                                sacrifice_at_end_step: false,
+                                exile_at_end_step: false,
+                                nonlegendary: false,
+                                extra_types: BTreeSet::new(),
+                                extra_subtypes: BTreeSet::new(),
+                                extra_keywords: BTreeSet::new(),
+                                override_pt: None,
+                                extra_colors: BTreeSet::new(),
+                                override_colors: None,
+                                strip_mana_cost: false,
+                                defender_scope:
+                                    spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                            }),
+                        ),
+                    ))],
                 ),
             });
             Ok(())
@@ -1955,29 +1984,34 @@ pub(super) fn lower_keyword(
                 },
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::CreateTokenCopyExt {
-                        source: MoveSubjectRef::AbilitySource,
-                        count: ValueExpr::literal(1),
-                        recipients: TokenRecipients::Controller,
-                        enters_tapped: false,
-                        enters_attacking: false,
-                        haste: false,
-                        sacrifice_at_end_step: false,
-                        exile_at_end_step: false,
-                        nonlegendary: false,
-                        extra_types: BTreeSet::new(),
-                        extra_subtypes: BTreeSet::from([zombie]),
-                        extra_keywords: BTreeSet::new(),
-                        override_pt: is_eternalize.then_some((4.into(), 4.into())),
-                        extra_colors: BTreeSet::new(),
-                        override_colors: Some(BTreeSet::from([if is_eternalize {
-                            Color::Black
-                        } else {
-                            Color::White
-                        }])),
-                        strip_mana_cost: true,
-                        defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
-                    }],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::create_token_copy(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            Box::new(spellwake_engine::toolbox::TokenCopySpec {
+                                count: ValueExpr::literal(1),
+                                recipients: TokenRecipients::Controller,
+                                enters_tapped: false,
+                                enters_attacking: false,
+                                haste: false,
+                                sacrifice_at_end_step: false,
+                                exile_at_end_step: false,
+                                nonlegendary: false,
+                                extra_types: BTreeSet::new(),
+                                extra_subtypes: BTreeSet::from([zombie]),
+                                extra_keywords: BTreeSet::new(),
+                                override_pt: is_eternalize.then_some((4.into(), 4.into())),
+                                extra_colors: BTreeSet::new(),
+                                override_colors: Some(BTreeSet::from([if is_eternalize {
+                                    Color::Black
+                                } else {
+                                    Color::White
+                                }])),
+                                strip_mana_cost: true,
+                                defender_scope:
+                                    spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                            }),
+                        ),
+                    ))],
                 ),
             });
             Ok(())
@@ -3805,13 +3839,15 @@ fn lower_non_mana_cumulative_upkeep(
             amount: age_count,
         }]
     } else if low == "flip a coin" {
-        vec![Instruction::FlipCoins {
-            player: ResolvingPlayer::Controller,
-            mode: spellwake_engine::program::CoinFlipMode::Count(age_count),
-            win_body: None,
-            lose_body: None,
-            lose_destination: None,
-        }]
+        vec![Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::flip_coins(
+                ResolvingPlayer::Controller,
+                spellwake_engine::program::CoinFlipMode::Count(age_count),
+                None,
+                None,
+                None,
+            ),
+        ))]
     } else if low == "exile the top card of your library" {
         pre_guard = Some(ResolutionCondition {
             left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerLibrarySize(
@@ -3984,7 +4020,9 @@ fn lower_non_mana_cumulative_upkeep(
     instructions.push(Instruction::Jump {
         destination: sac_idx + 1,
     });
-    instructions.push(Instruction::SacrificeStateTriggerSource);
+    instructions.push(Instruction::MutateObject(Box::new(
+        spellwake_engine::toolbox::MutateObjectSpec::sacrifice_state_trigger_source(),
+    )));
 
     Ok(TriggeredAbility {
         id: ids.triggered(),

@@ -1849,7 +1849,11 @@ impl StaticContinuousAbility {
                     if is_grantor_sac
                         != matches!(
                             ability.body.instructions.as_slice(),
-                            [crate::program::Instruction::DamageFromGrantingPermanent { .. }]
+                            [crate::program::Instruction::DealDamage(spec)]
+                                if matches!(
+                                    spec.recipients,
+                                    crate::toolbox::DamageTargetQuery::FromGrantingPermanent
+                                )
                         )
                     {
                         return Err(CharacteristicDefinitionError::InvalidKeywordGrant);

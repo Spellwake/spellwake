@@ -2803,9 +2803,9 @@ pub(super) fn lower_search_library_group(
                 in_trigger,
                 vocabulary,
             )?;
-            builder
-                .instructions
-                .push(Instruction::Discover { value: amt });
+            builder.instructions.push(Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::discover(amt),
+            )));
             Ok(())
         }
         InstructionAst::Attach {
@@ -3035,7 +3035,9 @@ pub(super) fn lower_search_library_group(
                                 .push(Instruction::FixedTargetClause(Box::new(
                                     ExecutableBody::new(
                                         att_bt,
-                                        vec![Instruction::RememberPermanentTarget],
+                                        vec![Instruction::MutateObject(Box::new(
+                                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                                        ))],
                                     ),
                                 )));
                             trial
@@ -3043,7 +3045,9 @@ pub(super) fn lower_search_library_group(
                                 .push(Instruction::FixedTargetClause(Box::new(
                                     ExecutableBody::new(
                                         host_bt,
-                                        vec![Instruction::RememberPermanentTarget],
+                                        vec![Instruction::MutateObject(Box::new(
+                                            spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
+                                        ))],
                                     ),
                                 )));
                             trial
@@ -4885,7 +4889,6 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
             | Instruction::OptionalSequence { .. }
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
-            | Instruction::BindResolutionX(_)
             | Instruction::AdjustLife(_) => continue,
             Instruction::MutatePlayer(spec)
                 if matches!(
@@ -4893,6 +4896,7 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
                     spellwake_engine::toolbox::PlayerMutation::Scry(_)
                         | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
                         | spellwake_engine::toolbox::PlayerMutation::AddMana(_)
+                        | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_)
                 ) =>
             {
                 continue;
@@ -4976,12 +4980,13 @@ fn last_moved_producer_is_single_or_bulk_play(ops: &[Instruction]) -> bool {
                 }
                 return true;
             }
-            Instruction::DrawCards(_) | Instruction::BindResolutionX(_) => continue,
+            Instruction::DrawCards(_) => continue,
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
                     spellwake_engine::toolbox::PlayerMutation::Scry(_)
                         | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
+                        | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_)
                 ) =>
             {
                 continue;
