@@ -140,6 +140,9 @@ fn parse_zone_verb_frame_inner(
 
     // 8. `discard(s) ...`
     if ts.eat_word("discard") || ts.eat_word("discards") {
+        if let Some(res) = super::zone_ext::try_parse_discard_ext(ts, actor) {
+            return res;
+        }
         if ts.eat_phrase(&["their", "hand"]) || ts.eat_phrase(&["your", "hand"]) {
             return Ok((
                 vec![Effect::ZoneOp {
@@ -543,7 +546,8 @@ fn parse_zone_verb_frame_inner(
                 {
                     from.push(z1);
                 }
-                let face_down = ts.eat_phrase(&["face", "down"]);
+                let face_down =
+                    ts.eat_phrase(&["face", "down"]) || super::zone_ext::eat_exile_pile_suffix(ts);
                 let counters = parse_exile_with_counters(ts);
                 let ex_dur = parse_trailing_duration(ts);
                 let eff = Effect::ZoneOp {
@@ -645,7 +649,8 @@ fn parse_zone_verb_frame_inner(
                 && ts.eat_phrase(&["from", "the", "top", "of"])
                 && let Ok(zref) = try_parse(ts, parse_zone_ref)
             {
-                let face_down = ts.eat_phrase(&["face", "down"]);
+                let face_down =
+                    ts.eat_phrase(&["face", "down"]) || super::zone_ext::eat_exile_pile_suffix(ts);
                 let counters = parse_exile_with_counters(ts);
                 return Ok((
                     vec![Effect::ZoneOp {
@@ -727,7 +732,8 @@ fn parse_zone_verb_frame_inner(
                 return Err(ts.err("expected `of` after `the top card(s)`"));
             }
             let zref = parse_zone_ref(ts)?;
-            let face_down = ts.eat_phrase(&["face", "down"]);
+            let face_down =
+                ts.eat_phrase(&["face", "down"]) || super::zone_ext::eat_exile_pile_suffix(ts);
             let counters = parse_exile_with_counters(ts);
             return Ok((
                 vec![Effect::ZoneOp {
@@ -831,7 +837,9 @@ fn parse_zone_verb_frame_inner(
                 break;
             }
         }
-        let face_down = ts.eat_phrase(&["face", "down"]);
+        let extra_top_exile = super::zone_ext::try_eat_and_top_cards(ts);
+        let face_down =
+            ts.eat_phrase(&["face", "down"]) || super::zone_ext::eat_exile_pile_suffix(ts);
         // Optional `with a/an/<N> <kind> counter(s) on it` / `with a number of <kind> counters on it equal to <val>`
         let counters = parse_exile_with_counters(ts);
         let ex_dur = parse_trailing_duration(ts);
@@ -912,6 +920,7 @@ fn parse_zone_verb_frame_inner(
             }
         };
         let mut out_exile = vec![eff];
+        super::zone_ext::push_extra_top_exile(&mut out_exile, actor, face_down, extra_top_exile);
         if let Some(zr) = extra_exile_zone {
             out_exile.push(Effect::ZoneOp {
                 actor,
@@ -1742,6 +1751,9 @@ fn parse_zone_verb_frame_inner(
         ));
     }
     if ts.eat_word("shuffle") || ts.eat_word("shuffles") {
+        if let Some(res) = super::zone_ext::try_parse_shuffle_ext(ts, actor) {
+            return res;
+        }
         // `shuffles their hand and graveyard into their library` / `shuffle <subj> into <lib>`
         {
             let scp = ts.checkpoint();
@@ -2145,21 +2157,24 @@ fn parse_zone_verb_frame_inner(
             ));
         }
         let subject = parse_subject_ref(ts)?;
-        return Ok((
-            vec![Effect::ZoneOp {
-                actor,
-                op: ZoneOpKind::Reveal,
-                subject,
-                from: Vec::new(),
-                to: None,
-                modifiers: EntryModifiers::default(),
-                except: None,
-                count: None,
-            }],
-            (),
-        ));
+        let extra_top = super::zone_ext::try_eat_and_top_cards(ts);
+        let mut out_rev = vec![Effect::ZoneOp {
+            actor,
+            op: ZoneOpKind::Reveal,
+            subject,
+            from: Vec::new(),
+            to: None,
+            modifiers: EntryModifiers::default(),
+            except: None,
+            count: None,
+        }];
+        super::zone_ext::push_extra_top_reveal(&mut out_rev, actor, extra_top);
+        return Ok((out_rev, ()));
     }
     if ts.eat_phrase(&["look", "at"]) || ts.eat_phrase(&["looks", "at"]) {
+        if let Some(res) = super::zone_ext::try_parse_look_ext(ts, actor) {
+            return res;
+        }
         if ts.eat_phrase(&["the", "top"]) {
             let count = if ts.eat_word("card") {
                 ValueExpr::Const(1)
@@ -2174,6 +2189,7 @@ fn parse_zone_verb_frame_inner(
                 return Err(ts.err("expected `of <library>` after `look at the top card(s)`"));
             }
             let zref = parse_zone_ref(ts)?;
+            let _ = ts.eat_phrase(&["any", "time"]);
             return Ok((
                 vec![Effect::ZoneOp {
                     actor,
@@ -2382,6 +2398,9 @@ fn parse_zone_verb_frame_inner(
                 }],
                 (),
             ));
+        }
+        if let Some(res) = super::zone_ext::try_parse_separate_piles_ext(ts, actor, subject) {
+            return res;
         }
         return Err(ts.err("expected pile specification after `separate`"));
     }

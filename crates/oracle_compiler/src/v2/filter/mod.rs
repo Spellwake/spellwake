@@ -53,8 +53,37 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
         || ts.eat_phrase(&["the", "player", "to", "their", "left"])
         || ts.eat_phrase(&["the", "player", "to", "your", "right"])
         || ts.eat_phrase(&["the", "player", "to", "your", "left"])
+        || ts.eat_phrase(&["the", "first", "player"])
+        || ts.eat_phrase(&["the", "second", "player"])
+        || ts.eat_phrase(&["the", "third", "player"])
+        || ts.eat_phrase(&["the", "other", "player"])
+        || ts.eat_phrase(&["the", "monarch"])
     {
         return Ok(PlayerRef::ThatPlayer);
+    }
+    if ts.eat_phrase(&["the", "opponent", "to", "your", "left"])
+        || ts.eat_phrase(&["the", "opponent", "to", "your", "right"])
+        || ts.eat_phrase(&["the", "opponent", "to", "their", "left"])
+        || ts.eat_phrase(&["the", "opponent", "to", "their", "right"])
+    {
+        return Ok(PlayerRef::AnyOpponent);
+    }
+    if ts.eat_phrase(&["a", "second", "player"]) || ts.eat_phrase(&["a", "third", "player"]) {
+        return Ok(PlayerRef::AnyPlayer);
+    }
+    {
+        let mcp = ts.checkpoint();
+        if (ts.eat_phrase(&["an", "opponent", "with", "the", "most"])
+            || ts.eat_phrase(&["the", "opponent", "with", "the", "most"])
+            || ts.eat_phrase(&["the", "player", "with", "the", "most"])
+            || ts.eat_phrase(&["a", "player", "with", "the", "most"]))
+            && try_parse(ts, parse_object_filter).is_ok()
+        {
+            let _ = ts.eat_phrase(&["among", "your", "opponents"])
+                || ts.eat_phrase(&["among", "all", "players"]);
+            return Ok(PlayerRef::MostObjectsPlayer);
+        }
+        ts.restore(mcp);
     }
     if ts.eat_phrase(&["each", "player", "on", "your", "team"]) {
         return Ok(PlayerRef::You);
@@ -213,7 +242,10 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     if ts.eat_phrase(&["defending", "player"]) {
         return Ok(PlayerRef::DefendingPlayer);
     }
-    if ts.eat_phrase(&["active", "player"]) || ts.eat_phrase(&["the", "attacking", "player"]) {
+    if ts.eat_phrase(&["active", "player"])
+        || ts.eat_phrase(&["the", "attacking", "player"])
+        || ts.eat_phrase(&["attacking", "player"])
+    {
         return Ok(PlayerRef::ActivePlayer);
     }
     if ts.eat_phrase(&["enchanted", "player"]) || ts.eat_phrase(&["enchanted", "opponent"]) {
@@ -475,6 +507,28 @@ pub fn parse_zone_ref(ts: &mut TokenStream<'_>) -> PResult<ZoneRef> {
             owner: ZoneOwner::Default,
         });
     }
+    // `the hand/graveyard/library of <player>` (`Adamaro, First to Desire`, `Glyph of Reincarnation`)
+    {
+        let zcp = ts.checkpoint();
+        let of_zone = if ts.eat_phrase(&["the", "hand", "of"]) {
+            Some(ZoneKind::Hand)
+        } else if ts.eat_phrase(&["the", "graveyard", "of"]) {
+            Some(ZoneKind::Graveyard)
+        } else if ts.eat_phrase(&["the", "library", "of"]) {
+            Some(ZoneKind::Library)
+        } else {
+            None
+        };
+        if let Some(zone) = of_zone
+            && try_parse(ts, parse_player_ref).is_ok()
+        {
+            return Ok(ZoneRef {
+                zone,
+                owner: ZoneOwner::ThatPlayer,
+            });
+        }
+        ts.restore(zcp);
+    }
 
     let cp = ts.checkpoint();
     // Longest-prefix match FIRST so `your opponents'` isn't shadowed by `your`
@@ -540,11 +594,15 @@ pub fn parse_zone_ref(ts: &mut TokenStream<'_>) -> PResult<ZoneRef> {
         ZoneOwner::Default
     };
 
+    let _ = ts.eat_word("opening");
     let zone = if ts.eat_word("graveyard") || ts.eat_word("graveyards") {
         ZoneKind::Graveyard
     } else if ts.eat_word("hand") || ts.eat_word("hands") {
         ZoneKind::Hand
-    } else if ts.eat_word("library") || ts.eat_word("libraries") {
+    } else if ts.eat_word("library")
+        || ts.eat_word("libraries")
+        || ts.eat_phrase(&["starting", "deck"])
+    {
         ZoneKind::Library
     } else {
         ts.restore(cp);
@@ -693,10 +751,22 @@ pub fn parse_zone_dest(ts: &mut TokenStream<'_>) -> PResult<(ZoneDest, EntryModi
                 || ts.eat_phrase(&["that", "player"])
                 || ts.eat_phrase(&["the", "defending", "player"])
                 || ts.eat_phrase(&["defending", "player"]);
+            let _ = ts.eat_phrase(&["or", "a", "planeswalker", "they", "control"])
+                || ts.eat_phrase(&["or", "a", "planeswalker", "that", "player", "controls"]);
+            continue;
+        }
+        if ts.eat_phrase(&["face", "up", "or", "face", "down"])
+            || ts.eat_phrase(&["face", "down", "or", "face", "up"])
+        {
+            modifiers.face_down = true;
             continue;
         }
         if ts.eat_phrase(&["face", "down"]) || ts.eat_word("face-down") {
             modifiers.face_down = true;
+            continue;
+        }
+        if ts.eat_phrase(&["face", "up"]) || ts.eat_word("face-up") {
+            modifiers.face_down = false;
             continue;
         }
         if ts.eat_phrase(&["attached", "to"])
@@ -783,6 +853,9 @@ pub fn parse_zone_dest(ts: &mut TokenStream<'_>) -> PResult<(ZoneDest, EntryModi
                 let _ = ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]);
                 if ts.eat_phrase(&["equal", "to"]) {
                     let _ = try_parse(ts, crate::v2::value::parse_value_expr);
+                }
+                if ts.eat_phrase(&["if", "it's"]) {
+                    let _ = try_parse(ts, parse_object_filter);
                 }
                 modifiers.with_counter = Some((ck, u16::try_from(cnt.max(0)).unwrap_or(1)));
                 // Optional chained counter (`and a lifelink counter on it`, `and an additional loyalty counter on it if it's a planeswalker`)
@@ -899,12 +972,38 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                 || !card_types_seen.is_empty()
                 || saw_subtype;
             if !has_head
-                && let Some(w) = ts.peek_word()
-                && is_filter_modifier_word(w, ts.vocab)
+                && (ts.peek_word().is_some_and(|w| is_filter_modifier_word(w, ts.vocab))
+                    || (ts.peek_word().is_some_and(|w| {
+                        w.eq_ignore_ascii_case("or") || w.eq_ignore_ascii_case("and/or")
+                    }) && ts.peek_n(1).is_some_and(|t| {
+                        matches!(t.kind, TokenKind::Word(nw) if is_filter_modifier_word(nw, ts.vocab))
+                    })))
             {
                 continue;
             }
-            // Allow Oxford comma inside card-type + subtype lists (`artifact, creature, or enchantment`, `artifacts, creatures, and/or lands`)
+            // Allow Oxford comma in spell/ability lists (`instant spell, sorcery spell, activated ability, or triggered ability`)
+            if (flt.any_spell || flt.is_ability)
+                && (ts.peek_word().is_some_and(|w| {
+                    let low = w.to_ascii_lowercase();
+                    matches!(low.as_str(), "activated" | "triggered")
+                        || (lookup_card_type(&low).is_some()
+                            && ts.peek_n(1).is_some_and(|t| {
+                                matches!(t.kind, TokenKind::Word(nw) if nw.eq_ignore_ascii_case("spell") || nw.eq_ignore_ascii_case("spells"))
+                            }))
+                }) || (ts.peek_word().is_some_and(|w| {
+                    w.eq_ignore_ascii_case("or") || w.eq_ignore_ascii_case("and/or")
+                }) && ts.peek_n(1).is_some_and(|t| {
+                    matches!(t.kind, TokenKind::Word(nw) if {
+                        let nl = nw.to_ascii_lowercase();
+                        matches!(nl.as_str(), "activated" | "triggered" | "ability" | "abilities")
+                            || lookup_card_type(&nl).is_some()
+                    })
+                })))
+            {
+                pending_or_type = true;
+                continue;
+            }
+            // Allow Oxford comma inside card-type + subtype lists (`artifact, creature, or enchantment`, `artifacts, enchantments, and/or tokens`)
             if !card_types_seen.is_empty() {
                 if ts.peek_word().is_some_and(|w| {
                     w.eq_ignore_ascii_case("or")
@@ -913,21 +1012,21 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                 }) && ts.peek_n(1).is_some_and(|t| {
                     matches!(t.kind, TokenKind::Word(nw) if {
                         let nl = nw.to_ascii_lowercase();
-                        lookup_card_type(&nl).is_some()
-                            || ts.vocab.lookup_subtype(&nl).is_some()
+                        is_filter_modifier_word(nw, ts.vocab)
                             || matches!(
                                 nl.as_str(),
-                                "tapped"
-                                    | "untapped"
-                                    | "legendary"
-                                    | "nonland"
-                                    | "noncreature"
-                                    | "basic"
-                                    | "snow"
-                                    | "multicolored"
-                                    | "colorless"
-                                    | "attacking"
-                                    | "blocking"
+                                "token"
+                                    | "tokens"
+                                    | "card"
+                                    | "cards"
+                                    | "spell"
+                                    | "spells"
+                                    | "permanent"
+                                    | "permanents"
+                                    | "ability"
+                                    | "abilities"
+                                    | "activated"
+                                    | "triggered"
                             )
                     })
                 }) {
@@ -943,7 +1042,7 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                     continue;
                 }
             }
-            // Allow Oxford comma inside subtype lists (`Elf, Warrior, or Tyvar`, `Cleric, Rogue, Warrior, and Wizard`, `Knight, Aura, Equipment, or legendary artifact`)
+            // Allow Oxford comma inside subtype lists (`Elf, Warrior, or Tyvar`, `Knight, Aura, Equipment, or legendary artifact`)
             if saw_subtype {
                 if ts.peek_word().is_some_and(|w| {
                     w.eq_ignore_ascii_case("or")
@@ -952,19 +1051,17 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                 }) && ts.peek_n(1).is_some_and(|t| {
                     matches!(t.kind, TokenKind::Word(nw) if {
                         let nl = nw.to_ascii_lowercase();
-                        ts.vocab.lookup_subtype(&nl).is_some()
-                            || lookup_card_type(&nl).is_some()
+                        is_filter_modifier_word(nw, ts.vocab)
                             || matches!(
                                 nl.as_str(),
-                                "tapped"
-                                    | "untapped"
-                                    | "legendary"
-                                    | "nonland"
-                                    | "noncreature"
-                                    | "basic"
-                                    | "snow"
-                                    | "multicolored"
-                                    | "colorless"
+                                "token"
+                                    | "tokens"
+                                    | "card"
+                                    | "cards"
+                                    | "spell"
+                                    | "spells"
+                                    | "permanent"
+                                    | "permanents"
                             )
                     })
                 }) {
@@ -1116,6 +1213,15 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
             break;
         }
         if low == "and" {
+            // Allow `activated and triggered abilities` (`Volatile Stormdrake`)
+            if flt.is_ability
+                && ts.peek_n(1).is_some_and(|t| {
+                    matches!(t.kind, TokenKind::Word(nw) if nw.eq_ignore_ascii_case("triggered") || nw.eq_ignore_ascii_case("activated"))
+                })
+            {
+                ts.next_word();
+                continue;
+            }
             // Allow `spell and ability` / `spells and abilities` (`Whirlwind Denial`)
             if flt.any_spell
                 && ts.peek_n(1).is_some_and(|t| {
@@ -1331,9 +1437,35 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                 ts.next_word();
                 flt.flags = flt.flags.union(FilterFlags::MODIFIED);
             }
-            "transformed" => {
+            "transformed" | "double-faced" => {
                 ts.next_word();
                 flt.flags = flt.flags.union(FilterFlags::TRANSFORMED);
+            }
+            "ring-bearer" | "ring-bearers" => {
+                ts.next_word();
+                card_types_seen.push(CardTypeMask::CREATURE);
+                flt.flags = flt.flags.union(FilterFlags::MODIFIED);
+            }
+            "last" => {
+                let has_head = flt.any_permanent
+                    || flt.any_card
+                    || flt.any_spell
+                    || flt.is_ability
+                    || !card_types_seen.is_empty()
+                    || saw_subtype;
+                let next_is_obj = ts.peek_n(1).is_some_and(|t| {
+                    matches!(t.kind, TokenKind::Word(nw) if {
+                        let nl = nw.to_ascii_lowercase();
+                        is_filter_modifier_word(nw, ts.vocab)
+                            || matches!(nl.as_str(), "card" | "cards" | "spell" | "spells" | "permanent" | "permanents")
+                    })
+                });
+                if !has_head && next_is_obj {
+                    ts.next_word();
+                    flt.flags = flt.flags.union(FilterFlags::LKI_PAST_TENSE);
+                } else {
+                    break;
+                }
             }
             "equipped" => {
                 ts.next_word();
@@ -1593,6 +1725,7 @@ fn is_filter_modifier_word(w: &str, vocab: &crate::vocab::Vocabulary) -> bool {
                 | "unblocked"
                 | "modified"
                 | "transformed"
+                | "double-faced"
                 | "equipped"
                 | "enchanted"
                 | "face-down"

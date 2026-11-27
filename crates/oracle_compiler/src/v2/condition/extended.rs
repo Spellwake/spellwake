@@ -140,6 +140,28 @@ pub(super) fn parse_there_are_condition(ts: &mut TokenStream<'_>) -> Option<Cond
                 min_count: u16::from(u8::try_from(min_count).unwrap_or(4)),
             });
         }
+        if ts.eat_phrase(&["unlocked", "doors", "among", "rooms", "you", "control"])
+            || ts.eat_phrase(&[
+                "different",
+                "names",
+                "among",
+                "unlocked",
+                "doors",
+                "of",
+                "rooms",
+                "you",
+                "control",
+            ])
+        {
+            return Some(ConditionExpr::Controls {
+                player: PlayerRef::You,
+                filter: Box::new(ObjectFilter {
+                    subtypes: vec!["Room".to_string()],
+                    ..Default::default()
+                }),
+                min_count,
+            });
+        }
         if ts.eat_phrase(&["basic", "land", "types", "among", "lands"])
             && let Ok(player) = try_parse(ts, parse_player_ref)
             && (ts.eat_word("control") || ts.eat_word("controls"))
@@ -1343,5 +1365,5 @@ pub(super) fn parse_extended_condition(ts: &mut TokenStream<'_>) -> PResult<Cond
         ts.restore(tcp);
     }
 
-    Err(ts.err("expected boolean condition expression"))
+    super::extended_extra::parse_extended_extra(ts)
 }

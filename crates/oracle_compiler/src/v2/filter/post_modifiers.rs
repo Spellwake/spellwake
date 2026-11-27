@@ -1965,11 +1965,33 @@ fn parse_proper_card_names(ts: &mut TokenStream<'_>) -> Option<Vec<String>> {
     names.push(first);
     loop {
         let cp = ts.checkpoint();
-        if (ts.eat_word("or") || ts.eat_word("and"))
-            && let Some(next) = parse_one_proper_card_name(ts)
-        {
-            names.push(next);
-            continue;
+        let had_comma = ts.eat_comma();
+        let had_conj = ts.eat_word("or") || ts.eat_word("and");
+        if had_conj {
+            if ts.eat_tilde() {
+                names.push("~".to_string());
+                continue;
+            }
+            if let Some(next) = parse_one_proper_card_name(ts) {
+                names.push(next);
+                continue;
+            }
+        } else if had_comma {
+            // Only consume a bare comma in a 3+ element Oxford list (must be followed by another `,` or `and`/`or`).
+            let next_opt = if ts.eat_tilde() {
+                Some("~".to_string())
+            } else {
+                parse_one_proper_card_name(ts)
+            };
+            if let Some(next) = next_opt
+                && (matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Comma))
+                    || ts.peek_word().is_some_and(|w| {
+                        w.eq_ignore_ascii_case("and") || w.eq_ignore_ascii_case("or")
+                    }))
+            {
+                names.push(next);
+                continue;
+            }
         }
         ts.restore(cp);
         break;
@@ -1989,20 +2011,36 @@ fn parse_one_proper_card_name(ts: &mut TokenStream<'_>) -> Option<String> {
                 ts.next_word();
                 continue;
             }
-            // Lowercase connector inside a proper card name (`of`, `the`, `in`, `to`, `from`, `at`, `on`, `for`, `a`, `an`, `by`, `with`)
-            // ONLY when followed by a capitalized word!
+            // Lowercase connector inside a proper card name (`of`, `the`, `in`, `to`, `from`, `at`, `on`, `for`, `a`, `an`, `by`),
+            // including two-word connectors like `of the <Capitalized>` (`Advocate of the Beast`, `Spirit of the Night`, `Mark of the Rani`)
+            // and `of ~` (`Kobolds of ~`)!
             if !parts.is_empty()
                 && matches!(
                     w,
                     "of" | "the" | "in" | "to" | "from" | "at" | "on" | "for" | "a" | "an" | "by"
                 )
-                && ts.peek_n(1).is_some_and(|t| {
-                    matches!(t.kind, TokenKind::Word(nw) if nw.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
-                })
             {
-                parts.push(w.to_string());
-                ts.next_word();
-                continue;
+                let next_is_upper_or_tilde = ts.peek_n(1).is_some_and(|t| match t.kind {
+                    TokenKind::Word(nw) => {
+                        nw.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                    }
+                    TokenKind::Tilde => true,
+                    _ => false,
+                });
+                let next_is_article_then_upper = ts.peek_n(1).is_some_and(|t| {
+                    matches!(t.kind, TokenKind::Word(nw) if matches!(nw, "the" | "a" | "an"))
+                }) && ts.peek_n(2).is_some_and(|t| {
+                    matches!(t.kind, TokenKind::Word(nw) if nw.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
+                });
+                if next_is_upper_or_tilde || next_is_article_then_upper {
+                    parts.push(w.to_string());
+                    ts.next_word();
+                    if matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Tilde)) {
+                        ts.next_tok();
+                        parts.push("~".to_string());
+                    }
+                    continue;
+                }
             }
             break;
         }

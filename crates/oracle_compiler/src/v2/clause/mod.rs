@@ -9,6 +9,7 @@
 
 pub(crate) mod player_actions;
 mod player_verbs;
+mod player_verbs_ext;
 mod restrictions;
 mod sentence_ext;
 mod subject_combat;
@@ -508,6 +509,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         || ts.eat_phrase(&["when", "you", "spend", "this", "mana", "to", "cast"])
     {
         let spell_filter = parse_object_filter(ts)?;
+        let _ = ts.eat_phrase(&["or", "activate", "an", "ability"]);
         if !ts.eat_comma() {
             return Err(ts.err("expected `,` after mana spend rider condition"));
         }
@@ -768,7 +770,10 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["for", "each", "graveyard", "with"])
             && let Ok(flt) = try_parse(ts, parse_object_filter)
-            && ts.eat_phrase(&["in", "it"])
+            && (ts.eat_phrase(&["in", "it"])
+                || flt
+                    .predicates
+                    .contains(&crate::v2::ir::FilterPredicate::AmongPriorCards))
             && ts.eat_comma()
         {
             let body = parse_sentence_top(ts)?;
@@ -1561,26 +1566,8 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             return Ok(effs);
         }
         ts.restore(seq_cp);
-        if let Some(fe_idx) = find_phrase_index(ts.tokens, ts.pos, &["for", "each"])
-            && fe_idx > ts.pos
-        {
-            let body_slice = &ts.tokens[ts.pos..fe_idx];
-            let fe_slice = &ts.tokens[fe_idx..];
-            let mut fe_ts = ts.sub_stream(fe_slice, ParseStage::Effect);
-            if let Ok(scale) = crate::v2::value::parse_for_each_expr(&mut fe_ts)
-                && fe_ts.is_eof()
-            {
-                let mut body_ts = ts.sub_stream(body_slice, ParseStage::Effect);
-                if let Ok(body) = parse_clause_seq(&mut body_ts, None)
-                    && body_ts.is_eof()
-                {
-                    ts.pos = ts.tokens.len();
-                    return Ok(vec![Effect::ForEach {
-                        over: ForEachDomain::Count(scale),
-                        body,
-                    }]);
-                }
-            }
+        if let Some(effs) = sentence_ext::try_parse_trailing_for_each_sentence(ts) {
+            return Ok(effs);
         }
         ts.restore(seq_cp);
     }
@@ -1809,6 +1796,16 @@ fn parse_single_clause(
                 Some(PlayerRef::You),
             ));
         }
+        if let Some(purpose) = restrictions::try_parse_extra_mana_spend_purpose(ts) {
+            return Ok((
+                vec![Effect::MutatePlayer {
+                    player: PlayerRef::You,
+                    mutation: PlayerMutation::ManaRule(ManaRuleKind::SpendForbidden(purpose)),
+                    duration: Duration::Instant,
+                }],
+                Some(PlayerRef::You),
+            ));
+        }
         return Err(ts.err("expected mana spend purpose after `This mana can't be spent to`"));
     }
     if ts.eat_phrase(&[
@@ -1847,7 +1844,9 @@ fn parse_single_clause(
         let mut purposes = Vec::new();
         loop {
             let pcp = ts.checkpoint();
-            if ts.eat_phrase(&["foretell", "a", "card", "from", "your", "hand"]) {
+            if let Some(purpose) = restrictions::try_parse_extra_mana_spend_purpose(ts) {
+                purposes.push(purpose);
+            } else if ts.eat_phrase(&["foretell", "a", "card", "from", "your", "hand"]) {
                 purposes.push(crate::v2::ir::ManaSpendPurpose::Foretell);
             } else if ts.eat_phrase(&["activate", "abilities"])
                 || ts.eat_phrase(&["activate", "an", "ability"])

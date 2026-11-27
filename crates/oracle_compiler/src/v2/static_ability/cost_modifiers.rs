@@ -1,14 +1,14 @@
 //! Static spell cost-modifier and next-spell-modifier parsers for `v2`.
 
 use crate::ast::{ControllerRelation, TurnStepAst};
-use crate::v2::condition::parse_condition;
 use crate::v2::filter::{parse_keyword_list, parse_object_filter};
 use crate::v2::ir::{
     CastPermissionMode, ConditionExpr, ConditionFlag, EventCheckKind, FilterPredicate,
     ObjectFilter, PlayerRef, RuleRestrictionKind, StaticAbility, SubjectRef,
 };
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
-use crate::v2::value::parse_for_each_expr;
+
+use super::cond_ext::{parse_static_condition, parse_static_scale_expr};
 
 /// Parse `The next/first <flt> you/they cast this/each turn can't be countered / can be cast ... / has <kws> / costs {M} less to cast`.
 pub(super) fn parse_next_spell_modifier(
@@ -90,7 +90,7 @@ pub(super) fn parse_next_spell_modifier(
             && let Some(delta) = ts.eat_mana_cost()
             && (ts.eat_phrase(&["less", "to", "cast"]) || ts.eat_word("less"))
         {
-            let scale = opt(ts, parse_for_each_expr);
+            let scale = opt(ts, parse_static_scale_expr);
             let cost_mod = StaticAbility::CostModifier {
                 subject: flt.clone(),
                 delta,
@@ -186,6 +186,9 @@ pub(super) fn parse_cost_modifier(
         // Any player
     }
     let _ = ts.eat_phrase(&["each", "turn"]);
+    let _ = ts.eat_phrase(&[
+        "that", "share", "a", "card", "type", "with", "the", "exiled", "card",
+    ]);
 
     let mut inline_cond: Option<ConditionExpr> = None;
     if ts.eat_phrase(&["during", "your", "turn"]) {
@@ -201,14 +204,31 @@ pub(super) fn parse_cost_modifier(
         return Err(ts.err("expected `cost` or `costs` in cost modifier"));
     }
 
-    // `<flt> cost(s) an additional <cost> to cast`
+    // `<flt> cost(s) an additional <cost | N life | "<quoted>"> to cast [for each ...]`
     {
         let acp = ts.checkpoint();
-        if ts.eat_phrase(&["an", "additional"])
-            && let Ok(costs) = try_parse(ts, crate::v2::cost::parse_cost_list)
-            && ts.eat_phrase(&["to", "cast"])
-        {
-            return Ok(StaticAbility::AdditionalCost(costs));
+        if ts.eat_phrase(&["an", "additional"]) {
+            let costs_opt = if let Some(n) = ts.next_number(false)
+                && ts.eat_word("life")
+            {
+                Some(vec![crate::v2::ir::Cost::PayLife(
+                    crate::v2::ir::ValueExpr::Const(n),
+                )])
+            } else if let Some(quoted) = ts.next_quoted()
+                && let Ok(toks) = crate::v2::lexer::tokenize(quoted)
+            {
+                let mut qts =
+                    TokenStream::new(quoted, &toks, ts.vocab, crate::v2::ir::ParseStage::Cost);
+                crate::v2::cost::parse_cost_list(&mut qts).ok()
+            } else {
+                try_parse(ts, crate::v2::cost::parse_cost_list).ok()
+            };
+            if let Some(costs) = costs_opt
+                && ts.eat_phrase(&["to", "cast"])
+            {
+                let _ = parse_cost_scale_expr(ts);
+                return Ok(StaticAbility::AdditionalCost(costs));
+            }
         }
         ts.restore(acp);
     }
@@ -227,7 +247,7 @@ pub(super) fn parse_cost_modifier(
 
     let scale = parse_cost_scale_expr(ts);
     let extra_cond = if ts.eat_word("if") {
-        Some(parse_condition(ts)?)
+        Some(parse_static_condition(ts)?)
     } else if ts.eat_phrase(&["during", "your", "end", "step"]) {
         Some(ConditionExpr::EventCheck(EventCheckKind::DuringStep(
             TurnStepAst::EndStep,
@@ -251,14 +271,36 @@ pub(super) fn parse_cost_modifier(
         });
     }
 
-    Ok(StaticAbility::CostModifier {
-        subject: flt,
+    let first_mod = StaticAbility::CostModifier {
+        subject: flt.clone(),
         delta,
         less,
         scale,
         min_mana: None,
-        condition: final_cond,
-    })
+        condition: final_cond.clone(),
+    };
+    // Optional second reduction conjunct (`and {2} less to cast for each other artifact or creature you've sacrificed this turn`)
+    let and_cp = ts.checkpoint();
+    if ts.eat_word("and")
+        && let Some(delta2) = ts.eat_mana_cost()
+        && (ts.eat_phrase(&["less", "to", "cast"]) || ts.eat_phrase(&["more", "to", "cast"]))
+    {
+        let scale2 = parse_cost_scale_expr(ts);
+        return Ok(StaticAbility::Compound(vec![
+            first_mod,
+            StaticAbility::CostModifier {
+                subject: flt,
+                delta: delta2,
+                less,
+                scale: scale2,
+                min_mana: None,
+                condition: final_cond,
+            },
+        ]));
+    }
+    ts.restore(and_cp);
+
+    Ok(first_mod)
 }
 
 fn parse_cost_scale_expr(ts: &mut TokenStream<'_>) -> Option<crate::v2::ir::ValueExpr> {
@@ -277,10 +319,35 @@ fn parse_cost_scale_expr(ts: &mut TokenStream<'_>) -> Option<crate::v2::ir::Valu
             exclude_first: true,
         });
     }
-    if ts.eat_phrase(&["for", "each", "permanent", "sacrificed", "this", "turn"]) {
+    if ts.eat_phrase(&["for", "each", "permanent", "sacrificed", "this", "way"])
+        || ts.eat_phrase(&["for", "each", "permanent", "sacrificed", "this", "turn"])
+    {
         return Some(ValueExpr::PriorActionCount(
             PriorActionKind::SacrificedThisWay,
         ));
+    }
+    if ts.eat_phrase(&["for", "each", "other"])
+        && try_parse(ts, parse_object_filter).is_ok()
+        && ts.eat_phrase(&["you've", "sacrificed", "this", "turn"])
+    {
+        return Some(ValueExpr::PriorActionCount(
+            PriorActionKind::SacrificedThisWay,
+        ));
+    }
+    {
+        let c_cp = ts.checkpoint();
+        if ts.eat_phrase(&["for", "each"])
+            && let Some(w) = ts.peek_word()
+            && let Some(c) = crate::vocab::lookup_color(&w.to_ascii_lowercase())
+        {
+            ts.next_word();
+            if ts.eat_phrase(&["mana", "symbol", "in", "their", "mana", "costs"])
+                || ts.eat_phrase(&["mana", "symbol", "in", "their", "activation", "costs"])
+            {
+                return Some(ValueExpr::Devotion(c));
+            }
+        }
+        ts.restore(c_cp);
     }
     if ts.eat_phrase(&["for", "each", "counter", "removed", "this", "way"]) {
         return Some(ValueExpr::PriorActionCount(
@@ -335,5 +402,5 @@ fn parse_cost_scale_expr(ts: &mut TokenStream<'_>) -> Option<crate::v2::ir::Valu
         return Some(ValueExpr::TargetsBeyondFirst);
     }
     ts.restore(cp);
-    opt(ts, parse_for_each_expr)
+    opt(ts, parse_static_scale_expr)
 }

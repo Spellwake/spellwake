@@ -243,7 +243,11 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
                 });
                 break;
             }
-            if ts.is_eof() {
+            if ts.is_eof()
+                || ts
+                    .peek_word()
+                    .is_some_and(|w| w.eq_ignore_ascii_case("instead"))
+            {
                 // Replacement damage amount without repeated `to <tgt>` (`If that land is a Mountain, ~ deals 2 damage instead.`)
                 out.push(Effect::DealDamage {
                     source: subject.clone(),
@@ -1757,9 +1761,13 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
             {
                 keep_existing_types = true;
             }
+            let _ = ts.eat_phrase(&["that's", "no", "longer", "an", "equipment"])
+                || ts.eat_phrase(&["that's", "no", "longer", "a", "creature"]);
             let duration = parse_trailing_duration(ts).unwrap_or(duration);
             let mut loses_abilities = ts.eat_phrase(&["and", "has", "no", "abilities"])
-                || ts.eat_phrase(&["and", "loses", "all", "abilities"]);
+                || ts.eat_phrase(&["and", "loses", "all", "abilities"])
+                || ts.eat_phrase(&["and", "loses", "all", "other", "abilities"])
+                || ts.eat_phrase(&["and", "lose", "all", "other", "abilities"]);
             if !loses_abilities {
                 let lcp = ts.checkpoint();
                 if ts.eat_comma() && ts.eat_phrase(&["loses", "all", "abilities"]) {

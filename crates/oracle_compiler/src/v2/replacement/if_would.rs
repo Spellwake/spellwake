@@ -889,27 +889,41 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
             }
         }
         ts.restore(cp);
-        // Singular predefined token replacement: `If you would create a <Predef> [, <Predef2>, or <Predef3>] token, instead create ...`
+        // Singular predefined or creature-subtype token replacement:
+        // `If you would create a <Predef|Subtype> [, ...] token, [instead] create ... [instead]`
         if ts.eat_phrase(&["you", "would", "create"]) && (ts.eat_word("a") || ts.eat_word("an")) {
             let mut predefs = Vec::new();
+            let mut subtype_names = Vec::new();
             while let Some(w) = ts.peek_word() {
-                if let Some(pt) = lookup_predefined_token(&w.to_ascii_lowercase()) {
+                let low = w.to_ascii_lowercase();
+                if let Some(pt) = lookup_predefined_token(&low) {
                     ts.next_word();
                     predefs.push(pt);
+                    let _ = ts.eat_comma();
+                    let _ = ts.eat_word("or");
+                } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+                    ts.next_word();
+                    subtype_names.push(sub.to_string());
                     let _ = ts.eat_comma();
                     let _ = ts.eat_word("or");
                 } else {
                     break;
                 }
             }
-            if !predefs.is_empty() && ts.eat_word("token") && ts.eat_comma() {
+            if (!predefs.is_empty() || !subtype_names.is_empty())
+                && ts.eat_word("token")
+                && ts.eat_comma()
+            {
+                let mut subs: Vec<String> = predefs.iter().map(|pt| format!("{pt:?}")).collect();
+                subs.extend(subtype_names);
                 let filter = Some(ObjectFilter {
                     token: Some(true),
-                    subtypes: predefs.iter().map(|pt| format!("{pt:?}")).collect(),
-                    subtypes_match_any: predefs.len() > 1,
+                    subtypes_match_any: subs.len() > 1,
+                    subtypes: subs,
                     ..Default::default()
                 });
-                if ts.eat_phrase(&["instead", "create", "one", "of", "each"]) {
+                if !predefs.is_empty() && ts.eat_phrase(&["instead", "create", "one", "of", "each"])
+                {
                     let _ = ts.eat_period();
                     if ts.is_eof() {
                         let rules = predefs
@@ -925,7 +939,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                             .collect();
                         return Ok(Replacement::Compound(rules));
                     }
-                } else if ts.eat_phrase(&["instead", "create"])
+                } else if (ts.eat_phrase(&["instead", "create"]) || ts.eat_word("create"))
                     && let Ok((c1, spec1, _)) =
                         try_parse(ts, crate::v2::clause::tokens::parse_token_creation)
                 {
@@ -950,6 +964,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                             },
                         });
                     }
+                    let _ = ts.eat_word("instead");
                     let _ = ts.eat_period();
                     if ts.is_eof() {
                         return Ok(if rules.len() == 1 {
@@ -1344,6 +1359,33 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
         if let Some(src_flt) = src_flt_opt
             && ts.eat_phrase(&["would", "deal"])
         {
+            // `If a red source you control would deal an amount of noncombat damage less than ~'s power to an opponent, that source deals damage equal to ~'s power instead.` (`Ojer Axonil`)
+            {
+                let ocp = ts.checkpoint();
+                if ts.eat_phrase(&["an", "amount", "of"]) {
+                    let _ = ts.eat_word("noncombat") || ts.eat_word("combat");
+                    if ts.eat_phrase(&["damage", "less", "than"])
+                        && try_parse(ts, parse_value_expr).is_ok()
+                        && ts.eat_word("to")
+                        && let Ok(tgt) = try_parse(ts, parse_subject_ref)
+                        && ts.eat_comma()
+                        && (ts.eat_phrase(&["that", "source", "deals", "damage", "equal", "to"])
+                            || ts.eat_phrase(&["it", "deals", "damage", "equal", "to"]))
+                        && let Ok(val) = try_parse(ts, parse_value_expr)
+                        && ts.eat_word("instead")
+                    {
+                        let _ = ts.eat_period();
+                        if ts.is_eof() {
+                            return Ok(Replacement::DamageRule(DamageReplacement::ModifyDynamic {
+                                source: Some(src_flt),
+                                target: Some(tgt),
+                                add: val,
+                            }));
+                        }
+                    }
+                }
+                ts.restore(ocp);
+            }
             let combat_only = ts.eat_word("combat");
             let _ = ts.eat_word("noncombat");
             let mut max_dmg_prevent: Option<i32> = None;
@@ -1367,14 +1409,37 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
             if ts.eat_word("damage") {
                 let _ = ts.eat_phrase(&["this", "turn"]);
                 let target = if ts.eat_word("to") {
-                    if let Some(mut first_tgt) = opt(ts, parse_subject_ref) {
+                    if ts.eat_phrase(&["the", "other", "chosen", "player"]) {
+                        let _ =
+                            ts.eat_phrase(&["or", "a", "permanent", "that", "player", "controls"]);
+                        Some(SubjectRef::Player(PlayerRef::ChosenPlayer))
+                    } else if let Some(mut first_tgt) = opt(ts, parse_subject_ref) {
                         let mut tgts = vec![first_tgt.clone()];
                         loop {
                             let tcp = ts.checkpoint();
-                            let _ = ts.eat_comma();
-                            if !(ts.eat_word("or") || ts.eat_word("and/or")) {
+                            let had_comma = ts.eat_comma();
+                            let had_or = ts.eat_word("or") || ts.eat_word("and/or");
+                            if !had_comma && !had_or {
                                 ts.restore(tcp);
                                 break;
+                            }
+                            if had_comma && !had_or {
+                                // Only continue comma list when next item is a bare type/player noun followed by `,` or `or`
+                                // (e.g. `a creature, battle, or opponent`)
+                                if ts.eat_word("battle") || ts.eat_word("planeswalker") {
+                                    tgts.push(SubjectRef::Group(Box::new(ObjectFilter {
+                                        any_permanent: true,
+                                        ..Default::default()
+                                    })));
+                                    continue;
+                                }
+                                ts.restore(tcp);
+                                break;
+                            }
+                            let _ = ts.eat_phrase(&["one", "or", "more"]);
+                            if ts.eat_word("opponent") {
+                                tgts.push(SubjectRef::Player(PlayerRef::AnyOpponent));
+                                continue;
                             }
                             if let Ok(next_tgt) = try_parse(ts, parse_subject_ref) {
                                 tgts.push(next_tgt);
@@ -1387,10 +1452,6 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                             first_tgt = SubjectRef::Compound(tgts);
                         }
                         Some(first_tgt)
-                    } else if ts.eat_phrase(&["the", "other", "chosen", "player"]) {
-                        let _ =
-                            ts.eat_phrase(&["or", "a", "permanent", "that", "player", "controls"]);
-                        Some(SubjectRef::Player(PlayerRef::ChosenPlayer))
                     } else {
                         None
                     }
@@ -1404,6 +1465,36 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                     None
                 };
                 if ts.eat_comma() {
+                    // `prevent half that damage, rounded up/down` (`Gisela, Blade of Goldnight`)
+                    {
+                        let hcp = ts.checkpoint();
+                        if ts.eat_phrase(&["prevent", "half", "that", "damage"]) {
+                            let _ = ts.eat_comma();
+                            let rounding = if ts.eat_phrase(&["rounded", "up"]) {
+                                crate::ast::Rounding::Up
+                            } else {
+                                let _ = ts.eat_phrase(&["rounded", "down"]);
+                                crate::ast::Rounding::Down
+                            };
+                            let _ = ts.eat_period();
+                            if ts.is_eof() {
+                                return Ok(Replacement::DamageRule(
+                                    DamageReplacement::PreventFixed {
+                                        source: Some(src_flt),
+                                        target,
+                                        amount: ValueExpr::Div {
+                                            expr: Box::new(ValueExpr::PriorActionCount(
+                                                crate::v2::ir::PriorActionKind::ThatMany,
+                                            )),
+                                            denom: 2,
+                                            rounding,
+                                        },
+                                    },
+                                ));
+                            }
+                        }
+                        ts.restore(hcp);
+                    }
                     // `prevent that damage [. <rider>]` (`Callous Giant`, `Swans of Bryn Argoll`)
                     {
                         let pcp = ts.checkpoint();
@@ -1761,537 +1852,9 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
         ts.restore(cp);
     }
 
-    // 1f. `If [combat|noncombat] damage would be dealt to <subj> [while <cond>], prevent that damage [and/, <eff>] | <instead>.`
-    {
-        let cp = ts.checkpoint();
-        let combat_only = ts.eat_word("combat");
-        let _ = ts.eat_word("noncombat");
-        if ts.eat_phrase(&["damage", "would", "be", "dealt", "to"])
-            && let Ok(target) = try_parse(ts, parse_subject_ref)
-        {
-            let _ = ts.eat_phrase(&["this", "turn"]);
-            let cond = if ts.eat_word("while") {
-                opt(ts, parse_condition)
-            } else {
-                None
-            };
-            if ts.eat_comma() {
-                if ts.eat_phrase(&["prevent", "that", "damage"]) {
-                    let mut rider = Vec::new();
-                    if ts.eat_word("and") || ts.eat_comma() {
-                        let _ = ts.eat_word("and");
-                        // Parse up to the first period (or EOF)
-                        let start = ts.pos;
-                        let mut end = start;
-                        while end < ts.tokens.len()
-                            && !matches!(ts.tokens[end].kind, crate::v2::lexer::TokenKind::Period)
-                        {
-                            end += 1;
-                        }
-                        let mut sub = ts
-                            .sub_stream(&ts.tokens[start..end], crate::v2::ir::ParseStage::Effect);
-                        if let Ok(r) = parse_effect_sentence(&mut sub)
-                            && sub.is_eof()
-                        {
-                            rider.extend(r);
-                            ts.pos = end;
-                        }
-                    }
-                    if ts.eat_period() && !ts.is_eof() {
-                        let start = ts.pos;
-                        let mut end = ts.tokens.len();
-                        if end > start
-                            && matches!(
-                                ts.tokens[end - 1].kind,
-                                crate::v2::lexer::TokenKind::Period
-                            )
-                        {
-                            end -= 1;
-                        }
-                        let mut sub = ts
-                            .sub_stream(&ts.tokens[start..end], crate::v2::ir::ParseStage::Effect);
-                        if let Ok(r2) = parse_effect_sentence(&mut sub)
-                            && sub.is_eof()
-                        {
-                            rider.extend(r2);
-                            ts.pos = ts.tokens.len();
-                        }
-                    }
-                    let _ = ts.eat_period();
-                    if ts.is_eof() {
-                        return Ok(if !rider.is_empty() || cond.is_some() {
-                            Replacement::DamageRule(DamageReplacement::PreventWithRider {
-                                target,
-                                condition: cond,
-                                rider,
-                            })
-                        } else {
-                            Replacement::DamageRule(DamageReplacement::PreventAll { target })
-                        });
-                    }
-                } else if let Ok(instead) = parse_instead_clause(ts) {
-                    let _ = ts.eat_period();
-                    if ts.is_eof() {
-                        return Ok(Replacement::EventInstead {
-                            event: TriggerEvent::DealtDamage {
-                                subject: target,
-                                combat_only,
-                            },
-                            instead,
-                        });
-                    }
-                }
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 1f1. `If <subj> would be destroyed, regenerate it / <instead>.`
-    {
-        let dcp = ts.checkpoint();
-        if let Ok(subject) = try_parse(ts, parse_subject_ref)
-            && ts.eat_phrase(&["would", "be", "destroyed"])
-            && ts.eat_comma()
-        {
-            if ts.eat_word("regenerate")
-                && (ts.eat_word("it") || ts.eat_word("them") || ts.eat_tilde())
-            {
-                let _ = ts.eat_period();
-                if ts.is_eof() {
-                    return Ok(Replacement::EventInstead {
-                        event: TriggerEvent::Dies {
-                            subject: subject.clone(),
-                        },
-                        instead: vec![crate::v2::ir::Effect::MutateObject {
-                            subject,
-                            mutation: crate::v2::ir::ObjectMutation::StateAction(
-                                crate::v2::ir::ObjectStateAction::Regenerate,
-                            ),
-                            duration: crate::v2::ir::Duration::Instant,
-                        }],
-                    });
-                }
-            } else if let Ok(instead) = parse_instead_clause(ts) {
-                let _ = ts.eat_period();
-                if ts.is_eof() {
-                    return Ok(Replacement::EventInstead {
-                        event: TriggerEvent::Dies { subject },
-                        instead,
-                    });
-                }
-            }
-        }
-        ts.restore(dcp);
-    }
-
-    // 1f2. `If you would begin your draw step, [you may] skip that step instead.`
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&["you", "would", "begin", "your", "draw", "step"]) && ts.eat_comma() {
-            let optional = ts.eat_phrase(&["you", "may"]);
-            if ts.eat_phrase(&["skip", "that", "step", "instead"]) {
-                let _ = ts.eat_period();
-                if ts.is_eof() {
-                    return Ok(Replacement::PlayerRule {
-                        player: PlayerRef::You,
-                        rule: PlayerReplacementKind::SkipStep {
-                            step: crate::ast::TurnStepAst::DrawStep,
-                            optional,
-                        },
-                    });
-                }
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 1f3. `If a spell or ability an opponent controls causes you to discard [~ | a card], <instead>.`
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&[
-            "a", "spell", "or", "ability", "an", "opponent", "controls", "causes", "you", "to",
-            "discard",
-        ]) {
-            let disc_subj = if ts.eat_tilde() {
-                Some(SubjectRef::SelfObject)
-            } else if ts.eat_phrase(&["a", "card"]) {
-                Some(SubjectRef::Group(Box::new(ObjectFilter {
-                    any_card: true,
-                    ..Default::default()
-                })))
-            } else {
-                None
-            };
-            if let Some(subject) = disc_subj
-                && ts.eat_comma()
-            {
-                let remaining = &ts.tokens[ts.pos..];
-                let mut end = remaining.len();
-                if end > 0 && matches!(remaining[end - 1].kind, crate::v2::lexer::TokenKind::Period)
-                {
-                    end -= 1;
-                }
-                let mut sub = ts.sub_stream(&remaining[..end], crate::v2::ir::ParseStage::Effect);
-                if let Ok(instead) = parse_effect_sentence(&mut sub)
-                    && sub.is_eof()
-                {
-                    ts.pos = ts.tokens.len();
-                    return Ok(Replacement::EventInstead {
-                        event: TriggerEvent::ForcedDiscard {
-                            player: PlayerRef::You,
-                            subject,
-                        },
-                        instead,
-                    });
-                }
-                if let Ok(instead) = parse_instead_clause(ts) {
-                    let _ = ts.eat_period();
-                    if ts.is_eof() {
-                        return Ok(Replacement::EventInstead {
-                            event: TriggerEvent::ForcedDiscard {
-                                player: PlayerRef::You,
-                                subject,
-                            },
-                            instead,
-                        });
-                    }
-                }
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 1f4. `If an opponent / you would draw a card except the first one they/you draw in each of their/your draw steps, <instead>`
-    {
-        let cp = ts.checkpoint();
-        let draw_player = if ts.eat_phrase(&[
-            "you", "would", "draw", "a", "card", "except", "the", "first", "one", "you", "draw",
-            "in", "each", "of", "your", "draw", "steps",
-        ]) {
-            Some(PlayerRef::You)
-        } else if ts.eat_phrase(&[
-            "an", "opponent", "would", "draw", "a", "card", "except", "the", "first", "one",
-            "they", "draw", "in", "each", "of", "their", "draw", "steps",
-        ]) {
-            Some(PlayerRef::AnyOpponent)
-        } else {
-            None
-        };
-        if let Some(player) = draw_player
-            && ts.eat_comma()
-        {
-            let sc_cp = ts.checkpoint();
-            if ts.eat_phrase(&["instead", "that", "player", "skips", "that", "draw", "and"])
-                && let Ok(mut effs) = parse_effect_sentence(ts)
-            {
-                let _ = ts.eat_period();
-                if ts.is_eof() {
-                    effs.insert(
-                        0,
-                        crate::v2::ir::Effect::MutatePlayer {
-                            player,
-                            mutation: crate::v2::ir::PlayerMutation::SkipNextStep(
-                                crate::ast::TurnStepAst::DrawStep,
-                            ),
-                            duration: crate::v2::ir::Duration::Instant,
-                        },
-                    );
-                    return Ok(Replacement::EventInstead {
-                        event: TriggerEvent::PlayerAction {
-                            player,
-                            action: PlayerTriggerKind::CardDrawn,
-                        },
-                        instead: effs,
-                    });
-                }
-            }
-            ts.restore(sc_cp);
-            if let Ok(instead) = parse_instead_clause(ts) {
-                let _ = ts.eat_period();
-                if ts.is_eof() {
-                    return Ok(Replacement::EventInstead {
-                        event: TriggerEvent::PlayerAction {
-                            player,
-                            action: PlayerTriggerKind::CardDrawn,
-                        },
-                        instead,
-                    });
-                }
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 1f5. `If an opponent would draw two or more cards, <instead>` (`Alms Collector`)
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&[
-            "an", "opponent", "would", "draw", "two", "or", "more", "cards",
-        ]) && ts.eat_comma()
-            && let Ok(instead) = parse_instead_clause(ts)
-        {
-            let _ = ts.eat_period();
-            if ts.is_eof() {
-                return Ok(Replacement::EventInstead {
-                    event: TriggerEvent::PlayerAction {
-                        player: PlayerRef::AnyOpponent,
-                        action: PlayerTriggerKind::CardDrawn,
-                    },
-                    instead,
-                });
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 1g. `If <player> would draw a card [while <cond>], <instead>.`
-    {
-        let cp = ts.checkpoint();
-        if let Ok(player) = try_parse(ts, crate::v2::filter::parse_player_ref)
-            && ts.eat_phrase(&["would", "draw", "a", "card"])
-        {
-            let while_cond =
-                if ts.eat_phrase(&["while", "your", "library", "has", "no", "cards", "in", "it"]) {
-                    Some(crate::v2::ir::ConditionExpr::Compare {
-                        lhs: Box::new(ValueExpr::PlayerStat {
-                            player: PlayerRef::You,
-                            stat: crate::ast::PlayerStatKind::CardsInLibrary,
-                        }),
-                        op: crate::ast::CompareOp::Eq,
-                        rhs: Box::new(ValueExpr::Const(0)),
-                    })
-                } else if ts.eat_word("while") {
-                    opt(ts, parse_condition)
-                } else {
-                    None
-                };
-            if ts.eat_comma()
-                && let Ok(instead) = parse_instead_clause(ts)
-            {
-                let _ = ts.eat_period();
-                ts.expect_eof()?;
-                let rep = Replacement::EventInstead {
-                    event: TriggerEvent::PlayerAction {
-                        player,
-                        action: PlayerTriggerKind::CardDrawn,
-                    },
-                    instead,
-                };
-                return Ok(if let Some(condition) = while_cond {
-                    Replacement::ConditionalEnters {
-                        condition,
-                        inner: Box::new(rep),
-                    }
-                } else {
-                    rep
-                });
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 1g1. `If <flt> would deal [combat] damage to <tgt>, prevent <N> of that damage.`
-    {
-        let cp = ts.checkpoint();
-        if let Ok(src_flt) = try_parse(ts, parse_object_filter)
-            && ts.eat_phrase(&["would", "deal"])
-        {
-            let _ = ts.eat_word("combat") || ts.eat_word("noncombat");
-            if ts.eat_word("damage") {
-                let target = if ts.eat_word("to") {
-                    if let Some(mut first_tgt) = opt(ts, parse_subject_ref) {
-                        let mut tgts = vec![first_tgt.clone()];
-                        loop {
-                            let tcp = ts.checkpoint();
-                            let _ = ts.eat_comma();
-                            if !(ts.eat_word("or") || ts.eat_word("and/or")) {
-                                ts.restore(tcp);
-                                break;
-                            }
-                            if let Ok(next_tgt) = try_parse(ts, parse_subject_ref) {
-                                tgts.push(next_tgt);
-                                continue;
-                            }
-                            ts.restore(tcp);
-                            break;
-                        }
-                        if tgts.len() > 1 {
-                            first_tgt = SubjectRef::Compound(tgts);
-                        }
-                        Some(first_tgt)
-                    } else if ts.eat_phrase(&["the", "other", "chosen", "player"]) {
-                        let _ =
-                            ts.eat_phrase(&["or", "a", "permanent", "that", "player", "controls"]);
-                        Some(SubjectRef::Player(PlayerRef::ChosenPlayer))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                if ts.eat_comma()
-                    && ts.eat_word("prevent")
-                    && let Ok(mut amount) = try_parse(ts, parse_value_expr)
-                    && ts.eat_phrase(&["of", "that", "damage"])
-                {
-                    if ts.eat_comma()
-                        && ts.eat_phrase(&["where", "x", "is"])
-                        && let Ok(val) = try_parse(ts, parse_value_expr)
-                    {
-                        amount = val;
-                    }
-                    let _ = ts.eat_period();
-                    if ts.is_eof() {
-                        return Ok(Replacement::DamageRule(DamageReplacement::PreventFixed {
-                            source: Some(src_flt),
-                            target,
-                            amount,
-                        }));
-                    }
-                }
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 1g2. Mill doubling (`If an opponent/a player would mill one or more cards, they mill twice that many cards instead.`)
-    {
-        let cp = ts.checkpoint();
-        if let Ok(player) = try_parse(ts, crate::v2::filter::parse_player_ref)
-            && ts.eat_phrase(&["would", "mill", "one", "or", "more", "cards"])
-            && ts.eat_comma()
-            && ts.eat_phrase(&["they", "mill", "twice", "that", "many", "cards", "instead"])
-        {
-            let _ = ts.eat_period();
-            if ts.is_eof() {
-                return Ok(Replacement::PlayerRule {
-                    player,
-                    rule: PlayerReplacementKind::MultiplyMill { factor: 2 },
-                });
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 1g3. Extra turn skip (`If a player would begin an extra turn, that player skips that turn instead.`)
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&["a", "player", "would", "begin", "an", "extra", "turn"])
-            && ts.eat_comma()
-            && ts.eat_phrase(&["that", "player", "skips", "that", "turn", "instead"])
-        {
-            let _ = ts.eat_period();
-            if ts.is_eof() {
-                return Ok(Replacement::EventInstead {
-                    event: TriggerEvent::StepBegins {
-                        step: crate::ast::TurnStepAst::Upkeep,
-                        owner: crate::v2::ir::StepOwner::EachPlayer,
-                    },
-                    instead: vec![crate::v2::ir::Effect::MutatePlayer {
-                        player: PlayerRef::ThatPlayer,
-                        mutation: crate::v2::ir::PlayerMutation::Action(
-                            PlayerActionKind::SkipNextTurn,
-                        ),
-                        duration: crate::v2::ir::Duration::Instant,
-                    }],
-                });
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 1g5. Lose-the-game replacement (`If you would lose the game, instead ...`) (`Exquisite Archangel`, `The Golden Throne`, `Lich's Mirror`)
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&["you", "would", "lose", "the", "game"])
-            && ts.eat_comma()
-            && let Ok(instead) = parse_instead_clause(ts)
-        {
-            let _ = ts.eat_period();
-            if ts.is_eof() {
-                return Ok(Replacement::EventInstead {
-                    event: TriggerEvent::PlayerAction {
-                        player: PlayerRef::You,
-                        action: PlayerTriggerKind::LosesGame,
-                    },
-                    instead,
-                });
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 1g6. Unspent mana conversion (`If you would lose unspent mana, that mana becomes <color|colorless> instead.`)
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&["you", "would", "lose", "unspent", "mana"])
-            && ts.eat_comma()
-            && ts.eat_phrase(&["that", "mana", "becomes"])
-        {
-            let sym = if ts.eat_word("colorless") {
-                Some(crate::v2::ir::ManaSymbol::Colorless)
-            } else if ts.eat_word("white") {
-                Some(crate::v2::ir::ManaSymbol::White)
-            } else if ts.eat_word("blue") {
-                Some(crate::v2::ir::ManaSymbol::Blue)
-            } else if ts.eat_word("black") {
-                Some(crate::v2::ir::ManaSymbol::Black)
-            } else if ts.eat_word("red") {
-                Some(crate::v2::ir::ManaSymbol::Red)
-            } else if ts.eat_word("green") {
-                Some(crate::v2::ir::ManaSymbol::Green)
-            } else {
-                None
-            };
-            if let Some(sym) = sym
-                && ts.eat_word("instead")
-            {
-                let _ = ts.eat_period();
-                if ts.is_eof() {
-                    return Ok(Replacement::Rule(ReplacementRuleKind::ManaOverride(
-                        crate::v2::ir::ManaCost { symbols: vec![sym] },
-                    )));
-                }
-            }
-        }
-        ts.restore(cp);
-    }
-
-    // 1g4. Explore replacement (`If <flt> would explore, instead ...`)
-    {
-        let cp = ts.checkpoint();
-        if let Ok(filter) = try_parse(ts, parse_object_filter)
-            && ts.eat_phrase(&["would", "explore"])
-            && ts.eat_comma()
-            && ts.eat_word("instead")
-        {
-            if ts.eat_phrase(&["it", "explores"])
-                && ts.eat_comma()
-                && ts.eat_phrase(&["then", "it", "explores", "again"])
-            {
-                let _ = ts.eat_period();
-                if ts.is_eof() {
-                    return Ok(Replacement::Rule(ReplacementRuleKind::ExploreAgain(filter)));
-                }
-            } else {
-                let mut rest = ts.clone();
-                if let Ok(instead) = parse_effect_sentence(&mut rest) {
-                    let _ = rest.eat_period();
-                    if rest.is_eof() {
-                        ts.pos = ts.tokens.len();
-                        return Ok(Replacement::EventInstead {
-                            event: TriggerEvent::PlayerObjectEvent {
-                                player: PlayerRef::You,
-                                kind: crate::v2::ir::PlayerObjectTriggerKind::CardPlayed,
-                                filter: Some(filter),
-                            },
-                            instead,
-                        });
-                    }
-                }
-            }
-        }
-        ts.restore(cp);
+    // 1f-1g7. Extended `If ... would ...` replacements (delegated to `if_would_ext.rs`)
+    if let Ok(rep) = try_parse(ts, super::if_would_ext::parse_if_would_ext) {
+        return Ok(rep);
     }
 
     // 1h. `If <cond>, it/~ enters with ... / enters tapped`

@@ -29,6 +29,9 @@ pub(super) fn parse_player_verb_frame(
     // 1. `double the power/toughness/number of counters ...` (falls through to section 3i for `double <subj>'s power [and toughness] [<val> times]`)
     let outer_dcp = ts.checkpoint();
     if ts.eat_word("double") || ts.eat_word("doubles") {
+        if let Some(res) = super::player_verbs_ext::try_parse_double_ext(ts, actor) {
+            return res;
+        }
         let dcp = ts.checkpoint();
         if ts.eat_phrase(&["the", "power", "and", "toughness", "of"])
             && let Ok(subject) = try_parse(ts, parse_subject_ref)
@@ -176,6 +179,9 @@ pub(super) fn parse_player_verb_frame(
 
     // 2. `get(s) {E}...` / `get(s) an emblem with "..."`
     if ts.eat_word("get") || ts.eat_word("gets") {
+        if let Some(res) = super::player_verbs_ext::try_parse_get_ext(ts, actor) {
+            return res;
+        }
         if ts.eat_phrase(&["an", "emblem", "with"]) {
             let quoted = ts
                 .next_quoted()
@@ -421,7 +427,9 @@ pub(super) fn parse_player_verb_frame(
         let subj = parse_subject_ref(ts)?;
         if ts.eat_word("from") {
             let fcp = ts.checkpoint();
-            if ts.eat_word("among") && try_parse(ts, parse_subject_ref).is_ok() {
+            if super::player_verbs_ext::eat_extended_cast_source(ts) {
+                // `play <subj> from among cards exiled this way / from the top of <lib>`
+            } else if ts.eat_word("among") && try_parse(ts, parse_subject_ref).is_ok() {
                 // `play <subj> from among <cards>`
             } else {
                 ts.restore(fcp);
@@ -466,6 +474,7 @@ pub(super) fn parse_player_verb_frame(
             });
         } else {
             ts.restore(m_cp);
+            super::player_verbs_ext::parse_trailing_play_mana_rider(ts, actor, dur, &mut out);
         }
         return Ok((out, ()));
     }
@@ -543,10 +552,13 @@ pub(super) fn parse_player_verb_frame(
             }
         }
         ts.restore(cp);
-        // `cast any number of [the] copies [without paying their mana costs]` (`Arcane Bombardment`, `Wizard's Spellbook`)
+        // `cast (any number of | up to <val> of) [the] copies [without paying their mana costs]` (`Arcane Bombardment`, `Wizard's Spellbook`, `Baron Helmut Zemo`)
         {
             let acp = ts.checkpoint();
-            if ts.eat_phrase(&["any", "number", "of"])
+            if (ts.eat_phrase(&["any", "number", "of"])
+                || (ts.eat_phrase(&["up", "to"])
+                    && opt(ts, parse_value_expr).is_some()
+                    && ts.eat_word("of")))
                 && (ts.eat_phrase(&["the", "copies"]) || ts.eat_word("copies"))
             {
                 let free = ts.eat_phrase(&["without", "paying", "their", "mana", "costs"])
@@ -582,7 +594,9 @@ pub(super) fn parse_player_verb_frame(
             if ts.eat_word("from") {
                 loop {
                     let f1_cp = ts.checkpoint();
-                    if ts.eat_word("among") {
+                    if super::player_verbs_ext::eat_extended_cast_source(ts) {
+                        // `from among cards exiled this way / one of those piles / the top of <zone>`
+                    } else if ts.eat_word("among") {
                         let acp = ts.checkpoint();
                         if (ts.eat_phrase(&["cards", "you", "own", "in"])
                             || ts.eat_phrase(&["cards", "in"]))
@@ -662,6 +676,7 @@ pub(super) fn parse_player_verb_frame(
                 });
             } else {
                 ts.restore(m_cp);
+                super::player_verbs_ext::parse_trailing_play_mana_rider(ts, actor, dur, &mut out);
             }
             return Ok((out, ()));
         }
@@ -748,6 +763,9 @@ pub(super) fn parse_player_verb_frame(
 
     // 3d. `have no maximum hand size [dur]` OR `have <subj> deal/fight/become/get ...`
     if ts.eat_word("have") || ts.eat_word("has") {
+        if let Some(res) = super::player_verbs_ext::try_parse_have_ext(ts, actor) {
+            return res;
+        }
         if ts.eat_phrase(&["no", "maximum", "hand", "size"]) {
             let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilYourNextTurn);
             return Ok((
@@ -1011,6 +1029,9 @@ pub(super) fn parse_player_verb_frame(
 
     // 3e. `roll a d20` / `roll a d6` / `roll a six-sided die` / `roll <K> d<N>`
     if ts.eat_word("roll") || ts.eat_word("rolls") {
+        if let Some(res) = super::player_verbs_ext::try_parse_roll_ext(ts, actor) {
+            return res;
+        }
         let count = if ts.eat_word("a") || ts.eat_word("an") {
             1u8
         } else {
@@ -1844,6 +1865,9 @@ pub(super) fn parse_player_verb_frame(
 
     // 21. `choose(s) <new targets for <subj> | characteristic | target>`
     if ts.eat_word("choose") || ts.eat_word("chooses") {
+        if let Some(res) = super::player_verbs_ext::try_parse_choose_ext(ts, actor) {
+            return res;
+        }
         if ts.eat_phrase(&["new", "targets", "for"])
             || ts.eat_phrase(&["a", "new", "target", "for"])
         {
@@ -2411,7 +2435,12 @@ pub(super) fn parse_player_verb_frame(
         return Ok((vec![parse_prevent_damage(ts)?], ()));
     }
 
-    // 28. Standalone keyword action verbs (`proliferate`, `investigate`, `populate`, `amass`, `adapt`, `goad`, etc.)
+    // 28. Extended player verbs (voting, meld, convert, unattach, reselect, manifest, planeswalk, repeat, etc.)
+    if let Some(res) = super::player_verbs_ext::try_parse_player_verb_ext(ts, actor) {
+        return res;
+    }
+
+    // 29. Standalone keyword action verbs (`proliferate`, `investigate`, `populate`, `amass`, `adapt`, `goad`, etc.)
     if let Some(eff) = opt(ts, |s| parse_keyword_action_verb(s, actor)) {
         return Ok((vec![eff], ()));
     }

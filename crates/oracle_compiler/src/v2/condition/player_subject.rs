@@ -1009,6 +1009,18 @@ pub(super) fn parse_player_or_subject_condition(
         ts.restore(cp);
     }
 
+    // `a card is exiled with it/~` / `one or more cards are exiled with it/~` (checked BEFORE `parse_subject_ref` so `is exiled` doesn't stop early!)
+    {
+        let ecp = ts.checkpoint();
+        if (ts.eat_phrase(&["a", "card", "is", "exiled", "with"])
+            || ts.eat_phrase(&["one", "or", "more", "cards", "are", "exiled", "with"]))
+            && (ts.eat_word("it") || ts.eat_tilde())
+        {
+            return Ok(ConditionExpr::Flag(ConditionFlag::CardsExiledWithSelf));
+        }
+        ts.restore(ecp);
+    }
+
     // Subject-headed conditions (`~ is in your graveyard`, `~ is untapped`, `<subj> has/doesn't have <kw>`, `it's a <filter>`)
     {
         let cp = ts.checkpoint();
@@ -1106,6 +1118,21 @@ pub(super) fn parse_player_or_subject_condition(
             if ts.eat_phrase(&["is", "in"])
                 && let Ok(zone) = try_parse(ts, parse_zone_ref)
             {
+                // Optional graveyard-order suffix (`with a creature card directly above it` / `with three or more creature cards above it`)
+                {
+                    let gcp = ts.checkpoint();
+                    if ts.eat_word("with") {
+                        let matched_order = ts
+                            .eat_phrase(&["a", "creature", "card", "directly", "above", "it"])
+                            || (ts.next_number(false).is_some()
+                                && ts.eat_phrase(&[
+                                    "or", "more", "creature", "cards", "above", "it",
+                                ]));
+                        if !matched_order {
+                            ts.restore(gcp);
+                        }
+                    }
+                }
                 let base = ConditionExpr::InZone {
                     subject: Box::new(subj.clone()),
                     zone,
@@ -1378,6 +1405,12 @@ pub(super) fn parse_player_or_subject_condition(
                     || ts.eat_word("were"));
             if negated || positive {
                 if let Some(state) = parse_object_state(ts) {
+                    if state == ObjectStateKind::Attacking {
+                        let pcp = ts.checkpoint();
+                        if try_parse(ts, parse_player_ref).is_err() {
+                            ts.restore(pcp);
+                        }
+                    }
                     // `is enchanted by (exactly <N> | <N> or more) <flt>`
                     if state == ObjectStateKind::Enchanted {
                         let bcp = ts.checkpoint();

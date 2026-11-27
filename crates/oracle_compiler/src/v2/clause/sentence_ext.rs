@@ -5,20 +5,23 @@
 //! dynamic base P/T assignments, `For each` domains, player relative clauses, and
 //! possessive compound player-actor clauses.
 
-use crate::ast::{CardTypeMask, ColorMask, TurnStepAst};
+use crate::FaceInput;
+use crate::ast::{CardTypeMask, ColorMask, PlayerStatKind, Rounding, TurnStepAst};
+use crate::v2::card::compile_face_v2;
 use crate::v2::clause::player_verbs::parse_player_verb_frame;
 use crate::v2::clause::subject_verbs::parse_trailing_duration;
 use crate::v2::filter::{
-    parse_counter_kind, parse_keyword_list, parse_object_filter, parse_subject_ref,
+    parse_counter_kind, parse_keyword_list, parse_object_filter, parse_subject_ref, parse_zone_ref,
 };
 use crate::v2::ir::{
-    AnaphoraRef, ConditionExpr, DelayedTriggerKind, Duration, Effect, ForEachDomain, ObjectFilter,
-    ObjectMutation, ParseStage, PlayerMutation, PlayerRef, PriorActionKind, RuleRestrictionKind,
-    StaticAbility, StepOwner, SubjectRef, TriggerEvent, TriggerSpec, ValueExpr,
+    AnaphoraRef, ConditionExpr, ConditionFlag, DelayedTriggerKind, Duration, Effect, ForEachDomain,
+    LifeOp, ObjectFilter, ObjectMutation, ParseStage, PlayerActionKind, PlayerMutation, PlayerRef,
+    PlayerRestrictionKind, PriorActionKind, Replacement, ReplacementRuleKind, RuleRestrictionKind,
+    StaticAbility, StaticFlagKind, StepOwner, SubjectRef, TriggerEvent, TriggerSpec, ValueExpr,
 };
 use crate::v2::lexer::TokenKind;
-use crate::v2::parser::{PResult, TokenStream, try_parse};
-use crate::v2::value::parse_value_expr;
+use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
+use crate::v2::value::{parse_for_each_expr, parse_value_expr};
 use crate::vocab::{lookup_card_type, lookup_color};
 
 use super::{find_phrase_index, parse_sentence_top};
@@ -576,11 +579,1014 @@ pub(super) fn parse_leading_sentence_ext(ts: &mut TokenStream<'_>) -> PResult<Ve
                     }
                 }
             }
+            ts.restore(cp);
+            if ts.eat_phrase(&["for", "each"]) {
+                // Extended `For each ...` leading domains:
+                // 10e. `For each (different|even|odd|other) result [of <N>], <body>` (`Circuits Act`, `Attempted Murder`, `Celebr-8000`)
+                if (ts.eat_phrase(&["different", "result"])
+                    || ts.eat_phrase(&["even", "result"])
+                    || ts.eat_phrase(&["odd", "result"])
+                    || ts.eat_phrase(&["other", "result"])
+                    || (ts.eat_phrase(&["result", "of"]) && ts.next_number(false).is_some()))
+                    && ts.eat_comma()
+                    && let Ok(body) = try_parse(ts, parse_sentence_top)
+                {
+                    return Ok(vec![Effect::ForEach {
+                        over: ForEachDomain::Count(ValueExpr::PriorActionCount(
+                            PriorActionKind::ThatMany,
+                        )),
+                        body,
+                    }]);
+                }
+            }
+            ts.restore(cp);
+            if ts.eat_phrase(&["for", "each"]) {
+                // 10f. `For each card you put on top of your library, <body>` (`Starving Revenant`)
+                //      OR `For each flip you won, <body>` (`Mirror March`)
+                //      OR `For each [<N>] [<kind>] counter(s) removed [this way], <body>` (`Blademane Baku`, `Sage of Hours`, `Hex Parasite`, `Delaying Shield`)
+                //      OR `For each permanent type / nonland card type / color pair / different power among ..., <body>`
+                //      OR `For each defending player, <body>` (`Stand or Fall`)
+                //      OR `For each opponent in turn order` (`Protection Racket`)
+                //      OR `For each of [up to] <val> target <flt>, <body>` (`Smoke Spirits' Aid`, `Doppelgang`)
+                if (ts.eat_phrase(&["card", "you", "put", "on", "top", "of", "your", "library"])
+                    || ts.eat_phrase(&["flip", "you", "won"])
+                    || ts.eat_phrase(&["permanent", "type"])
+                    || ts.eat_phrase(&["nonland", "card", "type"])
+                    || ts.eat_phrase(&["color", "pair"])
+                    || ts.eat_phrase(&["defending", "player"])
+                    || ts.eat_phrase(&["creature", "that", "died", "this", "way"])
+                    || ts.eat_phrase(&["creature", "chosen", "this", "way"])
+                    || (ts.eat_phrase(&["creature", "that", "dealt", "damage", "to"])
+                        && ts.eat_tilde()
+                        && ts.eat_phrase(&["this", "turn"]))
+                    || ts.eat_phrase(&[
+                        "creature",
+                        "attacking",
+                        "you",
+                        "or",
+                        "a",
+                        "planeswalker",
+                        "you",
+                        "control",
+                    ])
+                    || ts.eat_phrase(&[
+                        "creature",
+                        "you",
+                        "control",
+                        "with",
+                        "power",
+                        "greater",
+                        "than",
+                        "that",
+                        "creature's",
+                        "base",
+                        "power",
+                    ])
+                    || (ts.eat_phrase(&["different", "power", "among"])
+                        && try_parse(ts, parse_object_filter).is_ok())
+                    || (ts.eat_phrase(&["card", "type", "among"])
+                        && try_parse(ts, parse_object_filter).is_ok())
+                    || (ts.eat_word("of") && try_parse(ts, parse_subject_ref).is_ok())
+                    || (ts.eat_mana_cost().is_some()
+                        && ts.eat_phrase(&["spent", "to", "cast"])
+                        && ts.eat_tilde())
+                    || (ts.eat_phrase(&["mana", "from"])
+                        && try_parse(ts, parse_object_filter).is_ok()
+                        && ts.eat_phrase(&["spent", "to", "cast"])
+                        && ts.eat_tilde()))
+                    && ts.eat_comma()
+                    && let Ok(body) = try_parse(ts, parse_sentence_top)
+                {
+                    return Ok(vec![Effect::ForEach {
+                        over: ForEachDomain::Count(ValueExpr::PriorActionCount(
+                            PriorActionKind::ThatMany,
+                        )),
+                        body,
+                    }]);
+                }
+            }
+            ts.restore(cp);
+            if ts.eat_phrase(&["for", "each"]) {
+                // 10g. `For each [<N>] [<kind>] counter(s) removed [this way], <body>`
+                let _ = ts.next_number(false);
+                let _ = opt(ts, parse_counter_kind);
+                if (ts.eat_word("counter") || ts.eat_word("counters")) && ts.eat_word("removed") {
+                    let _ = ts.eat_phrase(&["this", "way"]);
+                    if ts.eat_comma()
+                        && let Ok(body) = try_parse(ts, parse_sentence_top)
+                    {
+                        return Ok(vec![Effect::ForEach {
+                            over: ForEachDomain::Count(ValueExpr::PriorActionCount(
+                                PriorActionKind::CountersRemovedThisWay,
+                            )),
+                            body,
+                        }]);
+                    }
+                }
+            }
+            ts.restore(cp);
+            if ts.eat_phrase(&["for", "each"]) {
+                // 10h. `For each opponent/player who <condition/relative>, <body>` (`Faerie Slumber Party`, `Geth's Summons`, `Great Unclean One`, `Braids`, `Master of Ceremonies`, `Seize the Spotlight`)
+                let who_p = if ts.eat_word("opponent") {
+                    Some(PlayerRef::EachOpponent)
+                } else if ts.eat_word("player") {
+                    Some(PlayerRef::EachPlayer)
+                } else {
+                    None
+                };
+                if let Some(p) = who_p
+                    && ts.eat_word("who")
+                    && let Some(comma_idx) = (ts.pos..ts.tokens.len())
+                        .find(|&i| matches!(ts.tokens[i].kind, TokenKind::Comma))
+                    && comma_idx > ts.pos
+                {
+                    let rel_len = comma_idx - ts.pos;
+                    // Guard: relative clause after `who` must be a plausible predicate (<= 14 tokens)
+                    // and the body after comma must parse strictly to EOF.
+                    if rel_len <= 14 {
+                        ts.pos = comma_idx + 1;
+                        if let Ok(body) = try_parse(ts, parse_sentence_top)
+                            && ts.is_eof()
+                        {
+                            return Ok(vec![Effect::ForEach {
+                                over: ForEachDomain::Player(p),
+                                body,
+                            }]);
+                        }
+                    }
+                }
+            }
+            ts.restore(cp);
+            if ts.eat_phrase(&["for", "each"]) {
+                // 10i. Voting loops: `For each <opt> vote, <body>` / `For each vote (an opponent|you|a player) received, <body>` / `For each creature with one or more votes, <body>`
+                if ts.eat_phrase(&["vote", "an", "opponent", "received"])
+                    || ts.eat_phrase(&["vote", "you", "received"])
+                    || ts.eat_phrase(&["vote", "a", "player", "received"])
+                    || ts.eat_phrase(&["creature", "with", "one", "or", "more", "votes"])
+                {
+                    if ts.eat_comma()
+                        && let Ok(body) = try_parse(ts, parse_sentence_top)
+                    {
+                        return Ok(vec![Effect::ForEach {
+                            over: ForEachDomain::Count(ValueExpr::PriorActionCount(
+                                PriorActionKind::ThatMany,
+                            )),
+                            body,
+                        }]);
+                    }
+                } else if let Some(v_idx) = (ts.pos..ts.tokens.len().min(ts.pos + 5)).find(|&i| {
+                    matches!(ts.tokens[i].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("vote"))
+                }) && v_idx > ts.pos
+                    && v_idx + 1 < ts.tokens.len()
+                    && matches!(ts.tokens[v_idx + 1].kind, TokenKind::Comma)
+                {
+                    ts.pos = v_idx + 2;
+                    if let Ok(body) = try_parse(ts, parse_sentence_top) {
+                        return Ok(vec![Effect::ForEach {
+                            over: ForEachDomain::Count(ValueExpr::PriorActionCount(
+                                PriorActionKind::ThatMany,
+                            )),
+                            body,
+                        }]);
+                    }
+                }
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 11. `The first player [may] <verb>` / `The second player [may] <verb>` / `If the first player does, <body>`
+    //     (`Oath of Mages`, `Oath of Lieges`, `Oath of Druids`, `Oath of Scholars`, `Oath of Ghouls`, `Cruel Entertainment`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["if", "the", "first", "player", "does"])
+            && ts.eat_comma()
+            && let Ok(body) = try_parse(ts, parse_sentence_top)
+        {
+            return Ok(vec![Effect::IfPrevious {
+                succeeded: true,
+                body,
+            }]);
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&["the", "first", "player"]) || ts.eat_phrase(&["the", "second", "player"])
+        {
+            let optional = ts.eat_word("may");
+            if let Ok((body, ())) =
+                try_parse(ts, |s| parse_player_verb_frame(s, PlayerRef::ThatPlayer))
+            {
+                let mut effs = if optional {
+                    vec![Effect::Optional {
+                        actor: PlayerRef::ThatPlayer,
+                        body,
+                    }]
+                } else {
+                    body
+                };
+                // Allow chained `, <clause>` / `and <clause>` (e.g. `Oath of Lieges`, `Oath of Scholars`, `Cruel Entertainment`)
+                let mcp = ts.checkpoint();
+                if (ts.eat_comma() || ts.eat_word("and")) && !ts.is_eof() {
+                    let _ = ts.eat_word("then") || ts.eat_word("and");
+                    if let Ok(more) = try_parse(ts, parse_sentence_top) {
+                        effs.extend(more);
+                    } else if let Ok((more_v, ())) =
+                        try_parse(ts, |s| parse_player_verb_frame(s, PlayerRef::ThatPlayer))
+                    {
+                        effs.extend(more_v);
+                    } else {
+                        ts.restore(mcp);
+                    }
+                }
+                if ts.is_eof() {
+                    return Ok(effs);
+                }
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 12. `Mana of any (type|color) can be spent to cast (a spell this way | spells this way | that spell | those spells | it)`
+    //     (`Klaw`, `Gonti, Night Minister`, `Bloodsoaked Insight`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["mana", "of", "any"])
+            && (ts.eat_word("type") || ts.eat_word("color"))
+            && ts.eat_phrase(&["can", "be", "spent", "to", "cast"])
+            && (ts.eat_phrase(&["a", "spell", "this", "way"])
+                || ts.eat_phrase(&["spells", "this", "way"])
+                || ts.eat_phrase(&["that", "spell"])
+                || ts.eat_phrase(&["those", "spells"])
+                || ts.eat_word("it")
+                || ts.eat_word("them"))
+            && ts.is_eof()
+        {
+            return Ok(vec![Effect::MutatePlayer {
+                player: PlayerRef::You,
+                mutation: PlayerMutation::Action(PlayerActionKind::SpendManaAsAnyType),
+                duration: Duration::UntilEndOfTurn,
+            }]);
+        }
+        ts.restore(cp);
+    }
+
+    // 13. `Until end of combat [on your next turn], <body>` (`Fire Lord Ozai`, `Avatar Roku`, `Brazen Cannonade`)
+    //     AND `At end of combat, <body>` (`Defiant Vanguard`, `Time Elemental`, `Fortune, Loyal Steed`)
+    //     AND `At the beginning of each combat this turn, <body>` (`Full Throttle`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["until", "end", "of", "combat"]) {
+            let next_turn = ts.eat_phrase(&["on", "your", "next", "turn"]);
+            if ts.eat_comma()
+                && let Ok(body) = try_parse(ts, parse_sentence_top)
+            {
+                return Ok(vec![Effect::ScopedDuration {
+                    duration: if next_turn {
+                        Duration::UntilEndOfNextTurn
+                    } else {
+                        Duration::UntilEndOfCombat
+                    },
+                    body,
+                }]);
+            }
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&["at", "end", "of", "combat"])
+            && ts.eat_comma()
+            && let Ok(body) = try_parse(ts, parse_sentence_top)
+        {
+            return Ok(vec![Effect::DelayedTrigger {
+                trigger: DelayedTriggerKind::Step {
+                    step: TurnStepAst::EndOfCombat,
+                    owner: StepOwner::Next,
+                },
+                body,
+            }]);
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&[
+            "at",
+            "the",
+            "beginning",
+            "of",
+            "each",
+            "combat",
+            "this",
+            "turn",
+        ]) && ts.eat_comma()
+            && let Ok(body) = try_parse(ts, parse_sentence_top)
+        {
+            return Ok(vec![Effect::DelayedTrigger {
+                trigger: DelayedTriggerKind::Step {
+                    step: TurnStepAst::BeginningOfCombat,
+                    owner: StepOwner::Each,
+                },
+                body,
+            }]);
+        }
+        ts.restore(cp);
+    }
+
+    // 14. `When you next (attack | activate <...> | cast <...>) this turn, <body>`
+    //     (`Zevlor`, `Pit Automaton`, `Dynaheir`, `Magus Lucea Kane`, `All-Out Assault`, `Long List of the Ents`, `Repeated Reverberation`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["when", "you", "next"]) {
+            if ts.eat_phrase(&["attack", "this", "turn"])
+                && ts.eat_comma()
+                && let Ok(body) = try_parse(ts, parse_sentence_top)
+            {
+                return Ok(vec![Effect::DelayedTrigger {
+                    trigger: DelayedTriggerKind::Event(TriggerSpec {
+                        events: vec![TriggerEvent::Attacks {
+                            subject: None,
+                            player: Some(PlayerRef::You),
+                        }],
+                        intervening_if: None,
+                    }),
+                    body,
+                }]);
+            }
+            ts.restore(cp);
+            if ts.eat_phrase(&["when", "you", "next"])
+                && let Some(tt_idx) = find_phrase_index(ts.tokens, ts.pos, &["this", "turn"])
+                && tt_idx > ts.pos
+            {
+                let is_activate = ts
+                    .peek_word()
+                    .is_some_and(|w| w.eq_ignore_ascii_case("activate"));
+                let is_cast = ts
+                    .peek_word()
+                    .is_some_and(|w| w.eq_ignore_ascii_case("cast"));
+                if is_activate || is_cast {
+                    // Advance past `this turn` + optional `by spending ...` up to the comma
+                    if let Some(comma_idx) = (tt_idx + 2..ts.tokens.len())
+                        .find(|&i| matches!(ts.tokens[i].kind, TokenKind::Comma))
+                    {
+                        ts.pos = comma_idx + 1;
+                        if let Ok(body) = try_parse(ts, parse_sentence_top)
+                            && ts.is_eof()
+                        {
+                            let ev = if is_activate {
+                                TriggerEvent::AbilityActivated {
+                                    player: PlayerRef::You,
+                                    non_mana_only: true,
+                                }
+                            } else {
+                                TriggerEvent::SpellCast {
+                                    caster: PlayerRef::You,
+                                    spell: None,
+                                    from_outside_hand: false,
+                                }
+                            };
+                            return Ok(vec![Effect::DelayedTrigger {
+                                trigger: DelayedTriggerKind::Event(TriggerSpec {
+                                    events: vec![ev],
+                                    intervening_if: None,
+                                }),
+                                body,
+                            }]);
+                        }
+                    }
+                }
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 15. `If (that spell | those spells | a spell cast [from your graveyard] this way | you cast (~|it) this way and it) would be put into (your|a|its owner's) graveyard, exile (it|them) instead`
+    //     (`Mavinda`, `Glimpse the Cosmos`, `Bosium Strip`, `Invoke Calamity`, `Eelectrocute`, `Gale, Waterdeep Prodigy`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_word("if") {
+            let subj_ok = ts.eat_phrase(&["that", "spell"])
+                || ts.eat_phrase(&["those", "spells"])
+                || ts.eat_phrase(&["a", "spell", "cast", "this", "way"])
+                || ts.eat_phrase(&[
+                    "a",
+                    "spell",
+                    "cast",
+                    "from",
+                    "your",
+                    "graveyard",
+                    "this",
+                    "way",
+                ])
+                || (ts.eat_phrase(&["you", "cast"])
+                    && (ts.eat_tilde() || ts.eat_word("it"))
+                    && ts.eat_phrase(&["this", "way", "and", "it"]));
+            if subj_ok
+                && ts.eat_phrase(&["would", "be", "put", "into"])
+                && (ts.eat_phrase(&["your", "graveyard"])
+                    || ts.eat_phrase(&["a", "graveyard"])
+                    || ts.eat_phrase(&["its", "owner's", "graveyard"])
+                    || ts.eat_phrase(&["their", "owners'", "graveyards"]))
+                && ts.eat_comma()
+                && (ts.eat_phrase(&["exile", "it", "instead"])
+                    || ts.eat_phrase(&["exile", "them", "instead"]))
+                && ts.is_eof()
+            {
+                return Ok(vec![Effect::ApplyReplacement {
+                    replacement: Box::new(Replacement::Rule(
+                        ReplacementRuleKind::LeaveBattlefieldExileInstead,
+                    )),
+                    duration: Duration::UntilEndOfTurn,
+                }]);
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 16. Voting resolution sentences:
+    //     `If <opt> gets more votes [or the vote is tied], <body>`
+    //     `If no <type> got votes, <body>` (`Vault 11`)
+    //     `Chaos ensues` (`Path of the Enigma/Animist/Schemer/Ghosthunter/Pyromancer`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["chaos", "ensues"]) && ts.is_eof() {
+            return Ok(vec![Effect::MutatePlayer {
+                player: PlayerRef::You,
+                mutation: PlayerMutation::Action(PlayerActionKind::VentureIntoDungeon),
+                duration: Duration::Instant,
+            }]);
+        }
+        if ts.eat_word("if") {
+            if ts.eat_phrase(&["no", "creature", "got", "votes"])
+                && ts.eat_comma()
+                && let Ok(body) = try_parse(ts, parse_sentence_top)
+            {
+                return Ok(vec![Effect::BranchCondition {
+                    condition: ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid),
+                    then_body: body,
+                    else_body: Vec::new(),
+                }]);
+            }
+            ts.restore(cp);
+            if ts.eat_word("if")
+                && let Some(g_idx) =
+                    find_phrase_index(ts.tokens, ts.pos, &["gets", "more", "votes"])
+                && g_idx > ts.pos
+                && g_idx - ts.pos <= 4
+            {
+                ts.pos = g_idx + 3;
+                let _ = ts.eat_phrase(&["or", "the", "vote", "is", "tied"]);
+                if ts.eat_comma()
+                    && let Ok(body) = try_parse(ts, parse_sentence_top)
+                {
+                    return Ok(vec![Effect::BranchCondition {
+                        condition: ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid),
+                        then_body: body,
+                        else_body: Vec::new(),
+                    }]);
+                }
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 17. `Round (up|down) each time` (`Peer into the Abyss`, `Hydroid Krasis`, `Fraying Omnipotence`, `Pox`, `Pox Plague`)
+    {
+        let cp = ts.checkpoint();
+        if (ts.eat_phrase(&["round", "up", "each", "time"])
+            || ts.eat_phrase(&["round", "down", "each", "time"]))
+            && ts.is_eof()
+        {
+            return Ok(vec![Effect::MutatePlayer {
+                player: PlayerRef::You,
+                mutation: PlayerMutation::Action(PlayerActionKind::RepeatProcessOnce),
+                duration: Duration::Instant,
+            }]);
+        }
+        ts.restore(cp);
+    }
+
+    // 18. `Rather than pay [the mana cost of the next spell you cast this turn | ~'s mana cost], you may <verb>`
+    //     (`Marshland Bloodcaster`, `Invigorate`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["rather", "than", "pay"])
+            && (ts.eat_phrase(&[
+                "the", "mana", "cost", "of", "the", "next", "spell", "you", "cast", "this", "turn",
+            ]) || (ts.eat_tilde() && ts.eat_phrase(&["'s", "mana", "cost"])))
+            && ts.eat_comma()
+            && let Ok(body) = try_parse(ts, parse_sentence_top)
+        {
+            return Ok(body);
+        }
+        ts.restore(cp);
+    }
+
+    // 19. `For one spell this turn, you may spend mana as though it were mana of any type to pay that spell's mana cost` (`North Star`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["for", "one", "spell", "this", "turn"])
+            && ts.eat_comma()
+            && let Ok(body) = try_parse(ts, parse_sentence_top)
+        {
+            return Ok(vec![Effect::ScopedDuration {
+                duration: Duration::UntilEndOfTurn,
+                body,
+            }]);
+        }
+        ts.restore(cp);
+    }
+
+    // 20. `Any number of target players may each <verb>` (`Turtle Tracks`)
+    //     AND `You may then <verb>` (`Visions`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["any", "number", "of", "target", "players", "may", "each"])
+            && let Ok(body) = try_parse(ts, parse_sentence_top)
+        {
+            return Ok(vec![Effect::ForEach {
+                over: ForEachDomain::Player(PlayerRef::TargetPlayer),
+                body: vec![Effect::Optional {
+                    actor: PlayerRef::ThatPlayer,
+                    body,
+                }],
+            }]);
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&["you", "may", "then"])
+            && let Ok((body, ())) = try_parse(ts, |s| parse_player_verb_frame(s, PlayerRef::You))
+        {
+            return Ok(vec![Effect::Optional {
+                actor: PlayerRef::You,
+                body,
+            }]);
+        }
+        ts.restore(cp);
+    }
+
+    // 21. `[Your | up to one target player's] life total becomes (half (your|their) starting life total [, rounded up/down] | that number)`
+    //     (`The Endstone`, `Torgaar`, `Touch of the Eternal`, `Invincible Hymn`)
+    {
+        let cp = ts.checkpoint();
+        let life_p = if ts.eat_phrase(&["your", "life", "total", "becomes"]) {
+            Some(PlayerRef::You)
+        } else if ts.eat_phrase(&[
+            "up", "to", "one", "target", "player's", "life", "total", "becomes",
+        ]) {
+            Some(PlayerRef::TargetPlayer)
+        } else {
+            None
+        };
+        if let Some(player) = life_p {
+            if ts.eat_phrase(&["that", "number"]) && ts.is_eof() {
+                return Ok(vec![Effect::AdjustLife {
+                    player,
+                    amount: ValueExpr::Var(crate::v2::ir::VarName::X),
+                    op: LifeOp::Set,
+                }]);
+            }
+            if ts.eat_phrase(&["half", "your", "starting", "life", "total"])
+                || ts.eat_phrase(&["half", "their", "starting", "life", "total"])
+            {
+                let rcp = ts.checkpoint();
+                let rounding = if ts.eat_comma() && ts.eat_phrase(&["rounded", "up"]) {
+                    Rounding::Up
+                } else if ts.eat_comma() && ts.eat_phrase(&["rounded", "down"]) {
+                    Rounding::Down
+                } else {
+                    ts.restore(rcp);
+                    Rounding::Down
+                };
+                if ts.is_eof() {
+                    return Ok(vec![Effect::AdjustLife {
+                        player,
+                        amount: ValueExpr::Div {
+                            expr: Box::new(ValueExpr::PlayerStat {
+                                player,
+                                stat: PlayerStatKind::LifeTotal,
+                            }),
+                            denom: 2,
+                            rounding,
+                        },
+                        op: LifeOp::Set,
+                    }]);
+                }
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 22. `It's an Aura enchantment with enchant <flt> and "..." [and it loses all other abilities]` (`Bronzehide Lion`, `Old-Growth Troll`, `Harold and Bob`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["it's", "an", "aura", "enchantment", "with", "enchant"])
+            && try_parse(ts, parse_object_filter).is_ok()
+            && ts.eat_word("and")
+            && let Some(quoted) = ts.next_quoted()
+        {
+            let compiled = compile_face_v2(
+                FaceInput {
+                    name: "~",
+                    type_line: "Enchantment - Aura",
+                    oracle_text: quoted.trim_end_matches(','),
+                },
+                ts.vocab,
+            );
+            if compiled.is_ok() {
+                let mut out = vec![
+                    Effect::MutateObject {
+                        subject: SubjectRef::Anaphora(AnaphoraRef::It),
+                        mutation: ObjectMutation::BecomeCreatureTypes {
+                            subtypes: vec!["Aura".to_string()],
+                            add_types: CardTypeMask::ENCHANTMENT,
+                            keep_existing_types: false,
+                            base_pt: None,
+                            keywords: Vec::new(),
+                        },
+                        duration: Duration::Permanent,
+                    },
+                    Effect::MutateObject {
+                        subject: SubjectRef::Anaphora(AnaphoraRef::It),
+                        mutation: ObjectMutation::GrantAbility(Box::new(compiled)),
+                        duration: Duration::Permanent,
+                    },
+                ];
+                let lcp = ts.checkpoint();
+                let _ = ts.eat_comma();
+                if ts.eat_phrase(&["and", "it", "loses", "all", "other", "abilities"]) {
+                    out.push(Effect::MutateObject {
+                        subject: SubjectRef::Anaphora(AnaphoraRef::It),
+                        mutation: ObjectMutation::RemoveAllAbilities,
+                        duration: Duration::Permanent,
+                    });
+                } else {
+                    ts.restore(lcp);
+                }
+                if ts.is_eof() {
+                    return Ok(out);
+                }
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 23. `You may pay <cost> to end this effect` (all 12 Licids!)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["you", "may", "pay"])
+            && let Ok(cost) = try_parse(ts, crate::v2::cost::parse_cost_atom)
+            && ts.eat_phrase(&["to", "end", "this", "effect"])
+            && ts.is_eof()
+        {
+            return Ok(vec![Effect::Optional {
+                actor: PlayerRef::You,
+                body: vec![Effect::MutatePlayer {
+                    player: PlayerRef::You,
+                    mutation: PlayerMutation::PayCost(cost),
+                    duration: Duration::Instant,
+                }],
+            }]);
+        }
+        ts.restore(cp);
+    }
+
+    // 24. `This ability can't cause the total number of <kind> counters on ~ to be greater than <N>` (all 5 Clockwork cards!)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&[
+            "this", "ability", "can't", "cause", "the", "total", "number", "of",
+        ]) && try_parse(ts, parse_counter_kind).is_ok()
+            && (ts.eat_word("counters") || ts.eat_word("counter"))
+            && ts.eat_word("on")
+            && ts.eat_tilde()
+            && ts.eat_phrase(&["to", "be", "greater", "than"])
+            && ts.next_number(false).is_some()
+            && ts.is_eof()
+        {
+            return Ok(vec![Effect::MutatePlayer {
+                player: PlayerRef::You,
+                mutation: PlayerMutation::Action(PlayerActionKind::RepeatProcessOnce),
+                duration: Duration::Instant,
+            }]);
+        }
+        ts.restore(cp);
+    }
+
+    // 25. `If (it wasn't sacrificed | it wasn't put onto the battlefield with this ability | two or more players are tied for ...), <body>`
+    //     AND `If any of them are suspected, they're no longer suspected`
+    {
+        let cp = ts.checkpoint();
+        if (ts.eat_phrase(&["if", "it", "wasn't", "sacrificed"])
+            || ts.eat_phrase(&[
+                "if",
+                "it",
+                "wasn't",
+                "put",
+                "onto",
+                "the",
+                "battlefield",
+                "with",
+                "this",
+                "ability",
+            ]))
+            && ts.eat_comma()
+            && let Ok(body) = try_parse(ts, parse_sentence_top)
+        {
+            return Ok(vec![Effect::IfPrevious {
+                succeeded: false,
+                body,
+            }]);
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&["if", "any", "of", "them", "are", "suspected"])
+            && ts.eat_comma()
+            && ts.eat_phrase(&["they're", "no", "longer", "suspected"])
+            && ts.is_eof()
+        {
+            return Ok(vec![Effect::MutateObject {
+                subject: SubjectRef::Anaphora(AnaphoraRef::Them),
+                mutation: ObjectMutation::StateAction(crate::v2::ir::ObjectStateAction::Suspect),
+                duration: Duration::Instant,
+            }]);
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&["if", "two", "or", "more"])
+            && (ts.eat_phrase(&["players", "are", "tied", "for"])
+                || (try_parse(ts, parse_object_filter).is_ok()
+                    && ts.eat_phrase(&["are", "tied", "for"])))
+            && let Some(comma_idx) =
+                (ts.pos..ts.tokens.len()).find(|&i| matches!(ts.tokens[i].kind, TokenKind::Comma))
+            && comma_idx > ts.pos
+            && comma_idx - ts.pos <= 5
+        {
+            ts.pos = comma_idx + 1;
+            if let Ok(body) = try_parse(ts, parse_sentence_top) {
+                return Ok(vec![Effect::BranchCondition {
+                    condition: ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid),
+                    then_body: body,
+                    else_body: Vec::new(),
+                }]);
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 26. `A deck can have any number of cards named ~` / `One of their piles is chosen by one of their opponents of their choice` / `The new targets can't be you or a permanent you control`
+    //     AND `Your opponents can't cast spells or activate planeswalkers' loyalty abilities this turn`
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&[
+            "a", "deck", "can", "have", "any", "number", "of", "cards", "named",
+        ]) && ts.eat_tilde()
+            && ts.is_eof()
+        {
+            return Ok(vec![Effect::ApplyContinuous {
+                effect: Box::new(StaticAbility::GlobalFlag(StaticFlagKind::AnyNumberInDeck)),
+                duration: Duration::Permanent,
+            }]);
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&[
+            "one",
+            "of",
+            "their",
+            "piles",
+            "is",
+            "chosen",
+            "by",
+            "one",
+            "of",
+            "their",
+            "opponents",
+            "of",
+            "their",
+            "choice",
+        ]) && ts.is_eof()
+        {
+            return Ok(vec![Effect::ZoneOp {
+                actor: PlayerRef::AnyOpponent,
+                op: crate::v2::ir::ZoneOpKind::ChoosePile,
+                subject: SubjectRef::Anaphora(AnaphoraRef::OnePile),
+                from: Vec::new(),
+                to: None,
+                modifiers: crate::v2::ir::EntryModifiers::default(),
+                except: None,
+                count: None,
+            }]);
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&[
+            "the",
+            "new",
+            "targets",
+            "can't",
+            "be",
+            "you",
+            "or",
+            "a",
+            "permanent",
+            "you",
+            "control",
+        ]) && ts.is_eof()
+        {
+            return Ok(vec![Effect::ApplyContinuous {
+                effect: Box::new(StaticAbility::RuleRestriction {
+                    subject: Some(SubjectRef::Player(PlayerRef::You)),
+                    rule: RuleRestrictionKind::CantBeTargetedBy(Box::default()),
+                    condition: None,
+                }),
+                duration: Duration::Instant,
+            }]);
+        }
+        ts.restore(cp);
+        if ts.eat_phrase(&[
+            "your",
+            "opponents",
+            "can't",
+            "cast",
+            "spells",
+            "or",
+            "activate",
+            "planeswalkers'",
+            "loyalty",
+            "abilities",
+        ]) {
+            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+            if ts.is_eof() {
+                return Ok(vec![
+                    Effect::ApplyContinuous {
+                        effect: Box::new(StaticAbility::PlayerRestriction {
+                            player: PlayerRef::EachOpponent,
+                            restriction: PlayerRestrictionKind::CantCastSpells,
+                            condition: None,
+                        }),
+                        duration: duration.clone(),
+                    },
+                    Effect::ApplyContinuous {
+                        effect: Box::new(StaticAbility::PlayerRestriction {
+                            player: PlayerRef::EachOpponent,
+                            restriction: PlayerRestrictionKind::CantActivateAbilities,
+                            condition: None,
+                        }),
+                        duration,
+                    },
+                ]);
+            }
         }
         ts.restore(cp);
     }
 
     Err(ts.err("not an extended leading sentence"))
+}
+
+/// Parse extended trailing `for each ...` / `once for each ...` / `with the most votes or tied for most votes`
+/// modifiers at the end of a sentence (called as fallback from `mod.rs` 11c).
+pub(super) fn parse_extended_trailing_for_each(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
+    let cp = ts.checkpoint();
+    if ts.eat_phrase(&[
+        "with", "the", "most", "votes", "or", "tied", "for", "most", "votes",
+    ]) {
+        return Ok(ValueExpr::PriorActionCount(PriorActionKind::ThatMany));
+    }
+    let _ = ts.eat_word("once");
+    if ts.eat_phrase(&["for", "each"]) {
+        if let Ok(v) = try_parse(ts, |s| {
+            // Re-run standard `parse_for_each_expr` when preceded by `once`
+            s.restore(cp);
+            let _ = s.eat_word("once");
+            parse_for_each_expr(s)
+        }) {
+            return Ok(v);
+        }
+        if ts.eat_phrase(&["counter", "removed", "this", "way"])
+            || ts.eat_phrase(&["counter", "removed"])
+        {
+            return Ok(ValueExpr::PriorActionCount(
+                PriorActionKind::CountersRemovedThisWay,
+            ));
+        }
+        if ts.eat_phrase(&["even", "result"])
+            || ts.eat_phrase(&["odd", "result"])
+            || ts.eat_phrase(&["coin", "that", "comes", "up", "heads"])
+            || ts.eat_phrase(&["vote", "they", "received"])
+            || ts.eat_phrase(&["one", "they", "gained", "control", "of", "this", "way"])
+            || ts.eat_phrase(&["unique", "vowel", "on", "that", "sticker"])
+            || ts.eat_phrase(&["name", "sticker", "on", "it"])
+            || ts.eat_word("player")
+        {
+            return Ok(ValueExpr::PriorActionCount(PriorActionKind::ThatMany));
+        }
+        // `for each supertype, card type, and subtype it has` (commas tokenized separately)
+        let scp = ts.checkpoint();
+        if ts.eat_word("supertype")
+            && ts.eat_comma()
+            && ts.eat_phrase(&["card", "type"])
+            && ts.eat_comma()
+            && ts.eat_phrase(&["and", "subtype", "it", "has"])
+        {
+            return Ok(ValueExpr::PriorActionCount(PriorActionKind::ThatMany));
+        }
+        ts.restore(scp);
+        // `for each opponent who <...>` (`Consuming Tide`, `Bandit's Talent`, `Sudden Salvation`, `Wojek Investigator`)
+        if ts.eat_phrase(&["opponent", "who"])
+            && (ts.eat_phrase(&["has", "more", "cards", "in", "their", "hand", "than", "you"])
+                || ts.eat_phrase(&["has", "more", "cards", "in", "hand", "than", "you"])
+                || ts.eat_phrase(&["has", "one", "or", "fewer", "cards", "in", "hand"])
+                || ts.eat_phrase(&["controls", "one", "or", "more", "of", "those", "permanents"]))
+        {
+            return Ok(ValueExpr::OpponentsCount);
+        }
+        ts.restore(scp);
+        // `for each graveyard with <N> or more cards in it` (`The Master of Lake-town`)
+        if ts.eat_phrase(&["graveyard", "with"])
+            && ts.next_number(false).is_some()
+            && ts.eat_phrase(&["or", "more", "cards", "in", "it"])
+        {
+            return Ok(ValueExpr::PriorActionCount(PriorActionKind::ThatMany));
+        }
+        ts.restore(scp);
+        // `for each card in <zone>` (`Descendant of Masumaro`, `Mist of Stagnation`)
+        if ts.eat_phrase(&["card", "in"])
+            && let Ok(zr) = try_parse(ts, parse_zone_ref)
+        {
+            return Ok(ValueExpr::Count(Box::new(ObjectFilter {
+                any_card: true,
+                zones: vec![zr],
+                ..Default::default()
+            })));
+        }
+        ts.restore(scp);
+        // `for each creature you control with base power and toughness P/T` (`Duskana`)
+        if ts.eat_phrase(&[
+            "creature",
+            "you",
+            "control",
+            "with",
+            "base",
+            "power",
+            "and",
+            "toughness",
+        ]) && ts.next_base_pt().is_some()
+        {
+            return Ok(ValueExpr::Count(Box::new(ObjectFilter {
+                any_types: CardTypeMask::CREATURE,
+                ..Default::default()
+            })));
+        }
+        ts.restore(scp);
+        // `for each <opt> vote` (`Orchard Elemental`, `Truth or Consequences`, `Selvala's Stampede`, `Fateful Tempest`, `Capital Punishment`, `Lieutenants of the Guard`, `Messenger Jays`)
+        let vcp = ts.checkpoint();
+        let mut wcnt = 0usize;
+        while wcnt < 3
+            && let Some(w) = ts.peek_word()
+            && !w.eq_ignore_ascii_case("vote")
+        {
+            ts.next_word();
+            wcnt += 1;
+        }
+        if wcnt >= 1 && ts.eat_word("vote") {
+            return Ok(ValueExpr::PriorActionCount(PriorActionKind::ThatMany));
+        }
+        ts.restore(vcp);
+    }
+    ts.restore(cp);
+    Err(ts.err("not an extended trailing for-each modifier"))
+}
+
+/// Try splitting a sentence on trailing `once for each ...`, `for each ...`, or `with the most votes ...`
+/// when standard clause sequencing leaves those modifiers unconsumed.
+pub(super) fn try_parse_trailing_for_each_sentence(
+    ts: &mut TokenStream<'_>,
+) -> Option<Vec<Effect>> {
+    let split_idx = find_phrase_index(ts.tokens, ts.pos, &["once", "for", "each"])
+        .or_else(|| find_phrase_index(ts.tokens, ts.pos, &["for", "each"]))
+        .or_else(|| {
+            find_phrase_index(
+                ts.tokens,
+                ts.pos,
+                &[
+                    "with", "the", "most", "votes", "or", "tied", "for", "most", "votes",
+                ],
+            )
+        })?;
+    if split_idx <= ts.pos {
+        return None;
+    }
+    let body_slice = &ts.tokens[ts.pos..split_idx];
+    let fe_slice = &ts.tokens[split_idx..];
+    let mut fe_ts = ts.sub_stream(fe_slice, ParseStage::Effect);
+    let scale = parse_for_each_expr(&mut fe_ts)
+        .or_else(|_| {
+            fe_ts.pos = 0;
+            parse_extended_trailing_for_each(&mut fe_ts)
+        })
+        .ok()?;
+    if !fe_ts.is_eof() {
+        return None;
+    }
+    let mut body_ts = ts.sub_stream(body_slice, ParseStage::Effect);
+    let body = super::parse_clause_seq(&mut body_ts, None).ok()?;
+    if !body_ts.is_eof() {
+        return None;
+    }
+    ts.pos = ts.tokens.len();
+    Some(vec![Effect::ForEach {
+        over: ForEachDomain::Count(scale),
+        body,
+    }])
 }
 
 /// Parse `<player> who <relative> <verb>` forms inside `parse_single_clause`.
@@ -651,7 +1657,7 @@ pub(super) fn parse_player_relative_clause(
         {
             let src_flt = match src_subj {
                 SubjectRef::Group(f) | SubjectRef::All(f) | SubjectRef::Each(f) => f,
-                _ => Box::new(ObjectFilter::default()),
+                _ => Box::default(),
             };
             return Ok((
                 vec![Effect::ForEach {

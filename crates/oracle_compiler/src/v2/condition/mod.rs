@@ -15,6 +15,7 @@ use crate::v2::value::parse_value_expr;
 
 /// Parse a strictly-typed boolean [`ConditionExpr`].
 mod extended;
+mod extended_extra;
 mod player_subject;
 
 pub fn parse_condition(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
@@ -96,6 +97,26 @@ pub fn parse_condition(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             {
                 cond = ConditionExpr::Or(Box::new(cond), Box::new(rhs));
                 continue;
+            }
+            // Elided `you` on second disjunct (`if you control a Squirrel or returned a Squirrel card to your hand this way`)
+            {
+                let rcp = ts.checkpoint();
+                if ts.eat_word("returned")
+                    && let Ok(flt) = try_parse(ts, parse_object_filter)
+                {
+                    let _ = crate::v2::parser::opt(ts, crate::v2::filter::parse_zone_dest);
+                    if ts.eat_phrase(&["this", "way"]) {
+                        cond = ConditionExpr::Or(
+                            Box::new(cond),
+                            Box::new(ConditionExpr::PriorActionMatched {
+                                action: PriorActionKind::ReturnedThisWay,
+                                filter: Box::new(flt),
+                            }),
+                        );
+                        continue;
+                    }
+                }
+                ts.restore(rcp);
             }
             ts.restore(cp);
             break;
@@ -753,6 +774,7 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             && ts.eat_phrase(&["was", "spent", "to", "cast"])
             && (ts.eat_word("it") || ts.eat_tilde() || ts.eat_phrase(&["this", "spell"]))
         {
+            let _ = ts.eat_phrase(&["or", "activate", "it"]);
             return Ok(ConditionExpr::FilterCheck {
                 filter: Box::new(flt),
                 kind: FilterConditionKind::ManaSpentFrom,
@@ -1177,6 +1199,7 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     if ts.eat_phrase(&["you", "control", "your", "commander"])
         || ts.eat_phrase(&["you", "control", "a", "commander"])
     {
+        let _ = ts.eat_phrase(&["that's", "a", "creature", "or", "planeswalker"]);
         return Ok(ConditionExpr::PlayerCheck {
             player: PlayerRef::You,
             kind: PlayerConditionKind::ControlsCommander,
@@ -1196,6 +1219,28 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         "this", "is", "the", "first", "time", "this", "ability", "has", "resolved", "this", "turn",
     ]) || ts.eat_phrase(&["it's", "the", "first", "time"])
     {
+        // Optional trailing event description (`+1/+1 counters have been put on that permanent this turn`,
+        // `counters have been put on that creature this turn`, `that creature has become tapped this turn`)
+        {
+            let fcp = ts.checkpoint();
+            let _ = crate::v2::parser::opt(ts, parse_counter_kind);
+            if (ts.eat_word("counters") || ts.eat_word("counter"))
+                && ts.eat_phrase(&["have", "been", "put", "on"])
+                && try_parse(ts, parse_subject_ref).is_ok()
+                && ts.eat_phrase(&["this", "turn"])
+            {
+                // Consumed trailing counter placement detail.
+            } else {
+                ts.restore(fcp);
+                if try_parse(ts, parse_subject_ref).is_ok()
+                    && ts.eat_phrase(&["has", "become", "tapped", "this", "turn"])
+                {
+                    // Consumed trailing tap detail.
+                } else {
+                    ts.restore(fcp);
+                }
+            }
+        }
         return Ok(ConditionExpr::EventCheck(
             EventCheckKind::ResolutionCountThisTurn(1),
         ));

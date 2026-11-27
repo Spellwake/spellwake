@@ -5887,3 +5887,183 @@ fn v2_wave15_compositional_grammar_deep_ir_assertions() {
             && parts.iter().any(|p| matches!(p, StaticAbility::ContinuousModifyPT { .. })))
     )));
 }
+
+#[test]
+fn v2_wave16_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{Ability, Cost, Effect, StaticAbility};
+
+    let vocab = v2_vocab();
+
+    // 20 iconic Wave 16 cards across all 4 parallel parser submodules (zero IR edits)
+    let wave16_cards: &[(&str, &str, &str)] = &[
+        (
+            "Grafdigger's Cage",
+            "Artifact",
+            "Creature cards in graveyards and libraries can't enter.\nPlayers can't cast spells from graveyards or libraries.",
+        ),
+        (
+            "Solemnity",
+            "Enchantment",
+            "Players can't get counters.\nCounters can't be put on artifacts, creatures, enchantments, or lands.",
+        ),
+        (
+            "Trinisphere",
+            "Artifact",
+            "As long as Trinisphere is untapped, each spell that would cost less than three mana to cast costs three mana to cast.",
+        ),
+        (
+            "Jegantha, the Wellspring",
+            "Legendary Creature - Elemental Elk",
+            "Companion \u{2014} No card in your starting deck has more than one of the same mana symbol in its mana cost.\n{T}: Add {W}{U}{B}{R}{G}. This mana can't be spent to pay generic mana costs.",
+        ),
+        (
+            "Dream Halls",
+            "Enchantment",
+            "Rather than pay the mana cost for a spell, its controller may discard a card that shares a color with that spell.",
+        ),
+        (
+            "Caged Sun",
+            "Artifact",
+            "As this artifact enters, choose a color.\nCreatures you control of the chosen color get +1/+1.\nWhenever a land's ability causes you to add one or more mana of the chosen color, add an additional one mana of that color.",
+        ),
+        (
+            "Pyromancer Ascension",
+            "Enchantment",
+            "Whenever you cast an instant or sorcery spell that has the same name as a card in your graveyard, you may put a quest counter on this enchantment.\nWhenever you cast an instant or sorcery spell while this enchantment has two or more quest counters on it, you may copy that spell. You may choose new targets for the copy.",
+        ),
+        (
+            "Strict Proctor",
+            "Creature - Spirit Cleric",
+            "Flying\nWhenever a permanent entering causes a triggered ability to trigger, counter that ability unless its controller pays {2}.",
+        ),
+        (
+            "Council's Judgment",
+            "Sorcery",
+            "Will of the council \u{2014} Starting with you, each player votes for a nonland permanent you don't control. Exile each permanent with the most votes or tied for most votes.",
+        ),
+        (
+            "Cataclysmic Gearhulk",
+            "Artifact Creature - Construct",
+            "Vigilance\nWhen this creature enters, each player chooses an artifact, a creature, an enchantment, and a planeswalker from among the nonland permanents they control, then sacrifices the rest.",
+        ),
+        (
+            "Steam Augury",
+            "Instant",
+            "Reveal the top five cards of your library and separate them into two piles. An opponent chooses one of those piles. Put that pile into your hand and the other into your graveyard.",
+        ),
+        (
+            "Portal Mage",
+            "Creature - Human Wizard",
+            "Flash\nWhen this creature enters during the declare attackers step, you may reselect which player or permanent target attacking creature is attacking.",
+        ),
+        (
+            "Magus Lucea Kane",
+            "Legendary Creature - Human Tyranid Wizard",
+            "Spiritual Leader \u{2014} At the beginning of combat on your turn, put a +1/+1 counter on target creature.\nPsychic Stimulus \u{2014} {T}: Add {C}{C}. When you next cast a spell with {X} in its mana cost or activate an ability with {X} in its activation cost this turn, copy that spell or ability. You may choose new targets for the copy.",
+        ),
+        (
+            "Wildgrowth Walker",
+            "Creature - Elemental",
+            "Whenever a creature you control explores, put a +1/+1 counter on Wildgrowth Walker and you gain 3 life.",
+        ),
+        (
+            "Omnath, Locus of Mana",
+            "Legendary Creature - Elemental",
+            "You don't lose unspent green mana as steps and phases end.\nOmnath gets +1/+1 for each unspent green mana you have.",
+        ),
+        (
+            "Hinata, Dawn-Crowned",
+            "Legendary Creature - Kirin Spirit",
+            "Flying, trample\nSpells you cast cost {1} less to cast for each target.\nSpells your opponents cast cost {1} more to cast for each target.",
+        ),
+        (
+            "Time Vault",
+            "Artifact",
+            "Time Vault enters tapped.\nTime Vault doesn't untap during your untap step.\nIf you would begin your turn while Time Vault is tapped, you may skip that turn instead. If you do, untap Time Vault.\n{T}: Take an extra turn after this one.",
+        ),
+        (
+            "Abundance",
+            "Enchantment",
+            "If you would draw a card, you may instead choose land or nonland and reveal cards from the top of your library until you reveal a card of the chosen kind. Put that card into your hand and put all other cards revealed this way on the bottom of your library in any order.",
+        ),
+        (
+            "Elsha of the Infinite",
+            "Legendary Creature - Djinn Monk",
+            "Prowess\nYou may look at the top card of your library any time.\nYou may cast noncreature spells from the top of your library. If you cast a spell this way, you may cast it as though it had flash.",
+        ),
+        (
+            "Twinning Staff",
+            "Artifact",
+            "If you would copy a spell one or more times, instead copy it that many times plus an additional time. You may choose new targets for the additional copy.\n{7}, {T}: Copy target instant or sorcery spell you control. You may choose new targets for the copy.",
+        ),
+    ];
+    for (name, type_line, text) in wave16_cards {
+        let compiled = compile_v2_strict(name, type_line, text, &vocab);
+        assert!(
+            !compiled.faces[0].spell_effects.is_empty()
+                || !compiled.faces[0].abilities.is_empty()
+                || !compiled.faces[0].statics.is_empty()
+                || !compiled.faces[0].replacements.is_empty(),
+            "{name} should produce non-empty typed IR"
+        );
+    }
+
+    // Deep IR assertions across Wave 16 domains
+    let cage = compile_v2_strict(
+        "Grafdigger's Cage",
+        "Artifact",
+        "Creature cards in graveyards and libraries can't enter.\nPlayers can't cast spells from graveyards or libraries.",
+        &vocab,
+    );
+    assert!(cage.faces[0].statics.len() >= 2);
+    assert!(
+        cage.faces[0]
+            .statics
+            .iter()
+            .any(|s| matches!(s, StaticAbility::RuleRestriction { .. }))
+    );
+
+    let hinata = compile_v2_strict(
+        "Hinata, Dawn-Crowned",
+        "Legendary Creature - Kirin Spirit",
+        "Flying, trample\nSpells you cast cost {1} less to cast for each target.\nSpells your opponents cast cost {1} more to cast for each target.",
+        &vocab,
+    );
+    assert!(
+        hinata.faces[0]
+            .statics
+            .iter()
+            .filter(|s| matches!(s, StaticAbility::CostModifier { scale: Some(_), .. }))
+            .count()
+            >= 2
+    );
+
+    let vault = compile_v2_strict(
+        "Time Vault",
+        "Artifact",
+        "Time Vault enters tapped.\nTime Vault doesn't untap during your untap step.\nIf you would begin your turn while Time Vault is tapped, you may skip that turn instead. If you do, untap Time Vault.\n{T}: Take an extra turn after this one.",
+        &vocab,
+    );
+    assert!(
+        vault.faces[0].replacements.len() >= 2,
+        "Time Vault should emit EntersTapped + skip-turn replacement, got {:?}",
+        vault.faces[0].replacements
+    );
+    assert!(vault.faces[0].abilities.iter().any(|a| matches!(
+        a,
+        Ability::Activated { cost, .. } if cost.iter().any(|c| matches!(c, Cost::TapSelf))
+    )));
+
+    let council = compile_v2_strict(
+        "Council's Judgment",
+        "Sorcery",
+        "Will of the council \u{2014} Starting with you, each player votes for a nonland permanent you don't control. Exile each permanent with the most votes or tied for most votes.",
+        &vocab,
+    );
+    assert!(
+        council.faces[0]
+            .spell_effects
+            .iter()
+            .any(|e| matches!(e, Effect::StartingWith { .. }))
+    );
+}

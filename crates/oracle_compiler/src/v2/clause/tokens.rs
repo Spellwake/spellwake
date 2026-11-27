@@ -109,7 +109,10 @@ fn parse_token_creation_named(
             ..EntryModifiers::default()
         };
         if ts.eat_phrase(&["and", "that", "are", "tapped", "and", "attacking"])
+            || ts.eat_phrase(&["and", "that's", "tapped", "and", "attacking"])
             || ts.eat_phrase(&["that's", "tapped", "and", "attacking"])
+            || ts.eat_phrase(&["that", "are", "tapped", "and", "attacking"])
+            || ts.eat_phrase(&["tapped", "and", "attacking"])
         {
             modifiers.tapped = true;
             modifiers.attacking = true;
@@ -117,6 +120,12 @@ fn parse_token_creation_named(
                 || ts.eat_phrase(&["that", "player"])
                 || ts.eat_phrase(&["the", "defending", "player"])
                 || ts.eat_phrase(&["defending", "player"]);
+        } else if ts.eat_phrase(&["and", "that's", "blocking"])
+            || ts.eat_phrase(&["and", "that", "are", "blocking"])
+            || ts.eat_phrase(&["that's", "blocking"])
+            || ts.eat_phrase(&["blocking"])
+        {
+            let _ = crate::v2::parser::try_parse(ts, parse_subject_ref);
         } else if ts.eat_phrase(&["that's", "attacking"])
             || ts.eat_phrase(&["that", "are", "attacking"])
             || ts.eat_word("attacking")
@@ -437,6 +446,9 @@ fn parse_token_creation_named(
             || ts.eat_phrase(&["or", "a", "planeswalker", "that", "player", "controls"]);
     } else if ts.eat_word("tapped") {
         mods.tapped = true;
+    }
+    if ts.eat_phrase(&["attached", "to"]) {
+        mods.attached_to = Some(Box::new(parse_subject_ref(ts)?));
     }
     let final_count = if deferred_equal_to && ts.eat_phrase(&["equal", "to"]) {
         parse_value_expr(ts)?

@@ -90,8 +90,13 @@ pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec>
     {
         let tcp = ts.checkpoint();
         if (ts.eat_phrase(&["one", "mana", "of", "any", "type", "that"])
-            || ts.eat_phrase(&["one", "mana", "of", "any", "color", "that"]))
-            && try_parse(ts, parse_object_filter).is_ok()
+            || ts.eat_phrase(&["one", "mana", "of", "any", "color", "that"])
+            || ts.eat_phrase(&["one", "mana", "of", "any", "type"])
+            || ts.eat_phrase(&["one", "mana", "of", "any", "color"]))
+            && (ts.eat_phrase(&["the", "sacrificed", "land"])
+                || ts.eat_phrase(&["the", "sacrificed", "permanent"])
+                || ts.eat_phrase(&["the", "exiled", "land"])
+                || try_parse(ts, parse_object_filter).is_ok())
             && (ts.eat_phrase(&["could", "produce"]) || ts.eat_word("produced"))
         {
             return Ok(ManaSpec::AnyColor {
@@ -1160,6 +1165,143 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                     }),
                     duration: Duration::UntilEndOfTurn,
                 }]);
+            }
+            ts.restore(dcp);
+            // 5b2. `<player> would roll one or more dice this turn, instead they roll that many dice plus one [and|, then] you choose one of those rolls to ignore` (`Squid Fire Knight`, `Bamboozling Beeble`)
+            if let Ok(player) = try_parse(ts, crate::v2::filter::parse_player_ref)
+                && ts.eat_phrase(&["would", "roll", "one", "or", "more", "dice", "this", "turn"])
+                && ts.eat_comma()
+                && ts.eat_phrase(&[
+                    "instead", "they", "roll", "that", "many", "dice", "plus", "one",
+                ])
+            {
+                let _ = ts.eat_comma();
+                let _ = ts.eat_word("then") || ts.eat_word("and");
+                if ts.eat_phrase(&[
+                    "you", "choose", "one", "of", "those", "rolls", "to", "ignore",
+                ]) {
+                    return Ok(vec![Effect::ApplyReplacement {
+                        replacement: Box::new(crate::v2::ir::Replacement::EventInstead {
+                            event: crate::v2::ir::TriggerEvent::RolledDie { player, value: 0 },
+                            instead: vec![Effect::MutatePlayer {
+                                player,
+                                mutation: PlayerMutation::RollDie { sides: 6, count: 2 },
+                                duration: Duration::Instant,
+                            }],
+                        }),
+                        duration: Duration::UntilEndOfTurn,
+                    }]);
+                }
+            }
+            ts.restore(dcp);
+            // 5b3. `<subj> adapts this turn, it adapts as though it had no +1/+1 counters on it` (`Biomancer's Familiar`)
+            if let Ok(subject) = try_parse(ts, parse_subject_ref)
+                && ts.eat_phrase(&["adapts", "this", "turn"])
+                && ts.eat_comma()
+                && ts.eat_phrase(&["it", "adapts", "as", "though", "it", "had", "no"])
+                && try_parse(ts, crate::v2::filter::parse_counter_kind).is_ok()
+                && ts.eat_phrase(&["counters", "on", "it"])
+            {
+                return Ok(vec![Effect::ApplyReplacement {
+                    replacement: Box::new(crate::v2::ir::Replacement::EntersWithCounters {
+                        subject: Some(subject),
+                        kind: crate::v2::ir::CounterKind::PlusOnePlusOne,
+                        count: ValueExpr::Const(1),
+                        additional: true,
+                    }),
+                    duration: Duration::UntilEndOfTurn,
+                }]);
+            }
+            ts.restore(dcp);
+            // 5b4. `one or more <flt> enter this turn, each enters with <val> additional <kind> counter(s) on it` (`Storyweave`)
+            if ts.eat_phrase(&["one", "or", "more"])
+                && let Ok(flt) = try_parse(ts, parse_object_filter)
+                && ts.eat_phrase(&["enter", "this", "turn"])
+                && ts.eat_comma()
+                && ts.eat_phrase(&["each", "enters", "with"])
+                && let Ok(count) = try_parse(ts, parse_value_expr)
+                && ts.eat_word("additional")
+                && let Ok(kind) = try_parse(ts, crate::v2::filter::parse_counter_kind)
+                && (ts.eat_word("counters") || ts.eat_word("counter"))
+                && ts.eat_phrase(&["on", "it"])
+            {
+                return Ok(vec![Effect::ApplyReplacement {
+                    replacement: Box::new(crate::v2::ir::Replacement::EntersWithCounters {
+                        subject: Some(SubjectRef::Group(Box::new(flt))),
+                        kind,
+                        count,
+                        additional: true,
+                    }),
+                    duration: Duration::UntilEndOfTurn,
+                }]);
+            }
+            ts.restore(dcp);
+            // 5b5. `<subj> would be destroyed this turn, <instead> instead` (`Pyramids`)
+            if let Ok(subject) = try_parse(ts, parse_subject_ref)
+                && ts.eat_phrase(&["would", "be", "destroyed", "this", "turn"])
+                && ts.eat_comma()
+                && ts.eat_phrase(&["remove", "all", "damage", "marked", "on", "it", "instead"])
+            {
+                return Ok(vec![Effect::ApplyReplacement {
+                    replacement: Box::new(crate::v2::ir::Replacement::EventInstead {
+                        event: crate::v2::ir::TriggerEvent::Dies { subject },
+                        instead: Vec::new(),
+                    }),
+                    duration: Duration::UntilEndOfTurn,
+                }]);
+            }
+            ts.restore(dcp);
+            // 5b6. `you cast <flt> [from your hand] this turn, put that card into your hand instead of into your graveyard as it resolves` (`Soulfire Grand Master`)
+            if ts.eat_phrase(&["you", "cast"])
+                && let Ok(flt) = try_parse(ts, parse_object_filter)
+            {
+                let _ = ts.eat_phrase(&["from", "your", "hand"]);
+                if ts.eat_phrase(&["this", "turn"])
+                    && ts.eat_comma()
+                    && ts.eat_phrase(&[
+                        "put",
+                        "that",
+                        "card",
+                        "into",
+                        "your",
+                        "hand",
+                        "instead",
+                        "of",
+                        "into",
+                        "your",
+                        "graveyard",
+                        "as",
+                        "it",
+                        "resolves",
+                    ])
+                {
+                    return Ok(vec![Effect::ApplyReplacement {
+                        replacement: Box::new(crate::v2::ir::Replacement::EventInstead {
+                            event: crate::v2::ir::TriggerEvent::SpellCast {
+                                caster: PlayerRef::You,
+                                spell: Some(flt),
+                                from_outside_hand: false,
+                            },
+                            instead: vec![Effect::ZoneOp {
+                                actor: PlayerRef::You,
+                                op: crate::v2::ir::ZoneOpKind::Move,
+                                subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatCard),
+                                from: Vec::new(),
+                                to: Some(crate::v2::ir::ZoneDest {
+                                    zone: crate::v2::ir::ZoneKind::Hand,
+                                    owner: crate::v2::ir::ZoneOwner::You,
+                                    library_position: None,
+                                    library_order: None,
+                                    under_control: None,
+                                }),
+                                modifiers: crate::v2::ir::EntryModifiers::default(),
+                                except: None,
+                                count: None,
+                            }],
+                        }),
+                        duration: Duration::UntilEndOfTurn,
+                    }]);
+                }
             }
             ts.restore(dcp);
             // 5c. `<src | a source of your choice> would deal [combat] damage [to <tgt> [and/or <tgt2>]] this turn/combat, <instead>`

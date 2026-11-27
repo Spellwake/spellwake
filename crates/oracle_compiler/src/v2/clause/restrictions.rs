@@ -15,6 +15,35 @@ pub(super) fn parse_additional_combat(ts: &mut TokenStream<'_>) -> PResult<Effec
         || ts.eat_phrase(&["after", "this", "main", "phase"])
         || ts.eat_phrase(&["after", "this", "combat", "phase"]);
     let _ = ts.eat_comma();
+    if ts.eat_phrase(&["there", "is", "an", "additional", "beginning", "phase"])
+        || ts.eat_phrase(&["there's", "an", "additional", "beginning", "phase"])
+    {
+        let _ = ts.eat_phrase(&["after", "this", "phase"]);
+        return Ok(Effect::MutatePlayer {
+            player: PlayerRef::You,
+            mutation: PlayerMutation::Action(crate::v2::ir::PlayerActionKind::ExtraTurn),
+            duration: Duration::UntilEndOfTurn,
+        });
+    }
+    if ts.eat_phrase(&["there", "are"]) {
+        let cp = ts.checkpoint();
+        if let Some(n) = ts.next_number(false)
+            && ts.eat_phrase(&["additional", "combat", "phases"])
+        {
+            let _ = ts.eat_phrase(&["after", "this", "phase"]);
+            return Ok(Effect::ForEach {
+                over: crate::v2::ir::ForEachDomain::Count(crate::v2::ir::ValueExpr::Const(n)),
+                body: vec![Effect::MutatePlayer {
+                    player: PlayerRef::You,
+                    mutation: PlayerMutation::AdditionalCombat {
+                        followed_by_main: false,
+                    },
+                    duration: Duration::UntilEndOfTurn,
+                }],
+            });
+        }
+        ts.restore(cp);
+    }
     if ts.eat_phrase(&["there", "is", "an", "additional", "combat", "phase"])
         || ts.eat_phrase(&["there's", "an", "additional", "combat", "phase"])
     {
@@ -28,6 +57,83 @@ pub(super) fn parse_additional_combat(ts: &mut TokenStream<'_>) -> PResult<Effec
         });
     }
     Err(ts.err("expected additional combat phase clause"))
+}
+
+/// Parse extended mana-spend purposes inside `Spend this mana only to ...` and
+/// `This mana can't be spent to ...` (`Adarkar Unicorn`, `Overgrown Zealot`,
+/// `Unblinking Observer`, `Niko Defies Destiny`, `Quinjet Technician`, `Ice Cauldron`,
+/// `Gallifrey Council Chamber`, `Jegantha, the Wellspring`, `Qarsi Deceiver`).
+pub(super) fn try_parse_extra_mana_spend_purpose(
+    ts: &mut TokenStream<'_>,
+) -> Option<crate::v2::ir::ManaSpendPurpose> {
+    use crate::v2::ir::ManaSpendPurpose;
+    let cp = ts.checkpoint();
+    if ts.eat_phrase(&["foretell", "cards"]) || ts.eat_phrase(&["foretell", "a", "card"]) {
+        let _ = ts.eat_phrase(&["from", "your", "hand"]);
+        return Some(ManaSpendPurpose::Foretell);
+    }
+    if ts.eat_phrase(&["pay", "cumulative", "upkeep", "costs"])
+        || ts.eat_phrase(&["pay", "a", "disturb", "cost"])
+        || ts.eat_phrase(&["pay", "a", "morph", "cost"])
+        || ts.eat_phrase(&["pay", "generic", "mana", "costs"])
+        || ts.eat_phrase(&[
+            "pay",
+            "a",
+            "mana",
+            "cost",
+            "to",
+            "turn",
+            "a",
+            "manifested",
+            "creature",
+            "face",
+            "up",
+        ])
+        || ts.eat_phrase(&["turn", "permanents", "face", "up"])
+        || ts.eat_phrase(&["turn", "a", "permanent", "face", "up"])
+        || ts.eat_phrase(&["activate", "power-up", "abilities"])
+    {
+        return Some(ManaSpendPurpose::ActivateAbilities(None));
+    }
+    if ts.eat_phrase(&["cast", "the", "last", "card", "exiled", "with"]) && ts.eat_tilde() {
+        return Some(ManaSpendPurpose::CastFromZone(
+            crate::v2::ir::ZoneKind::Exile,
+        ));
+    }
+    ts.restore(cp);
+    // `cast a Time Lord or Alien spell` / `activate an ability of a Time Lord or Alien`
+    if ts.eat_phrase(&["cast", "a", "time", "lord", "or", "alien", "spell"]) {
+        let mut flt = ObjectFilter {
+            any_spell: true,
+            subtypes_match_any: true,
+            ..Default::default()
+        };
+        flt.subtypes.push("Time Lord".to_string());
+        flt.subtypes.push("Alien".to_string());
+        return Some(ManaSpendPurpose::CastSpells(Some(flt)));
+    }
+    if ts.eat_phrase(&[
+        "activate", "an", "ability", "of", "a", "time", "lord", "or", "alien",
+    ]) || ts.eat_phrase(&[
+        "activate",
+        "abilities",
+        "of",
+        "a",
+        "time",
+        "lord",
+        "or",
+        "alien",
+    ]) {
+        let mut flt = ObjectFilter {
+            subtypes_match_any: true,
+            ..Default::default()
+        };
+        flt.subtypes.push("Time Lord".to_string());
+        flt.subtypes.push("Alien".to_string());
+        return Some(ManaSpendPurpose::ActivateAbilities(Some(flt)));
+    }
+    ts.restore(cp);
+    None
 }
 
 pub(super) fn parse_temporary_static_clause(ts: &mut TokenStream<'_>) -> PResult<Effect> {
