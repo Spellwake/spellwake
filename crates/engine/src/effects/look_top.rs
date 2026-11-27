@@ -234,9 +234,7 @@ impl EffectWindow {
                     (1, Some(LookTopFilter::Land), false, false, true, false)
                 }
                 Instruction::MayRevealLibraryTop => (1, None, false, true, false, false),
-                Instruction::ExploreSource
-                | Instruction::ExploreSubject(_)
-                | Instruction::RevealTopHandLoseManaValue { .. } => {
+                Instruction::ExploreSubject(_) | Instruction::RevealTopHandLoseManaValue { .. } => {
                     (1, None, false, true, false, false)
                 }
                 Instruction::RevealUntilLandKind => (0, None, false, false, false, false),
@@ -255,14 +253,7 @@ impl EffectWindow {
             results.revealed_top_card = None;
         }
         let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
-        let exploring = if instruction == &Instruction::ExploreSource {
-            let (StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source }) =
-                entry.kind()
-            else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            Some(source.clone())
-        } else if let Instruction::ExploreSubject(subj) = instruction {
+        let exploring = if let Instruction::ExploreSubject(subj) = instruction {
             let resolved_id = match subj {
                 crate::program::MoveSubjectRef::AbilitySource => match entry.kind() {
                     StackKind::ActivatedAbility { source }

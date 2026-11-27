@@ -279,7 +279,16 @@ fn destroy_permanent_instant() -> Program {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::DestroyTarget],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ),
+            ))],
         ),
     )
 }

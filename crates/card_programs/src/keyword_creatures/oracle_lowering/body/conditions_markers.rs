@@ -665,7 +665,6 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
                     Instruction::LookTopChoose { .. }
                         | Instruction::CreateTokens { .. }
                         | Instruction::CreateAttackingTokens { .. }
-                        | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
                 )
             ) =>
         {
@@ -3059,6 +3058,21 @@ pub(super) fn lower_marker_or_action_condition(
                 right: ValueExpr::literal(1),
             })
         }
+        ConditionAst::Marker(GameMarker::InZone { subject, zone }) => {
+            use spellwake_engine::toolbox::ObjectQuery;
+            let subj_q = lower_subject_to_object_query(subject, builder, in_trigger, vocabulary)
+                .ok_or("oracle:unsupported-if-condition")?;
+            let qz = lower_zone_filter_to_query_zone(*zone, builder, in_trigger)
+                .ok_or("oracle:unsupported-if-condition")?;
+            Ok(ResolutionCondition {
+                left: ValueExpr::QueryCount(Box::new(ObjectQuery::Intersect(
+                    Box::new(subj_q),
+                    Box::new(ObjectQuery::zone(qz, ObjectFilter::any())),
+                ))),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1),
+            })
+        }
         ConditionAst::Marker(GameMarker::KeywordCostPaid(kw)) => {
             let left = match kw.trim().to_ascii_lowercase().as_str() {
                 "kicker" | "kicked" | "multikicker" | "offspring" | "squad" | "entwine"
@@ -3363,6 +3377,41 @@ pub(super) fn lower_marker_or_action_condition(
                 ResolutionCondition {
                     left: ValueExpr::count_graveyard(ResolvingPlayer::Controller, obj),
                     comparison: Comparison::Equal,
+                    right: ValueExpr::literal(1),
+                },
+            ])
+            .ok_or("oracle:unsupported-if-condition")
+        }
+        ConditionAst::Marker(GameMarker::OnlyObjectInZone {
+            subject,
+            filter,
+            zone,
+        }) => {
+            use spellwake_engine::toolbox::ObjectQuery;
+            let subj_q = lower_subject_to_object_query(subject, builder, in_trigger, vocabulary)
+                .ok_or("oracle:unsupported-if-condition")?;
+            let qz = lower_zone_filter_to_query_zone(*zone, builder, in_trigger)
+                .ok_or("oracle:unsupported-if-condition")?;
+            let mut clean = filter.as_ref().clone();
+            clean.zone = None;
+            let obj = if is_unrestricted_filter(&clean) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter(&clean, vocabulary)?
+            };
+            let zone_q = ObjectQuery::zone(qz, obj);
+            combine_resolution_conditions_and(vec![
+                ResolutionCondition {
+                    left: ValueExpr::QueryCount(Box::new(ObjectQuery::Intersect(
+                        Box::new(subj_q),
+                        Box::new(zone_q.clone()),
+                    ))),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                },
+                ResolutionCondition {
+                    left: ValueExpr::QueryCount(Box::new(zone_q)),
+                    comparison: Comparison::LessOrEqual,
                     right: ValueExpr::literal(1),
                 },
             ])
@@ -5821,6 +5870,28 @@ pub(super) fn lower_marker_or_action_condition(
             })
         }
         ConditionAst::Marker(GameMarker::AllMatchingAre { filter, predicate }) => {
+            let query_diff_fallback =
+                |builder: &mut BodyBuilder| -> Result<ResolutionCondition, &'static str> {
+                    use spellwake_engine::toolbox::ObjectQuery;
+                    if !predicate.extra_zones.is_empty() {
+                        return Err("oracle:unsupported-if-condition");
+                    }
+                    let base_q =
+                        lower_filter_to_zone_query(filter, builder, in_trigger, vocabulary)
+                            .ok_or("oracle:unsupported-if-condition")?;
+                    let mut pred_clean = predicate.as_ref().clone();
+                    pred_clean.zone = None;
+                    let pred_obj = lower_object_filter(&pred_clean, vocabulary)?;
+                    let non_matching = ObjectQuery::Difference(
+                        Box::new(base_q.clone()),
+                        Box::new(ObjectQuery::filtered(base_q, pred_obj)),
+                    );
+                    Ok(ResolutionCondition {
+                        left: ValueExpr::QueryCount(Box::new(non_matching)),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(0),
+                    })
+                };
             if !matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
                 || !filter.extra_zones.is_empty()
                 || !matches!(predicate.zone, None | Some(ZoneFilter::Battlefield))
@@ -5829,7 +5900,7 @@ pub(super) fn lower_marker_or_action_condition(
                 || predicate.named.is_some()
                 || predicate.color_arity.is_some()
             {
-                return Err("oracle:unsupported-if-condition");
+                return query_diff_fallback(builder);
             }
             let mut base = filter.as_ref().clone();
             base.zone = None;
@@ -6221,6 +6292,19 @@ pub(super) fn lower_marker_or_action_condition(
                         ),
                         controller_scope: None,
                     },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                });
+            }
+            if let Some(subj_q) =
+                lower_subject_to_object_query(subject, builder, in_trigger, vocabulary)
+            {
+                use spellwake_engine::toolbox::{ObjectQuery, QueryZone};
+                return Ok(ResolutionCondition {
+                    left: ValueExpr::QueryCount(Box::new(ObjectQuery::Intersect(
+                        Box::new(subj_q),
+                        Box::new(ObjectQuery::zone(QueryZone::Exile, ObjectFilter::any())),
+                    ))),
                     comparison: Comparison::GreaterOrEqual,
                     right: ValueExpr::literal(1),
                 });

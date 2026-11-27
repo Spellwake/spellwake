@@ -202,7 +202,16 @@ fn search_same_name_as_matches_source_target_and_dying_trigger_lki() {
     let destroy = spell(
         11,
         BodyTarget::SingleCreature,
-        vec![Instruction::DestroyTarget],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                        allow_regenerate: true,
+                    },
+                },
+            ),
+        ))],
     );
 
     let game = world(

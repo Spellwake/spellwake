@@ -339,9 +339,14 @@ pub(super) fn compile_rules(
                         Instruction::OptionalEffect {
                             chooser: ResolvingPlayer::Controller,
                         },
-                        Instruction::AttachOnEntry {
-                            entering_equipment: false,
-                        },
+                        Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::all(
+                                spellwake_engine::toolbox::ObjectQuery::Source,
+                                spellwake_engine::toolbox::ObjectMutation::Attach {
+                                    host: spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                },
+                            ),
+                        )),
                     ],
                 )
             }
@@ -368,9 +373,14 @@ pub(super) fn compile_rules(
                         Instruction::OptionalEffect {
                             chooser: ResolvingPlayer::Controller,
                         },
-                        Instruction::AttachOnEntry {
-                            entering_equipment: true,
-                        },
+                        Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::all(
+                                spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                spellwake_engine::toolbox::ObjectMutation::Attach {
+                                    host: spellwake_engine::toolbox::ObjectQuery::Targets,
+                                },
+                            ),
+                        )),
                     ],
                 )
             }

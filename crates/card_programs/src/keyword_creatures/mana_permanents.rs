@@ -312,10 +312,18 @@ pub(super) fn bonders_ornament(card: &InventoryCard, profile: Profile) -> Option
         source_cost: spellwake_engine::activated::SourceCost::Tap,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawPlayersControllingName(
-                spellwake_contracts::names::EnglishCardName::new("Bonder's Ornament".to_owned())
-                    .ok()?,
-            )],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_cards(
+                    spellwake_engine::toolbox::PlayerSelector::ControllersOf(Box::new(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                            spellwake_engine::program::ObjectFilter::any()
+                                .sharing_name_with_source(),
+                        ),
+                    )),
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+            ],
         ),
     });
     Some(program)

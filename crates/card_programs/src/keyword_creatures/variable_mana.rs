@@ -105,10 +105,35 @@ fn spell_body(
         let minimum = u8::try_from(super::ordinary_text::amount(minimum)?).ok()?;
         return Some(ExecutableBody::new(
             BodyTarget::SingleCreature,
-            vec![Instruction::DamageCreatureAtSpellMastery {
-                amount: ValueExpr::chosen_x(),
-                minimum,
-            }],
+            vec![
+                Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Compare {
+                        left: Box::new(ValueExpr::count_graveyard(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                            spellwake_engine::program::ObjectFilter::instant_or_sorcery(),
+                        )),
+                        op: spellwake_engine::program::Comparison::GreaterOrEqual,
+                        right: Box::new(ValueExpr::literal(i64::from(minimum))),
+                    }),
+                    destination: 3,
+                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Both {
+                        objects: spellwake_engine::toolbox::ObjectQuery::Targets,
+                        players: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::TargetController,
+                        ),
+                    },
+                    ValueExpr::chosen_x(),
+                    false,
+                ),
+                Instruction::Jump { destination: 4 },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    ValueExpr::chosen_x(),
+                    false,
+                ),
+            ],
         ));
     }
     if text.trim()

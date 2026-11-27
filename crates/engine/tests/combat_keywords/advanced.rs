@@ -18,7 +18,18 @@ fn counters(state: &GameState, id: u64) -> spellwake_contracts::RulesInteger {
         .plus_one
 }
 fn lose_life(id: u64) -> SeedCard {
-    let mut spell = instant(id, A, Instruction::DestroyTarget);
+    let mut spell = instant(
+        id,
+        A,
+        Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+            spellwake_engine::toolbox::ObjectQuery::Targets,
+            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                    allow_regenerate: true,
+                },
+            },
+        ))),
+    );
     spell.program = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(

@@ -221,7 +221,7 @@ use token_entry_flow::TokenEntryWork;
 pub use crate::program::{
     BodyTarget, ExecutableBody, Instruction, Program, ProgramKind, SpellFilter,
 };
-use crate::program::{CardType, CreatureTypeSlot, EventValueKind, ObjectFilter, ValueExpr};
+use crate::program::{CardType, CreatureTypeSlot, EventValueKind, ValueExpr};
 /// One trusted resolution-time choice: retaining is distinct from fresh capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyTargetChoice {
@@ -463,12 +463,6 @@ enum LinkedReturnOrigin {
         instruction: usize,
         tapped: bool,
     },
-    Sacrifice {
-        zone: ObjectZone,
-        controller: SeatId,
-        entry: StackEntryId,
-        instruction: usize,
-    },
     Manifest {
         player: SeatId,
         entry: StackEntryId,
@@ -521,7 +515,6 @@ impl LinkedReturnOrigin {
                 controller: Some(controller),
                 ..
             }
-            | Self::Sacrifice { controller, .. }
             | Self::GraveyardTransformed { controller, .. } => controller,
             _ => card.owner(),
         }
@@ -532,7 +525,6 @@ impl LinkedReturnOrigin {
                 Self::Exile | Self::ExileWithCounters { .. } | Self::ChosenExile { .. } => {
                     card.zone() == ObjectZone::Exile
                 }
-                Self::Sacrifice { zone, .. } => card.zone() == zone,
                 Self::Hand { player, .. } => card.zone() == ObjectZone::Hand(player),
                 Self::HandOrGraveyardAuras { player, .. } => {
                     matches!(card.zone(), ObjectZone::Hand(owner) | ObjectZone::Graveyard(owner) if owner == player)
@@ -557,7 +549,6 @@ impl LinkedReturnOrigin {
     }
     fn reason(self, from: ObjectZone) -> crate::occurrence::ZoneReason {
         match self {
-            Self::Sacrifice { .. } => crate::occurrence::ZoneReason::ReturnFromSacrifice,
             Self::Manifest { .. } => crate::occurrence::ZoneReason::Manifest,
             Self::ExileWithCounters { .. } | Self::ChosenExile { .. } => {
                 crate::occurrence::ZoneReason::ExileToBattlefield
@@ -580,9 +571,6 @@ impl LinkedReturnOrigin {
         match self {
             Self::Exile => crate::occurrence::EventCause::MechanismUnit,
             Self::ExileWithCounters { entry, instruction }
-            | Self::Sacrifice {
-                entry, instruction, ..
-            }
             | Self::Manifest {
                 entry, instruction, ..
             }
@@ -7844,13 +7832,6 @@ impl EffectWindow {
         let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
         let (object, chooser) = if self.resolution_cursor().is_some() {
             match self.current_instruction()? {
-                Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_) => {
-                    let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target
-                    else {
-                        return Ok(None);
-                    };
-                    (object, entry.controller())
-                }
                 operation @ (Instruction::Unearth
                 | Instruction::Ninjutsu
                 | Instruction::ExileUpToTwoGraveyardTargetsGainLife
@@ -7960,9 +7941,6 @@ impl EffectWindow {
     fn graveyard_aura_entry_frame(&self) -> Result<Option<LinkedAuraChoiceFrame>, EffectError> {
         let cur_op = self.current_instruction()?;
         let is_target_bf_return = matches!(
-            cur_op,
-            Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
-        ) || matches!(
             cur_op,
             Instruction::ZoneOp(spec)
                 if matches!(spec.source, crate::toolbox::ObjectQuery::Targets)
@@ -10570,7 +10548,6 @@ impl EffectWindow {
             | Instruction::AttachBattlefieldAurasToSource
             | Instruction::EnterHandOrGraveyardAurasAttachedToSource
             | Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::LoseLifeAndScryForSubtype(_)
             | Instruction::GiveEquippedCreatureToUpkeepPlayer
             | Instruction::CopyCreatureExiledForAbility
             | Instruction::DamageFromGrantingPermanent { .. }
@@ -10639,20 +10616,15 @@ impl EffectWindow {
                 }
                 TargetRef::Object(_) | TargetRef::Player(_) => false,
             },
-            Instruction::DamageFromPower(_) | Instruction::DamageCreatureAtSpellMastery { .. } => {
-                match target {
-                    TargetRef::Player(player) => self.window.participants().contains(&player),
-                    TargetRef::Object(card) => evaluated
-                        .get(card)
-                        .and_then(ObjectCharacteristics::damage_recipient)
-                        .is_some(),
-                    TargetRef::Stack(_) => false,
-                }
-            }
+            Instruction::DamageFromPower(_) => match target {
+                TargetRef::Player(player) => self.window.participants().contains(&player),
+                TargetRef::Object(card) => evaluated
+                    .get(card)
+                    .and_then(ObjectCharacteristics::damage_recipient)
+                    .is_some(),
+                TargetRef::Stack(_) => false,
+            },
             Instruction::Attach(_) => true,
-            Instruction::DestroyTarget => {
-                matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|view| view.zone == ObjectZone::Battlefield && !view.has_keyword(KeywordAbility::Indestructible)))
-            }
             Instruction::ExileCreatureAtMostRevealedPower
             | Instruction::ImprintTargetLand
             | Instruction::ImprintTargetCreature
@@ -10662,11 +10634,6 @@ impl EffectWindow {
             }
             Instruction::ExileForBlackToken { .. } => {
                 matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|card| matches!(card.zone, ObjectZone::Graveyard(_))))
-            }
-            Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_) => {
-                matches!(target, TargetRef::Object(id)
-                if self.window.cards().get(id).is_some_and(|o| matches!(o.zone(), ObjectZone::Graveyard(_)))
-                    && evaluated.get(id).is_some_and(ObjectCharacteristics::is_creature))
             }
             Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
@@ -10754,7 +10721,6 @@ impl EffectWindow {
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
             | Instruction::RevealUntilMatch { .. }
-            | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::ResolvePowerAbility(_)
             | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::CreateTokenAndAttach { .. }
@@ -10768,7 +10734,6 @@ impl EffectWindow {
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
             | Instruction::OfferSourceCounters { .. }
-            | Instruction::IncreaseSpeed
             | Instruction::BecomeMonarch(_)
             | Instruction::RequireCondition(_)
             | Instruction::PutEquipmentFromHandOrGraveyard
@@ -10779,7 +10744,6 @@ impl EffectWindow {
             | Instruction::ReselectAttackDefender
             | Instruction::SetBlockDeclarations(_)
             | Instruction::AdditionalLoyaltyActivation
-            | Instruction::MoveLoyaltyCounterToEnteringPermanent
             | Instruction::ImpulseCastOrDamage(_)
             | Instruction::RevealCreatureOfSacrificedType
             | Instruction::SacrificeCombatContributor
@@ -10800,9 +10764,6 @@ impl EffectWindow {
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
-            | Instruction::TargetDamagesItsControllersOtherCreatures
-            | Instruction::OtherCreaturesReturnPowerDamage
-            | Instruction::DestroyCapturedCombatCreature { .. }
             | Instruction::ReflectAttachedCreatureDamage
             | Instruction::DestroyAttachedEnchantmentSubtype(_)
             | Instruction::GrantFlashback(_)
@@ -10814,8 +10775,6 @@ impl EffectWindow {
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
-            | Instruction::AttachChoosingPermanent { .. }
-            | Instruction::TabletopHonorAction { .. }
             | Instruction::CreateNonlegendaryLoyaltyCopy
             | Instruction::WeakenOpposingAttackersUntilNextTurn
             | Instruction::PhaseOtherPlaneswalkersNextEndStep
@@ -10823,9 +10782,7 @@ impl EffectWindow {
             | Instruction::ExileMeldPair
             | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::PhaseOutObjects(_)
             | Instruction::ReturnOneNonlandPerOpponent
-            | Instruction::WeakenDelayedAttacker(_)
             | Instruction::DrawRevealRemoveLoyalty
             | Instruction::CreateReflexiveDiscardDamage
             | Instruction::ScheduleDelayedStepTrigger { .. }
@@ -10853,9 +10810,7 @@ impl EffectWindow {
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
             | Instruction::ScheduleGraveyardReturnAtEndStep(_)
-            | Instruction::ReturnSacrificedCardToBattlefield
             | Instruction::ReturnDyingCreatureAsForest
-            | Instruction::ReturnDyingSourceTapped
             | Instruction::ReturnDelayedGraveyardCard(_)
             | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedPermanentToHand(_)
@@ -10871,12 +10826,7 @@ impl EffectWindow {
             | Instruction::CounterWardSource
             | Instruction::CounterTriggeringStackObject
             | Instruction::ResolveKeywordTrigger(_)
-            | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
-            | Instruction::DrawPlayersControllingName(_)
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnCapturedDyingCreature
-            | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
-            | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
             | Instruction::ReturnGraveyardCohort(_)
             | Instruction::DivideThreeDamageAmongTargets
             | Instruction::DistributePlusOneCounters { .. }
@@ -10885,7 +10835,6 @@ impl EffectWindow {
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
             | Instruction::DestroyFixedTargets
-            | Instruction::DestroyTargetAndAttachedEquipment
             | Instruction::ReturnFixedTargets
             | Instruction::FightFixedTargets
             | Instruction::BindOrderedPermanents { .. }
@@ -10902,8 +10851,6 @@ impl EffectWindow {
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::RevealSharedTypeCreatureCastOrBottom
             | Instruction::RevealOddCastOrDraw
-            | Instruction::MayTurnControlledCreatureFaceUp
-            | Instruction::ExploreSource
             | Instruction::MayRevealLibraryTop
             | Instruction::ManifestTop { .. }
             | Instruction::ExileNonlandsToHandAndDamage { .. }
@@ -10923,7 +10870,6 @@ impl EffectWindow {
             | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
             | Instruction::RevealHandAndBottomPiles
             | Instruction::RevealDividePiles
-            | Instruction::DrawToChosenOpponentHandSize
             | Instruction::LookTopPlaneswalkers
             | Instruction::RevealTopPermanentOrHand
             | Instruction::LookTopLandBattlefieldTapped
@@ -10935,7 +10881,6 @@ impl EffectWindow {
             | Instruction::ChooseCreatureType { .. }
             | Instruction::RepeatOpponentLifeLoss
             | Instruction::RememberPermanentTarget
-            | Instruction::ControllerLosesRememberedManaValue
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::GrantGraveyardCastAndWatchAbilities
@@ -10952,17 +10897,12 @@ impl EffectWindow {
             | Instruction::DestroyDamagedPlayersNonlandsAtX
             | Instruction::DestroyNonlandsAtSourceChargeCount
             | Instruction::AddCounterAndDischargeOnResolution(_)
-            | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::FightSourceWithTarget
-            | Instruction::TransformSourceAndAttachToTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
-            | Instruction::DestroyCapturedDamageSource
             | Instruction::RemoveCreatureCounters { .. }
-            | Instruction::AttachOnEntry { .. }
-            | Instruction::ControlledSubtypeDamagesAttacker(_)
             | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::Proliferate
             | Instruction::DamagePlayersHalfLife
@@ -10974,7 +10914,6 @@ impl EffectWindow {
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
             | Instruction::GrantChosenProtection { .. }
-            | Instruction::UntapOrTapSelect { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }

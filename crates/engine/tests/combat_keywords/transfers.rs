@@ -95,7 +95,18 @@ fn soulshift_fixes_a_graveyard_identity_checks_owner_type_value_and_rechecks_aft
         grave(3, A, 3, true),
         grave(4, A, 0, false),
         grave(5, B, 1, true),
-        instant(6, A, Instruction::DestroyTarget),
+        instant(
+            6,
+            A,
+            Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::Targets,
+                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                        allow_regenerate: true,
+                    },
+                },
+            ))),
+        ),
     ];
     let seed = GameSeed::with_uniform_life(
         vec![A, B],

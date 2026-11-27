@@ -273,37 +273,6 @@ impl EffectWindow {
         self.attach_at_cut(entry, source, target, &current)
     }
 
-    pub(super) fn entry_attachment(
-        &self,
-        entering_equipment: bool,
-    ) -> Result<(ObjectId, TargetRef), EffectError> {
-        let entry = self
-            .window
-            .resolving()
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        let trigger = self
-            .execution_bindings(entry.id())
-            .and_then(|b| b.trigger.as_ref())
-            .ok_or(EffectError::InconsistentProgram)?;
-        let [event] = trigger.causes.members() else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let crate::occurrence::TriggerRelated::ZoneChange { after, .. } = &event.related else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        Ok(if entering_equipment {
-            (
-                after.object.id(),
-                self.instruction_target(entry)?.choice().target,
-            )
-        } else {
-            (
-                trigger.source.object.id(),
-                TargetRef::Object(after.object.id()),
-            )
-        })
-    }
-
     pub(super) fn attach_at_cut(
         &mut self,
         entry: StackEntryId,

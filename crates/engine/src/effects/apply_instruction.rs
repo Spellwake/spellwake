@@ -31,13 +31,6 @@ impl EffectWindow {
                 exit: crate::stack_window::StackExit,
                 reason: ZoneReason,
             },
-            GraveyardEntry {
-                exit: crate::stack_window::StackExit,
-                previous: ObjectId,
-                object: ObjectId,
-                counters: PowerToughnessCounters,
-                effect: Option<ResolvedContinuousEffect>,
-            },
             Continuous(ResolvedContinuousEffect),
         }
         let mut cause = EventCause::Instruction {
@@ -64,7 +57,6 @@ impl EffectWindow {
             | Instruction::AttachBattlefieldAurasToSource
             | Instruction::EnterHandOrGraveyardAurasAttachedToSource
             | Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::LoseLifeAndScryForSubtype(_)
             | Instruction::ExileForBlackToken { .. }
             | Instruction::ExileForSubtypeToken(_)
             | Instruction::GiveEquippedCreatureToUpkeepPlayer
@@ -102,9 +94,7 @@ impl EffectWindow {
             | Instruction::Jump { .. }
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
-            | Instruction::DamageCreatureAtSpellMastery { .. }
             | Instruction::RememberPermanentTarget
-            | Instruction::ControllerLosesRememberedManaValue
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::GrantGraveyardCastAndWatchAbilities
@@ -121,17 +111,12 @@ impl EffectWindow {
             | Instruction::DestroyDamagedPlayersNonlandsAtX
             | Instruction::DestroyNonlandsAtSourceChargeCount
             | Instruction::AddCounterAndDischargeOnResolution(_)
-            | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::FightSourceWithTarget
-            | Instruction::TransformSourceAndAttachToTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
-            | Instruction::DestroyCapturedDamageSource
             | Instruction::RemoveCreatureCounters { .. }
-            | Instruction::AttachOnEntry { .. }
-            | Instruction::ControlledSubtypeDamagesAttacker(_)
             | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::Proliferate
             | Instruction::DamagePlayersHalfLife
@@ -201,7 +186,6 @@ impl EffectWindow {
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
             | Instruction::GrantChosenProtection { .. }
-            | Instruction::UntapOrTapSelect { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
@@ -211,7 +195,6 @@ impl EffectWindow {
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::RevealUntilMatch { .. }
-            | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::ResolvePowerAbility(_)
             | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::CreateTokenAndAttach { .. }
@@ -225,7 +208,6 @@ impl EffectWindow {
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
             | Instruction::OfferSourceCounters { .. }
-            | Instruction::IncreaseSpeed
             | Instruction::BecomeMonarch(_)
             | Instruction::RequireCondition(_)
             | Instruction::PutEquipmentFromHandOrGraveyard
@@ -236,7 +218,6 @@ impl EffectWindow {
             | Instruction::ReselectAttackDefender
             | Instruction::SetBlockDeclarations(_)
             | Instruction::AdditionalLoyaltyActivation
-            | Instruction::MoveLoyaltyCounterToEnteringPermanent
             | Instruction::ImpulseCastOrDamage(_)
             | Instruction::RevealCreatureOfSacrificedType
             | Instruction::SacrificeCombatContributor
@@ -257,9 +238,6 @@ impl EffectWindow {
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
-            | Instruction::TargetDamagesItsControllersOtherCreatures
-            | Instruction::OtherCreaturesReturnPowerDamage
-            | Instruction::DestroyCapturedCombatCreature { .. }
             | Instruction::ReflectAttachedCreatureDamage
             | Instruction::DestroyAttachedEnchantmentSubtype(_)
             | Instruction::GrantFlashback(_)
@@ -272,8 +250,6 @@ impl EffectWindow {
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
-            | Instruction::AttachChoosingPermanent { .. }
-            | Instruction::TabletopHonorAction { .. }
             | Instruction::CreateNonlegendaryLoyaltyCopy
             | Instruction::WeakenOpposingAttackersUntilNextTurn
             | Instruction::PhaseOtherPlaneswalkersNextEndStep
@@ -281,9 +257,7 @@ impl EffectWindow {
             | Instruction::ExileMeldPair
             | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::PhaseOutObjects(_)
             | Instruction::ReturnOneNonlandPerOpponent
-            | Instruction::WeakenDelayedAttacker(_)
             | Instruction::DrawRevealRemoveLoyalty
             | Instruction::CreateReflexiveDiscardDamage
             | Instruction::ScheduleDelayedStepTrigger { .. }
@@ -311,9 +285,7 @@ impl EffectWindow {
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
             | Instruction::ScheduleGraveyardReturnAtEndStep(_)
-            | Instruction::ReturnSacrificedCardToBattlefield
             | Instruction::ReturnDyingCreatureAsForest
-            | Instruction::ReturnDyingSourceTapped
             | Instruction::ReturnDelayedGraveyardCard(_)
             | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedPermanentToHand(_)
@@ -329,13 +301,8 @@ impl EffectWindow {
             | Instruction::CounterWardSource
             | Instruction::CounterTriggeringStackObject
             | Instruction::ResolveKeywordTrigger(_)
-            | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
-            | Instruction::DrawPlayersControllingName(_)
             | Instruction::ExchangeLifeWithSourceToughness
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnCapturedDyingCreature
-            | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
-            | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
             | Instruction::ReturnGraveyardCohort(_)
             | Instruction::DivideThreeDamageAmongTargets
             | Instruction::DistributePlusOneCounters { .. }
@@ -344,7 +311,6 @@ impl EffectWindow {
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
             | Instruction::DestroyFixedTargets
-            | Instruction::DestroyTargetAndAttachedEquipment
             | Instruction::ReturnFixedTargets
             | Instruction::FightFixedTargets
             | Instruction::BindOrderedPermanents { .. }
@@ -361,8 +327,6 @@ impl EffectWindow {
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::RevealSharedTypeCreatureCastOrBottom
             | Instruction::RevealOddCastOrDraw
-            | Instruction::MayTurnControlledCreatureFaceUp
-            | Instruction::ExploreSource
             | Instruction::MayRevealLibraryTop
             | Instruction::ManifestTop { .. }
             | Instruction::ExileNonlandsToHandAndDamage { .. }
@@ -384,7 +348,6 @@ impl EffectWindow {
             | Instruction::RevealHandAndBottomPiles
             | Instruction::RevealDividePiles
             | Instruction::DivideTargetPermanentsAndSacrificePile
-            | Instruction::DrawToChosenOpponentHandSize
             | Instruction::LookTopPlaneswalkers
             | Instruction::RevealTopPermanentOrHand
             | Instruction::LookTopLandBattlefieldTapped
@@ -796,92 +759,15 @@ impl EffectWindow {
             Instruction::GrantProtectionChosenColor(_) => {
                 return Err(EffectError::InconsistentProgram);
             }
-            Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_) => {
-                let enters_tapped = false;
-                let (window, mut exit) = self.window.record_targeted_resolution_move_with_exit(
-                    self.window.revision(),
-                    choice.id,
-                    ObjectDestination::Battlefield {
-                        controller: entry.controller(),
-                    },
-                )?;
-                self.window = window;
-                let crate::stack_window::StackExit::Object(movement) = &mut exit else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let previous = movement.before.id();
-                let object = movement.after.id();
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.returned_target_permanent = Some(object);
-                }
-                self.settled_entry_destinations.remove(&previous);
-                self.stage_resolution_entry_choice(previous, object)?;
-                self.characteristics.register_battlefield_entry(object)?;
-                if let Some(host) = self.resolution_aura_choices.remove(&previous) {
-                    self.characteristics.attach(object, host, true)?;
-                }
-                if enters_tapped {
-                    self.window.enter_tapped(object)?;
-                }
-                let effect = if let Instruction::ReturnAnyGraveyardCreatureBlackSubtype(kind) =
-                    instruction
-                {
-                    use crate::characteristics::{
-                        Color, ColorOperation, ResolvedDuration, ResolvedPart, ResolvedParts,
-                        SubtypeOperation, TypeChange, TypeOperation,
-                    };
-                    Some(self.characteristics.add_effect(
-                        entry.id(),
-                        object,
-                        ResolvedParts(vec![
-                            ResolvedPart::Type(TypeChange {
-                                land_subtypes: SubtypeOperation::Keep,
-                                supertypes: TypeOperation::Keep,
-                                types: TypeOperation::Keep,
-                                subtypes: SubtypeOperation::Add(BTreeSet::from([kind])),
-                            }),
-                            ResolvedPart::Color(ColorOperation::Set(BTreeSet::from([
-                                Color::Black,
-                            ]))),
-                        ]),
-                        ResolvedDuration::NoStatedDuration,
-                    )?)
-                } else {
-                    None
-                };
-                let counters = self.apply_entry_counters(
-                    &before,
-                    object,
-                    PowerToughnessCounters::default(),
-                    0,
-                )?;
-                movement.after = self
-                    .window
-                    .cards()
-                    .get(object)
-                    .ok_or(EffectError::InconsistentProgram)?
-                    .clone();
-                InstructionCut::GraveyardEntry {
-                    exit,
-                    previous,
-                    object,
-                    counters,
-                    effect,
-                }
-            }
             Instruction::ExileCreatureAtMostRevealedPower => {
                 return Err(EffectError::InconsistentProgram);
             }
-            Instruction::DestroyTarget
-            | Instruction::ImprintTargetLand
+            Instruction::ImprintTargetLand
             | Instruction::ImprintTargetCreature
             | Instruction::ExileTargetAsAbilityDonor
             | Instruction::ExileTargetUntilOpponentMonarch => {
                 let linked_source: Option<ObjectId> = None;
                 let (destination, reason) = match instruction {
-                    Instruction::DestroyTarget => {
-                        (ObjectDestination::Graveyard, ZoneReason::Destroyed)
-                    }
                     Instruction::ImprintTargetLand
                     | Instruction::ImprintTargetCreature
                     | Instruction::ExileTargetAsAbilityDonor
@@ -935,15 +821,6 @@ impl EffectWindow {
                         Some(RulesInteger::from_usize(arrivals.len()));
                     cursor.results.last_moved_objects = arrivals;
                 }
-                if matches!(instruction, Instruction::DestroyTarget)
-                    && let crate::stack_window::StackExit::Object(movement) = &exit
-                    && matches!(movement.after.zone(), ObjectZone::Graveyard(_))
-                {
-                    self.resolution_cursor_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .results
-                        .destroyed_target_controller = movement.before.controller();
-                }
                 if let (Some(source), crate::stack_window::StackExit::Object(movement)) =
                     (linked_source, &exit)
                 {
@@ -989,31 +866,10 @@ impl EffectWindow {
             None,
             append,
             |previous, current, controllers| {
-                let mut entry_counters = None;
-                let mut entry_effect = None;
                 let occurrence = match receipt {
                     InstructionCut::Ready(value) => value,
                     InstructionCut::Exit { exit, reason } => {
                         exit_occurrence_at(previous, current, exit, reason, controllers)?
-                    }
-                    InstructionCut::GraveyardEntry {
-                        exit,
-                        previous: source,
-                        object,
-                        counters,
-                        effect,
-                    } => {
-                        entry_effect = effect;
-                        if counters.valid_placement() {
-                            entry_counters = Some((source, object, counters));
-                        }
-                        exit_occurrence_at(
-                            previous,
-                            current,
-                            exit,
-                            ZoneReason::ReturnFromGraveyardToBattlefield,
-                            controllers,
-                        )?
                     }
                     InstructionCut::Continuous(effect) => {
                         let appearances = characteristic_appearance_changes(
@@ -1027,32 +883,7 @@ impl EffectWindow {
                         }
                     }
                 };
-                let mut rows = vec![occurrence];
-                if let Some(effect) = entry_effect {
-                    rows.push(RulesOccurrence::ContinuousEffectCreated {
-                        effect,
-                        appearances: vec![],
-                    });
-                }
-                if let Some((source, object, added)) = entry_counters {
-                    rows.push(RulesOccurrence::CountersPlaced {
-                        object,
-                        before: previous.characteristics.counters(object),
-                        after: current.characteristics.counters(object),
-                        added,
-                        before_appearance: Box::new(
-                            previous
-                                .appearance(source)
-                                .ok_or(EffectError::InconsistentProgram)?,
-                        ),
-                        after_appearance: Box::new(
-                            current
-                                .appearance(object)
-                                .ok_or(EffectError::InconsistentProgram)?,
-                        ),
-                    });
-                }
-                Ok(rows)
+                Ok(vec![occurrence])
             },
         )?;
         Ok(())

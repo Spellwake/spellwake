@@ -618,85 +618,6 @@ impl EffectWindow {
             power,
         )))
     }
-    pub(super) fn cohort_power_damage(
-        &mut self,
-        entry: &crate::stack_window::StackEntry,
-        returning: bool,
-    ) -> Result<Vec<DamageInput>, EffectError> {
-        let evaluated = self.evaluated_characteristics()?;
-        if returning {
-            let (target, sources) = self
-                .resolution_cursor_mut()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .results
-                .power_damage_cohort
-                .take()
-                .ok_or(EffectError::InconsistentProgram)?;
-            let Some(view) = evaluated
-                .get(target)
-                .filter(|view| view.zone == ObjectZone::Battlefield)
-            else {
-                return Ok(Vec::new());
-            };
-            let recipient = if view.is_creature() {
-                DamageRecipient::Creature(target)
-            } else if view.has_type(CardType::Planeswalker) {
-                DamageRecipient::Planeswalker(target)
-            } else if view.has_type(CardType::Battle) {
-                DamageRecipient::Battle(target)
-            } else {
-                return Ok(Vec::new());
-            };
-            let mut inputs = Vec::new();
-            for id in sources {
-                if let Some((source, amount)) = self.damage_source_power(id)? {
-                    inputs.push(DamageInput {
-                        source,
-                        target: recipient,
-                        amount,
-                    });
-                }
-            }
-            return Ok(inputs);
-        }
-
-        let TargetRef::Object(target) = self.instruction_target(entry)?.choice().target else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let controller = evaluated
-            .get(target)
-            .and_then(|card| card.controller)
-            .ok_or(EffectError::InconsistentProgram)?;
-        let others = evaluated
-            .objects
-            .values()
-            .filter(|card| {
-                card.object != target
-                    && card.zone == ObjectZone::Battlefield
-                    && card.is_creature()
-                    && card.controller == Some(controller)
-            })
-            .map(|card| card.object)
-            .collect::<Vec<_>>();
-        let damage = self.damage_source_power(target)?;
-        let inputs = damage.map_or_else(Vec::new, |(source, amount)| {
-            others
-                .iter()
-                .copied()
-                .map(|object| DamageInput {
-                    source: source.clone(),
-                    target: DamageRecipient::Creature(object),
-                    amount: amount.clone(),
-                })
-                .collect()
-        });
-        self.resolution_cursor_mut()
-            .ok_or(EffectError::WrongResolutionFrame)?
-            .results
-            .power_damage_cohort = Some((target, others));
-        Ok(inputs)
-    }
-
     pub(super) fn reflected_attached_damage(
         &self,
         entry: StackEntryId,
@@ -907,7 +828,6 @@ impl EffectWindow {
                                 | Instruction::FightPairedCreatures(_)
                                 | Instruction::ImpulseCastOrDamage(_)
                                 | Instruction::ExileNonlandsToHandAndDamage { .. }
-                                | Instruction::ControlledSubtypeDamagesAttacker(_)
                                 | Instruction::DivideDamageAmongTargets { .. }
                                 | Instruction::DivideDamageExprAmongTargets { .. }
                                 | Instruction::DivideThreeDamageAmongTargets
@@ -915,10 +835,7 @@ impl EffectWindow {
                                 | Instruction::DamageFromPower(_)
                                 | Instruction::CreatureDealsPowerDamageToOther { .. }
                                 | Instruction::DealDamage(_)
-                                | Instruction::DamageCreatureAtSpellMastery { .. }
                                 | Instruction::DamagePlayersHalfLife
-                                | Instruction::TargetDamagesItsControllersOtherCreatures
-                                | Instruction::OtherCreaturesReturnPowerDamage
                                 | Instruction::ReflectAttachedCreatureDamage
                                 | Instruction::AddCounterAndDischargeOnResolution(_)
                                 | Instruction::DamageTargetControllersCreatures { .. }

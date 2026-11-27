@@ -333,7 +333,6 @@ impl EffectWindow {
                 Some(
                     Instruction::ReturnFixedTargets
                         | Instruction::DestroyFixedTargets
-                        | Instruction::DestroyTargetAndAttachedEquipment
                         | Instruction::ExileUntilOtherTargetLeaves
                 )
             )

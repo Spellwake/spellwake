@@ -61,9 +61,6 @@ fn value_expr_references_ability_source(expr: &ValueExpr) -> bool {
 pub(super) fn prior_op_acted_on_ability_source(ops: &[Instruction]) -> bool {
     for op in ops.iter().rev() {
         match op {
-            Instruction::RemoveCountersFromPermanent {
-                target_self: true, ..
-            } => return true,
             Instruction::MutateObject(spec) => {
                 return matches!(&spec.source, spellwake_engine::toolbox::ObjectQuery::Source)
                     || matches!(
@@ -1003,7 +1000,7 @@ pub(super) fn lower_counters_pt_instruction(
                     handled_prot = match eff_subject {
                         SubjectRefAst::TargetObject {
                             filter,
-                            count: TargetCountAst::Exact(1),
+                            count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                         } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
                             let mut f_clean = filter.as_ref().clone();
                             f_clean.zone = None;
@@ -1011,6 +1008,9 @@ pub(super) fn lower_counters_pt_instruction(
                                 &f_clean, builder, in_trigger, vocabulary,
                             )?;
                             builder.bind_target(bt)?;
+                            if *tc == TargetCountAst::UpTo(1) {
+                                builder.up_to_one_target = true;
+                            }
                             bound_subject_already = true;
                             push_chosen_prot(
                                 &mut builder.instructions,
@@ -1021,12 +1021,15 @@ pub(super) fn lower_counters_pt_instruction(
                         }
                         SubjectRefAst::TargetOneOf {
                             options,
-                            count: TargetCountAst::Exact(1),
+                            count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                         } => {
                             let bt = lower_target_one_of_permanent_body_target(
                                 options, builder, in_trigger, vocabulary,
                             )?;
                             builder.bind_target(bt)?;
+                            if *tc == TargetCountAst::UpTo(1) {
+                                builder.up_to_one_target = true;
+                            }
                             bound_subject_already = true;
                             push_chosen_prot(
                                 &mut builder.instructions,
@@ -1616,6 +1619,7 @@ pub(super) fn lower_counters_pt_instruction(
             let mut extra_type_parts: Vec<ResolvedPartSpec> = Vec::new();
             let mut extra_combat_kws: Vec<spellwake_engine::program::CombatTriggerKeyword> =
                 Vec::new();
+            let mut extra_toxic: Option<RulesInteger> = None;
             fn normalize_prot_item(item: &str) -> &str {
                 match item {
                     "instant spells" => "instants",
@@ -1647,6 +1651,14 @@ pub(super) fn lower_counters_pt_instruction(
                     && let Ok(n) = num_raw.trim().parse::<i64>()
                     && n > 0
                 {
+                    if kw_head == "toxic" {
+                        let add = RulesInteger::from(n);
+                        extra_toxic = Some(match extra_toxic.take() {
+                            Some(prev) => prev.plus(&add),
+                            None => add,
+                        });
+                        continue;
+                    }
                     let ckw = match kw_head {
                         "bushido" => Some(
                             spellwake_engine::program::CombatTriggerKeyword::Bushido(n.into()),
@@ -1724,7 +1736,7 @@ pub(super) fn lower_counters_pt_instruction(
             } else {
                 eff_subject
             };
-            if !extra_parts.is_empty() || !extra_combat_kws.is_empty() {
+            if !extra_parts.is_empty() || !extra_combat_kws.is_empty() || extra_toxic.is_some() {
                 let mut ab_change = if !kw_remaining.is_empty() {
                     Some(lower_ability_change(&kw_remaining, vocabulary)?)
                 } else {
@@ -1733,6 +1745,13 @@ pub(super) fn lower_counters_pt_instruction(
                 if !extra_combat_kws.is_empty() {
                     let ab = ab_change.get_or_insert_with(AbilityChange::default);
                     ab.granted_combat_keywords.extend(extra_combat_kws);
+                }
+                if let Some(tox) = extra_toxic {
+                    let ab = ab_change.get_or_insert_with(AbilityChange::default);
+                    ab.granted_toxic = Some(match ab.granted_toxic.take() {
+                        Some(prev) => prev.plus(&tox),
+                        None => tox,
+                    });
                 }
                 if let Some(ab) = ab_change {
                     extra_parts.push(ResolvedPartSpec::Abilities(ab));
@@ -2158,9 +2177,27 @@ pub(super) fn lower_counters_pt_instruction(
                         .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]), dur));
                     Ok(())
                 }
+                SubjectRefAst::Anaphora(_)
+                    if is_permanent_body_target(builder.target)
+                        && builder.instructions.iter().any(|op| {
+                            matches!(op, Instruction::ModifyAnyNumberOfPermanents { .. })
+                        }) =>
+                {
+                    builder
+                        .instructions
+                        .push(Instruction::ModifyAnyNumberOfPermanents {
+                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                            duration: dur,
+                        });
+                    Ok(())
+                }
                 SubjectRefAst::Anaphora(_) | SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
                     if !is_permanent_body_target(builder.target)
-                        && last_instruction_moved_object(&builder.instructions) =>
+                        && (last_instruction_moved_object(&builder.instructions)
+                            || matches!(
+                                builder.instructions.last(),
+                                Some(Instruction::MutateObject(_))
+                            )) =>
                 {
                     let group = Box::new(EffectSubject::LastMoved);
                     if dur == ResolvedDuration::UntilEndOfTurn
@@ -2799,6 +2836,12 @@ pub(super) fn lower_counters_pt_instruction(
                         | "of each kind already on that creature"
                         | "each kind of counter already on it"
                         | "of each kind on it"
+                        | "another counter of that kind"
+                        | "a counter of each kind on it"
+                        | "each kind of counter on it"
+                        | "each kind of counter on that permanent"
+                        | "each kind of counter on that creature"
+                        | "another counter of each kind on it"
                 )
             {
                 let eff_subject = match subject.as_ref() {
@@ -3840,7 +3883,11 @@ pub(super) fn lower_counters_pt_instruction(
                 }
                 SubjectRefAst::Anaphora(_)
                     if !is_permanent_body_target(builder.target)
-                        && has_prior_moved_object(&builder.instructions) =>
+                        && (has_prior_moved_object(&builder.instructions)
+                            || matches!(
+                                builder.instructions.last(),
+                                Some(Instruction::MutateObject(_))
+                            )) =>
                 {
                     builder
                         .instructions
@@ -3944,7 +3991,7 @@ pub(super) fn lower_counters_pt_instruction(
                                 crate::keyword_creatures::oracle_lowering::toolbox_emit::clear_source_counters(kind),
                             );
                         }
-                        (Some(amt), Some(_)) => {
+                        (Some(amt), _) => {
                             builder.instructions.push(
                                 crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters(
                                     spellwake_engine::toolbox::ObjectQuery::Source,
@@ -3952,15 +3999,6 @@ pub(super) fn lower_counters_pt_instruction(
                                     amt,
                                 ),
                             );
-                        }
-                        (Some(amt), None) => {
-                            builder
-                                .instructions
-                                .push(Instruction::RemoveCountersFromPermanent {
-                                    target_self: true,
-                                    kind: None,
-                                    amount: amt,
-                                });
                         }
                     }
                     Ok(())
@@ -3984,7 +4022,7 @@ pub(super) fn lower_counters_pt_instruction(
                                 ),
                             );
                         }
-                        (Some(amt), Some(_)) => {
+                        (Some(amt), _) => {
                             builder.instructions.push(
                                 crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters(
                                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -3992,15 +4030,6 @@ pub(super) fn lower_counters_pt_instruction(
                                     amt,
                                 ),
                             );
-                        }
-                        (Some(amt), None) => {
-                            builder
-                                .instructions
-                                .push(Instruction::RemoveCountersFromPermanent {
-                                    target_self: false,
-                                    kind: None,
-                                    amount: amt,
-                                });
                         }
                     }
                     Ok(())
@@ -4181,7 +4210,9 @@ pub(super) fn lower_counters_pt_instruction(
         }
         InstructionAst::Explore { subject } => {
             if is_self_pronoun(subject, builder, self_pronoun_valid) {
-                builder.instructions.push(Instruction::ExploreSource);
+                builder
+                    .instructions
+                    .push(Instruction::ExploreSubject(MoveSubjectRef::AbilitySource));
                 return Ok(());
             }
             match subject.as_ref() {

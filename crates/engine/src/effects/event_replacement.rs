@@ -68,11 +68,6 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
                     )
                 ))
         }
-        Instruction::RemoveCountersFromPermanent {
-            target_self: true,
-            kind: Some(_),
-            ..
-        } => true,
         Instruction::MutateObject(spec) => {
             let valid_src = match &spec.source {
                 crate::toolbox::ObjectQuery::Source
@@ -1598,26 +1593,6 @@ impl EffectWindow {
                         .resolve_inline_value_expr(rep, &amount, event_amount)?
                         .max(0.into());
                     self.inline_mill_player(seat, &val, cause.clone(), append)?;
-                }
-                Instruction::RemoveCountersFromPermanent {
-                    target_self: true,
-                    kind: Some(kind),
-                    amount,
-                } => {
-                    if let Some(source) = rep.source {
-                        let val = self
-                            .resolve_inline_value_expr(rep, &amount, event_amount)?
-                            .max(0.into());
-                        if val.is_positive() {
-                            self.inline_remove_permanent_counters(
-                                &[source],
-                                kind,
-                                Some(&val),
-                                cause.clone(),
-                                append,
-                            )?;
-                        }
-                    }
                 }
                 Instruction::CreateTokens { creations } => {
                     self.inline_create_tokens(

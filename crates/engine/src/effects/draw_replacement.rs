@@ -106,14 +106,6 @@ impl DrawReplacement {
     }
 }
 impl EffectWindow {
-    pub(super) fn requested_draw_count(&self, player: SeatId) -> Option<RulesInteger> {
-        let work = self.draw_replacement.as_ref()?;
-        work.original
-            .as_ref()
-            .filter(|chunk| chunk.player == player)
-            .map(|chunk| chunk.count.clone())
-            .or_else(|| work.finished.get(&player).cloned())
-    }
     /// Library cards currently revealed to every viewer while ordering a replaced draw.
     pub fn draw_reveals(&self, owner: SeatId) -> &[ObjectId] {
         self.draw_replacement

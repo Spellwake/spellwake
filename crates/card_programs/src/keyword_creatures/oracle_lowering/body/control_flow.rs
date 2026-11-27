@@ -1881,6 +1881,7 @@ pub(super) fn lower_multi_target_fixed_clauses(
                 matches!(
                     op,
                     Instruction::BranchIfFalse { .. }
+                        | Instruction::BranchCondition { .. }
                         | Instruction::Jump { .. }
                         | Instruction::OptionalSequence { .. }
                         | Instruction::OfferManaPayment { .. }
@@ -4727,7 +4728,7 @@ pub(super) fn try_fuse_choose_keyword_grant(
     Some(i + 2)
 }
 
-pub(super) fn emit_condition_branches(
+fn emit_condition_branches_resolution(
     condition: &ConditionAst,
     builder: &mut BodyBuilder,
     vocabulary: &CreatureTypeVocabulary,
@@ -4782,6 +4783,41 @@ pub(super) fn emit_condition_branches(
         }
     }
     Ok(false_branches)
+}
+
+pub(super) fn emit_condition_branches(
+    condition: &ConditionAst,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    bound_x: Option<&ValueExprAst>,
+) -> Result<Vec<usize>, &'static str> {
+    let snap_len = builder.instructions.len();
+    let snap_target = builder.target;
+    let snap_gy = builder.graveyard_target_bounds;
+    let snap_x = builder.x_target_count;
+    let snap_up_to_x = builder.up_to_x_target_count;
+    let snap_group = builder.last_group_filter;
+    match emit_condition_branches_resolution(condition, builder, vocabulary, in_trigger, bound_x) {
+        Ok(branches) => Ok(branches),
+        Err("oracle:unsupported-if-condition") => {
+            builder.instructions.truncate(snap_len);
+            builder.target = snap_target;
+            builder.graveyard_target_bounds = snap_gy;
+            builder.x_target_count = snap_x;
+            builder.up_to_x_target_count = snap_up_to_x;
+            builder.last_group_filter = snap_group;
+            let cond_expr =
+                lower_condition_expr(condition, builder, vocabulary, in_trigger, bound_x)?;
+            let idx = builder.instructions.len();
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(cond_expr),
+                destination: 0,
+            });
+            Ok(vec![idx])
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn filter_references_that_player(f: &ObjectFilterAst) -> bool {
@@ -6510,8 +6546,10 @@ pub(in super::super) fn lower_instruction_seq(
                 .push(Instruction::Jump { destination: 0 });
             let base_start = builder.instructions.len();
             for rel_idx in false_branches {
-                if let Some(Instruction::BranchIfFalse { destination, .. }) =
-                    builder.instructions.get_mut(cond_start + rel_idx)
+                if let Some(
+                    Instruction::BranchIfFalse { destination, .. }
+                    | Instruction::BranchCondition { destination, .. },
+                ) = builder.instructions.get_mut(cond_start + rel_idx)
                 {
                     *destination = base_start;
                 }
@@ -7252,8 +7290,10 @@ pub(in super::super) fn lower_instruction_seq(
                     .push(Instruction::Jump { destination: 0 });
                 let else_dest = builder.instructions.len();
                 for b_idx in false_branches {
-                    if let Some(Instruction::BranchIfFalse { destination, .. }) =
-                        builder.instructions.get_mut(b_idx)
+                    if let Some(
+                        Instruction::BranchIfFalse { destination, .. }
+                        | Instruction::BranchCondition { destination, .. },
+                    ) = builder.instructions.get_mut(b_idx)
                     {
                         *destination = else_dest;
                     }
@@ -7285,8 +7325,10 @@ pub(in super::super) fn lower_instruction_seq(
             } else {
                 let end_dest = builder.instructions.len();
                 for b_idx in false_branches {
-                    if let Some(Instruction::BranchIfFalse { destination, .. }) =
-                        builder.instructions.get_mut(b_idx)
+                    if let Some(
+                        Instruction::BranchIfFalse { destination, .. }
+                        | Instruction::BranchCondition { destination, .. },
+                    ) = builder.instructions.get_mut(b_idx)
                     {
                         *destination = end_dest;
                     }
@@ -8724,7 +8766,7 @@ pub(in super::super) fn lower_instruction_seq(
                         | Instruction::SearchLibrary { .. }
                         | Instruction::Clash { .. }
                         | Instruction::ChooseOneLastMoved { .. }
-                        | Instruction::UntapOrTapSelect { .. }
+                        | Instruction::MutateObject(_)
                         | Instruction::Mill { .. }
                         | Instruction::CounterTriggeringStackObject
                 ) || matches!(
@@ -9604,6 +9646,7 @@ pub(in super::super) fn lower_instruction_seq(
                             Instruction::OptionalEffect { .. }
                             | Instruction::OptionalSequence { .. }
                             | Instruction::BranchIfFalse { .. }
+                            | Instruction::BranchCondition { .. }
                             | Instruction::Jump { .. }
                             | Instruction::BindResolutionX(_)
                             | Instruction::ChooseValue { .. }
@@ -13369,7 +13412,9 @@ pub(in super::super) fn lower_instruction_seq(
                     }
                     if matches!(
                         op,
-                        Instruction::BranchIfFalse { .. } | Instruction::Jump { .. }
+                        Instruction::BranchIfFalse { .. }
+                            | Instruction::BranchCondition { .. }
+                            | Instruction::Jump { .. }
                     ) {
                         break;
                     }
@@ -13387,7 +13432,9 @@ pub(in super::super) fn lower_instruction_seq(
                     }
                     if matches!(
                         op,
-                        Instruction::BranchIfFalse { .. } | Instruction::Jump { .. }
+                        Instruction::BranchIfFalse { .. }
+                            | Instruction::BranchCondition { .. }
+                            | Instruction::Jump { .. }
                     ) {
                         break;
                     }
@@ -13409,6 +13456,7 @@ pub(in super::super) fn lower_instruction_seq(
                 if matches!(
                     op,
                     Instruction::BranchIfFalse { .. }
+                        | Instruction::BranchCondition { .. }
                         | Instruction::Jump { .. }
                         | Instruction::OptionalEffect { .. }
                         | Instruction::OptionalSequence { .. }
@@ -14265,7 +14313,7 @@ pub(in super::super) fn lower_instruction_seq(
                 continue;
             }
         }
-        lower_instruction(
+        match lower_instruction(
             &ins[i],
             builder,
             vocabulary,
@@ -14273,10 +14321,406 @@ pub(in super::super) fn lower_instruction_seq(
             in_trigger,
             self_pronoun_valid,
             bound_x,
-        )?;
+        ) {
+            Ok(()) => {}
+            Err("oracle:unsupported-instruction")
+                if matches!(&ins[i], InstructionAst::InteractiveChoice(_)) =>
+            {
+                let InstructionAst::InteractiveChoice(kind) = &ins[i] else {
+                    return Err("oracle:unsupported-instruction");
+                };
+                try_lower_interactive_choice_prompt(kind, builder, vocabulary, in_trigger)?;
+            }
+            Err(err) => return Err(err),
+        }
         i += 1;
     }
     Ok(())
+}
+
+fn emit_prompt_choice_for_player(
+    chooser: PlayerRefAst,
+    domain: spellwake_engine::toolbox::PromptDomain,
+    category: spellwake_engine::toolbox::ChoiceCategory,
+    auto_resolve_trivial: bool,
+    builder: &mut BodyBuilder,
+    in_trigger: bool,
+) -> Result<(), &'static str> {
+    use spellwake_engine::toolbox::{BindingId, PlayerSelector, PromptChoiceSpec};
+    match chooser {
+        PlayerRefAst::EachPlayer | PlayerRefAst::EachOpponent | PlayerRefAst::EachOtherPlayer => {
+            let players = lower_affected_players_in_context(chooser, builder, in_trigger)?;
+            builder.instructions.push(Instruction::ForEachPlayerQuery {
+                selector: Box::new(PlayerSelector::Group(players)),
+                bind_player: BindingId(0),
+                body: Box::new(ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::PromptChoice(Box::new(PromptChoiceSpec {
+                        chooser: PlayerSelector::Bound(BindingId(0)),
+                        domain,
+                        category,
+                        bind_to: BindingId(1),
+                        bind_unchosen: None,
+                        tag_partition: None,
+                        auto_resolve_trivial,
+                    }))],
+                )),
+            });
+            Ok(())
+        }
+        PlayerRefAst::AnyPlayer | PlayerRefAst::AnyOpponent => {
+            let sel = if chooser == PlayerRefAst::AnyOpponent {
+                PlayerSelector::Group(AffectedPlayers::EachOpponent)
+            } else {
+                PlayerSelector::Group(AffectedPlayers::EachPlayer)
+            };
+            builder
+                .instructions
+                .push(Instruction::PromptChoice(Box::new(PromptChoiceSpec {
+                    chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                    domain: spellwake_engine::toolbox::PromptDomain::Players {
+                        selector: sel,
+                        min: 1,
+                        max: 1,
+                    },
+                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                    bind_to: BindingId(0),
+                    bind_unchosen: None,
+                    tag_partition: None,
+                    auto_resolve_trivial: true,
+                })));
+            builder
+                .instructions
+                .push(Instruction::PromptChoice(Box::new(PromptChoiceSpec {
+                    chooser: PlayerSelector::Bound(BindingId(0)),
+                    domain,
+                    category,
+                    bind_to: BindingId(1),
+                    bind_unchosen: None,
+                    tag_partition: None,
+                    auto_resolve_trivial,
+                })));
+            Ok(())
+        }
+        other => {
+            let rp = lower_resolving_player_in_context(other, builder, in_trigger)?;
+            builder
+                .instructions
+                .push(Instruction::PromptChoice(Box::new(PromptChoiceSpec {
+                    chooser: PlayerSelector::Resolving(rp),
+                    domain,
+                    category,
+                    bind_to: BindingId(0),
+                    bind_unchosen: None,
+                    tag_partition: None,
+                    auto_resolve_trivial,
+                })));
+            Ok(())
+        }
+    }
+}
+
+fn parse_prompt_count_prefix(raw: &str) -> (i64, i64, &str) {
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix("up to ") {
+        let rest = rest.trim();
+        for (word, n) in [
+            ("one ", 1_i64),
+            ("two ", 2),
+            ("three ", 3),
+            ("four ", 4),
+            ("five ", 5),
+            ("six ", 6),
+            ("seven ", 7),
+            ("eight ", 8),
+            ("nine ", 9),
+            ("ten ", 10),
+        ] {
+            if let Some(after) = rest.strip_prefix(word) {
+                return (0, n, after.trim());
+            }
+        }
+        if let Some((num_s, after)) = rest.split_once(' ')
+            && let Ok(n) = num_s.parse::<i64>()
+            && n > 0
+        {
+            return (0, n, after.trim());
+        }
+    }
+    for (word, n) in [
+        ("a ", 1_i64),
+        ("an ", 1),
+        ("one ", 1),
+        ("two ", 2),
+        ("three ", 3),
+        ("four ", 4),
+        ("five ", 5),
+        ("six ", 6),
+        ("seven ", 7),
+        ("eight ", 8),
+        ("nine ", 9),
+        ("ten ", 10),
+    ] {
+        if let Some(after) = trimmed.strip_prefix(word) {
+            return (n, n, after.trim());
+        }
+    }
+    if let Some((num_s, after)) = trimmed.split_once(' ')
+        && let Ok(n) = num_s.parse::<i64>()
+        && n > 0
+    {
+        return (n, n, after.trim());
+    }
+    (1, 1, trimmed)
+}
+
+fn try_lower_interactive_choice_prompt(
+    kind: &InteractiveChoiceKind,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+) -> Result<(), &'static str> {
+    use spellwake_engine::toolbox::{
+        ChoiceCategory, ObjectQuery, PlayerSelector, PromptDomain, SubtypeChoiceKind,
+    };
+    match kind {
+        InteractiveChoiceKind::SeparateIntoPiles {
+            chooser,
+            subject,
+            pile_count,
+        } if *pile_count >= 2 => {
+            let query = lower_subject_to_object_query(subject, builder, in_trigger, vocabulary)
+                .ok_or("oracle:unsupported-instruction")?;
+            emit_prompt_choice_for_player(
+                *chooser,
+                PromptDomain::Partition {
+                    query,
+                    pile_count: *pile_count,
+                    min_per_pile: 0,
+                },
+                ChoiceCategory::PileSplit,
+                true,
+                builder,
+                in_trigger,
+            )
+        }
+        InteractiveChoiceKind::BiddingAction { .. } => emit_prompt_choice_for_player(
+            PlayerRefAst::EachPlayer,
+            PromptDomain::Number {
+                min: Box::new(ValueExpr::literal(0)),
+                max: Box::new(ValueExpr::literal(20)),
+            },
+            ChoiceCategory::Generic,
+            false,
+            builder,
+            in_trigger,
+        ),
+        InteractiveChoiceKind::ChooseFromGroup {
+            chooser,
+            description,
+        } => {
+            let low = description
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let cleaned = low.strip_prefix("choose ").unwrap_or(low.as_str()).trim();
+            if matches!(cleaned, "a creature type" | "creature type") {
+                return emit_prompt_choice_for_player(
+                    *chooser,
+                    PromptDomain::Subtype {
+                        kind: SubtypeChoiceKind::Creature,
+                    },
+                    ChoiceCategory::Generic,
+                    false,
+                    builder,
+                    in_trigger,
+                );
+            }
+            if matches!(cleaned, "a basic land type" | "basic land type") {
+                return emit_prompt_choice_for_player(
+                    *chooser,
+                    PromptDomain::Subtype {
+                        kind: SubtypeChoiceKind::BasicLand,
+                    },
+                    ChoiceCategory::Generic,
+                    false,
+                    builder,
+                    in_trigger,
+                );
+            }
+            if matches!(cleaned, "a planeswalker type" | "planeswalker type") {
+                return emit_prompt_choice_for_player(
+                    *chooser,
+                    PromptDomain::Subtype {
+                        kind: SubtypeChoiceKind::Planeswalker,
+                    },
+                    ChoiceCategory::Generic,
+                    false,
+                    builder,
+                    in_trigger,
+                );
+            }
+            if matches!(cleaned, "a color" | "color" | "one of those colors") {
+                return emit_prompt_choice_for_player(
+                    *chooser,
+                    PromptDomain::Color {
+                        allowed: spellwake_engine::program::ColorMask::EMPTY,
+                    },
+                    ChoiceCategory::Generic,
+                    false,
+                    builder,
+                    in_trigger,
+                );
+            }
+            if matches!(cleaned, "a card type" | "card type") {
+                return emit_prompt_choice_for_player(
+                    *chooser,
+                    PromptDomain::CardType {
+                        allowed: Vec::new(),
+                    },
+                    ChoiceCategory::Generic,
+                    false,
+                    builder,
+                    in_trigger,
+                );
+            }
+            if matches!(
+                cleaned,
+                "a card name" | "card name" | "a nonland card name" | "nonland card name"
+            ) {
+                return emit_prompt_choice_for_player(
+                    *chooser,
+                    PromptDomain::CardName {
+                        nonland_only: cleaned.contains("nonland"),
+                    },
+                    ChoiceCategory::Generic,
+                    false,
+                    builder,
+                    in_trigger,
+                );
+            }
+            if matches!(
+                cleaned,
+                "a player"
+                    | "another player"
+                    | "an opponent"
+                    | "another opponent"
+                    | "one of your opponents"
+            ) {
+                let selector = if cleaned.contains("opponent") {
+                    PlayerSelector::Group(AffectedPlayers::EachOpponent)
+                } else if cleaned.contains("another") {
+                    PlayerSelector::Group(AffectedPlayers::EachOtherPlayer)
+                } else {
+                    PlayerSelector::Group(AffectedPlayers::EachPlayer)
+                };
+                return emit_prompt_choice_for_player(
+                    *chooser,
+                    PromptDomain::Players {
+                        selector,
+                        min: 1,
+                        max: 1,
+                    },
+                    ChoiceCategory::Generic,
+                    true,
+                    builder,
+                    in_trigger,
+                );
+            }
+            if let Some(rest) = cleaned.strip_prefix("a number between ")
+                && let Some((lo_s, hi_s)) = rest.split_once(" and ")
+                && let (Ok(lo), Ok(hi)) = (lo_s.trim().parse::<i64>(), hi_s.trim().parse::<i64>())
+                && lo <= hi
+            {
+                return emit_prompt_choice_for_player(
+                    *chooser,
+                    PromptDomain::Number {
+                        min: Box::new(ValueExpr::literal(lo)),
+                        max: Box::new(ValueExpr::literal(hi)),
+                    },
+                    ChoiceCategory::Generic,
+                    false,
+                    builder,
+                    in_trigger,
+                );
+            }
+            if matches!(
+                cleaned,
+                "odd or even"
+                    | "even or odd"
+                    | "heads or tails"
+                    | "khans or dragons"
+                    | "friends or foe"
+                    | "friend or foe"
+                    | "left or right"
+                    | "yes or no"
+                    | "time or space"
+                    | "attack or block"
+            ) && let Some((a, b)) = cleaned.split_once(" or ")
+            {
+                return emit_prompt_choice_for_player(
+                    *chooser,
+                    PromptDomain::Options {
+                        labels: vec![a.trim().to_owned(), b.trim().to_owned()],
+                        min: 1,
+                        max: 1,
+                        allow_repeat: false,
+                    },
+                    ChoiceCategory::Generic,
+                    false,
+                    builder,
+                    in_trigger,
+                );
+            }
+            if matches!(
+                cleaned,
+                "one of those cards" | "a card from among them" | "one of them"
+            ) && !builder.instructions.is_empty()
+            {
+                return emit_prompt_choice_for_player(
+                    *chooser,
+                    PromptDomain::Objects {
+                        query: ObjectQuery::LastMoved,
+                        min: Box::new(ValueExpr::literal(1)),
+                        max: Box::new(ValueExpr::literal(1)),
+                        constraint: None,
+                        hidden: false,
+                    },
+                    ChoiceCategory::Generic,
+                    true,
+                    builder,
+                    in_trigger,
+                );
+            }
+            let (min_c, max_c, rest_filter) = parse_prompt_count_prefix(cleaned);
+            let compiler_vocab = cached_compiler_vocab(vocabulary);
+            if !rest_filter.is_empty()
+                && let Ok(ast_f) = spellwake_oracle_compiler::filter::parse_object_filter(
+                    rest_filter,
+                    &compiler_vocab,
+                )
+                && let Some(query) =
+                    lower_filter_to_zone_query(&ast_f, builder, in_trigger, vocabulary)
+            {
+                return emit_prompt_choice_for_player(
+                    *chooser,
+                    PromptDomain::Objects {
+                        query,
+                        min: Box::new(ValueExpr::literal(min_c)),
+                        max: Box::new(ValueExpr::literal(max_c)),
+                        constraint: None,
+                        hidden: false,
+                    },
+                    ChoiceCategory::Generic,
+                    true,
+                    builder,
+                    in_trigger,
+                );
+            }
+            Err("oracle:unsupported-instruction")
+        }
+        _ => Err("oracle:unsupported-instruction"),
+    }
 }
 
 #[cfg(test)]

@@ -207,16 +207,77 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
             BodyTarget::FilteredPermanent(
                 ObjectFilter::creature().with_keyword(KeywordAbility::Flying),
             ),
-            vec![DestroyTargetAndAttachedEquipment],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Union(vec![
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Battlefield,
+                                ObjectFilter::artifact()
+                                    .with_artifact_subtype(
+                                        spellwake_engine::program::ArtifactSubtype::Equipment,
+                                    )
+                                    .with_flags(
+                                        spellwake_engine::program::ObjectFilterFlags::ATTACHED_TO_TARGET,
+                                    ),
+                            ),
+                        ]),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ),
+                ),
+            ],
         ),
 
         "Return target creature card from your graveyard to the battlefield. If it's an Angel, put two +1/+1 counters on it." => {
+            let angel = vocabulary.resolve_label("Angel")?;
             (
                 BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()),
-                vec![ReturnGraveyardCreatureWithSubtypeCounters {
-                    subtype: vocabulary.resolve_label("Angel")?,
-                    amount: 2,
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec {
+                            bind_moved: Some(spellwake_engine::toolbox::BindingId(0)),
+                            ..spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Battlefield {
+                                    controller: spellwake_engine::toolbox::ZoneController::Player(
+                                        Box::new(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::Controller,
+                                            ),
+                                        ),
+                                    ),
+                                    tapped: false,
+                                    attacking: false,
+                                    transformed: false,
+                                    face_down: false,
+                                    entering_counters: Vec::new(),
+                                    attach_to: None,
+                                },
+                            )
+                        },
+                    ),
+                    Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::AnyMatch {
+                            query: Box::new(spellwake_engine::toolbox::ObjectQuery::Bound(
+                                spellwake_engine::toolbox::BindingId(0),
+                            )),
+                            filter: Box::new(ObjectFilter::any().with_subtype(angel)),
+                        }),
+                        destination: 3,
+                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                        spellwake_engine::toolbox::ObjectQuery::Bound(
+                            spellwake_engine::toolbox::BindingId(0),
+                        ),
+                        spellwake_engine::effects::CounterKind::PlusOne,
+                        literal(2),
+                    ),
+                ],
             )
         }
 
@@ -657,7 +718,38 @@ fn aura(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Opt
                     spellwake_engine::program::ObjectFilter::any().attached_to_self(),
                 ),
                 BodyTarget::None,
-                vec![Instruction::ReturnCapturedDyingCreature],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Intersect(
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::OwnersOf(
+                                            Box::new(
+                                                spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                            ),
+                                        ),
+                                    )),
+                                    ObjectFilter::permanent(),
+                                )),
+                            ),
+                            spellwake_engine::toolbox::ZoneDest::Battlefield {
+                                controller: spellwake_engine::toolbox::ZoneController::Player(
+                                    Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        ResolvingPlayer::Controller,
+                                    )),
+                                ),
+                                tapped: false,
+                                attacking: false,
+                                transformed: false,
+                                face_down: false,
+                                entering_counters: Vec::new(),
+                                attach_to: None,
+                            },
+                        ),
+                    ),
+                ],
             );
         }
 
@@ -1370,10 +1462,75 @@ fn creature(
                 vec![(
                     spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::creature(), mode: spellwake_engine::program::DiesTriggerMode::DamagedBySource }),
                     NoTarget,
-                    vec![ReturnCapturedDyingCreatureWithTypeAndColor {
-                        subtype: vocabulary.resolve_label("Zombie")?,
-                        color: Color::Black,
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec {
+                                bind_moved: Some(spellwake_engine::toolbox::BindingId(0)),
+                                ..spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                    spellwake_engine::toolbox::ObjectQuery::Intersect(
+                                        Box::new(
+                                            spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                        ),
+                                        Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+                                            spellwake_engine::toolbox::QueryZone::Graveyard(
+                                                Box::new(
+                                                    spellwake_engine::toolbox::PlayerSelector::OwnersOf(
+                                                        Box::new(
+                                                            spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                                        ),
+                                                    ),
+                                                ),
+                                            ),
+                                            ObjectFilter::permanent(),
+                                        )),
+                                    ),
+                                    spellwake_engine::toolbox::ZoneDest::Battlefield {
+                                        controller:
+                                            spellwake_engine::toolbox::ZoneController::Player(
+                                                Box::new(
+                                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                        ResolvingPlayer::Controller,
+                                                    ),
+                                                ),
+                                            ),
+                                        tapped: false,
+                                        attacking: false,
+                                        transformed: false,
+                                        face_down: false,
+                                        entering_counters: Vec::new(),
+                                        attach_to: None,
+                                    },
+                                )
+                            },
+                        ),
+                        Instruction::ApplyContinuous(Box::new(
+                            spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Bound(
+                                    spellwake_engine::toolbox::BindingId(0),
+                                ),
+                                spellwake_engine::characteristics::ResolvedPartsSpec(vec![
+                                    spellwake_engine::characteristics::ResolvedPartSpec::Type(
+                                        spellwake_engine::characteristics::TypeChangeSpec {
+                                            types: spellwake_engine::characteristics::TypeOperation::Keep,
+                                            supertypes: spellwake_engine::characteristics::TypeOperation::Keep,
+                                            subtypes: spellwake_engine::characteristics::SubtypeOperation::Add(
+                                                spellwake_engine::characteristics::InstructionSubtypeOperand::Literal(
+                                                    [vocabulary.resolve_label("Zombie")?].into(),
+                                                ),
+                                            ),
+                                            land_subtypes: spellwake_engine::characteristics::SubtypeOperation::Keep,
+                                        },
+                                    ),
+                                    spellwake_engine::characteristics::ResolvedPartSpec::Color(
+                                        spellwake_engine::characteristics::ColorOperation::Add(
+                                            [Color::Black].into(),
+                                        ),
+                                    ),
+                                ]),
+                                spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
+                            ),
+                        )),
+                    ],
                 )],
             )
         }

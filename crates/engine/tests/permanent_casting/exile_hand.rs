@@ -262,7 +262,19 @@ fn rebound_with_no_legal_target_finishes_the_upkeep_trigger_and_leaves_the_card_
     let source = cards.iter_mut().find(|c| c.card == CardId(10)).unwrap();
     source.program = Program::instant(
         ManaCost::free(),
-        ExecutableBody::new(BodyTarget::SingleCreature, vec![Instruction::DestroyTarget]),
+        ExecutableBody::new(
+            BodyTarget::SingleCreature,
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ),
+            ))],
+        ),
     )
     .with_printed_keywords([KeywordAbility::Rebound]);
     let start = setup(Some(Step::PostcombatMain), cards);

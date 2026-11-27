@@ -4442,11 +4442,17 @@ pub(super) fn lower_object_filter(
         match pred {
             FilterPredicateAst::HasAbilityKind { kind, negated } => {
                 let norm_kind = kind.trim().to_ascii_lowercase();
-                if norm_kind == "adventure" && !negated {
+                if matches!(norm_kind.as_str(), "adventure" | "an adventure") && !negated {
                     clause.flags = clause.flags.union(ObjectFilterFlags::HAS_ADVENTURE);
+                } else if norm_kind == "toxic" && !negated {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::HAS_TOXIC);
                 } else if matches!(
                     norm_kind.as_str(),
-                    "activated" | "activated_ability" | "an activated ability"
+                    "activated"
+                        | "activated_ability"
+                        | "activated ability"
+                        | "an activated ability"
+                        | "activated abilities"
                 ) {
                     if *negated {
                         if clause
@@ -4467,6 +4473,22 @@ pub(super) fn lower_object_filter(
                         }
                         clause.flags = clause.flags.union(ObjectFilterFlags::HAS_ACTIVATED_ABILITY);
                     }
+                } else if let Some(kw) = lower_keyword_ability_name(&norm_kind) {
+                    if *negated {
+                        if clause.forbidden_keyword.is_some_and(|prev| prev != kw)
+                            || clause.keyword == Some(kw)
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.forbidden_keyword = Some(kw);
+                    } else {
+                        if clause.keyword.is_some_and(|prev| prev != kw)
+                            || clause.forbidden_keyword == Some(kw)
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.keyword = Some(kw);
+                    }
                 } else {
                     return Err("oracle:unsupported-filter-predicate");
                 }
@@ -4475,6 +4497,93 @@ pub(super) fn lower_object_filter(
                 clause.flags = clause
                     .flags
                     .union(ObjectFilterFlags::NOT_OWNED_BY_CONTROLLER);
+            }
+            FilterPredicateAst::SameTotalPowerAndToughness => {
+                clause.flags = clause.flags.union(ObjectFilterFlags::SAME_TOTAL_PT);
+            }
+            FilterPredicateAst::ColorCountCompare { op, expr } => {
+                let target_color = match (op, expr.as_ref()) {
+                    (CompareOp::Eq | CompareOp::Le, ValueExprAst::Const(0)) => {
+                        ObjectColorFilter::Colorless
+                    }
+                    (CompareOp::Eq, ValueExprAst::Const(1)) => ObjectColorFilter::Monocolored,
+                    (CompareOp::Ge, ValueExprAst::Const(1))
+                    | (CompareOp::Gt, ValueExprAst::Const(0)) => ObjectColorFilter::Colored,
+                    (CompareOp::Ge, ValueExprAst::Const(2))
+                    | (CompareOp::Gt, ValueExprAst::Const(1)) => ObjectColorFilter::Multicolored,
+                    _ => return Err("oracle:unsupported-filter-predicate"),
+                };
+                if clause.color != ObjectColorFilter::Any && clause.color != target_color {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+                clause.color = target_color;
+            }
+            FilterPredicateAst::AttachedBy(att_f) => {
+                let simple_attachment = att_f.zone.is_none()
+                    && att_f.extra_zones.is_empty()
+                    && att_f.predicates.is_empty()
+                    && att_f.controller.is_none()
+                    && att_f.owner.is_none()
+                    && att_f.any_colors.is_empty()
+                    && att_f.forbidden_colors.is_empty()
+                    && att_f.color_arity.is_none()
+                    && att_f.forbidden_types.is_empty()
+                    && att_f.required_supertypes.is_empty()
+                    && att_f.forbidden_supertypes.is_empty()
+                    && att_f.forbidden_subtypes.is_empty()
+                    && att_f.combat.is_none()
+                    && att_f.tapped.is_none()
+                    && att_f.token.is_none()
+                    && att_f.required_keywords.is_empty()
+                    && att_f.forbidden_keywords.is_empty()
+                    && att_f.stat_bounds.is_empty()
+                    && att_f.counter_kind.is_none()
+                    && att_f.named.is_none()
+                    && att_f.flags.0 == 0;
+                if simple_attachment
+                    && att_f.subtypes.len() == 1
+                    && att_f.subtypes[0].eq_ignore_ascii_case("aura")
+                    && (att_f.any_types.is_empty()
+                        || att_f.any_types == AstCardTypeMask::ENCHANTMENT)
+                {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::ENCHANTED);
+                } else if simple_attachment
+                    && att_f.subtypes.len() == 1
+                    && att_f.subtypes[0].eq_ignore_ascii_case("equipment")
+                    && (att_f.any_types.is_empty() || att_f.any_types == AstCardTypeMask::ARTIFACT)
+                {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::EQUIPPED);
+                } else {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+            }
+            FilterPredicateAst::WithSameControllerAs(subj) => {
+                match peel_battlefield_subject(subj) {
+                    SubjectRefAst::TargetObject {
+                        count: TargetCountAst::Exact(1),
+                        ..
+                    } => {
+                        if !matches!(
+                            clause.controller,
+                            ControllerFilter::Any | ControllerFilter::FirstTargetController
+                        ) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.controller = ControllerFilter::FirstTargetController;
+                    }
+                    SubjectRefAst::Anaphora(raw)
+                        if raw.trim().to_ascii_lowercase().contains("target") =>
+                    {
+                        if !matches!(
+                            clause.controller,
+                            ControllerFilter::Any | ControllerFilter::FirstTargetController
+                        ) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.controller = ControllerFilter::FirstTargetController;
+                    }
+                    _ => return Err("oracle:unsupported-filter-predicate"),
+                }
             }
             FilterPredicateAst::WithoutCounterKind(ck_raw) => {
                 let ck_low = ck_raw.trim().to_ascii_lowercase();
@@ -4528,42 +4637,53 @@ pub(super) fn lower_object_filter(
                 reference,
                 negated: false,
             } => {
-                let prop = property.trim().to_ascii_lowercase();
+                let prop_raw = property.trim().to_ascii_lowercase();
+                let prop = match prop_raw.as_str() {
+                    "color" | "a color" => "color",
+                    "creature_type" | "creature type" | "a creature type" => "creature_type",
+                    "card_type" | "card type" | "a card type" => "card_type",
+                    "name" | "a name" => "name",
+                    _ => return Err("oracle:unsupported-filter-predicate"),
+                };
                 let flag = match peel_battlefield_subject(reference) {
-                    SubjectRefAst::SelfObject => match prop.as_str() {
+                    SubjectRefAst::SelfObject => match prop {
                         "color" => ObjectFilterFlags::SHARES_COLOR_WITH_SOURCE,
                         "creature_type" => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_SOURCE,
                         "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_SOURCE,
+                        "name" => ObjectFilterFlags::SAME_NAME_AS_SOURCE,
                         _ => return Err("oracle:unsupported-filter-predicate"),
                     },
                     SubjectRefAst::Anaphora(raw)
                         if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
                     {
-                        match prop.as_str() {
+                        match prop {
                             "color" => ObjectFilterFlags::SHARES_COLOR_WITH_SOURCE,
                             "creature_type" => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_SOURCE,
                             "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_SOURCE,
+                            "name" => ObjectFilterFlags::SAME_NAME_AS_SOURCE,
                             _ => return Err("oracle:unsupported-filter-predicate"),
                         }
                     }
                     SubjectRefAst::TargetObject {
                         count: TargetCountAst::Exact(1),
                         ..
-                    } => match prop.as_str() {
+                    } => match prop {
                         "color" => ObjectFilterFlags::SHARES_COLOR_WITH_TARGET,
                         "creature_type" => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TARGET,
                         "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TARGET,
+                        "name" => ObjectFilterFlags::SAME_NAME_AS_TARGET,
                         _ => return Err("oracle:unsupported-filter-predicate"),
                     },
                     SubjectRefAst::Anaphora(raw) => {
                         let low = raw.trim().to_ascii_lowercase();
                         if low.contains("target") {
-                            match prop.as_str() {
+                            match prop {
                                 "color" => ObjectFilterFlags::SHARES_COLOR_WITH_TARGET,
                                 "creature_type" => {
                                     ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TARGET
                                 }
                                 "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TARGET,
+                                "name" => ObjectFilterFlags::SAME_NAME_AS_TARGET,
                                 _ => return Err("oracle:unsupported-filter-predicate"),
                             }
                         } else if (low.contains("sacrificed creature")
@@ -4582,6 +4702,24 @@ pub(super) fn lower_object_filter(
             }
             FilterPredicateAst::DifferentNameFrom(subj) => match peel_battlefield_subject(subj) {
                 SubjectRefAst::SelfObject => {
+                    if clause
+                        .flags
+                        .contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
+                        || matches!(
+                            clause.source_relation,
+                            SourceRelation::SharingNameWithAbilitySource
+                                | SourceRelation::OtherThanAbilitySourceSharingName
+                        )
+                    {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.flags = clause
+                        .flags
+                        .union(ObjectFilterFlags::DIFFERENT_NAME_FROM_SOURCE);
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
+                {
                     if clause
                         .flags
                         .contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
@@ -4643,14 +4781,24 @@ pub(super) fn lower_object_filter(
                 | PriorActionRefKind::DestroyedThisWay
                 | PriorActionRefKind::SacrificedThisWay
                 | PriorActionRefKind::PutIntoGraveyardThisWay
-                | PriorActionRefKind::ReturnedToHandThisWay,
+                | PriorActionRefKind::ReturnedToHandThisWay
+                | PriorActionRefKind::RevealedThisWay,
             ) => {
                 clause.flags = clause.flags.union(ObjectFilterFlags::IN_LAST_MOVED);
             }
             FilterPredicateAst::PriorActionZoneRef { kind }
                 if matches!(
                     kind.as_str(),
-                    "milled_this_way" | "put_onto_battlefield_this_way"
+                    "milled_this_way"
+                        | "put_onto_battlefield_this_way"
+                        | "exiled_this_way"
+                        | "discarded_this_way"
+                        | "destroyed_this_way"
+                        | "sacrificed_this_way"
+                        | "returned_this_way"
+                        | "put_into_graveyard_this_way"
+                        | "returned_to_hand_this_way"
+                        | "revealed_this_way"
                 ) =>
             {
                 clause.flags = clause.flags.union(ObjectFilterFlags::IN_LAST_MOVED);
@@ -4659,19 +4807,20 @@ pub(super) fn lower_object_filter(
                 subtypes_match_any = true;
             }
             FilterPredicateAst::HasBasicLandType => {
-                if clause.subtypes != SubtypeFilter::Any {
-                    return Err("oracle:unsupported-filter-predicate");
+                if clause.subtypes == SubtypeFilter::Any {
+                    use spellwake_engine::program::{SingleSubtype, SubtypeList};
+                    let list = SubtypeList::from_slice(&[
+                        SingleSubtype::Land(LandType::Plains),
+                        SingleSubtype::Land(LandType::Island),
+                        SingleSubtype::Land(LandType::Swamp),
+                        SingleSubtype::Land(LandType::Mountain),
+                        SingleSubtype::Land(LandType::Forest),
+                    ])
+                    .ok_or("oracle:unsupported-filter-predicate")?;
+                    clause.subtypes = SubtypeFilter::AnyOfList(list);
+                } else {
+                    clause.flags = clause.flags.union(ObjectFilterFlags::HAS_BASIC_LAND_TYPE);
                 }
-                use spellwake_engine::program::{SingleSubtype, SubtypeList};
-                let list = SubtypeList::from_slice(&[
-                    SingleSubtype::Land(LandType::Plains),
-                    SingleSubtype::Land(LandType::Island),
-                    SingleSubtype::Land(LandType::Swamp),
-                    SingleSubtype::Land(LandType::Mountain),
-                    SingleSubtype::Land(LandType::Forest),
-                ])
-                .ok_or("oracle:unsupported-filter-predicate")?;
-                clause.subtypes = SubtypeFilter::AnyOfList(list);
             }
             FilterPredicateAst::HasManaSymbolInCost(sym)
                 if sym.trim().to_ascii_lowercase().contains("{x}")
@@ -5030,6 +5179,29 @@ pub(super) fn lower_object_filter(
                             clause.mana_value = ManaValueFilter::Equal(a_u32);
                         } else {
                             mana_value_pair = Some((a_u32, b_u32));
+                        }
+                    }
+                    many if many.len() >= 3 => {
+                        let mut parsed = Vec::with_capacity(many.len());
+                        for v in many {
+                            parsed.push(
+                                u32::try_from(*v)
+                                    .map_err(|_| "oracle:unsupported-filter-predicate")?,
+                            );
+                        }
+                        parsed.sort_unstable();
+                        parsed.dedup();
+                        if parsed.first() == Some(&0)
+                            && parsed
+                                .iter()
+                                .enumerate()
+                                .all(|(idx, &val)| val as usize == idx)
+                        {
+                            let max_mv =
+                                *parsed.last().ok_or("oracle:unsupported-filter-predicate")?;
+                            clause.mana_value = ManaValueFilter::AtMost(max_mv);
+                        } else {
+                            return Err("oracle:unsupported-filter-predicate");
                         }
                     }
                     _ => return Err("oracle:unsupported-filter-predicate"),
@@ -5464,6 +5636,112 @@ pub(super) fn lower_object_filter(
                             op: Comparison::Less,
                             anchor: DynamicStatAnchor::SourceManaValue,
                         };
+                    }
+                    "has_adventure" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::HAS_ADVENTURE);
+                    }
+                    "same_total_pt" | "whose power and toughness are equal" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::SAME_TOTAL_PT);
+                    }
+                    "power_greater_than_toughness"
+                    | "with power greater than its toughness"
+                    | "whose power is greater than its toughness" => {
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::POWER_GREATER_THAN_TOUGHNESS);
+                    }
+                    "toughness_greater_than_power"
+                    | "with toughness greater than its power"
+                    | "whose toughness is greater than its power" => {
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::TOUGHNESS_GREATER_THAN_POWER);
+                    }
+                    "with no abilities" | "that has no abilities" | "that have no abilities" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::NO_ABILITIES);
+                    }
+                    "face down" | "face-down" | "that's face down" | "that is face down"
+                    | "that are face down" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::FACE_DOWN);
+                    }
+                    "face up" | "face-up" | "that's face up" | "that is face up"
+                    | "that are face up" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::FACE_UP);
+                    }
+                    "that's historic" | "historic" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::HISTORIC);
+                    }
+                    "that's a commander" | "commander" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::COMMANDER_ONLY);
+                    }
+                    "that isn't a commander" | "that aren't commanders" | "noncommander" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::NOT_COMMANDER);
+                    }
+                    "with even mana value" | "with an even mana value" => {
+                        if clause.mana_value == ManaValueFilter::Odd
+                            || clause.flags.contains(ObjectFilterFlags::ODD_MANA_VALUE)
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::EVEN_MANA_VALUE);
+                    }
+                    "with odd mana value" | "with an odd mana value" => {
+                        if clause.mana_value == ManaValueFilter::Even
+                            || clause.flags.contains(ObjectFilterFlags::EVEN_MANA_VALUE)
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::ODD_MANA_VALUE);
+                    }
+                    "with a basic land type"
+                    | "that has a basic land type"
+                    | "that have a basic land type" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::HAS_BASIC_LAND_TYPE);
+                    }
+                    "that's toxic" | "with toxic" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::HAS_TOXIC);
+                    }
+                    "that has a +1/+1 counter on it"
+                    | "that have a +1/+1 counter on them"
+                    | "with a +1/+1 counter on them"
+                    | "with +1/+1 counters on them"
+                    | "with one or more +1/+1 counters on it" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::WITH_PLUS_ONE_COUNTER);
+                    }
+                    "that has no counters on it"
+                    | "that have no counters on them"
+                    | "without counters on them"
+                    | "with no counters on them"
+                    | "that doesn't have a counter on it"
+                    | "that don't have counters on them" => {
+                        clause.flags = clause.flags.union(ObjectFilterFlags::WITHOUT_COUNTERS);
+                    }
+                    "with the same name as ~"
+                    | "that has the same name as ~"
+                    | "that have the same name as ~" => {
+                        if clause
+                            .flags
+                            .contains(ObjectFilterFlags::DIFFERENT_NAME_FROM_SOURCE)
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::SAME_NAME_AS_SOURCE);
+                    }
+                    other
+                        if other.starts_with("with power or toughness ")
+                            && other.ends_with(" or less") =>
+                    {
+                        let num_s = other
+                            .trim_start_matches("with power or toughness ")
+                            .trim_end_matches(" or less")
+                            .trim();
+                        let max_pt = num_s
+                            .parse::<u16>()
+                            .map_err(|_| "oracle:unsupported-filter-predicate")?;
+                        if clause.power != PowerFilter::Any {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.power = PowerFilter::PowerOrToughnessAtMost(max_pt);
                     }
                     other => {
                         if let Some(ck_raw) = extract_state_qual_counter_kind(other) {
@@ -6515,11 +6793,25 @@ fn resolve_that_player_for_value_expr(
         | BodyTarget::SinglePlaneswalker
         | BodyTarget::FilteredPermanent(_)
         | BodyTarget::SingleAnyTarget
+        | BodyTarget::SingleCreatureOrPlayer
         | BodyTarget::SinglePlayerOrPlaneswalker
         | BodyTarget::SingleOpponentOrPlaneswalker => Ok(ResolvingPlayer::TargetController),
-        BodyTarget::SingleSpell(_) if allow_spell_controller => {
+        BodyTarget::SingleSpell(_)
+        | BodyTarget::SingleStackObject(_)
+        | BodyTarget::SingleStackEntry
+        | BodyTarget::ControlledAbility { .. }
+        | BodyTarget::StackEntryTargetingControlledPermanent
+            if allow_spell_controller =>
+        {
             Ok(ResolvingPlayer::TargetSpellController)
         }
+        BodyTarget::SingleOwnGraveyardCard | BodyTarget::FilteredOwnGraveyardCard(_) => {
+            Ok(ResolvingPlayer::Controller)
+        }
+        BodyTarget::FilteredAnyGraveyardCard { .. }
+        | BodyTarget::AnyGraveyardCard
+        | BodyTarget::AnyGraveyardCreature
+        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => Ok(ResolvingPlayer::TargetOwner),
         _ if builder.instructions.iter().any(|op| {
             matches!(
                 op,
@@ -6536,8 +6828,66 @@ fn resolve_that_player_for_value_expr(
         {
             Ok(ResolvingPlayer::ChosenPlayer)
         }
-        _ if in_trigger => Ok(ResolvingPlayer::UniqueRelatedPlayer),
-        _ => Err("oracle:unbound-that-player"),
+        _ => {
+            if let Some(prior_p) = builder.instructions.iter().rev().find_map(|op| match op {
+                Instruction::OptionalEffect { chooser }
+                | Instruction::OptionalSequence { chooser, .. }
+                    if *chooser != ResolvingPlayer::Controller
+                        && (*chooser != ResolvingPlayer::UniqueRelatedPlayer || in_trigger) =>
+                {
+                    Some(*chooser)
+                }
+                Instruction::ForEachPlayerQuery { selector, .. } => match selector.as_ref() {
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(p)
+                    | spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::One(p))
+                        if *p != ResolvingPlayer::Controller
+                            && (*p != ResolvingPlayer::UniqueRelatedPlayer || in_trigger) =>
+                    {
+                        Some(*p)
+                    }
+                    _ => None,
+                },
+                Instruction::FixedTargetClause(body) => match body.target {
+                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
+                        Some(ResolvingPlayer::TargetPlayer)
+                    }
+                    BodyTarget::SinglePermanent
+                    | BodyTarget::SingleCreature
+                    | BodyTarget::SinglePlaneswalker
+                    | BodyTarget::FilteredPermanent(_)
+                    | BodyTarget::SingleAnyTarget
+                    | BodyTarget::SingleCreatureOrPlayer
+                    | BodyTarget::SinglePlayerOrPlaneswalker
+                    | BodyTarget::SingleOpponentOrPlaneswalker => {
+                        Some(ResolvingPlayer::TargetController)
+                    }
+                    BodyTarget::SingleSpell(_)
+                    | BodyTarget::SingleStackObject(_)
+                    | BodyTarget::SingleStackEntry
+                    | BodyTarget::ControlledAbility { .. }
+                    | BodyTarget::StackEntryTargetingControlledPermanent
+                        if allow_spell_controller =>
+                    {
+                        Some(ResolvingPlayer::TargetSpellController)
+                    }
+                    BodyTarget::FilteredAnyGraveyardCard { .. }
+                    | BodyTarget::AnyGraveyardCard
+                    | BodyTarget::AnyGraveyardCreature
+                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => {
+                        Some(ResolvingPlayer::TargetOwner)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            }) {
+                return Ok(prior_p);
+            }
+            if in_trigger {
+                Ok(ResolvingPlayer::UniqueRelatedPlayer)
+            } else {
+                Err("oracle:unbound-that-player")
+            }
+        }
     }
 }
 
@@ -7449,9 +7799,6 @@ fn lower_value_expr_inner(
                 let action_matches = matches!(
                     (kind, last_ins),
                     (
-                        PriorActionRefKind::TappedThisWay,
-                        Instruction::UntapOrTapSelect { tap: true, .. },
-                    ) | (
                         PriorActionRefKind::SacrificedThisWay,
                         Instruction::Sacrifice { .. },
                     )

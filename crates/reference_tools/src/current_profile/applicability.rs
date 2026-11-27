@@ -321,7 +321,6 @@ native!(ExecutableBody, self, {
         | Instruction::ScheduleDelayedEventTrigger { .. }
         | Instruction::CounterSpellToExile
         | Instruction::FightSourceWithTarget
-        | Instruction::TransformSourceAndAttachToTarget
         | Instruction::AdvanceClassLevel(_)
         | Instruction::SolveSourceCase
         | Instruction::BecomePreparedSource
@@ -347,16 +346,12 @@ native!(ExecutableBody, self, {
         | Instruction::ScheduleCreatedTokenSacrifice
         | Instruction::ExileDelayedObjects(_)
         | Instruction::ChooseAndReturnOwnGraveyardCardsByType
-        | Instruction::TargetDamagesItsControllersOtherCreatures
-        | Instruction::OtherCreaturesReturnPowerDamage
-        | Instruction::DestroyCapturedCombatCreature { .. }
         | Instruction::ReflectAttachedCreatureDamage
         | Instruction::DestroyAttachedEnchantmentSubtype(_)
         | Instruction::GrantFlashback(_)
         | Instruction::TapTargetWhileControllingSource
         | Instruction::RegisterTokenLinkedExile
         | Instruction::ReturnTokenLinkedExile
-        | Instruction::IncreaseSpeed
         | Instruction::BecomeMonarch(_)
         | Instruction::RequireCondition(_)
         | Instruction::PutEquipmentFromHandOrGraveyard
@@ -367,7 +362,6 @@ native!(ExecutableBody, self, {
         | Instruction::ReselectAttackDefender
         | Instruction::ChooseAttackDirection
         | Instruction::AdditionalLoyaltyActivation
-        | Instruction::MoveLoyaltyCounterToEnteringPermanent
         | Instruction::Ninjutsu
         | Instruction::Unearth
         | Instruction::Cascade
@@ -390,9 +384,7 @@ native!(ExecutableBody, self, {
         | Instruction::SacrificeDelayedObjects(_)
         | Instruction::ScheduleArtifactReturn(_)
         | Instruction::ScheduleGraveyardReturnAtEndStep(_)
-        | Instruction::ReturnSacrificedCardToBattlefield
         | Instruction::ReturnDyingCreatureAsForest
-        | Instruction::ReturnDyingSourceTapped
         | Instruction::ReturnDelayedGraveyardCard(_)
         | Instruction::ReturnDelayedGraveyardCardTransformed(_)
         | Instruction::ReturnDelayedPermanentToHand(_)
@@ -404,7 +396,6 @@ native!(ExecutableBody, self, {
         | Instruction::SetControlledCreatureSizeToHand
         | Instruction::DamageFromPower(_)
         | Instruction::CreatureDealsPowerDamageToOther { .. }
-        | Instruction::DamageCreatureAtSpellMastery { .. }
         | Instruction::ExtortDrain
         | Instruction::ResolveGrowth(_)
         | Instruction::ResolveCounterKeyword(_)
@@ -423,8 +414,6 @@ native!(ExecutableBody, self, {
         | Instruction::PutHandPermanentsOntoBattlefield { .. }
         | Instruction::RevealSharedTypeCreatureCastOrBottom
         | Instruction::RevealOddCastOrDraw
-        | Instruction::MayTurnControlledCreatureFaceUp
-        | Instruction::ExploreSource
         | Instruction::MayRevealLibraryTop
         | Instruction::ManifestTop { .. }
         | Instruction::ExileNonlandsToHandAndDamage { .. }
@@ -446,16 +435,12 @@ native!(ExecutableBody, self, {
         | Instruction::RevealHandAndBottomPiles
         | Instruction::RevealDividePiles
         | Instruction::DivideTargetPermanentsAndSacrificePile
-        | Instruction::DrawToChosenOpponentHandSize
         | Instruction::LookTopPlaneswalkers
         | Instruction::RevealTopPermanentOrHand
         | Instruction::LookTopLandBattlefieldTapped
         | Instruction::LookTopReveal { .. }
         | Instruction::LookTopTakeOne { .. }
         | Instruction::ReturnChosenXGraveyardCreatures
-        | Instruction::ReturnCapturedDyingCreature
-        | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
-        | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
         | Instruction::ReturnGraveyardCohort(_)
         | Instruction::DivideThreeDamageAmongTargets
         | Instruction::DistributePlusOneCounters { .. }
@@ -464,7 +449,6 @@ native!(ExecutableBody, self, {
         | Instruction::ExileUntilOtherTargetLeaves
         | Instruction::FixedTargetClause(_)
         | Instruction::DestroyFixedTargets
-        | Instruction::DestroyTargetAndAttachedEquipment
         | Instruction::ReturnFixedTargets
         | Instruction::FightFixedTargets
         | Instruction::BindOrderedPermanents { .. }
@@ -474,9 +458,7 @@ native!(ExecutableBody, self, {
         | Instruction::ExileFromTargetLibrary
         | Instruction::SearchLibrary { .. }
         | Instruction::CreateTokenAndAttach { .. }
-        | Instruction::ControlManaSourceThroughNextTurn
         | Instruction::AddMana(_)
-        | Instruction::TabletopHonorAction { .. }
         | Instruction::CreateNonlegendaryLoyaltyCopy
         | Instruction::WeakenOpposingAttackersUntilNextTurn
         | Instruction::PhaseOtherPlaneswalkersNextEndStep
@@ -484,16 +466,12 @@ native!(ExecutableBody, self, {
         | Instruction::ExileMeldPair
         | Instruction::MeldExiledPair(_)
         | Instruction::PairWithCreature { .. }
-        | Instruction::PhaseOutObjects(_)
         | Instruction::ReturnOneNonlandPerOpponent
-        | Instruction::WeakenDelayedAttacker(_)
         | Instruction::DrawRevealRemoveLoyalty
         | Instruction::CreateReflexiveDiscardDamage
         | Instruction::ScheduleDelayedStepTrigger { .. }
         | Instruction::EmitReflexiveTrigger { .. }
         | Instruction::RemoveLoyaltyExileTopForPlay
-        | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
-        | Instruction::DrawPlayersControllingName(_)
         | Instruction::ReturnUpToOneRecentGraveyardCard
         | Instruction::ExileUpToTwoGraveyardTargetsGainLife
         | Instruction::ChooseRevealedHandCard { .. }
@@ -512,7 +490,6 @@ native!(ExecutableBody, self, {
         | Instruction::ExileTargetAsAbilityDonor
         | Instruction::ExileTargetUntilOpponentMonarch
         | Instruction::RememberPermanentTarget
-        | Instruction::ControllerLosesRememberedManaValue
         | Instruction::RepeatOpponentLifeLoss
         | Instruction::GainControlOfSpell
         | Instruction::ChangeOnlyTarget
@@ -522,10 +499,7 @@ native!(ExecutableBody, self, {
         | Instruction::AdditionalCombatAfterUntappingAttackers
         | Instruction::GrantGraveyardCastAndWatchAbilities
         | Instruction::GainCastCardAbilities { .. }
-        | Instruction::DestroyCapturedDamageSource
         | Instruction::RemoveCreatureCounters { .. }
-        | Instruction::AttachOnEntry { .. }
-        | Instruction::ControlledSubtypeDamagesAttacker(_)
         | Instruction::RevealTopAndRemoveAttackerIfForest
         | Instruction::Proliferate
         | Instruction::DamagePlayersHalfLife
@@ -533,8 +507,6 @@ native!(ExecutableBody, self, {
         | Instruction::ResolvePowerAbility(_)
         | Instruction::UnattachEquipmentAndProtectHost
         | Instruction::Attach(_)
-        | Instruction::DestroyTarget
-        | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
         | Instruction::Scry { .. }
         | Instruction::Surveil { .. }
         | Instruction::Mill { .. }
@@ -545,7 +517,6 @@ native!(ExecutableBody, self, {
         | Instruction::AttachBattlefieldAurasToSource
         | Instruction::EnterHandOrGraveyardAurasAttachedToSource
         | Instruction::ReturnDelayedGraveyardToHand(_)
-        | Instruction::LoseLifeAndScryForSubtype(_)
         | Instruction::ExileForBlackToken { .. }
         | Instruction::ExileForSubtypeToken(_)
         | Instruction::GiveEquippedCreatureToUpkeepPlayer
@@ -663,7 +634,6 @@ native!(ExecutableBody, self, {
         | Instruction::LookTopChoose { .. }
         | Instruction::RepeatLoop { .. }
         | Instruction::RevealUntilMatch { .. }
-        | Instruction::RemoveCountersFromPermanent { .. }
         | Instruction::RollDie { .. }
         | Instruction::FlipCoins { .. }
         | Instruction::ChooseValue { .. }
@@ -694,7 +664,6 @@ native!(ExecutableBody, self, {
         | Instruction::OfferAnyPlayer { .. }
         | Instruction::DealDamageToAnnouncedTargets { .. }
         | Instruction::GrantChosenProtection { .. }
-        | Instruction::UntapOrTapSelect { .. }
         | Instruction::LookTopChooseExt { .. }
         | Instruction::RevealTopTwoPiles { .. }
         | Instruction::RevealUntilMatchExt { .. }
@@ -708,7 +677,6 @@ native!(ExecutableBody, self, {
         | Instruction::AddManaForPlayer { .. }
         | Instruction::SelectExtremeLifePlayer { .. }
         | Instruction::AttachFixedTargets
-        | Instruction::AttachChoosingPermanent { .. }
         | Instruction::ChooseOneLastMoved { .. }
         | Instruction::DrawCards(_)
         | Instruction::MutateObject(_)

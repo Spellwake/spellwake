@@ -922,13 +922,7 @@ impl ResolutionGraveyardOrderFrame {
     }
 }
 impl ResolutionSelectionWork {
-    fn frame(
-        &self,
-        revision: u64,
-        up_to_tap_select: bool,
-        _discard_up_to_ext: bool,
-        attach_choosing_optional: Option<bool>,
-    ) -> Option<EffectDecision> {
+    fn frame(&self, revision: u64, _discard_up_to_ext: bool) -> Option<EffectDecision> {
         match &self.stage {
             ResolutionSelectionStage::Choosing {
                 requirements,
@@ -945,31 +939,12 @@ impl ResolutionSelectionWork {
                             ResolutionSelectionOperation::RevealedHand { chooser, .. } => chooser,
                             _ => requirement.player,
                         },
-                        operation: match &self.operation {
-                            ResolutionSelectionOperation::AttachToSource { .. }
-                                if attach_choosing_optional.is_some() =>
-                            {
-                                ResolutionSelectionKind::AttachChosenAurasAndEquipment
-                            }
-                            _ => self.operation.kind(),
-                        },
+                        operation: self.operation.kind(),
                         domain: requirement.domain.clone(),
                         required: requirement.required,
                         custom_minimum: match &self.operation {
                             ResolutionSelectionOperation::SelectZoneCards { min, .. }
                             | ResolutionSelectionOperation::ChooseObjects { min, .. } => Some(*min),
-                            ResolutionSelectionOperation::AttachToSource { .. }
-                                if attach_choosing_optional.is_some() =>
-                            {
-                                attach_choosing_optional
-                                    .map(|optional| if optional { 0 } else { requirement.required })
-                            }
-                            ResolutionSelectionOperation::TapOrUntapControlled { .. }
-                            | ResolutionSelectionOperation::Sacrifice { .. }
-                                if up_to_tap_select =>
-                            {
-                                Some(0)
-                            }
                             _ => None,
                         },
                     })
@@ -999,18 +974,6 @@ impl ResolutionSelectionWork {
 }
 
 impl EffectWindow {
-    fn target_and_attached_equipment(&self) -> Result<BTreeSet<ObjectId>, EffectError> {
-        let targets = self.legal_permanent_targets()?;
-        let current = self.evaluated_characteristics()?;
-        Ok(targets.iter().copied().chain(current.objects.values().filter_map(|permanent| {
-            (permanent.zone == ObjectZone::Battlefield
-                && permanent.has_type(CardType::Artifact)
-                && permanent.current_artifact_subtypes.contains(&crate::program::ArtifactSubtype::Equipment)
-                && matches!(permanent.attached_to, Some(TargetRef::Object(host)) if targets.contains(&host))
-            ).then_some(permanent.object)
-        })).collect())
-    }
-
     fn attached_enchantment_subtype_subjects(
         &self,
         kind: crate::program::EnchantmentSubtype,
@@ -1095,16 +1058,6 @@ impl EffectWindow {
             ) => None,
         }
     }
-    fn is_up_to_tap_select(&self, work: &ResolutionSelectionWork) -> bool {
-        matches!(
-            self.payloads
-                .get(&work.cursor.entry)
-                .and_then(StackPayload::instructions)
-                .and_then(|ops| ops.get(work.cursor.instruction)),
-            Some(Instruction::UntapOrTapSelect { up_to: true, .. })
-        )
-    }
-
     fn is_discard_up_to_ext(&self, cursor: &ResolutionCursor) -> bool {
         matches!(
             self.payloads
@@ -1115,35 +1068,8 @@ impl EffectWindow {
         )
     }
 
-    fn attach_choosing_permanent_flags(&self, cursor: &ResolutionCursor) -> Option<(bool, bool)> {
-        match self
-            .payloads
-            .get(&cursor.entry)
-            .and_then(StackPayload::instructions)
-            .and_then(|ops| ops.get(cursor.instruction))
-        {
-            Some(Instruction::AttachChoosingPermanent {
-                attachment: crate::program::AttachSlot::Fixed(_),
-                optional,
-                ..
-            }) => Some((true, *optional)),
-            Some(Instruction::AttachChoosingPermanent {
-                host: crate::program::AttachSlot::Fixed(_),
-                optional,
-                ..
-            }) => Some((false, *optional)),
-            _ => None,
-        }
-    }
-
     fn work_selection_frame(&self, work: &ResolutionSelectionWork) -> Option<EffectDecision> {
-        work.frame(
-            self.revision,
-            self.is_up_to_tap_select(work),
-            self.is_discard_up_to_ext(&work.cursor),
-            self.attach_choosing_permanent_flags(&work.cursor)
-                .map(|(_, optional)| optional),
-        )
+        work.frame(self.revision, self.is_discard_up_to_ext(&work.cursor))
     }
 
     /// Derive only the positive current request from the sole owned stage.
@@ -1292,46 +1218,6 @@ impl EffectWindow {
         }
         entry.controller()
     }
-    fn captured_combatant(&self, entry: StackEntryId) -> Result<ObjectId, EffectError> {
-        let binding = self
-            .execution_bindings(entry)
-            .and_then(|bindings| bindings.trigger.as_ref())
-            .ok_or(EffectError::InconsistentProgram)?;
-        let [member] = binding.causes.members() else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let crate::occurrence::TriggerRelated::Combatant(object) = member.related else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        Ok(object)
-    }
-
-    fn captured_damage_permanent(
-        &self,
-        entry: StackEntryId,
-    ) -> Result<Option<ObjectId>, EffectError> {
-        use crate::occurrence::TriggerRelated;
-        let binding = self
-            .execution_bindings(entry)
-            .and_then(|value| value.trigger.as_ref())
-            .ok_or(EffectError::InconsistentProgram)?;
-        let [cause] = binding.causes.members() else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let id = match cause.related {
-            TriggerRelated::DamageSource(crate::damage::DamageSourceId::Object(id))
-            | TriggerRelated::CombatDamageToPlayer { source: id, .. } => id,
-            TriggerRelated::DamageSource(_) => return Ok(None),
-            _ => return Err(EffectError::InconsistentProgram),
-        };
-        Ok(self
-            .window
-            .cards()
-            .get(id)
-            .is_some_and(|object| object.zone() == ObjectZone::Battlefield)
-            .then_some(id))
-    }
-
     fn nonlands_at_resolution_value(
         &self,
         instruction: &Instruction,
@@ -1626,54 +1512,6 @@ impl EffectWindow {
                     },
                 )
             }
-            Instruction::DestroyCapturedCombatCreature { .. } => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let object = self.captured_combatant(entry.id())?;
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::DestroySingle { object },
-                )
-            }
-            Instruction::DestroyCapturedDamageSource => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let Some(object) = self.captured_damage_permanent(entry.id())? else {
-                    self.advance_instruction()?;
-                    return Ok(true);
-                };
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::DestroySingle { object },
-                )
-            }
-            Instruction::DestroyTarget => {
-                if self.zone_replacement_sources()?.sources.is_empty() {
-                    return Ok(false);
-                }
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let target = self.instruction_target(entry)?.choice().target;
-                let TargetRef::Object(object) = target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::DestroySingle { object },
-                )
-            }
             Instruction::ImprintTargetLand
             | Instruction::ImprintTargetCreature
             | Instruction::ExileTargetAsAbilityDonor
@@ -1768,15 +1606,6 @@ impl EffectWindow {
             }
             Instruction::DestroyAttachedEnchantmentSubtype(kind) => {
                 let objects = self.attached_enchantment_subtype_subjects(*kind)?;
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
-                )
-            }
-            Instruction::DestroyTargetAndAttachedEquipment => {
-                let objects = self.target_and_attached_equipment()?;
                 all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
                 (
                     AffectedPlayers::EachPlayer,
@@ -2209,157 +2038,6 @@ impl EffectWindow {
             Instruction::Discard { players, amount } => {
                 (*players, amount, ResolutionSelectionOperation::Discard)
             }
-            Instruction::AttachChoosingPermanent {
-                chooser,
-                attachment,
-                host,
-                optional,
-                all: choose_all,
-            } => {
-                use crate::program::AttachSlot;
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let ability_source = match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => Some(source.id()),
-                    StackKind::CardSpell(id) => Some(*id),
-                    _ => None,
-                };
-                let evaluated = self.evaluated_characteristics()?;
-                match (attachment, host) {
-                    (
-                        AttachSlot::Fixed(att_ref),
-                        AttachSlot::ChooseMatching {
-                            filter,
-                            exclude_current_host,
-                        },
-                    ) => {
-                        let att_id_opt = self
-                            .resolve_move_subject_objects(entry, *att_ref)?
-                            .into_iter()
-                            .next();
-                        let eligible = if let Some(att_id) = att_id_opt
-                            && let Some(att_view) = evaluated.get(att_id)
-                            && att_view.zone == ObjectZone::Battlefield
-                        {
-                            let current_host = self.attached_to(att_id);
-                            evaluated
-                                .objects
-                                .values()
-                                .filter(|view| {
-                                    view.zone == ObjectZone::Battlefield
-                                        && !(*exclude_current_host
-                                            && current_host == Some(TargetRef::Object(view.object)))
-                                        && self.matches_object_filter(
-                                            **filter,
-                                            view,
-                                            entry.controller(),
-                                            ability_source,
-                                            &BTreeSet::new(),
-                                            &evaluated,
-                                        )
-                                        && self.attachment_permitted(
-                                            att_view,
-                                            Some(TargetRef::Object(view.object)),
-                                            &evaluated,
-                                        )
-                                })
-                                .map(|view| view.object)
-                                .collect::<BTreeSet<_>>()
-                        } else {
-                            BTreeSet::new()
-                        };
-                        all = ValueExpr::Literal(RulesInteger::from_usize(usize::from(
-                            !eligible.is_empty(),
-                        )));
-                        (
-                            AffectedPlayers::One(*chooser),
-                            &all,
-                            ResolutionSelectionOperation::AttachToSource {
-                                source: att_id_opt.unwrap_or(ObjectId::SENTINEL),
-                                eligible,
-                                optional: *optional,
-                            },
-                        )
-                    }
-                    (
-                        AttachSlot::ChooseMatching {
-                            filter,
-                            exclude_current_host,
-                        },
-                        AttachSlot::Fixed(host_ref),
-                    ) => {
-                        let host_id_opt = self
-                            .resolve_move_subject_objects(entry, *host_ref)?
-                            .into_iter()
-                            .next();
-                        let eligible = if let Some(host_id) = host_id_opt
-                            && evaluated
-                                .get(host_id)
-                                .is_some_and(|view| view.zone == ObjectZone::Battlefield)
-                        {
-                            let host_target = TargetRef::Object(host_id);
-                            evaluated
-                                .objects
-                                .values()
-                                .filter(|view| {
-                                    view.zone == ObjectZone::Battlefield
-                                        && !(*exclude_current_host
-                                            && self.attached_to(view.object) == Some(host_target))
-                                        && self.matches_object_filter(
-                                            **filter,
-                                            view,
-                                            entry.controller(),
-                                            ability_source,
-                                            &BTreeSet::new(),
-                                            &evaluated,
-                                        )
-                                        && self.attachment_permitted(
-                                            view,
-                                            Some(host_target),
-                                            &evaluated,
-                                        )
-                                })
-                                .map(|view| view.object)
-                                .collect::<BTreeSet<_>>()
-                        } else {
-                            BTreeSet::new()
-                        };
-                        let max_pick = if *choose_all {
-                            eligible.len()
-                        } else {
-                            usize::from(!eligible.is_empty())
-                        };
-                        all = ValueExpr::Literal(RulesInteger::from_usize(max_pick));
-                        (
-                            AffectedPlayers::One(*chooser),
-                            &all,
-                            ResolutionSelectionOperation::AttachToSource {
-                                source: host_id_opt.unwrap_or(ObjectId::SENTINEL),
-                                eligible,
-                                optional: *optional,
-                            },
-                        )
-                    }
-                    _ => return Err(EffectError::InconsistentProgram),
-                }
-            }
-            Instruction::UntapOrTapSelect {
-                chooser,
-                filter,
-                count,
-                up_to: _,
-                tap,
-            } => (
-                AffectedPlayers::One(*chooser),
-                count,
-                ResolutionSelectionOperation::TapOrUntapControlled {
-                    tap: *tap,
-                    filter: filter.clone(),
-                },
-            ),
             Instruction::Blight { player, amount } => {
                 let entry = self
                     .window
@@ -2494,7 +2172,6 @@ impl EffectWindow {
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
             | Instruction::RevealUntilMatch { .. }
-            | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::ResolvePowerAbility(_)
             | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::CreateTokenAndAttach { .. }
@@ -2510,20 +2187,14 @@ impl EffectWindow {
             | Instruction::ChooseCreatureType { .. }
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
-            | Instruction::DamageCreatureAtSpellMastery { .. }
             | Instruction::RememberPermanentTarget
-            | Instruction::ControllerLosesRememberedManaValue
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::RemoveCreatureCounters { .. }
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
-            | Instruction::TargetDamagesItsControllersOtherCreatures
-            | Instruction::OtherCreaturesReturnPowerDamage
             | Instruction::ReflectAttachedCreatureDamage
             | Instruction::GrantFlashback(_)
             | Instruction::TapTargetWhileControllingSource
-            | Instruction::AttachOnEntry { .. }
-            | Instruction::ControlledSubtypeDamagesAttacker(_)
             | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::Proliferate
             | Instruction::DamagePlayersHalfLife
@@ -2535,9 +2206,6 @@ impl EffectWindow {
             | Instruction::OfferSourceCounters { .. }
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnCapturedDyingCreature
-            | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
-            | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
             | Instruction::ReturnGraveyardCohort(_)
             | Instruction::DivideThreeDamageAmongTargets
             | Instruction::DistributePlusOneCounters { .. }
@@ -2556,8 +2224,6 @@ impl EffectWindow {
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::RevealSharedTypeCreatureCastOrBottom
             | Instruction::RevealOddCastOrDraw
-            | Instruction::MayTurnControlledCreatureFaceUp
-            | Instruction::ExploreSource
             | Instruction::MayRevealLibraryTop
             | Instruction::ManifestTop { .. }
             | Instruction::ExileNonlandsToHandAndDamage { .. }
@@ -2579,14 +2245,12 @@ impl EffectWindow {
             | Instruction::RevealHandAndBottomPiles
             | Instruction::RevealDividePiles
             | Instruction::DivideTargetPermanentsAndSacrificePile
-            | Instruction::DrawToChosenOpponentHandSize
             | Instruction::LookTopPlaneswalkers
             | Instruction::RevealTopPermanentOrHand
             | Instruction::LookTopLandBattlefieldTapped
             | Instruction::LookTopReveal { .. }
             | Instruction::LookTopTakeOne { .. }
             | Instruction::SearchLibrary { .. }
-            | Instruction::IncreaseSpeed
             | Instruction::BecomeMonarch(_)
             | Instruction::RequireCondition(_)
             | Instruction::PutEquipmentFromHandOrGraveyard
@@ -2597,7 +2261,6 @@ impl EffectWindow {
             | Instruction::ReselectAttackDefender
             | Instruction::SetBlockDeclarations(_)
             | Instruction::AdditionalLoyaltyActivation
-            | Instruction::MoveLoyaltyCounterToEnteringPermanent
             | Instruction::ImpulseCastOrDamage(_)
             | Instruction::RevealCreatureOfSacrificedType
             | Instruction::ExileMilledCreatures { .. }
@@ -2617,15 +2280,12 @@ impl EffectWindow {
             | Instruction::RegisterTokenLinkedExile
             | Instruction::ReturnTokenLinkedExile
             | Instruction::AddMana(_)
-            | Instruction::TabletopHonorAction { .. }
             | Instruction::CreateNonlegendaryLoyaltyCopy
             | Instruction::WeakenOpposingAttackersUntilNextTurn
             | Instruction::PhaseOtherPlaneswalkersNextEndStep
             | Instruction::ChooseMeldPartner(_)
             | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::PhaseOutObjects(_)
-            | Instruction::WeakenDelayedAttacker(_)
             | Instruction::DrawRevealRemoveLoyalty
             | Instruction::CreateReflexiveDiscardDamage
             | Instruction::ScheduleDelayedStepTrigger { .. }
@@ -2653,9 +2313,7 @@ impl EffectWindow {
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
             | Instruction::ScheduleGraveyardReturnAtEndStep(_)
-            | Instruction::ReturnSacrificedCardToBattlefield
             | Instruction::ReturnDyingCreatureAsForest
-            | Instruction::ReturnDyingSourceTapped
             | Instruction::ReturnDelayedGraveyardCard(_)
             | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedExileWithCounters(_)
@@ -2671,7 +2329,6 @@ impl EffectWindow {
             | Instruction::CounterTriggeringStackObject
             | Instruction::Attach(_)
             | Instruction::FightSourceWithTarget
-            | Instruction::TransformSourceAndAttachToTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
@@ -2680,7 +2337,6 @@ impl EffectWindow {
             | Instruction::ExileTopRepeatOnPermanentEntry
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::LoseLifeAndScryForSubtype(_)
             | Instruction::ExileForBlackToken { .. }
             | Instruction::ExileForSubtypeToken(_)
             | Instruction::GiveEquippedCreatureToUpkeepPlayer
@@ -2693,8 +2349,6 @@ impl EffectWindow {
             | Instruction::CopyOtherControlledNontokensAsEntryHost
             | Instruction::CastLinkedSpellMatchingX
             | Instruction::AddCounterAndDischargeOnResolution(_)
-            | Instruction::RemoveCountersFromPermanent { .. }
-            | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
             | Instruction::CounterSpellToExile
             | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
@@ -2711,8 +2365,6 @@ impl EffectWindow {
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
-            | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
-            | Instruction::DrawPlayersControllingName(_)
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
             | Instruction::CreateArmyIfAbsent { .. }
@@ -2743,10 +2395,6 @@ impl EffectWindow {
             .window
             .resolving()
             .ok_or(EffectError::WrongResolutionFrame)?;
-        let untap_or_tap_select = match instruction {
-            Instruction::UntapOrTapSelect { filter, .. } => Some(**filter),
-            _ => None,
-        };
         let ability_source = match entry.kind() {
             StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
                 Some(source.id())
@@ -2787,43 +2435,23 @@ impl EffectWindow {
             }
             let protected = operation.is_sacrifice()
                 && self.opposing_sacrifice_prohibited(&evaluated, player, entry.controller())?;
-            let domain: Vec<_> = if let Some(select_filter) = untap_or_tap_select {
-                self.window
-                    .cards()
-                    .iter()
-                    .filter(|object| {
-                        object.zone() == ObjectZone::Battlefield
-                            && evaluated.get(object.id()).is_some_and(|view| {
-                                self.matches_object_filter(
-                                    select_filter,
-                                    view,
-                                    entry.controller(),
-                                    ability_source,
-                                    &excluded,
-                                    &evaluated,
-                                )
-                            })
-                    })
-                    .map(GameObject::id)
-                    .collect()
-            } else {
-                self.window
-                    .cards()
-                    .iter()
-                    .filter(|_| !protected)
-                    .filter(|object| {
-                        self.selection_eligible(
-                            &operation,
-                            player,
-                            object,
-                            ability_source,
-                            &evaluated,
-                            &excluded,
-                        )
-                    })
-                    .map(GameObject::id)
-                    .collect()
-            };
+            let domain: Vec<_> = self
+                .window
+                .cards()
+                .iter()
+                .filter(|_| !protected)
+                .filter(|object| {
+                    self.selection_eligible(
+                        &operation,
+                        player,
+                        object,
+                        ability_source,
+                        &evaluated,
+                        &excluded,
+                    )
+                })
+                .map(GameObject::id)
+                .collect();
             let bound = RulesInteger::from_usize(domain.len());
             let mut required = std::cmp::min(&amount, &bound)
                 .to_usize()
@@ -3307,14 +2935,10 @@ impl EffectWindow {
                             ResolutionSelectionOperation::ExileChosenGraveyardCards { .. }
                         ) && requirement.required
                             == requirement.domain.len();
-                        let attach_choosing = self.attach_choosing_permanent_flags(&cursor);
-                        let forced_attach = matches!(attach_choosing, Some((_, false)))
-                            && requirement.required == requirement.domain.len();
                         if discard_entire_hand
                             || forced_army
                             || forced_select_all
                             || forced_graveyard_cards
-                            || forced_attach
                             || matches!(
                                 operation,
                                 ResolutionSelectionOperation::RandomDiscard { .. }
@@ -3452,23 +3076,14 @@ impl EffectWindow {
                         let [selection] = accepted.as_slice() else {
                             return Err(EffectError::InconsistentSelectionWork);
                         };
-                        let attach_as_host = matches!(
-                            self.attach_choosing_permanent_flags(&cursor),
-                            Some((true, _))
-                        );
                         let before = self.rules_snapshot(None)?;
                         let current = before.view().evaluated;
                         let mut changed = Vec::new();
                         for id in &selection.objects {
-                            let (att_id, host_id) = if attach_as_host {
-                                (source, *id)
-                            } else {
-                                (*id, source)
-                            };
                             if let Some(event) = self.attach_at_cut(
                                 cursor.entry,
-                                att_id,
-                                TargetRef::Object(host_id),
+                                *id,
+                                TargetRef::Object(source),
                                 &current,
                             )? {
                                 changed.push(event);
@@ -4343,13 +3958,6 @@ impl EffectWindow {
                 if objects.len() > requirement.required {
                     return Err(EffectError::InvalidSelectionCount);
                 }
-                let up_to_tap_select = matches!(
-                    self.payloads
-                        .get(&work.cursor.entry)
-                        .and_then(StackPayload::instructions)
-                        .and_then(|ops| ops.get(work.cursor.instruction)),
-                    Some(Instruction::UntapOrTapSelect { up_to: true, .. })
-                );
                 match &work.operation {
                     ResolutionSelectionOperation::CollectEvidence { minimum } => {
                         let chosen_mv = objects.iter().fold(RulesInteger::from(0), |acc, id| {
@@ -4370,9 +3978,6 @@ impl EffectWindow {
                             return Err(EffectError::InvalidSelectionCount);
                         }
                     }
-                    ResolutionSelectionOperation::TapOrUntapControlled { .. }
-                    | ResolutionSelectionOperation::Sacrifice { .. }
-                        if up_to_tap_select => {}
                     ResolutionSelectionOperation::PayLifeToSaveCreatures { .. }
                     | ResolutionSelectionOperation::OtherControlledCreature {
                         or_exile_source: true,
@@ -4766,10 +4371,6 @@ impl EffectWindow {
                 AffectedPlayers::EachPlayer
             }
             (
-                ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
-                Instruction::DestroyTargetAndAttachedEquipment,
-            ) if *objects == self.target_and_attached_equipment()? => AffectedPlayers::EachPlayer,
-            (
                 ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
                 Instruction::AffectPermanentTargets {
                     action: crate::program::PermanentTargetAction::Exile,
@@ -4806,16 +4407,6 @@ impl EffectWindow {
                 ResolutionSelectionOperation::ReturnSingle { object },
                 Instruction::ReturnDelayedPermanentToHand(expected),
             ) if object == expected => AffectedPlayers::EachPlayer,
-            (
-                ResolutionSelectionOperation::DestroySingle { object },
-                Instruction::DestroyCapturedCombatCreature { .. },
-            ) if *object == self.captured_combatant(entry.id())? => AffectedPlayers::EachPlayer,
-            (
-                ResolutionSelectionOperation::DestroySingle { object },
-                Instruction::DestroyCapturedDamageSource,
-            ) if self.captured_damage_permanent(entry.id())? == Some(*object) => {
-                AffectedPlayers::EachPlayer
-            }
             (
                 ResolutionSelectionOperation::ExileSingle {
                     object,
@@ -4934,17 +4525,6 @@ impl EffectWindow {
                 },
                 Instruction::ExileDefeatedSiege,
             ) if matches!(entry.kind(), StackKind::TriggeredAbility {source} | StackKind::ActivatedAbility {source} if *object==source.id()) => {
-                AffectedPlayers::EachPlayer
-            }
-            (
-                ResolutionSelectionOperation::DestroySingle { object },
-                Instruction::DestroyTarget,
-            ) if self
-                .instruction_target_at(entry, Some(cursor.instruction))?
-                .choice()
-                .target
-                == TargetRef::Object(*object) =>
-            {
                 AffectedPlayers::EachPlayer
             }
             (

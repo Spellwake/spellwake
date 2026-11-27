@@ -178,7 +178,18 @@ fn body() -> ExecutableBody {
 
 #[test]
 fn an_instruction_spell_copy_uses_the_copied_spells_color_for_damage() {
-    let mut source = instant(3, A, Instruction::DestroyTarget);
+    let mut source = instant(
+        3,
+        A,
+        Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+            spellwake_engine::toolbox::ObjectQuery::Targets,
+            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                    allow_regenerate: true,
+                },
+            },
+        ))),
+    );
     source.program = Program::instant(ManaCost::free(), body());
     source.program.color_indicator = Some([Color::Red].into());
     let copier = SeedCard {

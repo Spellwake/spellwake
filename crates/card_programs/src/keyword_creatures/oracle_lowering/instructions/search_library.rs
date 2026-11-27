@@ -393,13 +393,37 @@ pub(super) fn lower_search_library_group(
             {
                 let obj = lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
                 bind_filter_player_target(builder, &obj)?;
-                builder.instructions.push(Instruction::UntapOrTapSelect {
-                    chooser: ResolvingPlayer::Controller,
-                    filter: Box::new(obj),
-                    count: ValueExpr::literal(i64::from(u16::MAX)),
-                    up_to: true,
-                    tap: true,
-                });
+                let untapped_obj = match obj {
+                    ObjectFilter::Clause(c) => ObjectFilter::Clause(c.untapped()),
+                    ObjectFilter::Either(a, b) => ObjectFilter::Either(a.untapped(), b.untapped()),
+                };
+                let zone = if matches!(f.controller, None | Some(ControllerRelation::You)) {
+                    spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                    ))
+                } else {
+                    spellwake_engine::toolbox::QueryZone::Battlefield
+                };
+                builder
+                    .instructions
+                    .push(Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::with_selection(
+                            spellwake_engine::toolbox::ObjectQuery::zone(zone, untapped_obj),
+                            spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                min: Box::new(ValueExpr::literal(0)),
+                                max: Box::new(ValueExpr::literal(i64::from(u16::MAX))),
+                                constraint: None,
+                                category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                hidden: false,
+                            },
+                            spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                        ),
+                    )));
                 Ok(())
             }
             SubjectRefAst::Compound(items) if !items.is_empty() => {
@@ -557,13 +581,37 @@ pub(super) fn lower_search_library_group(
             SubjectRefAst::Group(f) if f.zone.is_none() => {
                 let obj = lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
                 bind_filter_player_target(builder, &obj)?;
-                builder.instructions.push(Instruction::UntapOrTapSelect {
-                    chooser: ResolvingPlayer::Controller,
-                    filter: Box::new(obj),
-                    count: ValueExpr::literal(1),
-                    up_to: false,
-                    tap: true,
-                });
+                let untapped_obj = match obj {
+                    ObjectFilter::Clause(c) => ObjectFilter::Clause(c.untapped()),
+                    ObjectFilter::Either(a, b) => ObjectFilter::Either(a.untapped(), b.untapped()),
+                };
+                let zone = if matches!(f.controller, None | Some(ControllerRelation::You)) {
+                    spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                    ))
+                } else {
+                    spellwake_engine::toolbox::QueryZone::Battlefield
+                };
+                builder
+                    .instructions
+                    .push(Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::with_selection(
+                            spellwake_engine::toolbox::ObjectQuery::zone(zone, untapped_obj),
+                            spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                min: Box::new(ValueExpr::literal(1)),
+                                max: Box::new(ValueExpr::literal(1)),
+                                constraint: None,
+                                category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                hidden: false,
+                            },
+                            spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                        ),
+                    )));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_)
@@ -711,13 +759,42 @@ pub(super) fn lower_search_library_group(
                 )?,
                 None => ValueExpr::literal(1),
             };
-            builder.instructions.push(Instruction::UntapOrTapSelect {
-                chooser: ResolvingPlayer::Controller,
-                filter: Box::new(obj),
-                count: cnt,
-                up_to: *up_to,
-                tap: false,
-            });
+            let tapped_obj = match obj {
+                ObjectFilter::Clause(c) => ObjectFilter::Clause(c.tapped()),
+                ObjectFilter::Either(a, b) => ObjectFilter::Either(a.tapped(), b.tapped()),
+            };
+            let zone = if matches!(filter_ast.controller, None | Some(ControllerRelation::You)) {
+                spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                ))
+            } else {
+                spellwake_engine::toolbox::QueryZone::Battlefield
+            };
+            let min_expr = if *up_to {
+                ValueExpr::literal(0)
+            } else {
+                cnt.clone()
+            };
+            builder
+                .instructions
+                .push(Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::with_selection(
+                        spellwake_engine::toolbox::ObjectQuery::zone(zone, tapped_obj),
+                        spellwake_engine::toolbox::ZoneSelection::Prompt {
+                            chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            min: Box::new(min_expr),
+                            max: Box::new(cnt),
+                            constraint: None,
+                            category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                            hidden: false,
+                        },
+                        spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::UntapPermanent { subject, .. } => match subject.as_ref() {
@@ -795,13 +872,37 @@ pub(super) fn lower_search_library_group(
             SubjectRefAst::Group(f) if f.zone.is_none() => {
                 let obj = lower_object_filter_in_context(f, builder, in_trigger, vocabulary)?;
                 bind_filter_player_target(builder, &obj)?;
-                builder.instructions.push(Instruction::UntapOrTapSelect {
-                    chooser: ResolvingPlayer::Controller,
-                    filter: Box::new(obj),
-                    count: ValueExpr::literal(1),
-                    up_to: false,
-                    tap: false,
-                });
+                let tapped_obj = match obj {
+                    ObjectFilter::Clause(c) => ObjectFilter::Clause(c.tapped()),
+                    ObjectFilter::Either(a, b) => ObjectFilter::Either(a.tapped(), b.tapped()),
+                };
+                let zone = if matches!(f.controller, None | Some(ControllerRelation::You)) {
+                    spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                    ))
+                } else {
+                    spellwake_engine::toolbox::QueryZone::Battlefield
+                };
+                builder
+                    .instructions
+                    .push(Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::with_selection(
+                            spellwake_engine::toolbox::ObjectQuery::zone(zone, tapped_obj),
+                            spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                min: Box::new(ValueExpr::literal(1)),
+                                max: Box::new(ValueExpr::literal(1)),
+                                constraint: None,
+                                category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                hidden: false,
+                            },
+                            spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                        ),
+                    )));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_)
@@ -2695,7 +2796,10 @@ pub(super) fn lower_search_library_group(
                             builder.bind_target(bt)?;
                             builder
                                 .instructions
-                                .push(Instruction::Attach(AttachAbility::Equip));
+                                .push(super::super::toolbox_emit::attach_query(
+                                    spellwake_engine::toolbox::ObjectQuery::Source,
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ));
                             return Ok(());
                         }
                     }
@@ -2710,9 +2814,12 @@ pub(super) fn lower_search_library_group(
                     let bt = lower_battlefield_body_target(filter, vocabulary)?;
                     if bt == BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()) {
                         builder.bind_target(bt)?;
-                        builder.instructions.push(Instruction::AttachOnEntry {
-                            entering_equipment: true,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::attach_query(
+                                spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                            ),
+                        );
                         return Ok(());
                     }
                 }
@@ -2974,18 +3081,47 @@ pub(super) fn lower_search_library_group(
                             vocabulary,
                         )?;
                         bind_filter_player_target(&mut trial, &obj)?;
+                        const ATTACH_HOST_BIND: spellwake_engine::toolbox::BindingId =
+                            spellwake_engine::toolbox::BindingId(930);
+                        let base_host_query = spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                            obj,
+                        );
+                        let host_query = if exclude_current_host
+                            && matches!(att_ref, MoveSubjectRef::AbilitySource)
+                        {
+                            spellwake_engine::toolbox::ObjectQuery::Difference(
+                                Box::new(base_host_query),
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::AttachedHost),
+                            )
+                        } else {
+                            base_host_query
+                        };
+                        trial.instructions.push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec {
+                                chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                domain: spellwake_engine::toolbox::PromptDomain::Objects {
+                                    query: host_query,
+                                    min: Box::new(ValueExpr::literal(1)),
+                                    max: Box::new(ValueExpr::literal(1)),
+                                    constraint: None,
+                                    hidden: false,
+                                },
+                                category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                bind_to: ATTACH_HOST_BIND,
+                                bind_unchosen: None,
+                                tag_partition: None,
+                                auto_resolve_trivial: true,
+                            },
+                        )));
                         trial
                             .instructions
-                            .push(Instruction::AttachChoosingPermanent {
-                                chooser: ResolvingPlayer::Controller,
-                                attachment: spellwake_engine::program::AttachSlot::Fixed(att_ref),
-                                host: spellwake_engine::program::AttachSlot::ChooseMatching {
-                                    filter: Box::new(obj),
-                                    exclude_current_host,
-                                },
-                                optional: false,
-                                all: false,
-                            });
+                            .push(super::super::toolbox_emit::attach_query(
+                                super::super::toolbox_emit::move_subject_to_query(att_ref),
+                                spellwake_engine::toolbox::ObjectQuery::Bound(ATTACH_HOST_BIND),
+                            ));
                         *builder = trial;
                         return Ok(());
                     }
@@ -3014,18 +3150,36 @@ pub(super) fn lower_search_library_group(
                     } else {
                         (false, false)
                     };
-                    trial
-                        .instructions
-                        .push(Instruction::AttachChoosingPermanent {
-                            chooser: ResolvingPlayer::Controller,
-                            attachment: spellwake_engine::program::AttachSlot::ChooseMatching {
-                                filter: Box::new(obj),
-                                exclude_current_host: false,
+                    let selection = if choose_all && !optional {
+                        spellwake_engine::toolbox::ZoneSelection::All
+                    } else {
+                        spellwake_engine::toolbox::ZoneSelection::Prompt {
+                            chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            min: Box::new(ValueExpr::literal(if optional { 0 } else { 1 })),
+                            max: Box::new(ValueExpr::literal(if choose_all {
+                                i64::from(u16::MAX)
+                            } else {
+                                1
+                            })),
+                            constraint: None,
+                            category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                            hidden: false,
+                        }
+                    };
+                    trial.instructions.push(Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::with_selection(
+                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Battlefield,
+                                obj,
+                            ),
+                            selection,
+                            spellwake_engine::toolbox::ObjectMutation::Attach {
+                                host: super::super::toolbox_emit::move_subject_to_query(host_ref),
                             },
-                            host: spellwake_engine::program::AttachSlot::Fixed(host_ref),
-                            optional,
-                            all: choose_all,
-                        });
+                        ),
+                    )));
                     *builder = trial;
                     return Ok(());
                 }
@@ -4875,9 +5029,10 @@ fn parse_toolbox_search_dest(
     raw: &str,
     chooser: &spellwake_engine::toolbox::PlayerSelector,
     is_group_loop: bool,
+    _reveal: bool,
 ) -> Option<(spellwake_engine::toolbox::ZoneDest, bool)> {
     use spellwake_engine::toolbox::{
-        GraveyardSemantics, LibraryOrderPos, ZoneController, ZoneDest,
+        GraveyardSemantics, LibraryOrderPos, ObjectQuery, ZoneController, ZoneDest,
     };
     let low = raw.trim().to_ascii_lowercase();
     let cleaned = low
@@ -4904,9 +5059,13 @@ fn parse_toolbox_search_dest(
             | "into that player's hand"
             | "put it into that player's hand"
             | "put them into that player's hand"
+            | "owner's hand"
             | "its owner's hand"
             | "to its owner's hand"
             | "into its owner's hand"
+            | "their owners' hands"
+            | "to their owners' hands"
+            | "into their owners' hands"
             | "to hand"
             | "into hand"
             | "hands"
@@ -5004,12 +5163,18 @@ fn parse_toolbox_search_dest(
             | "top of library"
             | "top of your library"
             | "on top of your library"
+            | "top of your library in any order"
+            | "on top of your library in any order"
             | "top of their library"
             | "on top of their library"
+            | "top of their library in any order"
+            | "on top of their library in any order"
             | "top of that player's library"
             | "on top of that player's library"
+            | "top of that player's library in any order"
             | "top of its owner's library"
             | "on top of its owner's library"
+            | "top of its owner's library in any order"
     ) {
         return Some((
             ZoneDest::Library {
@@ -5025,11 +5190,16 @@ fn parse_toolbox_search_dest(
             | "bottom of library"
             | "bottom of your library"
             | "on the bottom of your library"
+            | "bottom of your library in any order"
+            | "on the bottom of your library in any order"
             | "bottom of their library"
             | "on the bottom of their library"
+            | "bottom of their library in any order"
+            | "on the bottom of their library in any order"
             | "bottom of that player's library"
             | "on the bottom of that player's library"
             | "bottom of its owner's library"
+            | "on the bottom of its owner's library"
     ) {
         return Some((
             ZoneDest::Library {
@@ -5038,14 +5208,73 @@ fn parse_toolbox_search_dest(
             true,
         ));
     }
-    if d.contains("battlefield")
-        && !d.contains("attached")
-        && !d.contains("counter")
-        && !d.contains("transformed")
-    {
-        let tapped = d.contains("tapped");
+    if matches!(
+        d,
+        "bottom_of_library_random"
+            | "bottom of your library in a random order"
+            | "on the bottom of your library in a random order"
+            | "bottom of their library in a random order"
+            | "on the bottom of their library in a random order"
+            | "bottom of that player's library in a random order"
+            | "bottom of its owner's library in a random order"
+    ) {
+        return Some((
+            ZoneDest::Library {
+                position: LibraryOrderPos::BottomRandom,
+            },
+            true,
+        ));
+    }
+    if d.contains("battlefield") {
+        let attach_to = if let Some((_, after_attach)) = d.split_once("attached to ") {
+            let tgt = after_attach.trim().trim_end_matches('.');
+            if matches!(
+                tgt,
+                "~" | "this creature" | "this permanent" | "this artifact" | "this enchantment"
+            ) {
+                Some(Box::new(ObjectQuery::Source))
+            } else {
+                return None;
+            }
+        } else if d.contains("attached") {
+            return None;
+        } else {
+            None
+        };
+        let mut entering_counters = Vec::new();
+        if d.contains("counter") {
+            if let Some((_, after_with)) = d.split_once("with ")
+                && let Some((cnt_body, _)) = after_with.split_once(" counter")
+            {
+                let cb = cnt_body.trim();
+                let (cnt_n, kind_s) = if let Some(rest) = cb
+                    .strip_prefix("a ")
+                    .or_else(|| cb.strip_prefix("an "))
+                    .or_else(|| cb.strip_prefix("one "))
+                {
+                    (1i64, rest.trim())
+                } else if let Some(rest) = cb.strip_prefix("two ") {
+                    (2i64, rest.trim())
+                } else if let Some(rest) = cb.strip_prefix("three ") {
+                    (3i64, rest.trim())
+                } else if let Some((num_s, rest)) = cb.split_once(' ')
+                    && let Ok(n) = num_s.parse::<i64>()
+                    && n > 0
+                {
+                    (n, rest.trim())
+                } else {
+                    return None;
+                };
+                let kind = parse_counter_kind(kind_s).filter(|k| k.is_permanent())?;
+                entering_counters.push((kind, Box::new(ValueExpr::literal(cnt_n))));
+            } else {
+                return None;
+            }
+        }
+        let tapped = d.contains("tapped") && !d.contains("untapped");
         let attacking = d.contains("attacking");
-        let face_down = d.contains("face down");
+        let transformed = d.contains("transformed") || d.contains("converted");
+        let face_down = d.contains("face down") || d.contains("face-down");
         let under_owner = d.contains("owner's control")
             || d.contains("owners' control")
             || d.contains("their control")
@@ -5061,10 +5290,10 @@ fn parse_toolbox_search_dest(
                 controller,
                 tapped,
                 attacking,
-                transformed: false,
+                transformed,
                 face_down,
-                entering_counters: Vec::new(),
-                attach_to: None,
+                entering_counters,
+                attach_to,
             },
             false,
         ));
@@ -5108,32 +5337,42 @@ fn try_lower_search_library_toolbox<'a>(
             return Err("oracle:unsupported-search-modifier");
         }
     }
-    if rest_to_zone.is_some() {
-        return Err("oracle:unsupported-search-rest");
-    }
-    if secondary_filter.is_some() && !secondary_is_or {
-        return Err("oracle:unsupported-secondary-search-filter");
-    }
-
     let mut eff_reveal = reveal;
     let mut eff_shuffle = shuffle || to_zone.to_ascii_lowercase().contains("after_shuffle");
     let mut eff_to_zone = to_zone.to_owned();
     let mut trailing: Vec<&InstructionAst> = Vec::new();
+    let mut explicit_lib_offset: Option<u8> = None;
 
     if to_zone == "follow_up" {
         if follow_up.is_empty() {
             return Err("oracle:unsupported-search-follow-up");
         }
         let mut idx = 0usize;
-        if let Some(InstructionAst::RevealCards { subject }) = follow_up.get(idx)
-            && subject_is_anaphora(subject)
-        {
-            eff_reveal = true;
-            idx += 1;
+        while idx < follow_up.len() {
+            match follow_up.get(idx) {
+                Some(InstructionAst::RevealCards { subject }) if subject_is_anaphora(subject) => {
+                    eff_reveal = true;
+                    idx += 1;
+                }
+                Some(InstructionAst::ShuffleLibrary {
+                    player: PlayerRefAst::You | PlayerRefAst::ThatPlayer,
+                }) => {
+                    eff_shuffle = true;
+                    idx += 1;
+                }
+                _ => break,
+            }
         }
         match follow_up.get(idx) {
             Some(InstructionAst::MoveZone { subject, to }) if subject_is_anaphora(subject) => {
                 eff_to_zone = to.clone();
+                idx += 1;
+            }
+            Some(InstructionAst::PutInLibraryAtPosition {
+                subject, from_top, ..
+            }) if subject_is_anaphora(subject) => {
+                eff_to_zone = "top of your library".to_owned();
+                explicit_lib_offset = Some(*from_top);
                 idx += 1;
             }
             Some(InstructionAst::ReturnZone {
@@ -5191,17 +5430,20 @@ fn try_lower_search_library_toolbox<'a>(
             trailing.push(ins);
         }
     } else if !follow_up.is_empty() {
-        if follow_up.iter().all(|ins| {
-            matches!(
+        for ins in follow_up {
+            if matches!(
                 ins,
                 InstructionAst::ShuffleLibrary {
                     player: PlayerRefAst::You | PlayerRefAst::ThatPlayer
                 }
-            )
-        }) {
-            eff_shuffle = true;
-        } else {
-            return Err("oracle:unsupported-search-follow-up");
+            ) {
+                eff_shuffle = true;
+                continue;
+            }
+            if instruction_references_anaphora(ins) {
+                return Err("oracle:unsupported-search-follow-up");
+            }
+            trailing.push(ins);
         }
     }
 
@@ -5369,10 +5611,47 @@ fn try_lower_search_library_toolbox<'a>(
                 lib_owner: PlayerSelector::Resolving(rp),
             }
         }
-        "defending player" | "defending player's" => SearchScope::Single {
+        "defending player"
+        | "defending player's"
+        | "the defending player"
+        | "the defending player's" => SearchScope::Single {
             chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
             lib_owner: PlayerSelector::Resolving(ResolvingPlayer::DefendingPlayer),
         },
+        "active player" | "active player's" | "the active player" | "the active player's" => {
+            SearchScope::Single {
+                chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                lib_owner: PlayerSelector::Resolving(ResolvingPlayer::ActivePlayer),
+            }
+        }
+        "enchanted player"
+        | "enchanted player's"
+        | "the enchanted player"
+        | "the enchanted player's"
+            if in_trigger || self_pronoun_valid || trial.has_source =>
+        {
+            SearchScope::Single {
+                chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                lib_owner: PlayerSelector::Resolving(ResolvingPlayer::EnchantedPlayer),
+            }
+        }
+        "chosen player" | "chosen player's" | "the chosen player" | "the chosen player's" => {
+            SearchScope::Single {
+                chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                lib_owner: PlayerSelector::Resolving(ResolvingPlayer::ChosenPlayer),
+            }
+        }
+        "that opponent" | "that opponent's" => {
+            let rp = lower_resolving_player_in_context(
+                PlayerRefAst::ThatPlayer,
+                &mut trial,
+                in_trigger,
+            )?;
+            SearchScope::Single {
+                chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                lib_owner: PlayerSelector::Resolving(rp),
+            }
+        }
         "each opponent" | "each opponent's" | "opponents'" | "your opponents'" => {
             SearchScope::Group(AffectedPlayers::EachOpponent)
         }
@@ -5462,56 +5741,196 @@ fn try_lower_search_library_toolbox<'a>(
 
     match scope {
         SearchScope::Single { chooser, lib_owner } => {
-            let (dest, needs_shuffle_before_place) =
-                parse_toolbox_search_dest(&eff_to_zone, &chooser, false)
+            let (mut dest, mut needs_shuffle_before_place) =
+                parse_toolbox_search_dest(&eff_to_zone, &chooser, false, eff_reveal)
                     .ok_or("oracle:unsupported-search-dest")?;
-            let source = build_full_query(&lib_owner);
-            let selection = ZoneSelection::Prompt {
-                chooser,
-                min: Box::new(min_expr),
-                max: Box::new(max_expr),
-                constraint: None,
-                category: ChoiceCategory::Search,
-                hidden: !eff_reveal,
-            };
-            if eff_shuffle && needs_shuffle_before_place {
-                const SEARCH_BIND: BindingId = BindingId(912);
+            if let Some(off) = explicit_lib_offset {
+                dest = ZoneDest::Library {
+                    position: spellwake_engine::toolbox::LibraryOrderPos::NthFromTop(Box::new(
+                        ValueExpr::literal(i64::from(off)),
+                    )),
+                };
+                needs_shuffle_before_place = true;
+            }
+            if let Some(rz) = rest_to_zone {
+                let ValueExprAst::Const(n) = eff_count_ast else {
+                    return Err("oracle:unsupported-search-rest");
+                };
+                if *n < 2 || (obj2_opt.is_some() && !secondary_is_or) {
+                    return Err("oracle:unsupported-search-rest");
+                }
+                let (rest_dest, _) = parse_toolbox_search_dest(rz, &chooser, false, eff_reveal)
+                    .ok_or("oracle:unsupported-search-rest")?;
+                const SEARCH_ALL_BIND: BindingId = BindingId(933);
+                const SEARCH_REST_BIND: BindingId = BindingId(934);
+                let source = build_full_query(&lib_owner);
                 let mut select_spec = ZoneOpSpec::simple(
                     source,
-                    selection,
+                    ZoneSelection::Prompt {
+                        chooser: chooser.clone(),
+                        min: Box::new(min_expr),
+                        max: Box::new(max_expr),
+                        constraint: None,
+                        category: ChoiceCategory::Search,
+                        hidden: !eff_reveal,
+                    },
                     if eff_reveal {
                         ZoneDest::RevealOnly
                     } else {
                         ZoneDest::None
                     },
                 );
-                select_spec.bind_moved = Some(SEARCH_BIND);
-                select_spec.shuffle_library = Some(lib_owner);
-                trial
-                    .instructions
-                    .push(super::super::toolbox_emit::zone_op(select_spec));
-                trial
-                    .instructions
-                    .push(super::super::toolbox_emit::zone_op(ZoneOpSpec::move_all(
-                        ObjectQuery::Bound(SEARCH_BIND),
-                        dest,
-                    )));
-            } else {
-                let mut spec = ZoneOpSpec::simple(source, selection, dest);
+                select_spec.bind_moved = Some(SEARCH_ALL_BIND);
                 if eff_shuffle {
-                    spec.shuffle_library = Some(lib_owner);
+                    select_spec.shuffle_library = Some(lib_owner);
                 }
                 trial
                     .instructions
-                    .push(super::super::toolbox_emit::zone_op(spec));
+                    .push(super::super::toolbox_emit::zone_op(select_spec));
+                let mut split_spec = ZoneOpSpec::simple(
+                    ObjectQuery::Bound(SEARCH_ALL_BIND),
+                    ZoneSelection::Prompt {
+                        chooser,
+                        min: Box::new(ValueExpr::literal(1)),
+                        max: Box::new(ValueExpr::literal(1)),
+                        constraint: None,
+                        category: ChoiceCategory::Generic,
+                        hidden: false,
+                    },
+                    dest,
+                );
+                split_spec.bind_unchosen = Some(SEARCH_REST_BIND);
+                trial
+                    .instructions
+                    .push(super::super::toolbox_emit::zone_op(split_spec));
+                trial
+                    .instructions
+                    .push(super::super::toolbox_emit::zone_op(ZoneOpSpec::move_all(
+                        ObjectQuery::Bound(SEARCH_REST_BIND),
+                        rest_dest,
+                    )));
+            } else if let Some(obj2) = obj2_opt
+                && !secondary_is_or
+            {
+                let q1 = build_source_query(&lib_owner, obj1);
+                let q2 = build_source_query(&lib_owner, obj2);
+                let sel1 = ZoneSelection::Prompt {
+                    chooser: chooser.clone(),
+                    min: Box::new(min_expr),
+                    max: Box::new(max_expr),
+                    constraint: None,
+                    category: ChoiceCategory::Search,
+                    hidden: !eff_reveal,
+                };
+                let sel2 = ZoneSelection::Prompt {
+                    chooser,
+                    min: Box::new(ValueExpr::literal(0)),
+                    max: Box::new(ValueExpr::literal(1)),
+                    constraint: None,
+                    category: ChoiceCategory::Search,
+                    hidden: !eff_reveal,
+                };
+                if eff_shuffle && needs_shuffle_before_place {
+                    const SEARCH_BIND_A: BindingId = BindingId(931);
+                    const SEARCH_BIND_B: BindingId = BindingId(932);
+                    let hold_dest = if eff_reveal {
+                        ZoneDest::RevealOnly
+                    } else {
+                        ZoneDest::None
+                    };
+                    let mut s1 = ZoneOpSpec::simple(q1, sel1, hold_dest.clone());
+                    s1.bind_moved = Some(SEARCH_BIND_A);
+                    let mut s2 = ZoneOpSpec::simple(q2, sel2, hold_dest);
+                    s2.bind_moved = Some(SEARCH_BIND_B);
+                    s2.shuffle_library = Some(lib_owner);
+                    trial
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(s1));
+                    trial
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(s2));
+                    trial.instructions.push(super::super::toolbox_emit::zone_op(
+                        ZoneOpSpec::move_all(
+                            ObjectQuery::Union(vec![
+                                ObjectQuery::Bound(SEARCH_BIND_A),
+                                ObjectQuery::Bound(SEARCH_BIND_B),
+                            ]),
+                            dest,
+                        ),
+                    ));
+                } else {
+                    let s1 = ZoneOpSpec::simple(q1, sel1, dest.clone());
+                    let mut s2 = ZoneOpSpec::simple(q2, sel2, dest);
+                    if eff_shuffle {
+                        s2.shuffle_library = Some(lib_owner);
+                    }
+                    trial
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(s1));
+                    trial
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(s2));
+                }
+            } else {
+                let source = build_full_query(&lib_owner);
+                let selection = ZoneSelection::Prompt {
+                    chooser,
+                    min: Box::new(min_expr),
+                    max: Box::new(max_expr),
+                    constraint: None,
+                    category: ChoiceCategory::Search,
+                    hidden: !eff_reveal,
+                };
+                if eff_shuffle && needs_shuffle_before_place {
+                    const SEARCH_BIND: BindingId = BindingId(912);
+                    let mut select_spec = ZoneOpSpec::simple(
+                        source,
+                        selection,
+                        if eff_reveal {
+                            ZoneDest::RevealOnly
+                        } else {
+                            ZoneDest::None
+                        },
+                    );
+                    select_spec.bind_moved = Some(SEARCH_BIND);
+                    select_spec.shuffle_library = Some(lib_owner);
+                    trial
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(select_spec));
+                    trial.instructions.push(super::super::toolbox_emit::zone_op(
+                        ZoneOpSpec::move_all(ObjectQuery::Bound(SEARCH_BIND), dest),
+                    ));
+                } else {
+                    let mut spec = ZoneOpSpec::simple(source, selection, dest);
+                    if eff_shuffle {
+                        spec.shuffle_library = Some(lib_owner);
+                    }
+                    trial
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(spec));
+                }
             }
         }
         SearchScope::Group(players) => {
+            if rest_to_zone.is_some() {
+                return Err("oracle:unsupported-search-rest");
+            }
+            if obj2_opt.is_some() && !secondary_is_or {
+                return Err("oracle:unsupported-secondary-search-filter");
+            }
             const SEAT_BIND: BindingId = BindingId(913);
             let seat_sel = PlayerSelector::Bound(SEAT_BIND);
-            let (dest, needs_shuffle_before_place) =
-                parse_toolbox_search_dest(&eff_to_zone, &seat_sel, true)
+            let (mut dest, mut needs_shuffle_before_place) =
+                parse_toolbox_search_dest(&eff_to_zone, &seat_sel, true, eff_reveal)
                     .ok_or("oracle:unsupported-search-dest")?;
+            if let Some(off) = explicit_lib_offset {
+                dest = ZoneDest::Library {
+                    position: spellwake_engine::toolbox::LibraryOrderPos::NthFromTop(Box::new(
+                        ValueExpr::literal(i64::from(off)),
+                    )),
+                };
+                needs_shuffle_before_place = true;
+            }
             let source = build_full_query(&seat_sel);
             let selection = ZoneSelection::Prompt {
                 chooser: seat_sel.clone(),
