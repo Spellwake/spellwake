@@ -1167,6 +1167,14 @@ impl EffectWindow {
                 self.splice_replacing_current(entry.id(), index, &expanded)?;
                 Ok(StepOutcome::Continue)
             }
+            Instruction::PromptChoice(spec)
+                if matches!(
+                    spec.domain,
+                    crate::toolbox::PromptDomain::ManaPayment { .. }
+                ) =>
+            {
+                Ok(StepOutcome::Next(Instruction::PromptChoice(spec)))
+            }
             Instruction::PromptChoice(spec) => {
                 if let crate::toolbox::PromptDomain::Subtype {
                     legacy_slot: Some(slot),

@@ -56,9 +56,6 @@ impl EffectWindow {
             | Instruction::SideDeckOp(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }

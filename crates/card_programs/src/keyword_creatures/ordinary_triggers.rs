@@ -455,13 +455,15 @@ pub(super) fn compile(
             let (price, action) = action.split_once(". If you do, create ")?;
             let creation = create_tokens(action.strip_suffix('.')?,vocabulary)?;
             triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::of_type(CardType::Artifact)),
-                ExecutableBody::new(BodyTarget::None, vec![Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::Controller,
-                    fixed: fixed_cost(price)?,
-                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 1,
-                    declined_destination: 2,
-                }, creation])));
+                ExecutableBody::new(BodyTarget::None, vec![Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::Controller,
+                        fixed_cost(price)?,
+                        spellwake_engine::program::ValueExpr::Literal(0.into()),
+                        1,
+                        2,
+                    ),
+                )), creation])));
         } else if let Some((subject, effect)) = line.strip_prefix("Whenever ").and_then(|s|s.split_once(" or another nontoken creature you control dies, create "))
             && (subject == face.name || Some(subject) == face.name.split(',').next()) {
             let (template, threshold) = effect.split_once(" If the creature had power ")?;
@@ -1308,13 +1310,15 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::Controller,
-                    fixed: fixed_cost(cost)?,
-                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 2,
-                    declined_destination: 1,
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::Controller,
+                        fixed_cost(cost)?,
+                        spellwake_engine::program::ValueExpr::Literal(0.into()),
+                        2,
+                        1,
+                    ),
+                )),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::phase_out_query(
                     spellwake_engine::toolbox::ObjectQuery::Source,
                 ),
@@ -1426,20 +1430,20 @@ pub(super) fn body(
         let count = u8::try_from(amount(number)?).ok().filter(|&n| n > 0)?;
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::LookTopChooseExt {
-                library_owner: ResolvingPlayer::Controller,
-                chooser: ResolvingPlayer::Controller,
-                count: spellwake_engine::program::ValueExpr::literal(i64::from(count)),
-                filter: None,
-                max_picks: 1,
-                take_all_matching: false,
-                keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                rest_dest: spellwake_engine::program::LookTopRestDest::Graveyard,
-                reveal_kept: false,
-                reveal_all: false,
-                reveal_only: false,
-                secondary: None,
-            }],
+            spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                ResolvingPlayer::Controller,
+                ResolvingPlayer::Controller,
+                spellwake_engine::program::ValueExpr::literal(i64::from(count)),
+                None,
+                1,
+                false,
+                spellwake_engine::program::LookTopKeepDest::Hand,
+                spellwake_engine::program::LookTopRestDest::Graveyard,
+                false,
+                false,
+                false,
+                None,
+            ),
         ));
     }
 
@@ -1762,13 +1766,15 @@ pub(super) fn body(
             ExecutableBody::new(
                 BodyTarget::SinglePermanent,
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        fixed: fixed_cost(price)?,
-                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 1,
-                        declined_destination: 3,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::Controller,
+                            fixed_cost(price)?,
+                            spellwake_engine::program::ValueExpr::Literal(0.into()),
+                            1,
+                            3,
+                        ),
+                    )),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(true),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap_targets(),
                 ],
@@ -1785,13 +1791,15 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::Controller,
-                    fixed: fixed_cost(price)?,
-                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 1,
-                    declined_destination: 3,
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::Controller,
+                        fixed_cost(price)?,
+                        spellwake_engine::program::ValueExpr::Literal(0.into()),
+                        1,
+                        3,
+                    ),
+                )),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::set_group_tapped(
                     ObjectFilter::creature().attacking(),
                     false,
@@ -1917,13 +1925,15 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::TriggeringAttackerController,
-                    fixed: fixed_cost(cost)?,
-                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 2,
-                    declined_destination: 1,
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::TriggeringAttackerController,
+                        fixed_cost(cost)?,
+                        spellwake_engine::program::ValueExpr::Literal(0.into()),
+                        2,
+                        1,
+                    ),
+                )),
                 create_tokens(template, vocabulary)?,
             ],
         ));
@@ -1936,13 +1946,15 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::UniqueRelatedPlayer,
-                    fixed: fixed_cost(cost)?,
-                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 2,
-                    declined_destination: 1,
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                        fixed_cost(cost)?,
+                        spellwake_engine::program::ValueExpr::Literal(0.into()),
+                        2,
+                        1,
+                    ),
+                )),
                 creation,
             ],
         ));

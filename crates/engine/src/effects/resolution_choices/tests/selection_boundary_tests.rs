@@ -12,13 +12,15 @@ fn target_player_role_uses_the_bound_player_for_optional_and_payment_choices() {
                 instructions: 1,
             },
             gain(1),
-            Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::TargetPlayer,
-                fixed: ManaCost::free(),
-                extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                paid_destination: 3,
-                declined_destination: 4,
-            },
+            Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::TargetPlayer,
+                    ManaCost::free(),
+                    crate::program::ValueExpr::Literal(0.into()),
+                    3,
+                    4,
+                ),
+            )),
             gain(2),
         ],
     )

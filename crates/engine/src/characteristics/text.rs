@@ -387,11 +387,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             amount.rewrite_creature_type(change.from, change.to);
         };
         match instruction {
-            Instruction::OfferDynamicManaPayment {
-                extra_generic: amount,
-                ..
-            }
-            | Instruction::RepeatLoop { count: amount, .. } => rewrite_amount(amount),
+            Instruction::RepeatLoop { count: amount, .. } => rewrite_amount(amount),
             Instruction::CreateTokens { creations } => {
                 for spec in creations {
                     rewrite_amount(&mut spec.amount);
@@ -674,6 +670,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     crate::toolbox::PromptDomain::Partition { query, .. } => {
                         rewrite_object_query(change, query);
                     }
+                    crate::toolbox::PromptDomain::ManaPayment { extra_generic, .. } => {
+                        rewrite_amount(extra_generic);
+                    }
                     crate::toolbox::PromptDomain::Players { .. }
                     | crate::toolbox::PromptDomain::Options { .. }
                     | crate::toolbox::PromptDomain::Color { .. }
@@ -734,29 +733,10 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     _ => {}
                 }
             }
-            Instruction::RevealUntilMatchExt { filter, count, .. } => {
-                filter.rewrite_creature_type(change.from, change.to);
-                rewrite_amount(count);
-            }
-            Instruction::LookTopChooseExt {
-                count,
-                filter,
-                secondary,
-                ..
-            } => {
-                rewrite_amount(count);
-                if let Some(filter) = filter {
-                    filter.rewrite_creature_type(change.from, change.to);
-                }
-                if let Some(sec) = secondary {
-                    sec.filter.rewrite_creature_type(change.from, change.to);
-                }
-            }
             // These admitted instructions contain no literal creature-type words.
             // Draw's chosen-type reference remains a runtime local value.
             Instruction::OptionalSequence { .. }
             | Instruction::Jump { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. } => {}
         }

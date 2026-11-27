@@ -1438,13 +1438,7 @@ pub(in super::super) fn rewrite_instruction_anaphora(
     replacement: ValueObjectRef,
 ) {
     match op {
-        Instruction::LookTopChooseExt { count: amount, .. }
-        | Instruction::RevealUntilMatchExt { count: amount, .. }
-        | Instruction::OfferDynamicManaPayment {
-            extra_generic: amount,
-            ..
-        }
-        | Instruction::RepeatLoop { count: amount, .. } => {
+        Instruction::RepeatLoop { count: amount, .. } => {
             rewrite_value_expr_anaphora(amount, replacement);
         }
         Instruction::AdjustLife(spec) => match &mut spec.op {
@@ -1526,6 +1520,9 @@ pub(in super::super) fn rewrite_instruction_anaphora(
                 spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
                     rewrite_value_expr_anaphora(min, replacement);
                     rewrite_value_expr_anaphora(max, replacement);
+                }
+                spellwake_engine::toolbox::PromptDomain::ManaPayment { extra_generic, .. } => {
+                    rewrite_value_expr_anaphora(extra_generic, replacement);
                 }
                 _ => {}
             }
@@ -1681,10 +1678,6 @@ pub(in super::super) fn rewrite_body_prior_result(
     for op in &mut body.instructions {
         if !saw_count_action {
             match op {
-                Instruction::LookTopChooseExt { count: amount, .. }
-                | Instruction::RevealUntilMatchExt { count: amount, .. } => {
-                    rewrite_value_expr_prior_result(amount, replacement);
-                }
                 Instruction::AdjustLife(spec) => match &mut spec.op {
                     spellwake_engine::toolbox::LifeOp::Gain(amount)
                     | spellwake_engine::toolbox::LifeOp::Lose(amount)
@@ -1772,6 +1765,12 @@ pub(in super::super) fn rewrite_body_prior_result(
                         spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
                             rewrite_value_expr_prior_result(min, replacement);
                             rewrite_value_expr_prior_result(max, replacement);
+                        }
+                        spellwake_engine::toolbox::PromptDomain::ManaPayment {
+                            extra_generic,
+                            ..
+                        } => {
+                            rewrite_value_expr_prior_result(extra_generic, replacement);
                         }
                         _ => {}
                     }
@@ -2823,12 +2822,7 @@ pub(super) fn rewrite_body_trigger_subject_stats(
 ) {
     for op in &mut body.instructions {
         match op {
-            Instruction::LookTopChooseExt { count: amount, .. }
-            | Instruction::OfferDynamicManaPayment {
-                extra_generic: amount,
-                ..
-            }
-            | Instruction::RepeatLoop { count: amount, .. } => {
+            Instruction::RepeatLoop { count: amount, .. } => {
                 rewrite_value_expr_trigger_subject(amount, replacement);
             }
             Instruction::AdjustLife(spec) => match &mut spec.op {
@@ -2909,6 +2903,11 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                     spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
                         rewrite_value_expr_trigger_subject(min, replacement);
                         rewrite_value_expr_trigger_subject(max, replacement);
+                    }
+                    spellwake_engine::toolbox::PromptDomain::ManaPayment {
+                        extra_generic, ..
+                    } => {
+                        rewrite_value_expr_trigger_subject(extra_generic, replacement);
                     }
                     _ => {}
                 }

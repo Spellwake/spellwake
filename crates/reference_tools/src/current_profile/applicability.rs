@@ -294,8 +294,7 @@ native!(ExecutableBody, self, {
         return Err(ApplicabilityError);
     }
     self.instructions.iter().try_for_each(|value| match value {
-        Instruction::OfferDynamicManaPayment { .. }
-        | Instruction::ForEach { .. }
+        Instruction::ForEach { .. }
         | Instruction::ForEachPlayerQuery { .. }
         | Instruction::BindEnv { .. }
         | Instruction::SetObjectTag { .. }
@@ -306,6 +305,9 @@ native!(ExecutableBody, self, {
         | Instruction::SearchLibrary { .. }
         | Instruction::ScheduleDelayedStepTrigger { .. }
         | Instruction::EmitReflexiveTrigger { .. } => Err(ApplicabilityError),
+        Instruction::PromptChoice(spec) if spec.as_mana_payment().is_some() => {
+            Err(ApplicabilityError)
+        }
         Instruction::PromptChoice(spec) => {
             if matches!(
                 &spec.domain,
@@ -520,8 +522,6 @@ native!(ExecutableBody, self, {
         }
         Instruction::Jump { .. }
         | Instruction::RepeatLoop { .. }
-        | Instruction::LookTopChooseExt { .. }
-        | Instruction::RevealUntilMatchExt { .. }
         | Instruction::DrawCards(_)
         | Instruction::MutateObject(_)
         | Instruction::AdjustLife(_)

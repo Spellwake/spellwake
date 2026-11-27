@@ -25,13 +25,15 @@ fn payment_outcomes(result: &NativeCandidate) -> usize {
 #[test]
 fn every_wrong_reply_kind_variant_retains_the_latest_prefix_before_its_own_valid_continuation() {
     let opened = pending(vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(3.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 4,
-            declined_destination: 1,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(3.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                4,
+                1,
+            ),
+        )),
         Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
             instructions: 1,
@@ -185,13 +187,15 @@ pub(super) fn exact_total_unavailable_amount_and_required_colorless_denials_keep
                 A,
                 BodyTarget::None,
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        fixed: ManaCost::specific(ManaType::Colourless, 1.into()),
-                        extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 2,
-                        declined_destination: 1,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::Controller,
+                            ManaCost::specific(ManaType::Colourless, 1.into()),
+                            crate::program::ValueExpr::Literal(0.into()),
+                            2,
+                            1,
+                        ),
+                    )),
                     gain(2),
                 ],
             ),
@@ -269,13 +273,15 @@ fn record_choice(trace: &mut TypedTrace, choice: DecisionReply) {
 
 fn replay_body() -> Vec<Instruction> {
     vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(2.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 1,
-            declined_destination: 4,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(2.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                1,
+                4,
+            ),
+        )),
         Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
             instructions: 1,

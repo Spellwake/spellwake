@@ -503,7 +503,8 @@ impl EffectWindow {
         next_instruction: Option<&Instruction>,
         mut instruction: Instruction,
     ) -> Result<StepOutcome, EffectError> {
-        if let Instruction::OfferDynamicManaPayment { fixed: cost, .. } = &mut instruction
+        if let Instruction::PromptChoice(spec) = &mut instruction
+            && let Some((cost, _, _)) = spec.as_mana_payment_mut()
             && let Some(keyword) = self
                 .execution_bindings(entry.id())
                 .and_then(|b| b.trigger.as_ref())
@@ -1720,40 +1721,13 @@ impl EffectWindow {
         }
         if matches!(
             &instruction,
-            Instruction::LookTopChooseExt { .. } | Instruction::RevealUntilMatchExt { .. }
-        ) || matches!(
-            &instruction,
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
                     crate::toolbox::PlayerMutation::RevealTopTwoPiles { .. }
                 )
         ) {
-            let look_top_reveal_only_count = match &instruction {
-                Instruction::LookTopChooseExt {
-                    count,
-                    reveal_only: true,
-                    ..
-                } => Some(count.clone()),
-                _ => None,
-            };
-            if look_top_reveal_only_count.is_some()
-                && let Some(cursor) = self.resolution_cursor_mut()
-            {
-                cursor.results.revealed_top_card = None;
-                cursor.results.revealed_top_types.clear();
-            }
-            let player = if let Instruction::LookTopChooseExt { library_owner, .. }
-            | Instruction::RevealUntilMatchExt { library_owner, .. } = instruction
-            {
-                let cursor_snap = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                self.resolving_player_identity_at(library_owner, Some(&cursor_snap))?
-            } else {
-                entry.controller()
-            };
+            let player = entry.controller();
             if let Some(frame) =
                 self.progress_revealed_piles(entry.id(), index, player, ctx.append)?
             {
@@ -1761,26 +1735,6 @@ impl EffectWindow {
             }
             if self.random_resolution_pending() {
                 return Ok(StepOutcome::Continue);
-            }
-            if let Some(count_expr) = look_top_reveal_only_count {
-                let lib_len = self.window.cards().library(player).len();
-                let requested = self
-                    .resolve_value_expr(entry.controller(), &count_expr)?
-                    .max(0.into())
-                    .min(RulesInteger::from_usize(lib_len));
-                let revealed_count = if self
-                    .resolution_cursor()
-                    .and_then(|c| c.results.revealed_top_card)
-                    .is_some()
-                {
-                    requested
-                } else {
-                    0.into()
-                };
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.last_action_succeeded = revealed_count.is_positive();
-                    cursor.results.last_action_count = Some(revealed_count);
-                }
             }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);

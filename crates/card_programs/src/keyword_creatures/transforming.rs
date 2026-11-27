@@ -336,13 +336,15 @@ fn compile_face(
                 (
                     upkeep.clone(),
                     vec![
-                        OfferDynamicManaPayment {
-                            payer: ResolvingPlayer::Controller,
-                            fixed: fixed_cost("{2}{B}{B}")?,
-                            extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                            paid_destination: 1,
-                            declined_destination: 2,
-                        },
+                        spellwake_engine::program::Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                ResolvingPlayer::Controller,
+                                fixed_cost("{2}{B}{B}")?,
+                                spellwake_engine::program::ValueExpr::Literal(0.into()),
+                                1,
+                                2,
+                            ),
+                        )),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
                 )

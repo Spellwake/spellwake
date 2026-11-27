@@ -253,13 +253,15 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
             ExecutableBody::new(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::TargetSpellController,
-                        fixed: ManaCost::generic(3.into()),
-                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 2,
-                        declined_destination: 1,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::TargetSpellController,
+                            ManaCost::generic(3.into()),
+                            spellwake_engine::program::ValueExpr::Literal(0.into()),
+                            2,
+                            1,
+                        ),
+                    )),
                     Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                             spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -276,13 +278,15 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
                     spellwake_engine::program::SpellFilter::any(),
                 ),
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::UniqueRelatedPlayer,
-                        fixed: ManaCost::generic(1.into()),
-                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 3,
-                        declined_destination: 1,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::UniqueRelatedPlayer,
+                            ManaCost::generic(1.into()),
+                            spellwake_engine::program::ValueExpr::Literal(0.into()),
+                            3,
+                            1,
+                        ),
+                    )),
                     optional,
                     draw,
                 ],

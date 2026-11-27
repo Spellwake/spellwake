@@ -41,13 +41,15 @@ fn optional(player: ResolvingPlayer) -> Instruction {
 }
 
 fn payment(player: ResolvingPlayer, destination: usize) -> Instruction {
-    Instruction::OfferDynamicManaPayment {
-        payer: player,
-        fixed: ManaCost::free(),
-        extra_generic: crate::program::ValueExpr::Literal(0.into()),
-        paid_destination: destination,
-        declined_destination: destination,
-    }
+    Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+            player,
+            ManaCost::free(),
+            crate::program::ValueExpr::Literal(0.into()),
+            destination,
+            destination,
+        ),
+    ))
 }
 
 fn branch(destination: usize) -> Instruction {
@@ -213,13 +215,15 @@ fn live_and_retained_controller_paths_join() {
             discard(ResolvingPlayer::TargetSpellController, 1),
         ],
         vec![
-            Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::Controller,
-                fixed: ManaCost::free(),
-                extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                paid_destination: 1,
-                declined_destination: 2,
-            },
+            Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::Controller,
+                    ManaCost::free(),
+                    crate::program::ValueExpr::Literal(0.into()),
+                    1,
+                    2,
+                ),
+            )),
             Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
                 crate::toolbox::CounterDestination::Graveyard,
             ))),

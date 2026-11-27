@@ -1716,17 +1716,6 @@ fn rewrite_instructions_unique_related_player(
                     &|_| {},
                 );
             }
-            Instruction::LookTopChooseExt {
-                library_owner,
-                chooser,
-                ..
-            } => {
-                rewrite_resolving_player_if_unique(library_owner, replacement);
-                rewrite_resolving_player_if_unique(chooser, replacement);
-            }
-            Instruction::OfferDynamicManaPayment { payer, .. } => {
-                rewrite_resolving_player_if_unique(payer, replacement);
-            }
             Instruction::OptionalSequence { chooser, .. } => {
                 rewrite_resolving_player_if_unique(chooser, replacement);
             }

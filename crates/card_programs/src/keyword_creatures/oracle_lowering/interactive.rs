@@ -900,21 +900,6 @@ pub(super) fn patch_any_color_cast_permission(op: &mut Instruction) -> bool {
                 false
             }
         }
-        Instruction::LookTopChooseExt {
-            keep_dest:
-                spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. }
-                | spellwake_engine::program::LookTopKeepDest::ExileLinked { any_color, .. },
-            ..
-        }
-        | Instruction::RevealUntilMatchExt {
-            match_dest:
-                spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. }
-                | spellwake_engine::program::LookTopKeepDest::ExileLinked { any_color, .. },
-            ..
-        } => {
-            *any_color = true;
-            true
-        }
         _ => false,
     }
 }
@@ -2188,25 +2173,7 @@ fn has_live_interactive_last_moved(
                     _ => matches!(expected, InteractiveLastMovedKind::Any),
                 };
             }
-            Instruction::DrawCards(_) => {
-                return matches!(expected, InteractiveLastMovedKind::Any);
-            }
-            Instruction::LookTopChooseExt { keep_dest, .. }
-            | Instruction::RevealUntilMatchExt {
-                match_dest: keep_dest,
-                ..
-            } => {
-                return match keep_dest {
-                    spellwake_engine::program::LookTopKeepDest::Exile { .. }
-                    | spellwake_engine::program::LookTopKeepDest::ExileLinked { .. } => matches!(
-                        expected,
-                        InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
-                    ),
-                    _ => matches!(expected, InteractiveLastMovedKind::Any),
-                };
-            }
-
-            Instruction::SearchLibrary { .. } => {
+            Instruction::DrawCards(_) | Instruction::SearchLibrary { .. } => {
                 return matches!(expected, InteractiveLastMovedKind::Any);
             }
             Instruction::PromptChoice(spec)

@@ -426,68 +426,68 @@ fn world_at_upkeep(
 fn chaos_warp_reveals_and_puts_opponent_permanent_under_owners_control() {
     let vocab = vocabulary();
 
+    let mut chaos_warp_ops = vec![Instruction::ZoneOp(Box::new(
+        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+            spellwake_engine::toolbox::ObjectQuery::Targets,
+            spellwake_engine::toolbox::ZoneDest::Library {
+                position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
+            },
+        ),
+    ))];
+    chaos_warp_ops.extend(
+        spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+            ResolvingPlayer::TargetOwner,
+            ResolvingPlayer::Controller,
+            ValueExpr::literal(1),
+            None,
+            0,
+            false,
+            spellwake_engine::program::LookTopKeepDest::Hand,
+            spellwake_engine::program::LookTopRestDest::BottomOrder,
+            true,
+            true,
+            true,
+            None,
+        ),
+    );
+    chaos_warp_ops.push(Instruction::ZoneOp(Box::new(
+        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+            spellwake_engine::toolbox::ObjectQuery::Revealed,
+            spellwake_engine::toolbox::ZoneDest::Battlefield {
+                controller: if true {
+                    spellwake_engine::toolbox::ZoneController::Owner
+                } else {
+                    spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                    ))
+                },
+                tapped: false,
+                attacking: false,
+                transformed: false,
+                face_down: None,
+                entering_counters: (None)
+                    .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
+                        (
+                            k,
+                            Box::new(spellwake_engine::program::ValueExpr::literal(i64::from(c))),
+                        )
+                    })
+                    .into_iter()
+                    .collect(),
+                attach_to: if false {
+                    Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
+                } else {
+                    None
+                },
+            },
+        ),
+    )));
     let chaos_warp = validated(
         Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(
-                BodyTarget::SinglePermanent,
-                vec![
-                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                        spellwake_engine::toolbox::ObjectQuery::Targets,
-                        spellwake_engine::toolbox::ZoneDest::Library {
-                            position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
-                        },
-                    ))),
-                    Instruction::LookTopChooseExt {
-                        library_owner: ResolvingPlayer::TargetOwner,
-                        chooser: ResolvingPlayer::Controller,
-                        count: ValueExpr::literal(1),
-                        filter: None,
-                        max_picks: 0,
-                        take_all_matching: false,
-                        keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                        rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                        reveal_kept: true,
-                        reveal_all: true,
-                        reveal_only: true,
-                        secondary: None,
-                    },
-                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                        spellwake_engine::toolbox::ObjectQuery::Revealed,
-                        spellwake_engine::toolbox::ZoneDest::Battlefield {
-                            controller: if true {
-                                spellwake_engine::toolbox::ZoneController::Owner
-                            } else {
-                                spellwake_engine::toolbox::ZoneController::Player(Box::new(
-                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                                        spellwake_engine::program::ResolvingPlayer::Controller,
-                                    ),
-                                ))
-                            },
-                            tapped: false,
-                            attacking: false,
-                            transformed: false,
-                            face_down: None,
-                            entering_counters: (None)
-                                .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
-                                    (
-                                        k,
-                                        Box::new(spellwake_engine::program::ValueExpr::literal(
-                                            i64::from(c),
-                                        )),
-                                    )
-                                })
-                                .into_iter()
-                                .collect(),
-                            attach_to: if false {
-                                Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
-                            } else {
-                                None
-                            },
-                        },
-                    ))),
-                ],
-            ),
+            ExecutableBody::new(BodyTarget::SinglePermanent, chaos_warp_ops),
         ),
         &vocab,
     );

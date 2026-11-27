@@ -1110,13 +1110,14 @@ impl EffectWindow {
         instruction: &Instruction,
         is_sequence: bool,
     ) -> Result<bool, EffectError> {
-        let allowed_sequence_head =
-            matches!(instruction, Instruction::OfferDynamicManaPayment { .. })
-                || (is_sequence
-                    && matches!(
-                        instruction,
-                        Instruction::BranchCondition { .. } | Instruction::Jump { .. }
-                    ));
+        let allowed_sequence_head = matches!(
+            instruction,
+            Instruction::PromptChoice(spec) if spec.as_mana_payment().is_some()
+        ) || (is_sequence
+            && matches!(
+                instruction,
+                Instruction::BranchCondition { .. } | Instruction::Jump { .. }
+            ));
         if !instruction.is_optional_primitive() && !allowed_sequence_head {
             return Err(EffectError::InconsistentProgram);
         }
@@ -1272,9 +1273,7 @@ impl EffectWindow {
                 }
                 _ => Ok(true),
             },
-            Instruction::OfferDynamicManaPayment { .. } | Instruction::FixedTargetClause(_) => {
-                Ok(true)
-            }
+            Instruction::FixedTargetClause(_) => Ok(true),
             Instruction::PromptChoice(spec) => match &spec.domain {
                 crate::toolbox::PromptDomain::Subtype {
                     kind: crate::toolbox::SubtypeChoiceKind::Creature,
@@ -1660,9 +1659,7 @@ impl EffectWindow {
             }
             Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::CreateTokens { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. } => Ok(true),
+            | Instruction::CreateTokens { .. } => Ok(true),
             Instruction::SearchLibrary { filter } => {
                 if let Some(host) = filter.curse_host() {
                     Ok(self.searched_curse_host(host)?.is_some())
@@ -1866,13 +1863,12 @@ impl EffectWindow {
                     })));
                 self.skip_unpayable_optional_after_departure()?;
             }
-            Instruction::OfferDynamicManaPayment {
-                payer,
-                fixed,
-                extra_generic,
-                paid_destination,
-                declined_destination,
-            } => {
+            Instruction::PromptChoice(spec) if spec.as_mana_payment().is_some() => {
+                let Some((payer, fixed, extra_generic, paid_destination, declined_destination)) =
+                    spec.as_mana_payment()
+                else {
+                    unreachable!();
+                };
                 let cursor = self
                     .resolution_cursor()
                     .ok_or(EffectError::WrongResolutionFrame)?
@@ -1899,7 +1895,7 @@ impl EffectWindow {
                         .max(0.into());
                     cost.generic = cost.generic.plus(&extra);
                 }
-                let payer = self.resolving_player_identity_at(*payer, Some(&cursor))?;
+                let payer = self.resolving_player_identity_at(payer, Some(&cursor))?;
                 let restricted_colors = self
                     .payloads
                     .get(&cursor.entry)
@@ -1923,8 +1919,8 @@ impl EffectWindow {
                         cursor,
                         payer,
                         cost,
-                        paid_destination: *paid_destination,
-                        declined_destination: *declined_destination,
+                        paid_destination,
+                        declined_destination,
                     },
                     append,
                 )?;
@@ -1953,8 +1949,6 @@ impl EffectWindow {
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::SearchLibrary { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. }
             | Instruction::OptionalSequence { .. } => return Ok(false),
         }
         Ok(true)

@@ -682,13 +682,15 @@ pub(super) fn spell(
         "Counter target spell unless its controller pays {1}. That player discards a card." => (
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
             vec![
-                OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::TargetSpellController,
-                    fixed: fixed_cost("{1}")?,
-                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 2,
-                    declined_destination: 1,
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::TargetSpellController,
+                        fixed_cost("{1}")?,
+                        spellwake_engine::program::ValueExpr::Literal(0.into()),
+                        2,
+                        1,
+                    ),
+                )),
                 Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard))),
                 Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
                     spellwake_engine::program::AffectedPlayers::One(
@@ -856,20 +858,20 @@ pub(super) fn spell(
         "Look at the top four cards of your library. Put one of them into your hand and the rest into your graveyard." => {
             (
                 NoTarget,
-                vec![LookTopChooseExt {
-                    library_owner: ResolvingPlayer::Controller,
-                    chooser: ResolvingPlayer::Controller,
-                    count: amount(4),
-                    filter: None,
-                    max_picks: 1,
-                    take_all_matching: false,
-                    keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                    rest_dest: spellwake_engine::program::LookTopRestDest::Graveyard,
-                    reveal_kept: false,
-                    reveal_all: false,
-                    reveal_only: false,
-                    secondary: None,
-                }],
+                spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                    ResolvingPlayer::Controller,
+                    ResolvingPlayer::Controller,
+                    amount(4),
+                    None,
+                    1,
+                    false,
+                    spellwake_engine::program::LookTopKeepDest::Hand,
+                    spellwake_engine::program::LookTopRestDest::Graveyard,
+                    false,
+                    false,
+                    false,
+                    None,
+                ),
             )
         }
         "Exile target card from a graveyard." => {
@@ -1229,20 +1231,20 @@ pub(super) fn compile(
                 delta: CounterCostDelta::RemoveAll,
                 tap_source: true,
                 sacrifice_source: false,
-            }, NoTarget, vec![Instruction::LookTopChooseExt {
-                library_owner: spellwake_engine::program::ResolvingPlayer::Controller,
-                chooser: spellwake_engine::program::ResolvingPlayer::Controller,
-                count: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::PaidNamedCounters),
-                filter: None,
-                max_picks: 1,
-                take_all_matching: false,
-                keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                reveal_kept: false,
-                reveal_all: false,
-                reveal_only: false,
-                secondary: None,
-            }]);
+            }, NoTarget, spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                spellwake_engine::program::ResolvingPlayer::Controller,
+                spellwake_engine::program::ResolvingPlayer::Controller,
+                spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::PaidNamedCounters),
+                None,
+                1,
+                false,
+                spellwake_engine::program::LookTopKeepDest::Hand,
+                spellwake_engine::program::LookTopRestDest::BottomOrder,
+                false,
+                false,
+                false,
+                None,
+            ));
             let mut program = Program::artifact(Some(price()?), vec![look]);
             add_trigger(&mut program, spellwake_engine::program::TriggerSpec::dies(spellwake_engine::program::ObjectFilter::creature().controlled()), NoTarget,
                 vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(CounterKind::Eyeball, amount(2))]);
@@ -1618,13 +1620,15 @@ pub(super) fn compile(
                 spellwake_engine::program::TriggerSpec::enters(spellwake_engine::program::ObjectFilter::creature().controlled().other_than_ability_source().with_power(spellwake_engine::program::PowerFilter::AtMost(2))),
                 NoTarget,
                 vec![
-                    OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        fixed: fixed_cost("{1}")?,
-                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 1,
-                        declined_destination: 2,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::Controller,
+                            fixed_cost("{1}")?,
+                            spellwake_engine::program::ValueExpr::Literal(0.into()),
+                            1,
+                            2,
+                        ),
+                    )),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(amount(1)),
                 ],
             )],
@@ -2915,20 +2919,20 @@ pub(super) fn compile(
                 vec![(
                     etb,
                     NoTarget,
-                    vec![LookTopChooseExt {
-                        library_owner: ResolvingPlayer::Controller,
-                        chooser: ResolvingPlayer::Controller,
-                        count: amount(2),
-                        filter: None,
-                        max_picks: 1,
-                        take_all_matching: false,
-                        keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                        rest_dest: spellwake_engine::program::LookTopRestDest::Graveyard,
-                        reveal_kept: false,
-                        reveal_all: false,
-                        reveal_only: false,
-                        secondary: None,
-                    }],
+                    spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                        ResolvingPlayer::Controller,
+                        ResolvingPlayer::Controller,
+                        amount(2),
+                        None,
+                        1,
+                        false,
+                        spellwake_engine::program::LookTopKeepDest::Hand,
+                        spellwake_engine::program::LookTopRestDest::Graveyard,
+                        false,
+                        false,
+                        false,
+                        None,
+                    ),
                 )],
             )
         }

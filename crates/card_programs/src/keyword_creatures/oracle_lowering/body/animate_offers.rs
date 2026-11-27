@@ -751,6 +751,11 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                         rewrite_offer_chosen_to_loop_ve(min);
                         rewrite_offer_chosen_to_loop_ve(max);
                     }
+                    spellwake_engine::toolbox::PromptDomain::ManaPayment {
+                        extra_generic, ..
+                    } => {
+                        rewrite_offer_chosen_to_loop_ve(extra_generic);
+                    }
                     spellwake_engine::toolbox::PromptDomain::Partition { query, .. } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
                             query,
@@ -772,30 +777,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     &rewrite_offer_chosen_to_loop_ap,
                     &rewrite_offer_chosen_to_loop_ve,
                 );
-            }
-            Instruction::LookTopChooseExt {
-                library_owner,
-                chooser,
-                count,
-                ..
-            }
-            | Instruction::RevealUntilMatchExt {
-                library_owner,
-                chooser,
-                count,
-                ..
-            } => {
-                rewrite_offer_chosen_to_loop_rp(library_owner);
-                rewrite_offer_chosen_to_loop_rp(chooser);
-                rewrite_offer_chosen_to_loop_ve(count);
-            }
-            Instruction::OfferDynamicManaPayment {
-                payer,
-                extra_generic,
-                ..
-            } => {
-                rewrite_offer_chosen_to_loop_rp(payer);
-                rewrite_offer_chosen_to_loop_ve(extra_generic);
             }
             Instruction::OptionalSequence { chooser, .. } => {
                 rewrite_offer_chosen_to_loop_rp(chooser);

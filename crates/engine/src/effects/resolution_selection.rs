@@ -1217,7 +1217,6 @@ impl EffectWindow {
             }
             Instruction::Jump { .. }
             | Instruction::OptionalSequence { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -1236,8 +1235,6 @@ impl EffectWindow {
             | Instruction::SearchLibrary { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. }
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
             | Instruction::AdjustLife(_)

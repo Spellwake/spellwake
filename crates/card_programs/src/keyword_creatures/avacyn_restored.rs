@@ -1541,27 +1541,30 @@ fn creature(
                 vec![(
                     spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player().only_if(spellwake_engine::program::TriggerCondition::NoOtherControlledCreatures),
                     NoTarget,
-                    vec![
-                        Instruction::MutatePlayer(Box::new(
+                    {
+                        let mut ops = vec![Instruction::MutatePlayer(Box::new(
                             spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
                                 spellwake_engine::program::InterveningCondition::NoOtherControlledCreatures,
                             ),
-                        )),
-                        Instruction::LookTopChooseExt {
-                            library_owner: spellwake_engine::program::ResolvingPlayer::Controller,
-                            chooser: spellwake_engine::program::ResolvingPlayer::Controller,
-                            count: spellwake_engine::program::ValueExpr::Literal(4.into()),
-                            filter: None,
-                            max_picks: 1,
-                            take_all_matching: false,
-                            keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                            rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                            reveal_kept: false,
-                            reveal_all: false,
-                            reveal_only: false,
-                            secondary: None,
-                        },
-                    ],
+                        ))];
+                        ops.extend(
+                            spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                                spellwake_engine::program::ValueExpr::Literal(4.into()),
+                                None,
+                                1,
+                                false,
+                                spellwake_engine::program::LookTopKeepDest::Hand,
+                                spellwake_engine::program::LookTopRestDest::BottomOrder,
+                                false,
+                                false,
+                                false,
+                                None,
+                            ),
+                        );
+                        ops
+                    },
                 )],
             )
         }
@@ -1824,13 +1827,15 @@ fn creature(
                 spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::of_type(CardType::Instant)),
                 NoTarget,
                 vec![
-                    OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        fixed: fixed_cost("{1}")?,
-                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 1,
-                        declined_destination: 2,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::Controller,
+                            fixed_cost("{1}")?,
+                            spellwake_engine::program::ValueExpr::Literal(0.into()),
+                            1,
+                            2,
+                        ),
+                    )),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(literal(1)),
                 ],
             )],

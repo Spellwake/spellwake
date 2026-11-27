@@ -26,7 +26,87 @@ use crate::{
 use spellwake_contracts::RulesInteger;
 use std::collections::{BTreeMap, BTreeSet};
 
+fn query_scans_library(query: &crate::toolbox::ObjectQuery) -> bool {
+    match query {
+        crate::toolbox::ObjectQuery::ZoneScan {
+            zone: crate::toolbox::QueryZone::Library(_),
+            ..
+        } => true,
+        crate::toolbox::ObjectQuery::Filtered { source, .. }
+        | crate::toolbox::ObjectQuery::Take { source, .. } => query_scans_library(source),
+        _ => false,
+    }
+}
+
 impl EffectWindow {
+    fn reorder_library_cards(
+        &mut self,
+        owner: SeatId,
+        entry: crate::stack_window::StackEntryId,
+        ids: &[ObjectId],
+        to_top: bool,
+        nth_from_top: Option<usize>,
+    ) -> Result<(), EffectError> {
+        let library = self.window.cards().library(owner);
+        let present: Vec<ObjectId> = ids
+            .iter()
+            .copied()
+            .filter(|id| library.contains(id))
+            .collect();
+        if present.is_empty() {
+            return Ok(());
+        }
+        let max_idx = present
+            .iter()
+            .filter_map(|id| library.iter().position(|c| c == id))
+            .max()
+            .ok_or(EffectError::InvalidLibraryPartition)?;
+        let prefix_len = match nth_from_top {
+            Some(offset) => (max_idx + 1)
+                .max(offset.saturating_add(present.len()))
+                .min(library.len()),
+            None => max_idx + 1,
+        };
+        let frozen = library
+            .get(..prefix_len)
+            .ok_or(EffectError::InvalidLibraryPartition)?
+            .to_vec();
+        let present_set: BTreeSet<ObjectId> = present.iter().copied().collect();
+        let others: Vec<ObjectId> = frozen
+            .iter()
+            .copied()
+            .filter(|id| !present_set.contains(id))
+            .collect();
+        let (top, bottom): (Vec<ObjectId>, Vec<ObjectId>) = if let Some(offset) = nth_from_top {
+            let insert_at = offset.saturating_sub(1).min(others.len());
+            let mut combined = Vec::with_capacity(frozen.len());
+            combined.extend_from_slice(&others[..insert_at]);
+            combined.extend_from_slice(&present);
+            combined.extend_from_slice(&others[insert_at..]);
+            (combined, Vec::new())
+        } else if to_top {
+            let mut combined = Vec::with_capacity(frozen.len());
+            combined.extend_from_slice(&present);
+            combined.extend_from_slice(&others);
+            (combined, Vec::new())
+        } else {
+            (others, present)
+        };
+        let (window, _) = self.window.record_library_top(
+            self.window.revision(),
+            entry,
+            crate::stack_window::LibraryTopCommit {
+                player: owner,
+                frozen: &frozen,
+                top: &top,
+                bottom: &bottom,
+                moves_application: &[],
+            },
+        )?;
+        self.window = window;
+        Ok(())
+    }
+
     fn emit_zone_op_moves(
         &mut self,
         entry: &StackEntry,
@@ -377,10 +457,68 @@ impl EffectWindow {
                 moved_ids = selected;
             }
             ZoneDest::RevealOnly => {
-                if let Some(&first) = selected.first()
-                    && let Some(cur) = self.resolution_cursor_mut()
-                {
-                    cur.results.revealed_top_card = Some(first);
+                if selected.is_empty() {
+                    if query_scans_library(&spec.source)
+                        && let Some(cur) = self.resolution_cursor_mut()
+                    {
+                        cur.results.revealed_top_card = None;
+                        cur.results.revealed_top_types.clear();
+                    }
+                } else if let Some(&first) = selected.first() {
+                    let first_in_library = self
+                        .window
+                        .cards()
+                        .get(first)
+                        .is_some_and(|c| matches!(c.zone(), ObjectZone::Library(_)));
+                    if first_in_library {
+                        let revealed_types: BTreeSet<crate::program::CardType> = selected
+                            .iter()
+                            .filter(|&&id| {
+                                self.window
+                                    .cards()
+                                    .get(id)
+                                    .is_some_and(|c| matches!(c.zone(), ObjectZone::Library(_)))
+                            })
+                            .filter_map(|&id| evaluated.get(id))
+                            .flat_map(|c| c.current_types.iter().copied())
+                            .collect();
+                        if let Some(cur) = self.resolution_cursor_mut() {
+                            cur.results.revealed_top_card = Some(first);
+                            cur.results.revealed_top_types = revealed_types;
+                        }
+                    } else if let Some(cur) = self.resolution_cursor_mut() {
+                        cur.results.revealed_top_card = Some(first);
+                    }
+                }
+                let library_cards: Vec<GameObject> = selected
+                    .iter()
+                    .copied()
+                    .filter_map(|id| {
+                        self.window
+                            .cards()
+                            .get(id)
+                            .filter(|c| matches!(c.zone(), ObjectZone::Library(_)))
+                            .cloned()
+                    })
+                    .collect();
+                if !library_cards.is_empty() {
+                    let before = self.rules_snapshot(None)?;
+                    self.emit_from(
+                        EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before,
+                        None,
+                        ctx.append,
+                        |_, _, _| {
+                            Ok(library_cards
+                                .iter()
+                                .cloned()
+                                .map(|object| RulesOccurrence::LibraryCardRevealed { object })
+                                .collect())
+                        },
+                    )?;
                 }
                 let hand_cards: Vec<GameObject> = selected
                     .iter()
@@ -541,6 +679,7 @@ impl EffectWindow {
                                 .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
                         });
                 let mut deferred_self = false;
+                let mut already_exiled = Vec::new();
                 let to_move: Vec<(ObjectId, ObjectDestination)> = if skip_until_leaves {
                     Vec::new()
                 } else {
@@ -551,8 +690,15 @@ impl EffectWindow {
                             if Some(*id) == resolving_spell_id {
                                 deferred_self = true;
                                 false
+                            } else if let Some(card) = self.window.cards().get(*id) {
+                                if card.zone() == ObjectZone::Exile {
+                                    already_exiled.push(*id);
+                                    false
+                                } else {
+                                    true
+                                }
                             } else {
-                                self.window.cards().get(*id).is_some()
+                                false
                             }
                         })
                         .map(|id| (id, ObjectDestination::Exile))
@@ -567,7 +713,7 @@ impl EffectWindow {
                         moved_ids.push(sid);
                     }
                 }
-                if !to_move.is_empty() {
+                if !to_move.is_empty() || !already_exiled.is_empty() {
                     let viewer_seat = match viewer {
                         Some(sel) => self
                             .eval_player_selector_at(
@@ -581,52 +727,65 @@ impl EffectWindow {
                             .unwrap_or(controller),
                         None => controller,
                     };
-                    let before = self.rules_snapshot(None)?;
-                    let (window, movements) = self.window.record_linked_return_moves(&to_move)?;
-                    self.window = window;
-                    moved_ids = movements.iter().map(|m| m.after.id()).collect();
-                    if matches!(
-                        self.payloads
-                            .get(&entry.id())
-                            .and_then(StackPayload::instructions)
-                            .and_then(|ops| ops.get(index + 1)),
-                        Some(Instruction::ZoneOp(next_spec))
-                            if matches!(
-                                next_spec.destination,
-                                ZoneDest::Delayed(
-                                    crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort {
-                                        ..
-                                    }
+                    let mut newly_exiled = Vec::new();
+                    if !to_move.is_empty() {
+                        let before = self.rules_snapshot(None)?;
+                        let (window, movements) =
+                            self.window.record_linked_return_moves(&to_move)?;
+                        self.window = window;
+                        newly_exiled = movements.iter().map(|m| m.after.id()).collect();
+                        moved_ids.extend(newly_exiled.iter().copied());
+                        if matches!(
+                            self.payloads
+                                .get(&entry.id())
+                                .and_then(StackPayload::instructions)
+                                .and_then(|ops| ops.get(index + 1)),
+                            Some(Instruction::ZoneOp(next_spec))
+                                if matches!(
+                                    next_spec.destination,
+                                    ZoneDest::Delayed(
+                                        crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort {
+                                            ..
+                                        }
+                                    )
                                 )
-                            )
-                    ) {
-                        let flickered: Vec<ObjectId> = movements
-                            .iter()
-                            .filter(|m| m.after.zone() == ObjectZone::Exile)
-                            .flat_map(crate::object_identity::ObjectMovement::arrivals)
-                            .filter(|id| {
-                                self.window
-                                    .cards()
-                                    .get(*id)
-                                    .is_some_and(|card| card.card_id().is_some())
-                            })
-                            .collect();
-                        if let Some(cur) = self.resolution_cursor_mut() {
-                            cur.impulse.flickered = flickered;
+                        ) {
+                            let flickered: Vec<ObjectId> = movements
+                                .iter()
+                                .filter(|m| m.after.zone() == ObjectZone::Exile)
+                                .flat_map(crate::object_identity::ObjectMovement::arrivals)
+                                .filter(|id| {
+                                    self.window
+                                        .cards()
+                                        .get(*id)
+                                        .is_some_and(|card| card.card_id().is_some())
+                                })
+                                .collect();
+                            if let Some(cur) = self.resolution_cursor_mut() {
+                                cur.impulse.flickered = flickered;
+                            }
                         }
+                        self.emit_zone_op_moves(
+                            entry,
+                            index,
+                            &before,
+                            &movements,
+                            ZoneReason::ExiledByEffect,
+                            ctx.append,
+                        )?;
                     }
-                    for &new_id in &moved_ids {
+                    moved_ids.extend(already_exiled.iter().copied());
+                    for &exiled_id in newly_exiled.iter().chain(&already_exiled) {
                         if *face_down {
-                            self.face_down_exile.insert(new_id, viewer_seat);
+                            self.face_down_exile.insert(exiled_id, viewer_seat);
                         }
                         if *link_to_source && let Some(src) = source_id {
-                            self.characteristics
-                                .linked_exiles
-                                .entry(src)
-                                .or_default()
-                                .push(new_id);
+                            let linked = self.characteristics.linked_exiles.entry(src).or_default();
+                            if !linked.contains(&exiled_id) {
+                                linked.push(exiled_id);
+                            }
                             self.object_tags.set(
-                                new_id,
+                                exiled_id,
                                 TagKey::LinkedSource(src),
                                 TagValue::Object(src),
                             );
@@ -637,19 +796,11 @@ impl EffectWindow {
                             self.independent_exile_links
                                 .entry((src, *group))
                                 .or_default()
-                                .insert(new_id);
+                                .insert(exiled_id);
                         }
                     }
-                    self.emit_zone_op_moves(
-                        entry,
-                        index,
-                        &before,
-                        &movements,
-                        ZoneReason::ExiledByEffect,
-                        ctx.append,
-                    )?;
                     if let Some(timing) = delayed_return
-                        && !moved_ids.is_empty()
+                        && !newly_exiled.is_empty()
                     {
                         match timing {
                             DelayedReturnTiming::Immediately => {
@@ -660,7 +811,7 @@ impl EffectWindow {
                                         entry: entry.id(),
                                         instruction: index,
                                     },
-                                    moved_ids.clone(),
+                                    newly_exiled.clone(),
                                     ctx.append,
                                 )?;
                             }
@@ -687,7 +838,7 @@ impl EffectWindow {
                                             BodyTarget::None,
                                             vec![Instruction::ZoneOp(Box::new(
                                                 ZoneOpSpec::return_fixed_to_battlefield(
-                                                    moved_ids.clone(),
+                                                    newly_exiled.clone(),
                                                     false,
                                                 ),
                                             ))],
@@ -701,7 +852,7 @@ impl EffectWindow {
                                         .linked_exiles
                                         .entry(src)
                                         .or_default()
-                                        .extend(moved_ids.iter().copied());
+                                        .extend(newly_exiled.iter().copied());
                                 }
                             }
                             DelayedReturnTiming::LinkedGroup(group) => {
@@ -711,7 +862,7 @@ impl EffectWindow {
                                     self.independent_exile_links
                                         .entry((src, *group))
                                         .or_default()
-                                        .extend(moved_ids.iter().copied());
+                                        .extend(newly_exiled.iter().copied());
                                 }
                             }
                         }
@@ -760,6 +911,7 @@ impl EffectWindow {
             }
             ZoneDest::Library { position } => {
                 let effective_pos = chosen_library_pos.as_ref().unwrap_or(position);
+                let mut nth_offset: Option<usize> = None;
                 let (dest, placement) = match effective_pos {
                     LibraryOrderPos::Top => (ObjectDestination::LibraryTop, LibraryPlacement::Top),
                     LibraryOrderPos::Bottom | LibraryOrderPos::ShuffleInto => {
@@ -779,6 +931,7 @@ impl EffectWindow {
                             )?
                             .to_usize()
                             .unwrap_or(0);
+                        nth_offset = Some(offset);
                         let offset_u8 = u8::try_from(offset).unwrap_or(u8::MAX);
                         (
                             ObjectDestination::LibraryFromTop(offset_u8),
@@ -790,6 +943,7 @@ impl EffectWindow {
                     }
                 };
                 let mut deferred_self = false;
+                let mut same_zone_by_owner: BTreeMap<SeatId, Vec<ObjectId>> = BTreeMap::new();
                 let mut to_move = Vec::new();
                 for id in selected {
                     if Some(id) == resolving_spell_id {
@@ -805,7 +959,11 @@ impl EffectWindow {
                         if matches!(effective_pos, LibraryOrderPos::ShuffleInto) {
                             shuffle_owners.insert(obj.owner());
                         }
-                        to_move.push((id, dest));
+                        if obj.zone() == ObjectZone::Library(obj.owner()) {
+                            same_zone_by_owner.entry(obj.owner()).or_default().push(id);
+                        } else {
+                            to_move.push((id, dest));
+                        }
                     }
                 }
                 if deferred_self
@@ -817,12 +975,29 @@ impl EffectWindow {
                         moved_ids.push(sid);
                     }
                 }
+                for (owner, ids) in same_zone_by_owner {
+                    match effective_pos {
+                        LibraryOrderPos::Top | LibraryOrderPos::ChoiceTopOrBottom { .. } => {
+                            self.reorder_library_cards(owner, entry.id(), &ids, true, None)?;
+                        }
+                        LibraryOrderPos::Bottom | LibraryOrderPos::BottomRandom => {
+                            self.reorder_library_cards(owner, entry.id(), &ids, false, None)?;
+                        }
+                        LibraryOrderPos::NthFromTop(_) => {
+                            self.reorder_library_cards(owner, entry.id(), &ids, true, nth_offset)?;
+                        }
+                        LibraryOrderPos::ShuffleInto => {
+                            self.reorder_library_cards(owner, entry.id(), &ids, false, None)?;
+                        }
+                    }
+                    moved_ids.extend(ids);
+                }
                 self.apply_exile_if_leaves_replacement(&mut to_move);
                 if !to_move.is_empty() {
                     let before = self.rules_snapshot(None)?;
                     let (window, movements) = self.window.record_linked_return_moves(&to_move)?;
                     self.window = window;
-                    moved_ids = movements.iter().map(|m| m.after.id()).collect();
+                    moved_ids.extend(movements.iter().map(|m| m.after.id()));
                     self.emit_zone_op_moves(
                         entry,
                         index,

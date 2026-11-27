@@ -2375,13 +2375,15 @@ pub(super) fn try_build_offer_mana(
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<Instruction> {
     if let Some(cost) = parse_fixed_mana_cost(raw) {
-        return Some(Instruction::OfferDynamicManaPayment {
-            payer,
-            fixed: cost,
-            extra_generic: ValueExpr::Literal(0.into()),
-            paid_destination,
-            declined_destination,
-        });
+        return Some(Instruction::PromptChoice(Box::new(
+            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                payer,
+                cost,
+                ValueExpr::Literal(0.into()),
+                paid_destination,
+                declined_destination,
+            ),
+        )));
     }
     if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
         && x_cnt > 0
@@ -2391,23 +2393,26 @@ pub(super) fn try_build_offer_mana(
             None => ValueExpr::chosen_x(),
         };
         let extra_generic = scale_value_expr(x_val, i64::from(x_cnt));
-        return Some(Instruction::OfferDynamicManaPayment {
-            payer,
-            fixed,
-            extra_generic,
-            paid_destination,
-            declined_destination,
-        });
+        return Some(Instruction::PromptChoice(Box::new(
+            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                payer,
+                fixed,
+                extra_generic,
+                paid_destination,
+                declined_destination,
+            ),
+        )));
     }
     None
 }
 
 pub(super) fn with_offer_dests(mut op: Instruction, paid: usize, declined: usize) -> Instruction {
-    if let Instruction::OfferDynamicManaPayment {
-        paid_destination,
-        declined_destination,
-        ..
-    } = &mut op
+    if let Instruction::PromptChoice(spec) = &mut op
+        && let spellwake_engine::toolbox::PromptDomain::ManaPayment {
+            paid_destination,
+            declined_destination,
+            ..
+        } = &mut spec.domain
     {
         *paid_destination = paid;
         *declined_destination = declined;
@@ -2416,19 +2421,21 @@ pub(super) fn with_offer_dests(mut op: Instruction, paid: usize, declined: usize
 }
 
 pub(super) fn set_offer_paid(op: Option<&mut Instruction>, paid: usize) {
-    if let Some(Instruction::OfferDynamicManaPayment {
-        paid_destination, ..
-    }) = op
+    if let Some(Instruction::PromptChoice(spec)) = op
+        && let spellwake_engine::toolbox::PromptDomain::ManaPayment {
+            paid_destination, ..
+        } = &mut spec.domain
     {
         *paid_destination = paid;
     }
 }
 
 pub(super) fn set_offer_declined(op: Option<&mut Instruction>, declined: usize) {
-    if let Some(Instruction::OfferDynamicManaPayment {
-        declined_destination,
-        ..
-    }) = op
+    if let Some(Instruction::PromptChoice(spec)) = op
+        && let spellwake_engine::toolbox::PromptDomain::ManaPayment {
+            declined_destination,
+            ..
+        } = &mut spec.domain
     {
         *declined_destination = declined;
     }
@@ -2788,13 +2795,15 @@ pub(super) fn lower_ward_cost_body(
             let extra_generic = scale_value_expr(ValueExpr::chosen_x(), i64::from(x_cnt));
             return Ok(ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::OfferDynamicManaPayment {
-                    payer,
-                    fixed,
-                    extra_generic,
-                    paid_destination: 2,
-                    declined_destination: 1,
-                }],
+                vec![Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        payer,
+                        fixed,
+                        extra_generic,
+                        2,
+                        1,
+                    ),
+                ))],
             ));
         }
         return Err("oracle:ward-non-mana");
@@ -2819,24 +2828,28 @@ pub(super) fn lower_ward_cost_body(
     let mut instructions = Vec::new();
     if let Some(mc) = mana_cost {
         if non_mana_ops.is_empty() {
-            instructions.push(Instruction::OfferDynamicManaPayment {
-                payer,
-                fixed: mc,
-                extra_generic: ValueExpr::Literal(0.into()),
-                paid_destination: 2,
-                declined_destination: 1,
-            });
+            instructions.push(Instruction::PromptChoice(Box::new(
+                spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    payer,
+                    mc,
+                    ValueExpr::Literal(0.into()),
+                    2,
+                    1,
+                ),
+            )));
             return Ok(ExecutableBody::new(BodyTarget::None, instructions));
         }
         // Offer mana first; if declined jump directly to the ward counter op (the instruction after this body).
         let counter_idx = 1 + 1 + non_mana_ops.len() + 1;
-        instructions.push(Instruction::OfferDynamicManaPayment {
-            payer,
-            fixed: mc,
-            extra_generic: ValueExpr::Literal(0.into()),
-            paid_destination: 1,
-            declined_destination: counter_idx,
-        });
+        instructions.push(Instruction::PromptChoice(Box::new(
+            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                payer,
+                mc,
+                ValueExpr::Literal(0.into()),
+                1,
+                counter_idx,
+            ),
+        )));
     }
     if non_mana_ops.is_empty() {
         return Err("oracle:ward-non-mana");

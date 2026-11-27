@@ -276,7 +276,13 @@ fn try_append_fixed_first_target_counters(
             Instruction::BranchCondition { .. }
                 | Instruction::Jump { .. }
                 | Instruction::OptionalSequence { .. }
-                | Instruction::OfferDynamicManaPayment { .. }
+        ) || matches!(
+            op,
+            Instruction::PromptChoice(spec)
+                if matches!(
+                    spec.domain,
+                    spellwake_engine::toolbox::PromptDomain::ManaPayment { .. }
+                )
         )
     };
     let rest = &builder.instructions[1..];

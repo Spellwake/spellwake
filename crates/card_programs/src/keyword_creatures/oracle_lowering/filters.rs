@@ -7774,10 +7774,19 @@ fn has_prior_reveal_top(context: Option<(&BodyBuilder, bool)>) -> bool {
         b.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::LookTopChooseExt {
-                    reveal_only: true,
-                    ..
-                }
+                Instruction::ZoneOp(spec)
+                    if matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::RevealOnly
+                            | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                    ) && matches!(
+                        &spec.source,
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                            slice: spellwake_engine::toolbox::QuerySlice::Top(_),
+                            ..
+                        }
+                    )
             ) || matches!(
                 op,
                 Instruction::MutatePlayer(spec)
@@ -7795,14 +7804,18 @@ fn has_prior_reveal_other(context: Option<(&BodyBuilder, bool)>) -> bool {
         b.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::LookTopChooseExt {
-                    reveal_only: false,
-                    ..
-                }
-            ) || matches!(
-                op,
                 Instruction::ZoneOp(spec)
                     if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::RevealOnly)
+                        || (matches!(
+                            &spec.source,
+                            spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                                ..
+                            }
+                        ) && !matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                        ))
             )
         })
     })

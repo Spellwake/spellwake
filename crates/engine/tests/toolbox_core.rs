@@ -4352,3 +4352,212 @@ fn prompt_choice_choose_objects_enforces_max_total_power_and_binds_unchosen() {
         ObjectZone::Graveyard(P1)
     );
 }
+
+#[test]
+fn object_query_difference_and_look_top_and_reveal_until_match_pipelines() {
+    use spellwake_engine::program::{LookTopKeepDest, LookTopRestDest};
+
+    let vocab = vocabulary();
+    let forest = || {
+        validated(
+            Program::land(BTreeSet::from([LandType::Forest]), vec![]),
+            &vocab,
+        )
+    };
+
+    // 1. ObjectQuery::Difference: exile all creatures except those controlled by P0.
+    let diff_spell = sorcery(
+        vec![Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+            ObjectQuery::Difference(
+                Box::new(ObjectQuery::zone(
+                    QueryZone::Battlefield,
+                    ObjectFilter::creature(),
+                )),
+                Box::new(ObjectQuery::zone(
+                    QueryZone::Battlefield,
+                    ObjectFilter::creature().controlled(),
+                )),
+            ),
+            ZoneDest::exile(),
+        )))],
+        &vocab,
+    );
+    let game_diff = init_world(
+        vocab.clone(),
+        vec![
+            in_hand(1, P0, diff_spell),
+            bf(2, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+            bf(3, P1, bear(3, 3, BTreeSet::new(), &vocab)),
+            bf(4, P1, bear(4, 4, BTreeSet::new(), &vocab)),
+        ],
+    );
+    let after_diff = cast_untargeted(&game_diff, 1).into_state();
+    assert_eq!(
+        after_diff
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_diff, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Battlefield
+    );
+    assert_eq!(
+        after_diff
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_diff, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Exile
+    );
+    assert_eq!(
+        after_diff
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_diff, 4))
+            .unwrap()
+            .zone(),
+        ObjectZone::Exile
+    );
+
+    // 2. ZoneOpSpec::look_top_choose_instructions: look at top 3, pick 1 to hand, rest to bottom.
+    let look_spell = sorcery(
+        ZoneOpSpec::look_top_choose_instructions(
+            ResolvingPlayer::Controller,
+            ResolvingPlayer::Controller,
+            ValueExpr::literal(3),
+            None,
+            1,
+            false,
+            LookTopKeepDest::Hand,
+            LookTopRestDest::BottomOrder,
+            false,
+            false,
+            false,
+            None,
+        ),
+        &vocab,
+    );
+    // Pushed bottom-to-top so initial library top-to-bottom is [10, 11, 12, 13].
+    let game_look = init_world(
+        vocab.clone(),
+        vec![
+            in_hand(1, P0, look_spell),
+            in_library(13, P0, bear(5, 5, BTreeSet::new(), &vocab)),
+            in_library(12, P0, forest()),
+            in_library(11, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+            in_library(10, P0, forest()),
+        ],
+    );
+    let c10 = object(&game_look, 10);
+    let c11 = object(&game_look, 11);
+    let c12 = object(&game_look, 12);
+    let c13 = object(&game_look, 13);
+
+    let paused = cast_untargeted(&game_look, 1);
+    let decision = paused
+        .state()
+        .pending_decision()
+        .expect("look-top choose prompt must be pending");
+    assert_eq!(decision.chooser(), P0);
+    match decision.frame() {
+        RuleFrame::PromptChoice(frame) => match &frame.domain {
+            ResolvedPromptDomain::Objects {
+                candidates,
+                min,
+                max,
+                hidden,
+            } => {
+                assert_eq!(candidates.len(), 3);
+                assert_eq!(*min, 1);
+                assert_eq!(*max, 1);
+                assert!(!hidden);
+                assert!(candidates.contains(&c10));
+                assert!(candidates.contains(&c11));
+                assert!(candidates.contains(&c12));
+                assert!(!candidates.contains(&c13));
+            }
+            other => panic!("expected Objects prompt domain, got {other:?}"),
+        },
+        other => panic!("expected PromptChoice frame, got {other:?}"),
+    }
+
+    let after_look = submit(
+        paused.state(),
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Objects(vec![c11])),
+        },
+    )
+    .into_state();
+    assert!(after_look.pending_decision().is_none());
+    assert_eq!(
+        after_look
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_look, 11))
+            .unwrap()
+            .zone(),
+        ObjectZone::Hand(P0)
+    );
+    let lib_after_look = after_look.execution().window().cards().library(P0);
+    assert_eq!(lib_after_look.len(), 3);
+    assert_eq!(lib_after_look[0], object(&after_look, 13));
+    let bottom_set: BTreeSet<_> = lib_after_look[1..].iter().copied().collect();
+    assert_eq!(
+        bottom_set,
+        BTreeSet::from([object(&after_look, 10), object(&after_look, 12)])
+    );
+
+    // 3. ZoneOpSpec::reveal_until_match_instructions: reveal until 1 creature -> hand, rest bottom.
+    let reveal_spell = sorcery(
+        ZoneOpSpec::reveal_until_match_instructions(
+            ResolvingPlayer::Controller,
+            ResolvingPlayer::Controller,
+            ObjectFilter::creature(),
+            ValueExpr::literal(1),
+            LookTopKeepDest::Hand,
+            LookTopRestDest::BottomOrder,
+            false,
+            false,
+            false,
+        ),
+        &vocab,
+    );
+    // Pushed bottom-to-top so initial library top-to-bottom is [20, 21, 22 (creature), 23].
+    let game_reveal = init_world(
+        vocab.clone(),
+        vec![
+            in_hand(1, P0, reveal_spell),
+            in_library(23, P0, forest()),
+            in_library(22, P0, bear(3, 3, BTreeSet::new(), &vocab)),
+            in_library(21, P0, forest()),
+            in_library(20, P0, forest()),
+        ],
+    );
+    let after_reveal = cast_untargeted(&game_reveal, 1).into_state();
+    assert!(after_reveal.pending_decision().is_none());
+    assert_eq!(
+        after_reveal
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_reveal, 22))
+            .unwrap()
+            .zone(),
+        ObjectZone::Hand(P0)
+    );
+    let lib_after_reveal = after_reveal.execution().window().cards().library(P0);
+    assert_eq!(lib_after_reveal.len(), 3);
+    assert_eq!(lib_after_reveal[0], object(&after_reveal, 23));
+    let reveal_bottom_set: BTreeSet<_> = lib_after_reveal[1..].iter().copied().collect();
+    assert_eq!(
+        reveal_bottom_set,
+        BTreeSet::from([object(&after_reveal, 20), object(&after_reveal, 21)])
+    );
+}

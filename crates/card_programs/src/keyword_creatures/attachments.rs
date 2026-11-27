@@ -821,13 +821,15 @@ fn bearer_trigger(keyword: &str, vocabulary: &CreatureTypeVocabulary) -> Option<
         }
         let mut instructions = Vec::new();
         if let Some(cost) = price {
-            instructions.push(Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::Controller,
-                fixed: cost,
-                extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                paid_destination: 1,
-                declined_destination: 2,
-            });
+            instructions.push(Instruction::PromptChoice(Box::new(
+                spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::Controller,
+                    cost,
+                    spellwake_engine::program::ValueExpr::Literal(0.into()),
+                    1,
+                    2,
+                ),
+            )));
         }
         instructions.push(Instruction::MutateObject(Box::new(
             spellwake_engine::toolbox::MutateObjectSpec::create_token_and_attach(Box::new(

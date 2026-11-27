@@ -51,8 +51,15 @@ fn instruction_supports_optional_wrapper(op: &Instruction) -> bool {
         Instruction::SearchLibrary { filter } => filter.supports_optional_wrapper(),
         Instruction::BranchCondition { .. }
         | Instruction::Jump { .. }
-        | Instruction::OfferDynamicManaPayment { .. }
         | Instruction::OptionalSequence { .. } => false,
+        Instruction::PromptChoice(spec)
+            if matches!(
+                spec.domain,
+                spellwake_engine::toolbox::PromptDomain::ManaPayment { .. }
+            ) =>
+        {
+            false
+        }
         _ => true,
     }
 }
@@ -69,8 +76,13 @@ fn wrap_optional_instructions(
     let Some(head) = ops.get(start) else {
         return Err("oracle:empty-optional");
     };
+    let is_mana_offer = matches!(
+        head,
+        Instruction::PromptChoice(spec)
+            if matches!(spec.domain, spellwake_engine::toolbox::PromptDomain::ManaPayment { .. })
+    );
     if count == 1 {
-        let already_optional = matches!(head, Instruction::OfferDynamicManaPayment { .. })
+        let already_optional = is_mana_offer
             || matches!(
                 head,
                 Instruction::MutatePlayer(spec)
@@ -100,9 +112,7 @@ fn wrap_optional_instructions(
             );
             return Ok(());
         }
-    } else if instruction_supports_optional_wrapper(head)
-        || matches!(head, Instruction::OfferDynamicManaPayment { .. })
-    {
+    } else if instruction_supports_optional_wrapper(head) || is_mana_offer {
         prepend_instruction_at(
             ops,
             start,
@@ -374,13 +384,15 @@ pub(super) fn lower_control_misc_instruction(
                 let offer_idx = builder.instructions.len();
                 builder
                     .instructions
-                    .push(Instruction::OfferDynamicManaPayment {
-                        payer,
-                        fixed: ManaCost::free(),
-                        extra_generic: ValueExpr::chosen_x(),
-                        paid_destination: offer_idx + 2,
-                        declined_destination: offer_idx + 1,
-                    });
+                    .push(Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            payer,
+                            ManaCost::free(),
+                            ValueExpr::chosen_x(),
+                            offer_idx + 2,
+                            offer_idx + 1,
+                        ),
+                    )));
                 builder
                     .instructions
                     .push(Instruction::MutatePlayer(Box::new(
@@ -466,11 +478,13 @@ pub(super) fn lower_control_misc_instruction(
                     self_pronoun_valid,
                     bound_x,
                 )?;
-                if sub
-                    .instructions
-                    .iter()
-                    .any(|op| matches!(op, Instruction::OfferDynamicManaPayment { .. }))
-                {
+                if sub.instructions.iter().any(|op| {
+                    matches!(
+                        op,
+                        Instruction::PromptChoice(spec)
+                            if matches!(spec.domain, spellwake_engine::toolbox::PromptDomain::ManaPayment { .. })
+                    )
+                }) {
                     return Err("oracle:unsupported-pay-any-mana");
                 }
                 wrap_optional_instructions(&mut sub.instructions, 0, ResolvingPlayer::LoopPlayer)?;
@@ -494,13 +508,15 @@ pub(super) fn lower_control_misc_instruction(
                 let offer_idx = builder.instructions.len();
                 builder
                     .instructions
-                    .push(Instruction::OfferDynamicManaPayment {
-                        payer,
-                        fixed: ManaCost::free(),
-                        extra_generic: ValueExpr::chosen_x(),
-                        paid_destination: offer_idx + 2,
-                        declined_destination: offer_idx + 1,
-                    });
+                    .push(Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            payer,
+                            ManaCost::free(),
+                            ValueExpr::chosen_x(),
+                            offer_idx + 2,
+                            offer_idx + 1,
+                        ),
+                    )));
                 builder
                     .instructions
                     .push(Instruction::MutatePlayer(Box::new(
@@ -649,13 +665,15 @@ pub(super) fn lower_control_misc_instruction(
                 if let Some(mc) = parse_fixed_mana_cost(raw) {
                     builder
                         .instructions
-                        .push(Instruction::OfferDynamicManaPayment {
-                            payer: ResolvingPlayer::Controller,
-                            fixed: mc,
-                            extra_generic: ValueExpr::Literal(0.into()),
-                            paid_destination: idx + 1,
-                            declined_destination: idx + 1,
-                        });
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                ResolvingPlayer::Controller,
+                                mc,
+                                ValueExpr::Literal(0.into()),
+                                idx + 1,
+                                idx + 1,
+                            ),
+                        )));
                     return Ok(());
                 } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
                     && x_cnt > 0
@@ -669,13 +687,15 @@ pub(super) fn lower_control_misc_instruction(
                     let extra_generic = scale_value_expr(x_val, i64::from(x_cnt));
                     builder
                         .instructions
-                        .push(Instruction::OfferDynamicManaPayment {
-                            payer: ResolvingPlayer::Controller,
-                            fixed,
-                            extra_generic,
-                            paid_destination: idx + 1,
-                            declined_destination: idx + 1,
-                        });
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                ResolvingPlayer::Controller,
+                                fixed,
+                                extra_generic,
+                                idx + 1,
+                                idx + 1,
+                            ),
+                        )));
                     return Ok(());
                 } else if let Some(op) =
                     lower_hybrid_mana_payment_instruction(ResolvingPlayer::Controller, raw)
@@ -720,13 +740,15 @@ pub(super) fn lower_control_misc_instruction(
                     builder.instructions.len()
                 };
                 let op = if let Some(mc) = parse_fixed_mana_cost(raw) {
-                    Instruction::OfferDynamicManaPayment {
-                        payer: rp,
-                        fixed: mc,
-                        extra_generic: ValueExpr::Literal(0.into()),
-                        paid_destination: base_idx + 1,
-                        declined_destination: base_idx + 1,
-                    }
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            rp,
+                            mc,
+                            ValueExpr::Literal(0.into()),
+                            base_idx + 1,
+                            base_idx + 1,
+                        ),
+                    ))
                 } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
                     && x_cnt > 0
                 {
@@ -737,13 +759,15 @@ pub(super) fn lower_control_misc_instruction(
                         None => ValueExpr::chosen_x(),
                     };
                     let extra_generic = scale_value_expr(x_val, i64::from(x_cnt));
-                    Instruction::OfferDynamicManaPayment {
-                        payer: rp,
-                        fixed,
-                        extra_generic,
-                        paid_destination: base_idx + 1,
-                        declined_destination: base_idx + 1,
-                    }
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            rp,
+                            fixed,
+                            extra_generic,
+                            base_idx + 1,
+                            base_idx + 1,
+                        ),
+                    ))
                 } else if let Some(hyb_op) = lower_hybrid_mana_payment_instruction(rp, raw) {
                     hyb_op
                 } else {
@@ -1202,12 +1226,7 @@ pub(super) fn lower_control_misc_instruction(
             ) && (last_instruction_moved_object(&builder.instructions)
                 || matches!(
                     builder.instructions.last(),
-                    Some(
-                        Instruction::ZoneOp(_)
-                            | Instruction::ForEachPlayerQuery { .. }
-                            | Instruction::LookTopChooseExt { .. }
-                            | Instruction::RevealUntilMatchExt { .. }
-                    )
+                    Some(Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. })
                 )
                 || matches!(
                     builder.instructions.last(),
@@ -1753,13 +1772,15 @@ pub(super) fn lower_control_misc_instruction(
                 let offer_idx = builder.instructions.len();
                 builder
                     .instructions
-                    .push(Instruction::OfferDynamicManaPayment {
-                        payer,
-                        fixed: mana,
-                        extra_generic: ValueExpr::Literal(0.into()),
-                        paid_destination: 0,
-                        declined_destination: offer_idx + 1,
-                    });
+                    .push(Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            payer,
+                            mana,
+                            ValueExpr::Literal(0.into()),
+                            0,
+                            offer_idx + 1,
+                        ),
+                    )));
                 if let Some(probe) = probed_body {
                     splice_probed_body(builder, probe)?;
                 } else {
@@ -1774,12 +1795,7 @@ pub(super) fn lower_control_misc_instruction(
                     )?;
                 }
                 let end_dest = builder.instructions.len();
-                if let Some(Instruction::OfferDynamicManaPayment {
-                    paid_destination, ..
-                }) = builder.instructions.get_mut(offer_idx)
-                {
-                    *paid_destination = end_dest;
-                }
+                set_offer_paid(builder.instructions.get_mut(offer_idx), end_dest);
                 return Ok(());
             }
             let opt_choice = if let Some(cost) = unless_cost {
@@ -2629,12 +2645,16 @@ pub(super) fn lower_control_misc_instruction(
                 && let Some(offer_idx) = delayed_body.instructions.len().checked_sub(1)
                 && matches!(
                     delayed_body.instructions.get(offer_idx),
-                    Some(Instruction::OfferDynamicManaPayment {
-                        paid_destination,
-                        declined_destination,
-                        ..
-                    }) if *paid_destination == offer_idx + 1
-                        && *declined_destination == offer_idx + 1
+                    Some(Instruction::PromptChoice(spec))
+                        if matches!(
+                            spec.domain,
+                            spellwake_engine::toolbox::PromptDomain::ManaPayment {
+                                paid_destination,
+                                declined_destination,
+                                ..
+                            } if paid_destination == offer_idx + 1
+                                && declined_destination == offer_idx + 1
+                        )
                 )
             {
                 let mut fail_builder = BodyBuilder::new();
@@ -2659,12 +2679,7 @@ pub(super) fn lower_control_misc_instruction(
                     delayed_body.instructions.push(op);
                 }
                 let end_dest = delayed_body.instructions.len();
-                if let Some(Instruction::OfferDynamicManaPayment {
-                    paid_destination, ..
-                }) = delayed_body.instructions.get_mut(offer_idx)
-                {
-                    *paid_destination = end_dest;
-                }
+                set_offer_paid(delayed_body.instructions.get_mut(offer_idx), end_dest);
                 return Ok(());
             }
             Err("oracle:unsupported-instruction")
@@ -5172,43 +5187,45 @@ fn lower_hybrid_mana_payment_instruction(payer: ResolvingPlayer, raw: &str) -> O
     if dedup.len() < 2 {
         return None;
     }
-    let options: Vec<(String, ExecutableBody)> = dedup
-        .into_iter()
-        .map(|(cost, life)| {
-            let label = format_mana_payment_label(&cost, life);
-            let ops = if life == 0 {
-                vec![Instruction::OfferDynamicManaPayment {
-                    payer,
-                    fixed: cost,
-                    extra_generic: ValueExpr::Literal(0.into()),
-                    paid_destination: 1,
-                    declined_destination: 1,
-                }]
-            } else if cost == ManaCost::free() {
-                vec![
+    let options: Vec<(String, ExecutableBody)> =
+        dedup
+            .into_iter()
+            .map(|(cost, life)| {
+                let label = format_mana_payment_label(&cost, life);
+                let ops =
+                    if life == 0 {
+                        vec![Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                payer,
+                                cost,
+                                ValueExpr::Literal(0.into()),
+                                1,
+                                1,
+                            ),
+                        ))]
+                    } else if cost == ManaCost::free() {
+                        vec![
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_life(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(payer),
+                                ValueExpr::literal(i64::from(life)),
+                            ),
+                        ]
+                    } else {
+                        vec![
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            payer, cost, ValueExpr::Literal(0.into()), 1, 2,
+                        ),
+                    )),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(payer),
                         ValueExpr::literal(i64::from(life)),
                     ),
                 ]
-            } else {
-                vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer,
-                        fixed: cost,
-                        extra_generic: ValueExpr::Literal(0.into()),
-                        paid_destination: 1,
-                        declined_destination: 2,
-                    },
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_life(
-                        spellwake_engine::toolbox::PlayerSelector::Resolving(payer),
-                        ValueExpr::literal(i64::from(life)),
-                    ),
-                ]
-            };
-            (label, ExecutableBody::new(BodyTarget::None, ops))
-        })
-        .collect();
+                    };
+                (label, ExecutableBody::new(BodyTarget::None, ops))
+            })
+            .collect();
     Some(Instruction::PromptChoice(Box::new(
         spellwake_engine::toolbox::PromptChoiceSpec::choose_option(payer, options),
     )))
@@ -5235,13 +5252,15 @@ fn lower_extra_pay_cost_instruction(
                     label,
                     ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::OfferDynamicManaPayment {
-                            payer,
-                            fixed: mc,
-                            extra_generic: ValueExpr::Literal(0.into()),
-                            paid_destination: 1,
-                            declined_destination: 1,
-                        }],
+                        vec![Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                payer,
+                                mc,
+                                ValueExpr::Literal(0.into()),
+                                1,
+                                1,
+                            ),
+                        ))],
                     ),
                 ));
             }
@@ -5256,13 +5275,15 @@ fn lower_extra_pay_cost_instruction(
                 in_trigger,
                 vocabulary,
             )?;
-            Ok(Some(Instruction::OfferDynamicManaPayment {
-                payer,
-                fixed: ManaCost::free(),
-                extra_generic,
-                paid_destination: base_idx + 1,
-                declined_destination: base_idx + 1,
-            }))
+            Ok(Some(Instruction::PromptChoice(Box::new(
+                spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    payer,
+                    ManaCost::free(),
+                    extra_generic,
+                    base_idx + 1,
+                    base_idx + 1,
+                ),
+            ))))
         }
         CostAtomAst::PayEnergy(n) if *n > 0 => Ok(Some(
             crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_player_counter(
@@ -7108,6 +7129,11 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                         rewrite_chosen_to_loop_ve(min);
                         rewrite_chosen_to_loop_ve(max);
                     }
+                    spellwake_engine::toolbox::PromptDomain::ManaPayment {
+                        extra_generic, ..
+                    } => {
+                        rewrite_chosen_to_loop_ve(extra_generic);
+                    }
                     spellwake_engine::toolbox::PromptDomain::Partition { query, .. } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
                             query,
@@ -7286,31 +7312,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     }
                     _ => {}
                 }
-            }
-            Instruction::LookTopChooseExt {
-                library_owner,
-                chooser,
-                count,
-                ..
-            }
-            | Instruction::RevealUntilMatchExt {
-                library_owner,
-                chooser,
-                count,
-                ..
-            } => {
-                rewrite_chosen_to_loop_rp(library_owner);
-                rewrite_chosen_to_loop_rp(chooser);
-                rewrite_chosen_to_loop_ve(count);
-            }
-
-            Instruction::OfferDynamicManaPayment {
-                payer,
-                extra_generic,
-                ..
-            } => {
-                rewrite_chosen_to_loop_rp(payer);
-                rewrite_chosen_to_loop_ve(extra_generic);
             }
             Instruction::OptionalSequence { chooser, .. } => {
                 rewrite_chosen_to_loop_rp(chooser);
@@ -7947,8 +7948,6 @@ fn instruction_produces_card_pool(op: &Instruction) -> bool {
     match op {
         Instruction::ZoneOp(_)
         | Instruction::ForEachPlayerQuery { .. }
-        | Instruction::LookTopChooseExt { .. }
-        | Instruction::RevealUntilMatchExt { .. }
         | Instruction::SearchLibrary { .. } => true,
         Instruction::PromptChoice(spec) => matches!(
             spec.domain,
@@ -8526,17 +8525,6 @@ pub(super) fn lower_shuffle_that_player_fallback(
                     }
                 }
             }
-            Instruction::OfferDynamicManaPayment { payer: player, .. }
-                if *player != ResolvingPlayer::Controller
-                    && is_safe_resolving_player_for_shuffle(*player, builder, in_trigger) =>
-            {
-                builder.instructions.push(
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(
-                        *player,
-                    ),
-                );
-                return Ok(());
-            }
             Instruction::PromptChoice(spec) => match &spec.chooser {
                 PlayerSelector::Resolving(rp) | PlayerSelector::Group(AffectedPlayers::One(rp))
                     if *rp != ResolvingPlayer::Controller
@@ -8600,8 +8588,6 @@ pub(super) fn lower_shuffle_that_player_fallback(
                 Instruction::ZoneOp(_)
                     | Instruction::ForEachPlayerQuery { .. }
                     | Instruction::SearchLibrary { .. }
-                    | Instruction::LookTopChooseExt { .. }
-                    | Instruction::RevealUntilMatchExt { .. }
                     | Instruction::MutateObject(_)
             ) || matches!(
                 op,

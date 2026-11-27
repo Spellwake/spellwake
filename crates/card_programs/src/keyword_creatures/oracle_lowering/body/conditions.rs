@@ -184,9 +184,6 @@ pub(super) fn resolve_prev_anaphora_ref(
     let has_checked_top = instructions.iter().any(|op| {
         matches!(
             op,
-            Instruction::RevealUntilMatchExt { .. } | Instruction::LookTopChooseExt { .. }
-        ) || matches!(
-            op,
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
@@ -203,13 +200,11 @@ pub(super) fn resolve_prev_anaphora_ref(
                 spec.destination,
                 spellwake_engine::toolbox::ZoneDest::Exile { .. }
                     | spellwake_engine::toolbox::ZoneDest::RevealOnly
+                    | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
             )
         })
     });
     instructions.iter().rev().find_map(|op| match op {
-        Instruction::RevealUntilMatchExt { .. } | Instruction::LookTopChooseExt { .. } => {
-            Some(MatchObjectRef::RevealedTop)
-        }
         Instruction::MutatePlayer(spec)
             if matches!(
                 spec.op,
@@ -252,6 +247,18 @@ pub(super) fn resolve_prev_anaphora_ref(
                     ) =>
                 {
                     Some(MatchObjectRef::LastMovedToExile)
+                }
+                spellwake_engine::toolbox::ZoneDest::RevealOnly
+                | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                    if matches!(
+                        &spec.source,
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                            ..
+                        }
+                    ) =>
+                {
+                    Some(MatchObjectRef::RevealedTop)
                 }
                 spellwake_engine::toolbox::ZoneDest::None
                 | spellwake_engine::toolbox::ZoneDest::RevealOnly
@@ -4741,9 +4748,7 @@ pub(super) fn lower_subject_to_object_query(
                 let has_zone_op = builder.instructions.iter().any(|op| {
                     matches!(
                         op,
-                        Instruction::ZoneOp(_)
-                            | Instruction::ForEachPlayerQuery { .. }
-                            | Instruction::LookTopChooseExt { .. }
+                        Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
                     ) || matches!(
                         op,
                         Instruction::MutatePlayer(spec)

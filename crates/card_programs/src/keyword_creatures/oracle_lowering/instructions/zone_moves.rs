@@ -9123,13 +9123,15 @@ pub(super) fn lower_zone_moves_instruction(
             if let Some(cost) = parse_fixed_mana_cost(raw) {
                 builder
                     .instructions
-                    .push(Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        fixed: cost,
-                        extra_generic: ValueExpr::Literal(0.into()),
-                        paid_destination: idx + 2,
-                        declined_destination: idx + 1,
-                    });
+                    .push(Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::Controller,
+                            cost,
+                            ValueExpr::Literal(0.into()),
+                            idx + 2,
+                            idx + 1,
+                        ),
+                    )));
             } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
                 && x_cnt > 0
             {
@@ -9142,13 +9144,15 @@ pub(super) fn lower_zone_moves_instruction(
                 let extra_generic = scale_value_expr(x_val, i64::from(x_cnt));
                 builder
                     .instructions
-                    .push(Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        fixed,
-                        extra_generic,
-                        paid_destination: idx + 2,
-                        declined_destination: idx + 1,
-                    });
+                    .push(Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::Controller,
+                            fixed,
+                            extra_generic,
+                            idx + 2,
+                            idx + 1,
+                        ),
+                    )));
             } else {
                 return Err("oracle:sac-unless-x");
             }
@@ -10777,13 +10781,15 @@ pub(super) fn lower_zone_moves_instruction(
                 let offer_idx = builder.instructions.len();
                 builder
                     .instructions
-                    .push(Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        fixed: mana,
-                        extra_generic: ValueExpr::Literal(0.into()),
-                        paid_destination: 0,
-                        declined_destination: offer_idx + 1,
-                    });
+                    .push(Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::Controller,
+                            mana,
+                            ValueExpr::Literal(0.into()),
+                            0,
+                            offer_idx + 1,
+                        ),
+                    )));
                 lower_instruction(
                     &sac_ins,
                     builder,
@@ -10794,12 +10800,7 @@ pub(super) fn lower_zone_moves_instruction(
                     bound_x,
                 )?;
                 let end_dest = builder.instructions.len();
-                if let Some(Instruction::OfferDynamicManaPayment {
-                    paid_destination, ..
-                }) = builder.instructions.get_mut(offer_idx)
-                {
-                    *paid_destination = end_dest;
-                }
+                set_offer_paid(builder.instructions.get_mut(offer_idx), end_dest);
                 return Ok(());
             }
             lower_instruction_seq(
@@ -10970,23 +10971,25 @@ pub(super) fn lower_zone_moves_instruction(
                 builder.bind_target(bt)?;
             }
             if *exile {
-                builder.instructions.push(Instruction::RevealUntilMatchExt {
-                    library_owner,
-                    chooser: ResolvingPlayer::Controller,
-                    filter: Box::new(obj),
-                    count: ValueExpr::literal(1),
-                    match_dest: spellwake_engine::program::LookTopKeepDest::Exile {
-                        playable: false,
-                        free: false,
-                        cast_only: false,
-                        any_color: false,
-                        duration: ResolvedDuration::NoStatedDuration,
-                    },
-                    rest_dest: spellwake_engine::program::LookTopRestDest::Exile,
-                    keep_all_revealed: false,
-                    optional_keep: false,
-                    exile_instead_of_reveal: false,
-                });
+                builder.instructions.extend(
+                    spellwake_engine::toolbox::ZoneOpSpec::reveal_until_match_instructions(
+                        library_owner,
+                        ResolvingPlayer::Controller,
+                        obj,
+                        ValueExpr::literal(1),
+                        spellwake_engine::program::LookTopKeepDest::Exile {
+                            playable: false,
+                            free: false,
+                            cast_only: false,
+                            any_color: false,
+                            duration: ResolvedDuration::NoStatedDuration,
+                        },
+                        spellwake_engine::program::LookTopRestDest::Exile,
+                        false,
+                        false,
+                        false,
+                    ),
+                );
             } else {
                 builder
                     .instructions
@@ -11015,31 +11018,32 @@ pub(super) fn lower_zone_moves_instruction(
             SubjectRefAst::Anaphora(raw) => {
                 let low = raw.trim().to_ascii_lowercase();
                 if low == "the top card" {
-                    let make_reveal =
-                        |library_owner: ResolvingPlayer| Instruction::LookTopChooseExt {
+                    let make_reveal = |library_owner: ResolvingPlayer| {
+                        spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
                             library_owner,
-                            chooser: ResolvingPlayer::Controller,
-                            count: ValueExpr::literal(1),
-                            filter: None,
-                            max_picks: 0,
-                            take_all_matching: false,
-                            keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                            rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                            reveal_kept: false,
-                            reveal_all: true,
-                            reveal_only: true,
-                            secondary: None,
-                        };
+                            ResolvingPlayer::Controller,
+                            ValueExpr::literal(1),
+                            None,
+                            0,
+                            false,
+                            spellwake_engine::program::LookTopKeepDest::Hand,
+                            spellwake_engine::program::LookTopRestDest::BottomOrder,
+                            false,
+                            true,
+                            true,
+                            None,
+                        )
+                    };
                     if let Some(players) = try_group_affected_players(*player) {
                         push_for_each_player(
                             players,
-                            vec![make_reveal(ResolvingPlayer::LoopPlayer)],
+                            make_reveal(ResolvingPlayer::LoopPlayer),
                             builder,
                         );
                         return Ok(());
                     }
                     let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-                    builder.instructions.push(make_reveal(rp));
+                    builder.instructions.extend(make_reveal(rp));
                     Ok(())
                 } else if matches!(low.as_str(), "it" | "that card")
                     && has_checked_revealed_top_strict(&builder.instructions)
@@ -11048,12 +11052,28 @@ pub(super) fn lower_zone_moves_instruction(
                         return Err("oracle:unsupported-reveal-by-player");
                     }
                     let prior_owner = builder.instructions.iter().rev().find_map(|op| match op {
-                        Instruction::LookTopChooseExt {
-                            count,
-                            library_owner,
-                            reveal_only: true,
-                            ..
-                        } => (*count == ValueExpr::literal(1)).then_some(Some(*library_owner)),
+                        Instruction::ZoneOp(spec)
+                            if matches!(
+                                spec.destination,
+                                spellwake_engine::toolbox::ZoneDest::RevealOnly
+                                    | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                            ) =>
+                        {
+                            if let spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                zone: spellwake_engine::toolbox::QueryZone::Library(ps),
+                                slice: spellwake_engine::toolbox::QuerySlice::Top(count),
+                                ..
+                            } = &spec.source
+                                && **count == ValueExpr::literal(1)
+                                && let spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    library_owner,
+                                ) = ps.as_ref()
+                            {
+                                Some(Some(*library_owner))
+                            } else {
+                                None
+                            }
+                        }
                         Instruction::MutatePlayer(spec)
                             if matches!(
                                 spec.op,
@@ -11086,20 +11106,22 @@ pub(super) fn lower_zone_moves_instruction(
                     if actor != library_owner && actor != ResolvingPlayer::Controller {
                         return Err("oracle:unsupported-reveal-by-player");
                     }
-                    trial.instructions.push(Instruction::LookTopChooseExt {
-                        library_owner,
-                        chooser: ResolvingPlayer::Controller,
-                        count: ValueExpr::literal(1),
-                        filter: None,
-                        max_picks: 0,
-                        take_all_matching: false,
-                        keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                        rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                        reveal_kept: false,
-                        reveal_all: true,
-                        reveal_only: true,
-                        secondary: None,
-                    });
+                    trial.instructions.extend(
+                        spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                            library_owner,
+                            ResolvingPlayer::Controller,
+                            ValueExpr::literal(1),
+                            None,
+                            0,
+                            false,
+                            spellwake_engine::program::LookTopKeepDest::Hand,
+                            spellwake_engine::program::LookTopRestDest::BottomOrder,
+                            false,
+                            true,
+                            true,
+                            None,
+                        ),
+                    );
                     *builder = trial;
                     Ok(())
                 } else if matches!(
@@ -11139,22 +11161,32 @@ pub(super) fn lower_zone_moves_instruction(
 fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
     for op in ops.iter().rev() {
         match op {
-            Instruction::LookTopChooseExt {
-                reveal_only: true, ..
-            } => continue,
-            Instruction::RevealUntilMatchExt { .. } | Instruction::LookTopChooseExt { .. } => {
-                return true;
-            }
             Instruction::ZoneOp(spec)
                 if matches!(
                     spec.destination,
-                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                ) || (matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::RevealOnly
                 ) && matches!(
                     &spec.source,
                     spellwake_engine::toolbox::ObjectQuery::ZoneScan {
                         zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                        slice: spellwake_engine::toolbox::QuerySlice::Top(_),
                         ..
                     }
+                )) =>
+            {
+                continue;
+            }
+            Instruction::ZoneOp(spec)
+                if matches!(
+                    &spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                        zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                        ..
+                    } | spellwake_engine::toolbox::ObjectQuery::Bound(_)
+                        | spellwake_engine::toolbox::ObjectQuery::Difference(_, _)
                 ) =>
             {
                 return true;
@@ -11171,7 +11203,6 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
                 return false;
             }
             Instruction::OptionalSequence { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::AdjustLife(_)
             | Instruction::MutatePlayer(_)
             | Instruction::BranchCondition { .. }
@@ -11371,27 +11402,6 @@ pub(super) fn has_live_last_moved_producer(
                 };
             }
 
-            Instruction::LookTopChooseExt {
-                reveal_only: true, ..
-            } => continue,
-            Instruction::LookTopChooseExt { keep_dest, .. }
-            | Instruction::RevealUntilMatchExt {
-                match_dest: keep_dest,
-                ..
-            } => {
-                return match keep_dest {
-                    spellwake_engine::program::LookTopKeepDest::Exile { .. }
-                    | spellwake_engine::program::LookTopKeepDest::ExileLinked { .. } => matches!(
-                        expected,
-                        LastMovedProducerKind::Any | LastMovedProducerKind::Exile
-                    ),
-                    spellwake_engine::program::LookTopKeepDest::Graveyard => matches!(
-                        expected,
-                        LastMovedProducerKind::Any | LastMovedProducerKind::Graveyard
-                    ),
-                    _ => matches!(expected, LastMovedProducerKind::Any),
-                };
-            }
             Instruction::PromptChoice(spec)
                 if matches!(
                     spec.domain,
@@ -11422,7 +11432,6 @@ pub(super) fn has_live_last_moved_producer(
                 return false;
             }
             Instruction::OptionalSequence { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::AdjustLife(_)
             | Instruction::MutatePlayer(_)
             | Instruction::BranchCondition { .. }
@@ -11693,12 +11702,6 @@ pub(super) fn has_checked_revealed_top(ops: &[Instruction]) -> bool {
     ops.iter().rev().any(|op| {
         matches!(
             op,
-            Instruction::LookTopChooseExt {
-                reveal_only: true,
-                ..
-            } | Instruction::RevealUntilMatchExt { .. }
-        ) || matches!(
-            op,
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
@@ -11708,14 +11711,20 @@ pub(super) fn has_checked_revealed_top(ops: &[Instruction]) -> bool {
             op,
             Instruction::ZoneOp(spec)
                 if matches!(
-                    spec.destination,
-                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                ) && matches!(
                     &spec.source,
                     spellwake_engine::toolbox::ObjectQuery::ZoneScan {
                         zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                        slice,
                         ..
-                    }
+                    } if matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                            | spellwake_engine::toolbox::ZoneDest::RevealOnly
+                            | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                    ) || matches!(
+                        slice,
+                        spellwake_engine::toolbox::QuerySlice::UntilMatch { .. }
+                    )
                 )
         )
     })
@@ -11727,12 +11736,6 @@ pub(super) fn has_checked_revealed_top_strict(ops: &[Instruction]) -> bool {
     ops.iter().rev().any(|op| {
         matches!(
             op,
-            Instruction::LookTopChooseExt {
-                reveal_only: true,
-                ..
-            }
-        ) || matches!(
-            op,
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
@@ -11744,6 +11747,8 @@ pub(super) fn has_checked_revealed_top_strict(ops: &[Instruction]) -> bool {
                 if matches!(
                     spec.destination,
                     spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                        | spellwake_engine::toolbox::ZoneDest::RevealOnly
+                        | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
                 ) && matches!(
                     &spec.source,
                     spellwake_engine::toolbox::ObjectQuery::ZoneScan {
@@ -12207,14 +12212,15 @@ fn extract_prior_resolving_player_for_shuffle(
         {
             from_sel(&spec.players)
         }
-        Instruction::OptionalSequence { chooser: p, .. }
-        | Instruction::OfferDynamicManaPayment { payer: p, .. }
-        | Instruction::RevealUntilMatchExt {
-            library_owner: p, ..
+        Instruction::OptionalSequence { chooser: p, .. } if valid(*p) => Some(*p),
+        Instruction::PromptChoice(spec)
+            if matches!(
+                spec.domain,
+                spellwake_engine::toolbox::PromptDomain::ManaPayment { .. }
+            ) =>
+        {
+            from_sel(&spec.chooser)
         }
-        | Instruction::LookTopChooseExt {
-            library_owner: p, ..
-        } if valid(*p) => Some(*p),
         _ => None,
     })
 }
@@ -12310,8 +12316,6 @@ fn is_moved_object_instruction(op: &Instruction) -> bool {
         Instruction::ZoneOp(_)
             | Instruction::ForEachPlayerQuery { .. }
             | Instruction::DrawCards(_)
-            | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::LookTopChooseExt { .. }
             | Instruction::SearchLibrary { .. }
     ) || matches!(
         op,
@@ -12491,7 +12495,6 @@ pub(super) fn has_prior_moved_object(ops: &[Instruction]) -> bool {
         }
         match op {
             Instruction::OptionalSequence { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::AdjustLife(_)
             | Instruction::DealDamage(_)
             | Instruction::MutatePlayer(_)

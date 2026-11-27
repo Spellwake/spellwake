@@ -369,6 +369,40 @@ impl ApplyContinuousSpec {
         }
     }
 
+    /// Construct an exiled play/cast permission spec mapping a [`ResolvedDuration`] to
+    /// [`crate::program::ImpulsePlayDuration`].
+    #[must_use]
+    pub fn exile_play_permission_for_duration(
+        player: PlayerSelector,
+        objects: ObjectQuery,
+        duration: ResolvedDuration,
+        free: bool,
+        cast_only: bool,
+        any_color: bool,
+    ) -> Self {
+        use crate::program::ImpulsePlayDuration;
+        let impulse_duration = match duration {
+            ResolvedDuration::UntilEndOfTurn | ResolvedDuration::UntilEndOfCombat => {
+                ImpulsePlayDuration::ThisTurn
+            }
+            ResolvedDuration::ThroughControllerNextTurn
+            | ResolvedDuration::UntilControllerNextTurn
+            | ResolvedDuration::ThroughNextTurn { .. }
+            | ResolvedDuration::UntilPlayerNextTurn { .. } => {
+                ImpulsePlayDuration::UntilEndOfNextTurn
+            }
+            _ => ImpulsePlayDuration::WhileExiled,
+        };
+        Self::impulse_play_permission(
+            objects,
+            player,
+            impulse_duration,
+            cast_only,
+            free,
+            any_color,
+        )
+    }
+
     /// Construct a damage-prevention shield spec.
     #[must_use]
     pub fn prevent_damage(spec: TurnPreventionSpec) -> Self {

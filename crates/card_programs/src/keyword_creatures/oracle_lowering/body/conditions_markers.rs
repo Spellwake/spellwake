@@ -665,10 +665,19 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
         MatchObjectRef::LastMovedToHand | MatchObjectRef::LastMovedToBattlefield
             if matches!(
                 builder.instructions.last(),
-                Some(
-                    Instruction::LookTopChooseExt { .. }
-                        | Instruction::CreateTokens { .. }
-                )
+                Some(Instruction::CreateTokens { .. })
+            ) || matches!(
+                builder.instructions.last(),
+                Some(Instruction::ZoneOp(spec))
+                    if matches!(
+                        spec.source,
+                        spellwake_engine::toolbox::ObjectQuery::Bound(_)
+                            | spellwake_engine::toolbox::ObjectQuery::Difference(_, _)
+                    ) && !matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Hand
+                            | spellwake_engine::toolbox::ZoneDest::Battlefield { .. }
+                    )
             ) =>
         {
             false

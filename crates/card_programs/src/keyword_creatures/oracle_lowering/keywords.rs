@@ -982,13 +982,15 @@ pub(super) fn lower_keyword(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::OfferDynamicManaPayment {
-                            payer: ResolvingPlayer::Controller,
-                            fixed: mana,
-                            extra_generic: ValueExpr::Literal(0.into()),
-                            paid_destination: 1,
-                            declined_destination: 3,
-                        },
+                        Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                ResolvingPlayer::Controller,
+                                mana,
+                                ValueExpr::Literal(0.into()),
+                                1,
+                                3,
+                            ),
+                        )),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_hand(),
                         Instruction::Jump { destination: 4 },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
@@ -2319,14 +2321,14 @@ pub(super) fn lower_keyword(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::LookTopChooseExt {
-                        library_owner: ResolvingPlayer::Controller,
-                        chooser: ResolvingPlayer::Controller,
-                        count: ValueExpr::literal(n),
-                        filter: None,
-                        max_picks: 1,
-                        take_all_matching: false,
-                        keep_dest: spellwake_engine::program::LookTopKeepDest::ExileLinked {
+                    spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                        ResolvingPlayer::Controller,
+                        ResolvingPlayer::Controller,
+                        ValueExpr::literal(n),
+                        None,
+                        1,
+                        false,
+                        spellwake_engine::program::LookTopKeepDest::ExileLinked {
                             face_down: true,
                             playable: false,
                             free: false,
@@ -2334,12 +2336,12 @@ pub(super) fn lower_keyword(
                             any_color: false,
                             duration: ResolvedDuration::NoStatedDuration,
                         },
-                        rest_dest: spellwake_engine::program::LookTopRestDest::BottomRandom,
-                        reveal_kept: false,
-                        reveal_all: false,
-                        reveal_only: false,
-                        secondary: None,
-                    }],
+                        spellwake_engine::program::LookTopRestDest::BottomRandom,
+                        false,
+                        false,
+                        false,
+                        None,
+                    ),
                 ),
             });
             let has_look_at_exiled =

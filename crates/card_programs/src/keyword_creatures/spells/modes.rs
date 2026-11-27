@@ -108,13 +108,15 @@ fn mode_body(
         return Some(ExecutableBody::new(
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
             vec![
-                Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::TargetSpellController,
-                    fixed: fixed_cost(price)?,
-                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 2,
-                    declined_destination: 1,
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::TargetSpellController,
+                        fixed_cost(price)?,
+                        spellwake_engine::program::ValueExpr::Literal(0.into()),
+                        2,
+                        1,
+                    ),
+                )),
                 Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,

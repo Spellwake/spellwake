@@ -9030,13 +9030,15 @@ fn lower_dynamic_ward_trigger(
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::UniqueRelatedPlayer,
-                    fixed: ManaCost::free(),
-                    extra_generic,
-                    paid_destination: 2,
-                    declined_destination: 1,
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                        ManaCost::free(),
+                        extra_generic,
+                        2,
+                        1,
+                    ),
+                )),
                 Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_ward_source(),
                 )),

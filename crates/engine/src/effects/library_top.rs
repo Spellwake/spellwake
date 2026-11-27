@@ -502,14 +502,11 @@ impl EffectWindow {
             | Instruction::StackOp(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. }
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
             | Instruction::AdjustLife(_)

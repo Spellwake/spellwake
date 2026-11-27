@@ -37,26 +37,30 @@ impl Lane {
             ],
             Self::Payer => vec![
                 gate_instruction(3),
-                Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::UniqueRelatedPlayer,
-                    fixed: ManaCost::free(),
-                    extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 2,
-                    declined_destination: 2,
-                },
+                Instruction::PromptChoice(Box::new(
+                    crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                        ManaCost::free(),
+                        crate::program::ValueExpr::Literal(0.into()),
+                        2,
+                        2,
+                    ),
+                )),
                 gain(2),
             ],
         }
     }
 }
 fn gate_instruction(end: usize) -> Instruction {
-    Instruction::OfferDynamicManaPayment {
-        payer: ResolvingPlayer::Controller,
-        fixed: ManaCost::free(),
-        extra_generic: crate::program::ValueExpr::Literal(0.into()),
-        paid_destination: 1,
-        declined_destination: end,
-    }
+    Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+            ResolvingPlayer::Controller,
+            ManaCost::free(),
+            crate::program::ValueExpr::Literal(0.into()),
+            1,
+            end,
+        ),
+    ))
 }
 fn scenario(lane: Lane, fault: Fault) -> String {
     format!(

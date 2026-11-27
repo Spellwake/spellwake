@@ -252,6 +252,12 @@ impl ObjectQuery {
         }
     }
 
+    /// Convenience constructor returning objects in `left` not in `right`, preserving order.
+    #[must_use]
+    pub fn difference(left: Self, right: Self) -> Self {
+        Self::Difference(Box::new(left), Box::new(right))
+    }
+
     /// Convert a legacy [`crate::program::MoveSubjectRef`] into an orthogonal [`ObjectQuery`].
     #[must_use]
     pub fn from_move_subject(subj: crate::program::MoveSubjectRef) -> Self {

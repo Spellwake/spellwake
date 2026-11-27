@@ -118,7 +118,6 @@ impl EffectWindow {
                 }
             }
             Instruction::OptionalSequence { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -131,8 +130,6 @@ impl EffectWindow {
             | Instruction::SideDeckOp(_)
             | Instruction::StackOp(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }

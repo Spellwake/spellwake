@@ -380,6 +380,7 @@ impl EffectWindow {
                     min_per_pile: *min_per_pile,
                 }
             }
+            PromptDomain::ManaPayment { .. } => return Err(EffectError::InconsistentProgram),
         })
     }
 

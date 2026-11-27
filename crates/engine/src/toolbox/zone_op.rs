@@ -4,15 +4,17 @@
 //! sacrifice, discard, mill, and shuffle into a single orthogonal specification.
 
 use crate::{
+    characteristics::ResolvedDuration,
     effects::CounterKind,
     object_identity::ObjectId,
     program::{
-        AffectedPlayers, CardType, CardTypeMask, DefinitionError, DelayedReturnTiming,
-        LibraryPlacement, LinkedExileGroup, ObjectClause, ObjectFilter, PermanentTypeFilter,
-        ResolvingPlayer, ValueExpr,
+        AffectedPlayers, CardType, CardTypeMask, DefinitionError, DelayedReturnTiming, Instruction,
+        LibraryPlacement, LinkedExileGroup, LookTopKeepDest, LookTopRestDest, ObjectClause,
+        ObjectFilter, PermanentTypeFilter, ResolvingPlayer, ValueExpr,
     },
     toolbox::{
-        choice::ChoiceCategory,
+        choice::{ChoiceCategory, PromptChoiceSpec, PromptDomain},
+        continuous::ApplyContinuousSpec,
         env::BindingId,
         query::{ObjectQuery, PlayerSelector, QuerySlice, QueryZone},
         tags::{TagKey, TagValue},
@@ -908,4 +910,420 @@ impl ZoneOpSpec {
         }
         Ok(())
     }
+
+    /// Lower a look-top-N choose pipeline into composable toolbox instructions.
+    // All 12 parameters correspond directly to the orthogonal look-top-choose pipeline fields.
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn look_top_choose_instructions(
+        library_owner: ResolvingPlayer,
+        chooser: ResolvingPlayer,
+        count: ValueExpr,
+        filter: Option<ObjectFilter>,
+        max_picks: u8,
+        take_all_matching: bool,
+        keep_dest: LookTopKeepDest,
+        rest_dest: LookTopRestDest,
+        reveal_kept: bool,
+        reveal_all: bool,
+        reveal_only: bool,
+        secondary: Option<(ObjectFilter, bool, bool, u8)>,
+    ) -> Vec<Instruction> {
+        look_top_choose_instructions(
+            library_owner,
+            chooser,
+            count,
+            filter,
+            max_picks,
+            take_all_matching,
+            keep_dest,
+            rest_dest,
+            reveal_kept,
+            reveal_all,
+            reveal_only,
+            secondary,
+        )
+    }
+
+    /// Lower a reveal-from-top-until-N-matching pipeline into composable toolbox instructions.
+    // All 9 parameters correspond directly to the orthogonal reveal-until-match pipeline fields.
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn reveal_until_match_instructions(
+        library_owner: ResolvingPlayer,
+        chooser: ResolvingPlayer,
+        filter: ObjectFilter,
+        count: ValueExpr,
+        match_dest: LookTopKeepDest,
+        rest_dest: LookTopRestDest,
+        keep_all_revealed: bool,
+        optional_keep: bool,
+        exile_instead_of_reveal: bool,
+    ) -> Vec<Instruction> {
+        reveal_until_match_instructions(
+            library_owner,
+            chooser,
+            filter,
+            count,
+            match_dest,
+            rest_dest,
+            keep_all_revealed,
+            optional_keep,
+            exile_instead_of_reveal,
+        )
+    }
+}
+
+fn keep_dest_to_zone_dest(
+    dest: LookTopKeepDest,
+    chooser: ResolvingPlayer,
+) -> (ZoneDest, Option<(ResolvedDuration, bool, bool, bool)>) {
+    match dest {
+        LookTopKeepDest::Hand => (ZoneDest::Hand, None),
+        LookTopKeepDest::Battlefield { tapped, attacking } => (
+            ZoneDest::Battlefield {
+                controller: ZoneController::Player(Box::new(PlayerSelector::Resolving(chooser))),
+                tapped,
+                attacking,
+                transformed: false,
+                face_down: None,
+                entering_counters: Vec::new(),
+                attach_to: None,
+            },
+            None,
+        ),
+        LookTopKeepDest::LibraryTop => (
+            ZoneDest::Library {
+                position: LibraryOrderPos::Top,
+            },
+            None,
+        ),
+        LookTopKeepDest::Graveyard => (
+            ZoneDest::Graveyard {
+                semantics: GraveyardSemantics::Move,
+            },
+            None,
+        ),
+        LookTopKeepDest::Exile {
+            playable,
+            free,
+            cast_only,
+            any_color,
+            duration,
+        } => (
+            ZoneDest::exile(),
+            playable.then_some((duration, free, cast_only, any_color)),
+        ),
+        LookTopKeepDest::ExileLinked {
+            face_down,
+            playable,
+            free,
+            cast_only,
+            any_color,
+            duration,
+        } => (
+            ZoneDest::Exile {
+                face_down,
+                viewer: face_down.then_some(PlayerSelector::Resolving(chooser)),
+                link_to_source: true,
+                delayed_return: None,
+                link_group: None,
+            },
+            playable.then_some((duration, free, cast_only, any_color)),
+        ),
+    }
+}
+
+fn rest_dest_to_zone_dest(dest: LookTopRestDest) -> ZoneDest {
+    match dest {
+        LookTopRestDest::BottomRandom => ZoneDest::Library {
+            position: LibraryOrderPos::BottomRandom,
+        },
+        LookTopRestDest::BottomOrder => ZoneDest::Library {
+            position: LibraryOrderPos::Bottom,
+        },
+        LookTopRestDest::TopOrder => ZoneDest::Library {
+            position: LibraryOrderPos::Top,
+        },
+        LookTopRestDest::Graveyard => ZoneDest::Graveyard {
+            semantics: GraveyardSemantics::Move,
+        },
+        LookTopRestDest::Exile => ZoneDest::exile(),
+        LookTopRestDest::Hand => ZoneDest::Hand,
+    }
+}
+
+/// Lower a look-top-N choose pipeline into composable toolbox instructions.
+// All 12 parameters correspond directly to the orthogonal look-top-choose pipeline fields.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn look_top_choose_instructions(
+    library_owner: ResolvingPlayer,
+    chooser: ResolvingPlayer,
+    count: ValueExpr,
+    filter: Option<ObjectFilter>,
+    max_picks: u8,
+    take_all_matching: bool,
+    keep_dest: LookTopKeepDest,
+    rest_dest: LookTopRestDest,
+    reveal_kept: bool,
+    reveal_all: bool,
+    reveal_only: bool,
+    secondary: Option<(ObjectFilter, bool, bool, u8)>,
+) -> Vec<Instruction> {
+    const SLICE_BIND: BindingId = BindingId(10);
+    const PRIMARY_CHOSEN_BIND: BindingId = BindingId(11);
+    const PRIMARY_MOVED_BIND: BindingId = BindingId(12);
+    const SECONDARY_CHOSEN_BIND: BindingId = BindingId(13);
+
+    let mut step1 = ZoneOpSpec::move_all(
+        ObjectQuery::ZoneScan {
+            zone: QueryZone::Library(Box::new(PlayerSelector::Resolving(library_owner))),
+            filter: Box::new(ObjectFilter::any()),
+            slice: QuerySlice::Top(Box::new(count)),
+        },
+        if reveal_all || reveal_only {
+            ZoneDest::RevealOnly
+        } else {
+            ZoneDest::LookOnly {
+                viewer: PlayerSelector::Resolving(chooser),
+            }
+        },
+    );
+    step1.bind_moved = Some(SLICE_BIND);
+    let mut ops = vec![Instruction::ZoneOp(Box::new(step1))];
+    if reveal_only {
+        return ops;
+    }
+
+    let eligible = match filter {
+        Some(f) => ObjectQuery::filtered(ObjectQuery::Bound(SLICE_BIND), f),
+        None => ObjectQuery::Bound(SLICE_BIND),
+    };
+    if take_all_matching {
+        let mut bind_eligible = ZoneOpSpec::move_all(
+            eligible,
+            ZoneDest::LookOnly {
+                viewer: PlayerSelector::Resolving(chooser),
+            },
+        );
+        bind_eligible.bind_moved = Some(PRIMARY_CHOSEN_BIND);
+        ops.push(Instruction::ZoneOp(Box::new(bind_eligible)));
+    } else {
+        let min_picks: u8 = if filter.is_none()
+            && max_picks == 1
+            && secondary.is_none()
+            && !matches!(keep_dest, LookTopKeepDest::Battlefield { .. })
+        {
+            1
+        } else {
+            0
+        };
+        ops.push(Instruction::PromptChoice(Box::new(PromptChoiceSpec {
+            chooser: PlayerSelector::Resolving(chooser),
+            domain: PromptDomain::Objects {
+                query: eligible,
+                min: Box::new(ValueExpr::literal(i64::from(min_picks))),
+                max: Box::new(ValueExpr::literal(i64::from(max_picks))),
+                constraint: None,
+                max_total_power: None,
+                hidden: false,
+            },
+            category: ChoiceCategory::Generic,
+            bind_to: PRIMARY_CHOSEN_BIND,
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: true,
+            option_branches: Vec::new(),
+        })));
+    }
+
+    if reveal_kept && !reveal_all {
+        ops.push(Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+            ObjectQuery::Bound(PRIMARY_CHOSEN_BIND),
+            ZoneDest::RevealOnly,
+        ))));
+    }
+
+    let (keep_zone_dest, play_perm) = keep_dest_to_zone_dest(keep_dest, chooser);
+    let mut move_primary =
+        ZoneOpSpec::move_all(ObjectQuery::Bound(PRIMARY_CHOSEN_BIND), keep_zone_dest);
+    move_primary.bind_moved = Some(PRIMARY_MOVED_BIND);
+    ops.push(Instruction::ZoneOp(Box::new(move_primary)));
+    if let Some((duration, free, cast_only, any_color)) = play_perm {
+        ops.push(Instruction::ApplyContinuous(Box::new(
+            ApplyContinuousSpec::exile_play_permission_for_duration(
+                PlayerSelector::Resolving(chooser),
+                ObjectQuery::Bound(PRIMARY_MOVED_BIND),
+                duration,
+                free,
+                cast_only,
+                any_color,
+            ),
+        )));
+    }
+
+    let mut final_rest = ObjectQuery::difference(
+        ObjectQuery::Bound(SLICE_BIND),
+        ObjectQuery::Bound(PRIMARY_CHOSEN_BIND),
+    );
+    if let Some((sec_filter, to_bf, enters_tapped, sec_max)) = secondary {
+        let rem = final_rest;
+        ops.push(Instruction::PromptChoice(Box::new(PromptChoiceSpec {
+            chooser: PlayerSelector::Resolving(chooser),
+            domain: PromptDomain::Objects {
+                query: ObjectQuery::filtered(rem.clone(), sec_filter),
+                min: Box::new(ValueExpr::literal(0)),
+                max: Box::new(ValueExpr::literal(i64::from(sec_max))),
+                constraint: None,
+                max_total_power: None,
+                hidden: false,
+            },
+            category: ChoiceCategory::Generic,
+            bind_to: SECONDARY_CHOSEN_BIND,
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: true,
+            option_branches: Vec::new(),
+        })));
+        let sec_dest = if to_bf {
+            ZoneDest::Battlefield {
+                controller: ZoneController::Player(Box::new(PlayerSelector::Resolving(chooser))),
+                tapped: enters_tapped,
+                attacking: false,
+                transformed: false,
+                face_down: None,
+                entering_counters: Vec::new(),
+                attach_to: None,
+            }
+        } else {
+            ZoneDest::Hand
+        };
+        ops.push(Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+            ObjectQuery::Bound(SECONDARY_CHOSEN_BIND),
+            sec_dest,
+        ))));
+        final_rest = ObjectQuery::difference(rem, ObjectQuery::Bound(SECONDARY_CHOSEN_BIND));
+    }
+
+    ops.push(Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+        final_rest,
+        rest_dest_to_zone_dest(rest_dest),
+    ))));
+    ops
+}
+
+/// Lower a reveal-from-top-until-N-matching pipeline into composable toolbox instructions.
+// All 9 parameters correspond directly to the orthogonal reveal-until-match pipeline fields.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn reveal_until_match_instructions(
+    library_owner: ResolvingPlayer,
+    chooser: ResolvingPlayer,
+    filter: ObjectFilter,
+    count: ValueExpr,
+    match_dest: LookTopKeepDest,
+    rest_dest: LookTopRestDest,
+    keep_all_revealed: bool,
+    optional_keep: bool,
+    exile_instead_of_reveal: bool,
+) -> Vec<Instruction> {
+    const SLICE_BIND: BindingId = BindingId(10);
+    const PRIMARY_CHOSEN_BIND: BindingId = BindingId(11);
+    const PRIMARY_MOVED_BIND: BindingId = BindingId(12);
+
+    let mut step1 = ZoneOpSpec::move_all(
+        ObjectQuery::ZoneScan {
+            zone: QueryZone::Library(Box::new(PlayerSelector::Resolving(library_owner))),
+            filter: Box::new(ObjectFilter::any()),
+            slice: QuerySlice::UntilMatch {
+                filter: Box::new(filter),
+                count: Box::new(count.clone()),
+                include_non_matches: true,
+            },
+        },
+        if exile_instead_of_reveal {
+            ZoneDest::exile()
+        } else {
+            ZoneDest::RevealOnly
+        },
+    );
+    step1.bind_moved = Some(SLICE_BIND);
+    let mut ops = vec![Instruction::ZoneOp(Box::new(step1))];
+
+    let (match_zone_dest, play_perm) = keep_dest_to_zone_dest(match_dest, chooser);
+    if keep_all_revealed {
+        let mut move_all = ZoneOpSpec::move_all(ObjectQuery::Bound(SLICE_BIND), match_zone_dest);
+        move_all.bind_moved = Some(PRIMARY_MOVED_BIND);
+        ops.push(Instruction::ZoneOp(Box::new(move_all)));
+        if let Some((duration, free, cast_only, any_color)) = play_perm {
+            ops.push(Instruction::ApplyContinuous(Box::new(
+                ApplyContinuousSpec::exile_play_permission_for_duration(
+                    PlayerSelector::Resolving(chooser),
+                    ObjectQuery::Bound(PRIMARY_MOVED_BIND),
+                    duration,
+                    free,
+                    cast_only,
+                    any_color,
+                ),
+            )));
+        }
+        return ops;
+    }
+
+    let matching = ObjectQuery::filtered(ObjectQuery::Bound(SLICE_BIND), filter);
+    if optional_keep {
+        ops.push(Instruction::PromptChoice(Box::new(PromptChoiceSpec {
+            chooser: PlayerSelector::Resolving(chooser),
+            domain: PromptDomain::Objects {
+                query: matching,
+                min: Box::new(ValueExpr::literal(0)),
+                max: Box::new(count),
+                constraint: None,
+                max_total_power: None,
+                hidden: false,
+            },
+            category: ChoiceCategory::Generic,
+            bind_to: PRIMARY_CHOSEN_BIND,
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: true,
+            option_branches: Vec::new(),
+        })));
+    } else {
+        let mut bind_matching = ZoneOpSpec::move_all(
+            matching,
+            ZoneDest::LookOnly {
+                viewer: PlayerSelector::Resolving(chooser),
+            },
+        );
+        bind_matching.bind_moved = Some(PRIMARY_CHOSEN_BIND);
+        ops.push(Instruction::ZoneOp(Box::new(bind_matching)));
+    }
+
+    let mut move_matched =
+        ZoneOpSpec::move_all(ObjectQuery::Bound(PRIMARY_CHOSEN_BIND), match_zone_dest);
+    move_matched.bind_moved = Some(PRIMARY_MOVED_BIND);
+    ops.push(Instruction::ZoneOp(Box::new(move_matched)));
+    if let Some((duration, free, cast_only, any_color)) = play_perm {
+        ops.push(Instruction::ApplyContinuous(Box::new(
+            ApplyContinuousSpec::exile_play_permission_for_duration(
+                PlayerSelector::Resolving(chooser),
+                ObjectQuery::Bound(PRIMARY_MOVED_BIND),
+                duration,
+                free,
+                cast_only,
+                any_color,
+            ),
+        )));
+    }
+
+    ops.push(Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+        ObjectQuery::difference(
+            ObjectQuery::Bound(SLICE_BIND),
+            ObjectQuery::Bound(PRIMARY_CHOSEN_BIND),
+        ),
+        rest_dest_to_zone_dest(rest_dest),
+    ))));
+    ops
 }

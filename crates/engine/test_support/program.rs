@@ -4391,13 +4391,15 @@ impl Body {
                         cost,
                         paid_destination,
                         declined_destination,
-                    } => Instruction::OfferDynamicManaPayment {
-                        payer: payer.into(),
-                        fixed: cost.native()?,
-                        extra_generic: ValueExpr::Literal(0.into()),
-                        paid_destination: instruction_destination(paid_destination)?,
-                        declined_destination: instruction_destination(declined_destination)?,
-                    },
+                    } => Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            payer.into(),
+                            cost.native()?,
+                            ValueExpr::Literal(0.into()),
+                            instruction_destination(paid_destination)?,
+                            instruction_destination(declined_destination)?,
+                        ),
+                    )),
                     Op::BranchIfFalse {
                         condition,
                         destination,
@@ -11071,6 +11073,19 @@ pub fn body(value: &ExecutableBody) -> Value {
                 } = &spec.domain
                 {
                     json!({"op":"ChooseCreatureType","into":into.ordinal().to_string(),"excluding":excluding.iter().map(|value|projection::creature_type_id(*value)).collect::<Vec<_>>()})
+                } else if let Some((
+                    payer,
+                    fixed,
+                    extra_generic,
+                    paid_destination,
+                    declined_destination,
+                )) = spec.as_mana_payment()
+                {
+                    if *extra_generic == ValueExpr::Literal(0.into()) {
+                        json!({"op":"OfferManaPayment","payer":format!("{payer:?}"),"cost":cost(fixed),"paid_destination":paid_destination.to_string(),"declined_destination":declined_destination.to_string()})
+                    } else {
+                        json!({"op":"OfferDynamicManaPayment","payer":format!("{payer:?}"),"fixed":format!("{fixed:?}"),"extra_generic":instruction_amount(extra_generic),"paid":paid_destination,"declined":declined_destination})
+                    }
                 } else {
                     json!({"op":"PromptChoice","spec":format!("{spec:?}")})
                 }
@@ -11264,19 +11279,6 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::RepeatLoop { count, body } => {
                 json!({"op":"RepeatLoop","count":instruction_amount(count),"body":format!("{body:?}")})
             }
-            Instruction::OfferDynamicManaPayment {
-                payer,
-                fixed,
-                extra_generic,
-                paid_destination,
-                declined_destination,
-            } => {
-                if *extra_generic == ValueExpr::Literal(0.into()) {
-                    json!({"op":"OfferManaPayment","payer":format!("{payer:?}"),"cost":cost(fixed),"paid_destination":paid_destination.to_string(),"declined_destination":declined_destination.to_string()})
-                } else {
-                    json!({"op":"OfferDynamicManaPayment","payer":format!("{payer:?}"),"fixed":format!("{fixed:?}"),"extra_generic":instruction_amount(extra_generic),"paid":paid_destination,"declined":declined_destination})
-                }
-            }
             Instruction::ScheduleDelayedStepTrigger {
                 step,
                 own_step_only,
@@ -11290,8 +11292,6 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::ScheduleDelayedEventTrigger { trigger, body: inner, expires, once } => {
                 json!({"op":"ScheduleDelayedEventTrigger","trigger":format!("{trigger:?}"),"body":body(inner),"expires":format!("{expires:?}"),"once":once})
             }
-            Instruction::LookTopChooseExt { library_owner, chooser, count, filter, max_picks, take_all_matching, keep_dest, rest_dest, reveal_kept, .. } => json!({"op":"LookTopChooseExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"count":instruction_amount(count),"filter":format!("{filter:?}"),"max_picks":max_picks,"take_all_matching":take_all_matching,"keep_dest":format!("{keep_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"reveal_kept":reveal_kept}),
-            Instruction::RevealUntilMatchExt { library_owner, chooser, filter, count, match_dest, rest_dest, keep_all_revealed, .. } => json!({"op":"RevealUntilMatchExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"filter":format!("{filter:?}"),"count":instruction_amount(count),"match_dest":format!("{match_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"keep_all_revealed":keep_all_revealed}),
         })
         .collect::<Vec<_>>();
     let mut result = json!({"target":target,"instructions":instructions});
@@ -14010,13 +14010,15 @@ mod tests {
                     },
                     primitive,
                 ],
-                vec![Instruction::OfferDynamicManaPayment {
-                    payer: role,
-                    fixed: quoted.clone(),
-                    extra_generic: ValueExpr::Literal(0.into()),
-                    paid_destination: 1,
-                    declined_destination: 1,
-                }],
+                vec![Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        role,
+                        quoted.clone(),
+                        ValueExpr::Literal(0.into()),
+                        1,
+                        1,
+                    ),
+                ))],
             ] {
                 let body = ExecutableBody::new(target, instructions);
                 let (program, body_pointer) = if role == ResolvingPlayer::UniqueRelatedPlayer {

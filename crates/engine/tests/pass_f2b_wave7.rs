@@ -12,7 +12,7 @@
 //! - `MoveGroupToLibrary` (`LibraryPlacement::BottomRandom`) and `MoveGraveyardGroupOwned`
 //!   (`under_owner_control`)
 //! - `ExileLibraryTopLinked` + `CastPermissionRule::ExileMatchingExt` (Nightveil Specter flow)
-//! - `LookTopChooseExt` (`keep_dest: LibraryTop` and `rest_dest: Hand`) and `RevealUntilMatchExt`
+//! - `ZoneOpSpec::look_top_choose_instructions` (`keep_dest: LibraryTop` and `rest_dest: Hand`) and `ZoneOpSpec::reveal_until_match_instructions`
 //! - `CreateTokenCopyExt` (nonlegendary, override P/T, extra keywords, extra colors)
 //! - `Program.activation_cost_reductions`, `ActivationRestriction::{XNonZero, OnlySpendManaType}`,
 //!   and `ExtraActivationCost::{PaySnowMana, ExileTopLibrary, RevealSource, SacrificeAnyNumber}`
@@ -412,6 +412,16 @@ fn answer_look_pick(
         .expect("expected look-top selection decision");
     assert_eq!(decision.chooser(), expected_chooser);
     let choice = match decision.frame() {
+        RuleFrame::PromptChoice(frame)
+            if matches!(
+                frame.domain,
+                spellwake_engine::toolbox::ResolvedPromptDomain::Objects { .. }
+            ) =>
+        {
+            DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Objects(
+                vec![chosen],
+            ))
+        }
         RuleFrame::RevealedPiles(_) | RuleFrame::ResolutionSelect(_) => {
             DecisionReply::SelectResolution(vec![chosen])
         }
@@ -1000,7 +1010,7 @@ fn exile_library_top_linked_and_exile_matching_ext_nightveil_specter_flow() {
 }
 
 // ============================================================================
-// 9. LookTopChooseExt (LibraryTop & rest_dest: Hand) and RevealUntilMatchExt
+// 9. ZoneOpSpec look-top choose (LibraryTop & rest_dest: Hand) and reveal-until-match
 // ============================================================================
 
 #[test]
@@ -1018,20 +1028,20 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::LookTopChooseExt {
-                    library_owner: ResolvingPlayer::Controller,
-                    chooser: ResolvingPlayer::Controller,
-                    count: ValueExpr::literal(2),
-                    filter: None,
-                    max_picks: 1,
-                    take_all_matching: false,
-                    keep_dest: LookTopKeepDest::LibraryTop,
-                    rest_dest: LookTopRestDest::Graveyard,
-                    reveal_kept: false,
-                    reveal_all: false,
-                    reveal_only: false,
-                    secondary: None,
-                }],
+                spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                    ResolvingPlayer::Controller,
+                    ResolvingPlayer::Controller,
+                    ValueExpr::literal(2),
+                    None,
+                    1,
+                    false,
+                    LookTopKeepDest::LibraryTop,
+                    LookTopRestDest::Graveyard,
+                    false,
+                    false,
+                    false,
+                    None,
+                ),
             ),
         ),
         &vocab,
@@ -1041,20 +1051,20 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::LookTopChooseExt {
-                    library_owner: ResolvingPlayer::Controller,
-                    chooser: ResolvingPlayer::Controller,
-                    count: ValueExpr::literal(2),
-                    filter: Some(Box::new(ObjectFilter::creature())),
-                    max_picks: 1,
-                    take_all_matching: true,
-                    keep_dest: LookTopKeepDest::Graveyard,
-                    rest_dest: LookTopRestDest::Hand,
-                    reveal_kept: false,
-                    reveal_all: false,
-                    reveal_only: false,
-                    secondary: None,
-                }],
+                spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                    ResolvingPlayer::Controller,
+                    ResolvingPlayer::Controller,
+                    ValueExpr::literal(2),
+                    Some(ObjectFilter::creature()),
+                    1,
+                    true,
+                    LookTopKeepDest::Graveyard,
+                    LookTopRestDest::Hand,
+                    false,
+                    false,
+                    false,
+                    None,
+                ),
             ),
         ),
         &vocab,
@@ -1064,20 +1074,20 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::RevealUntilMatchExt {
-                    library_owner: ResolvingPlayer::Controller,
-                    chooser: ResolvingPlayer::Controller,
-                    filter: Box::new(ObjectFilter::creature()),
-                    count: ValueExpr::literal(1),
-                    match_dest: LookTopKeepDest::Battlefield {
+                spellwake_engine::toolbox::ZoneOpSpec::reveal_until_match_instructions(
+                    ResolvingPlayer::Controller,
+                    ResolvingPlayer::Controller,
+                    ObjectFilter::creature(),
+                    ValueExpr::literal(1),
+                    LookTopKeepDest::Battlefield {
                         tapped: true,
                         attacking: false,
                     },
-                    rest_dest: LookTopRestDest::BottomRandom,
-                    keep_all_revealed: false,
-                    optional_keep: false,
-                    exile_instead_of_reveal: false,
-                }],
+                    LookTopRestDest::BottomRandom,
+                    false,
+                    false,
+                    false,
+                ),
             ),
         ),
         &vocab,
@@ -1095,6 +1105,14 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
     );
     let card_11 = object(&game_a, 11);
     let pending_a = cast_untargeted(&game_a, 1);
+    assert!(matches!(
+        pending_a.state().pending_decision().map(|d| d.frame()),
+        Some(RuleFrame::PromptChoice(frame))
+            if matches!(
+                frame.domain,
+                spellwake_engine::toolbox::ResolvedPromptDomain::Objects { .. }
+            )
+    ));
     let after_a = answer_look_pick(pending_a.state(), P0, card_11);
     let lib_a = after_a.state().execution().window().cards().library(P0);
     assert_eq!(lib_a, vec![object(after_a.state(), 11)]);

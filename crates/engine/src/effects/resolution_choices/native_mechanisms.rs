@@ -1309,13 +1309,15 @@ fn captured_optional_controller_survives_real_source_departure_and_control_chang
 
 fn captured_offer_body() -> Vec<Instruction> {
     vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::UniqueRelatedPlayer,
-            fixed: ManaCost::generic(1.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 4,
-            declined_destination: 1,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::UniqueRelatedPlayer,
+                ManaCost::generic(1.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                4,
+                1,
+            ),
+        )),
         Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
             instructions: 1,
@@ -2195,13 +2197,15 @@ fn target_spell_controller_role_comes_from_the_actual_card_spell_or_spell_copy()
                 A,
                 BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::TargetSpellController,
-                        fixed: ManaCost::free(),
-                        extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 2,
-                        declined_destination: 1,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::TargetSpellController,
+                            ManaCost::free(),
+                            crate::program::ValueExpr::Literal(0.into()),
+                            2,
+                            1,
+                        ),
+                    )),
                     gain(2),
                 ],
             ),
@@ -2381,13 +2385,15 @@ fn payment_mana_source_denials_reach_physical_control_tap_capability_and_age_gua
 #[test]
 fn colored_resolution_cost_rejects_missing_required_color_before_valid_exact_spend() {
     let state = pending(vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::specific(ManaType::Blue, 1.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 2,
-            declined_destination: 1,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::specific(ManaType::Blue, 1.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                2,
+                1,
+            ),
+        )),
         gain(2),
     ]);
     let state = tap(&state, 10).into_state();
@@ -2843,13 +2849,15 @@ fn returned_mana_source_incarnation_rejects_old_identity_before_current_source_s
 #[test]
 fn same_original_typed_inputs_reexecute_every_payment_parent_child_journal_and_whole_state() {
     let body = vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(3.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 1,
-            declined_destination: 4,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(3.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                1,
+                4,
+            ),
+        )),
         Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
             instructions: 1,
@@ -3009,13 +3017,15 @@ fn nonempty_resolution_locals_survive_each_mana_prefix_and_both_optional_outcome
             auto_resolve_trivial: false,
             option_branches: Vec::new(),
         })),
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(3.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 2,
-            declined_destination: 5,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(3.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                2,
+                5,
+            ),
+        )),
         Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
             instructions: 1,
@@ -3214,13 +3224,15 @@ fn actual_by_player_group_retains_two_entry_causes_for_distinct_payer_and_option
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::UniqueRelatedPlayer,
-                    fixed: ManaCost::generic(1.into()),
-                    extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 1,
-                    declined_destination: 3,
-                },
+                Instruction::PromptChoice(Box::new(
+                    crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                        ManaCost::generic(1.into()),
+                        crate::program::ValueExpr::Literal(0.into()),
+                        1,
+                        3,
+                    ),
+                )),
                 Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
                     instructions: 1,

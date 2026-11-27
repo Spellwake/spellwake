@@ -101,6 +101,14 @@ pub enum PromptDomain {
         pile_count: u8,
         min_per_pile: u8,
     },
+    /// Offer a mana payment with `fixed` plus dynamically evaluated `extra_generic`,
+    /// jumping to `paid_destination` if paid or `declined_destination` if declined.
+    ManaPayment {
+        fixed: crate::mana::ManaCost,
+        extra_generic: Box<ValueExpr>,
+        paid_destination: usize,
+        declined_destination: usize,
+    },
 }
 
 impl PromptDomain {
@@ -205,6 +213,7 @@ impl PromptDomain {
             Self::Players { selector, .. } => selector.uses_target(),
             Self::Number { min, max } => min.uses_target() || max.uses_target(),
             Self::Partition { query, .. } => query.uses_target(),
+            Self::ManaPayment { extra_generic, .. } => extra_generic.uses_target(),
             Self::Options { .. }
             | Self::Color { .. }
             | Self::CardType { .. }
@@ -264,6 +273,11 @@ impl PromptDomain {
                     return Err(DefinitionError::InvalidInstruction);
                 }
                 query.validate_vocabulary(vocabulary)?;
+            }
+            Self::ManaPayment { extra_generic, .. } => {
+                extra_generic
+                    .validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)?;
             }
             Self::Subtype {
                 kind, excluding, ..
@@ -365,6 +379,83 @@ impl PromptChoiceSpec {
             auto_resolve_trivial: false,
             option_branches,
         }
+    }
+
+    /// Construct a dynamic mana payment prompt offering `payer` to pay `fixed` plus
+    /// `extra_generic`, jumping to `paid_destination` if paid or `declined_destination` if declined.
+    #[must_use]
+    pub fn offer_dynamic_mana_payment(
+        payer: crate::program::ResolvingPlayer,
+        fixed: crate::mana::ManaCost,
+        extra_generic: ValueExpr,
+        paid_destination: usize,
+        declined_destination: usize,
+    ) -> Self {
+        Self {
+            chooser: PlayerSelector::Resolving(payer),
+            domain: PromptDomain::ManaPayment {
+                fixed,
+                extra_generic: Box::new(extra_generic),
+                paid_destination,
+                declined_destination,
+            },
+            category: ChoiceCategory::Generic,
+            bind_to: BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+            option_branches: Vec::new(),
+        }
+    }
+
+    /// Inspect this spec as a dynamic mana payment prompt, if it uses `PromptDomain::ManaPayment`
+    /// with a `PlayerSelector::Resolving` chooser.
+    #[must_use]
+    pub fn as_mana_payment(
+        &self,
+    ) -> Option<(
+        crate::program::ResolvingPlayer,
+        &crate::mana::ManaCost,
+        &ValueExpr,
+        usize,
+        usize,
+    )> {
+        let PlayerSelector::Resolving(payer) = self.chooser else {
+            return None;
+        };
+        let PromptDomain::ManaPayment {
+            fixed,
+            extra_generic,
+            paid_destination,
+            declined_destination,
+        } = &self.domain
+        else {
+            return None;
+        };
+        Some((
+            payer,
+            fixed,
+            extra_generic.as_ref(),
+            *paid_destination,
+            *declined_destination,
+        ))
+    }
+
+    /// Mutably borrow the fixed mana cost and jump destinations of a `PromptDomain::ManaPayment` spec.
+    #[must_use]
+    pub fn as_mana_payment_mut(
+        &mut self,
+    ) -> Option<(&mut crate::mana::ManaCost, &mut usize, &mut usize)> {
+        let PromptDomain::ManaPayment {
+            fixed,
+            paid_destination,
+            declined_destination,
+            ..
+        } = &mut self.domain
+        else {
+            return None;
+        };
+        Some((fixed, paid_destination, declined_destination))
     }
 
     /// Translate a legacy [`crate::program::SourceZoneFilter`] and actor into an [`ObjectQuery`].

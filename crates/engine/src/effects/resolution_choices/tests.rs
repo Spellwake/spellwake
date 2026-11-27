@@ -30,13 +30,15 @@ fn gain(amount: i64) -> Instruction {
 }
 fn offer(cost: i64) -> Vec<Instruction> {
     vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(cost.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 2,
-            declined_destination: 1,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(cost.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                2,
+                1,
+            ),
+        )),
         gain(2),
     ]
 }

@@ -10661,9 +10661,6 @@ impl EffectWindow {
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. }
             | Instruction::DrawCards(_) => false,
         })
     }

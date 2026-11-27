@@ -1386,15 +1386,6 @@ pub enum SourceZoneFilter {
     CommandZone,
 }
 
-/// Optional secondary pick bucket for `Instruction::LookTopChooseExt`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LookTopSecondary {
-    pub filter: Box<ObjectFilter>,
-    pub to_battlefield: bool,
-    pub enters_tapped: bool,
-    pub max_picks: u8,
-}
-
 /// How multiple die rolls are combined into a single numeric result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DieRollMode {
@@ -2147,7 +2138,8 @@ pub enum EntryCopyRule {
     MatchingExt(Box<EntryCopySpecExt>),
 }
 
-/// Destination for kept/matched cards in [`Instruction::LookTopChooseExt`] and [`Instruction::RevealUntilMatchExt`].
+/// Destination for kept/matched cards in [`crate::toolbox::zone_op::look_top_choose_instructions`]
+/// and [`crate::toolbox::zone_op::reveal_until_match_instructions`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LookTopKeepDest {
     Hand,
@@ -2175,7 +2167,8 @@ pub enum LookTopKeepDest {
     },
 }
 
-/// Destination for remaining/unkept cards in [`Instruction::LookTopChooseExt`] and [`Instruction::RevealUntilMatchExt`].
+/// Destination for remaining/unkept cards in [`crate::toolbox::zone_op::look_top_choose_instructions`]
+/// and [`crate::toolbox::zone_op::reveal_until_match_instructions`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LookTopRestDest {
     BottomRandom,
@@ -2434,15 +2427,6 @@ pub enum Instruction {
         count: ValueExpr,
         body: Box<ExecutableBody>,
     },
-    /// Offer `payer` a mana payment with `fixed` plus dynamically evaluated `extra_generic`,
-    /// jumping to `paid_destination` if paid or `declined_destination` if declined.
-    OfferDynamicManaPayment {
-        payer: ResolvingPlayer,
-        fixed: ManaCost,
-        extra_generic: ValueExpr,
-        paid_destination: usize,
-        declined_destination: usize,
-    },
     /// CR 603.7. Schedule a delayed step trigger executing `body` at the next matching step.
     ScheduleDelayedStepTrigger {
         step: Step,
@@ -2466,33 +2450,6 @@ pub enum Instruction {
     },
     CreateTokens {
         creations: Vec<crate::token::TokenCreation>,
-    },
-    /// Generalized look-at-top-N choosing cards into `keep_dest` and putting the rest into `rest_dest`.
-    LookTopChooseExt {
-        library_owner: ResolvingPlayer,
-        chooser: ResolvingPlayer,
-        count: ValueExpr,
-        filter: Option<Box<ObjectFilter>>,
-        max_picks: u8,
-        take_all_matching: bool,
-        keep_dest: LookTopKeepDest,
-        rest_dest: LookTopRestDest,
-        reveal_kept: bool,
-        reveal_all: bool,
-        reveal_only: bool,
-        secondary: Option<Box<LookTopSecondary>>,
-    },
-    /// Generalized reveal-from-top-until-N-matching into `match_dest`, putting the rest into `rest_dest`.
-    RevealUntilMatchExt {
-        library_owner: ResolvingPlayer,
-        chooser: ResolvingPlayer,
-        filter: Box<ObjectFilter>,
-        count: ValueExpr,
-        match_dest: LookTopKeepDest,
-        rest_dest: LookTopRestDest,
-        keep_all_revealed: bool,
-        optional_keep: bool,
-        exile_instead_of_reveal: bool,
     },
     /// Universal composable zone-operation pipeline (`Source -> Select -> Move/Reveal/Look -> Bind/Tag`).
     ZoneOp(Box<crate::toolbox::ZoneOpSpec>),
@@ -2564,7 +2521,6 @@ impl Instruction {
             }
             Self::ZoneOp(_)
             | Self::ApplyContinuous(_)
-            | Self::PromptChoice(_)
             | Self::ForEach { .. }
             | Self::ForEachPlayerQuery { .. }
             | Self::BindEnv { .. }
@@ -2572,13 +2528,13 @@ impl Instruction {
             | Self::UpdateStateTrack { .. }
             | Self::SideDeckOp(_)
             | Self::StackOp(_) => {}
-            Self::OfferDynamicManaPayment {
-                paid_destination,
-                declined_destination,
-                ..
-            } => {
-                adjust(paid_destination);
-                adjust(declined_destination);
+            Self::PromptChoice(spec) => {
+                if let Some((_, paid_destination, declined_destination)) =
+                    spec.as_mana_payment_mut()
+                {
+                    adjust(paid_destination);
+                    adjust(declined_destination);
+                }
             }
             Self::MutatePlayer(spec) => match &mut spec.op {
                 crate::toolbox::PlayerMutation::FlipCoins {
@@ -2595,9 +2551,7 @@ impl Instruction {
                 }
                 _ => {}
             },
-            Self::LookTopChooseExt { .. }
-            | Self::RevealUntilMatchExt { .. }
-            | Self::ScheduleDelayedEventTrigger { .. }
+            Self::ScheduleDelayedEventTrigger { .. }
             | Self::RepeatLoop { .. }
             | Self::ScheduleDelayedStepTrigger { .. }
             | Self::EmitReflexiveTrigger { .. }
@@ -2673,36 +2627,11 @@ impl Instruction {
                         _ => false,
                     }
             }
-            Self::OfferDynamicManaPayment { payer, .. } => is_target_player(*payer),
             Self::OptionalSequence { chooser, .. } => is_target_player(*chooser),
             Self::RepeatLoop { body, .. } => body.instructions.iter().any(Self::uses_mode_target),
             Self::ScheduleDelayedEventTrigger { body, .. } => {
                 body.target == BodyTarget::None
                     && body.instructions.iter().any(Self::uses_mode_target)
-            }
-            Self::LookTopChooseExt {
-                library_owner,
-                chooser,
-                count,
-                filter,
-                ..
-            } => {
-                is_target_player(*library_owner)
-                    || is_target_player(*chooser)
-                    || count.uses_target()
-                    || filter.as_deref().is_some_and(filter_uses_target)
-            }
-            Self::RevealUntilMatchExt {
-                library_owner,
-                chooser,
-                filter,
-                count,
-                ..
-            } => {
-                is_target_player(*library_owner)
-                    || is_target_player(*chooser)
-                    || count.uses_target()
-                    || filter_uses_target(filter)
             }
             Self::ZoneOp(spec) => spec.uses_target(),
             Self::DrawCards(spec) => spec.uses_target(),
@@ -2796,13 +2725,14 @@ impl Instruction {
                 spec.recipients,
                 crate::toolbox::DamageTargetQuery::FromGrantingPermanent
             ),
+            Self::PromptChoice(spec) => !matches!(
+                spec.domain,
+                crate::toolbox::PromptDomain::ManaPayment { .. }
+            ),
             Self::FixedTargetClause(_)
-            | Self::LookTopChooseExt { .. }
-            | Self::RevealUntilMatchExt { .. }
             | Self::DrawCards(_)
             | Self::AdjustLife(_)
             | Self::ApplyContinuous(_)
-            | Self::PromptChoice(_)
             | Self::ForEach { .. }
             | Self::ForEachPlayerQuery { .. }
             | Self::BindEnv { .. }
@@ -2818,7 +2748,6 @@ impl Instruction {
             Self::SearchLibrary { .. }
             | Self::BranchCondition { .. }
             | Self::Jump { .. }
-            | Self::OfferDynamicManaPayment { .. }
             | Self::OptionalSequence { .. } => false,
         }
     }
@@ -4415,7 +4344,8 @@ impl ExecutableBody {
                         if let crate::toolbox::ObjectQuery::ZoneScan {
                             slice:
                                 crate::toolbox::QuerySlice::Top(expr)
-                                | crate::toolbox::QuerySlice::Bottom(expr),
+                                | crate::toolbox::QuerySlice::Bottom(expr)
+                                | crate::toolbox::QuerySlice::UntilMatch { count: expr, .. },
                             ..
                         } = &spec.source
                         {
@@ -6701,6 +6631,32 @@ impl ExecutableBody {
                                 )?,
                             )?;
                         }
+                        crate::toolbox::PromptDomain::ManaPayment {
+                            fixed,
+                            extra_generic,
+                            paid_destination,
+                            declined_destination,
+                        } => {
+                            if !fixed.valid() {
+                                return Err(DefinitionError::InvalidResolutionPaymentCost);
+                            }
+                            let is_chosen_x_payment = **extra_generic == ValueExpr::chosen_x()
+                                || matches!(
+                                    extra_generic.as_ref(),
+                                    ValueExpr::Scale { expr, factor }
+                                        if **expr == ValueExpr::chosen_x() && factor.is_positive()
+                                );
+                            if !is_chosen_x_payment {
+                                extra_generic.validate_amount(
+                                    &defined_slots,
+                                    context,
+                                    &facts,
+                                    vocabulary,
+                                )?;
+                            }
+                            Self::validate_destination(index, *paid_destination, length)?;
+                            Self::validate_destination(index, *declined_destination, length)?;
+                        }
                         crate::toolbox::PromptDomain::Options { .. }
                         | crate::toolbox::PromptDomain::Color { .. }
                         | crate::toolbox::PromptDomain::CardType { .. }
@@ -7328,7 +7284,14 @@ impl ExecutableBody {
                         .ok_or(DefinitionError::MissingOptionalEffect)?;
                     let allowed_head = effect.is_optional_primitive()
                         || (*instructions >= 2
-                            && matches!(effect, Instruction::OfferDynamicManaPayment { .. }));
+                            && matches!(
+                                effect,
+                                Instruction::PromptChoice(spec)
+                                    if matches!(
+                                        spec.domain,
+                                        crate::toolbox::PromptDomain::ManaPayment { .. }
+                                    )
+                            ));
                     if !allowed_head {
                         return Err(DefinitionError::UnsupportedOptionalEffect);
                     }
@@ -7745,59 +7708,6 @@ impl ExecutableBody {
                     }
                     None
                 }
-                Instruction::LookTopChooseExt {
-                    library_owner,
-                    chooser,
-                    count,
-                    filter,
-                    secondary,
-                    ..
-                } => {
-                    count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    if let Some(f) = filter {
-                        f.validate_vocabulary(vocabulary)
-                            .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    }
-                    if let Some(sec) = secondary {
-                        sec.filter
-                            .validate_vocabulary(vocabulary)
-                            .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    }
-                    facts.moved_library_cards = true;
-                    facts.definitely_checked_top = true;
-                    let lf = library_owner.validate(
-                        context,
-                        self.target,
-                        facts.definitely_exiled_target,
-                    )?;
-                    let cf =
-                        chooser.validate(context, self.target, facts.definitely_exiled_target)?;
-                    let af = count.required_operand_family(self.target)?;
-                    merge_family(merge_family(lf, cf)?, af)?
-                }
-                Instruction::RevealUntilMatchExt {
-                    library_owner,
-                    chooser,
-                    filter,
-                    count,
-                    ..
-                } => {
-                    filter
-                        .validate_vocabulary(vocabulary)
-                        .map_err(|_| DefinitionError::InvalidInstruction)?;
-                    count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    facts.moved_library_cards = true;
-                    facts.definitely_checked_top = true;
-                    let lf = library_owner.validate(
-                        context,
-                        self.target,
-                        facts.definitely_exiled_target,
-                    )?;
-                    let cf =
-                        chooser.validate(context, self.target, facts.definitely_exiled_target)?;
-                    let af = count.required_operand_family(self.target)?;
-                    merge_family(merge_family(lf, cf)?, af)?
-                }
                 Instruction::ScheduleDelayedEventTrigger { trigger, body, .. } => {
                     let temp = TriggeredAbility {
                         id: TriggeredAbilityId(0),
@@ -7874,36 +7784,6 @@ impl ExecutableBody {
                         body.validate_in_with_facts(vocabulary, context, loop_facts)?;
                         None
                     }
-                }
-                Instruction::OfferDynamicManaPayment {
-                    payer,
-                    fixed,
-                    extra_generic,
-                    paid_destination,
-                    declined_destination,
-                } => {
-                    let family =
-                        payer.validate(context, self.target, facts.definitely_exiled_target)?;
-                    if !fixed.valid() {
-                        return Err(DefinitionError::InvalidResolutionPaymentCost);
-                    }
-                    let is_chosen_x_payment = *extra_generic == ValueExpr::chosen_x()
-                        || matches!(
-                            extra_generic,
-                            ValueExpr::Scale { expr, factor }
-                                if **expr == ValueExpr::chosen_x() && factor.is_positive()
-                        );
-                    if !is_chosen_x_payment {
-                        extra_generic.validate_amount(
-                            &defined_slots,
-                            context,
-                            &facts,
-                            vocabulary,
-                        )?;
-                    }
-                    Self::validate_destination(index, *paid_destination, length)?;
-                    Self::validate_destination(index, *declined_destination, length)?;
-                    family
                 }
             };
             if let Some(family) = family {
@@ -8040,6 +7920,34 @@ impl ExecutableBody {
                         }
                         facts.merge_into(&mut incoming[*destination]);
                     }
+                    Instruction::PromptChoice(spec)
+                        if matches!(
+                            spec.domain,
+                            crate::toolbox::PromptDomain::ManaPayment { .. }
+                        ) =>
+                    {
+                        if let crate::toolbox::PromptDomain::ManaPayment {
+                            extra_generic,
+                            paid_destination,
+                            declined_destination,
+                            ..
+                        } = &spec.domain
+                        {
+                            let is_chosen_x_payment = **extra_generic == ValueExpr::chosen_x()
+                                || matches!(
+                                    extra_generic.as_ref(),
+                                    ValueExpr::Scale { expr, factor }
+                                        if **expr == ValueExpr::chosen_x() && factor.is_positive()
+                                );
+                            let mut paid_facts = facts.clone();
+                            if is_chosen_x_payment {
+                                paid_facts.defined_resolution_x = true;
+                                paid_facts.maybe_defined_resolution_x = true;
+                            }
+                            paid_facts.merge_into(&mut incoming[*paid_destination]);
+                            facts.merge_into(&mut incoming[*declined_destination]);
+                        }
+                    }
                     Instruction::ZoneOp(_)
                     | Instruction::ApplyContinuous(_)
                     | Instruction::PromptChoice(_)
@@ -8092,31 +8000,9 @@ impl ExecutableBody {
                             facts.merge_into(&mut incoming[*declined_destination]);
                         }
                     }
-                    Instruction::OfferDynamicManaPayment {
-                        extra_generic,
-                        paid_destination,
-                        declined_destination,
-                        ..
-                    } => {
-                        let is_chosen_x_payment = *extra_generic == ValueExpr::chosen_x()
-                            || matches!(
-                                extra_generic,
-                                ValueExpr::Scale { expr, factor }
-                                    if **expr == ValueExpr::chosen_x() && factor.is_positive()
-                            );
-                        let mut paid_facts = facts.clone();
-                        if is_chosen_x_payment {
-                            paid_facts.defined_resolution_x = true;
-                            paid_facts.maybe_defined_resolution_x = true;
-                        }
-                        paid_facts.merge_into(&mut incoming[*paid_destination]);
-                        facts.merge_into(&mut incoming[*declined_destination]);
-                    }
                     Instruction::CreateTokens { .. }
                     | Instruction::ScheduleDelayedStepTrigger { .. }
                     | Instruction::EmitReflexiveTrigger { .. }
-                    | Instruction::LookTopChooseExt { .. }
-                    | Instruction::RevealUntilMatchExt { .. }
                     | Instruction::ScheduleDelayedEventTrigger { .. }
                     | Instruction::RepeatLoop { .. }
                     | Instruction::FixedTargetClause(_)
@@ -9053,13 +8939,15 @@ impl UpkeepKeyword {
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        fixed: cost,
-                        extra_generic: ValueExpr::Literal(0.into()),
-                        paid_destination: 2,
-                        declined_destination: 1,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::Controller,
+                            cost,
+                            ValueExpr::Literal(0.into()),
+                            2,
+                            1,
+                        ),
+                    )),
                     Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::move_all(
                         crate::toolbox::ObjectQuery::Source,
                         crate::toolbox::ZoneDest::Graveyard {
@@ -9116,13 +9004,15 @@ impl TriggeredAbility {
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::UniqueRelatedPlayer,
-                        fixed: cost,
-                        extra_generic: ValueExpr::Literal(0.into()),
-                        paid_destination: 2,
-                        declined_destination: 1,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::UniqueRelatedPlayer,
+                            cost,
+                            ValueExpr::Literal(0.into()),
+                            2,
+                            1,
+                        ),
+                    )),
                     Instruction::StackOp(Box::new(
                         crate::toolbox::StackOpSpec::counter_ward_source(),
                     )),
@@ -9206,13 +9096,15 @@ impl TriggeredAbility {
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        fixed: ManaCost::generic(1.into()),
-                        extra_generic: ValueExpr::Literal(0.into()),
-                        paid_destination: 1,
-                        declined_destination: 2,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::Controller,
+                            ManaCost::generic(1.into()),
+                            ValueExpr::Literal(0.into()),
+                            1,
+                            2,
+                        ),
+                    )),
                     Instruction::MutatePlayer(Box::new(
                         crate::toolbox::MutatePlayerSpec::extort_drain(),
                     )),
@@ -11839,8 +11731,7 @@ impl Program {
                     let expr_uses_source = |e: &ValueExpr| e.references_ability_source();
                     matches!(
                         op,
-                        Instruction::LookTopChooseExt { count: amount, .. }
-                            | Instruction::RepeatLoop { count: amount, .. }
+                        Instruction::RepeatLoop { count: amount, .. }
                             if expr_uses_source(amount)
                     ) || matches!(op, Instruction::StackOp(spec) if matches!(&spec.op, crate::toolbox::StackOpKind::Copy { count, .. } if expr_uses_source(count))) || matches!(
                         op,
@@ -12131,8 +12022,7 @@ impl Program {
                             | Instruction::Jump { .. }
                             | Instruction::CreateTokens { .. }
                             | Instruction::ScheduleDelayedEventTrigger { .. }
-                            | Instruction::RepeatLoop { .. }
-                            | Instruction::OfferDynamicManaPayment { .. } => true,
+                            | Instruction::RepeatLoop { .. } => true,
                             Instruction::ZoneOp(_)
                             | Instruction::DrawCards(_)
                             | Instruction::MutateObject(_)
@@ -12148,11 +12038,7 @@ impl Program {
                             | Instruction::SetObjectTag { .. }
                             | Instruction::UpdateStateTrack { .. }
                             | Instruction::SideDeckOp { .. }
-                            | Instruction::StackOp(_)
-                            | Instruction::LookTopChooseExt { .. }
-                            | Instruction::RevealUntilMatchExt { .. } => {
-                                !operation.uses_mode_target()
-                            }
+                            | Instruction::StackOp(_) => !operation.uses_mode_target(),
                             Instruction::OptionalSequence { chooser, .. } => {
                                 targetless_player(*chooser)
                             }
@@ -12355,20 +12241,24 @@ mod stage_a_validation_and_jump_tests {
                 None,
                 Some(6),
             ))),
-            Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::Controller,
-                fixed: ManaCost::free(),
-                extra_generic: ValueExpr::literal(0),
-                paid_destination: 3,
-                declined_destination: 7,
-            },
-            Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::Controller,
-                fixed: ManaCost::free(),
-                extra_generic: ValueExpr::literal(1),
-                paid_destination: 2,
-                declined_destination: 8,
-            },
+            Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::Controller,
+                    ManaCost::free(),
+                    ValueExpr::literal(0),
+                    3,
+                    7,
+                ),
+            )),
+            Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::Controller,
+                    ManaCost::free(),
+                    ValueExpr::literal(1),
+                    2,
+                    8,
+                ),
+            )),
             Instruction::MutatePlayer(Box::new(
                 crate::toolbox::MutatePlayerSpec::offer_source_counters(1.into(), 1, 9),
             )),
@@ -12393,20 +12283,14 @@ mod stage_a_validation_and_jump_tests {
                 )
         ));
         assert!(matches!(
-            ops[3],
-            Instruction::OfferDynamicManaPayment {
-                paid_destination: 5,
-                declined_destination: 9,
-                ..
-            }
+            &ops[3],
+            Instruction::PromptChoice(spec)
+                if matches!(spec.as_mana_payment(), Some((_, _, _, 5, 9)))
         ));
         assert!(matches!(
-            ops[4],
-            Instruction::OfferDynamicManaPayment {
-                paid_destination: 2,
-                declined_destination: 10,
-                ..
-            }
+            &ops[4],
+            Instruction::PromptChoice(spec)
+                if matches!(spec.as_mana_payment(), Some((_, _, _, 2, 10)))
         ));
         assert!(matches!(
             &ops[5],

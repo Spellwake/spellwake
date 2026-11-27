@@ -10,13 +10,15 @@ fn optional(chooser: ResolvingPlayer) -> Instruction {
     }
 }
 fn offer(payer: ResolvingPlayer, paid: usize, declined: usize) -> Instruction {
-    Instruction::OfferDynamicManaPayment {
-        payer,
-        fixed: ManaCost::generic(3.into()),
-        extra_generic: crate::program::ValueExpr::Literal(0.into()),
-        paid_destination: paid,
-        declined_destination: declined,
-    }
+    Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+            payer,
+            ManaCost::generic(3.into()),
+            crate::program::ValueExpr::Literal(0.into()),
+            paid,
+            declined,
+        ),
+    ))
 }
 fn gain() -> Instruction {
     crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
@@ -152,13 +154,15 @@ fn payment_uses_existing_cost_validity_including_explicit_zero() {
         assert_eq!(
             check(
                 BodyTarget::None,
-                vec![Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::Controller,
-                    fixed: cost,
-                    extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 1,
-                    declined_destination: 1,
-                }]
+                vec![Instruction::PromptChoice(Box::new(
+                    crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::Controller,
+                        cost,
+                        crate::program::ValueExpr::Literal(0.into()),
+                        1,
+                        1,
+                    ),
+                ))]
             ),
             Ok(())
         );
@@ -170,13 +174,15 @@ fn payment_uses_existing_cost_validity_including_explicit_zero() {
         assert_eq!(
             check(
                 BodyTarget::None,
-                vec![Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::Controller,
-                    fixed: cost,
-                    extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 1,
-                    declined_destination: 1,
-                }]
+                vec![Instruction::PromptChoice(Box::new(
+                    crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::Controller,
+                        cost,
+                        crate::program::ValueExpr::Literal(0.into()),
+                        1,
+                        1,
+                    ),
+                ))]
             ),
             Err(DefinitionError::InvalidResolutionPaymentCost)
         );
@@ -311,13 +317,15 @@ fn unreachable_new_instructions_still_validate_context_syntax_and_cost() {
             DefinitionError::InvalidControlFlow,
         ),
         (
-            Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::Controller,
-                fixed: ManaCost::generic((-1).into()),
-                extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                paid_destination: 2,
-                declined_destination: 2,
-            },
+            Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::Controller,
+                    ManaCost::generic((-1).into()),
+                    crate::program::ValueExpr::Literal(0.into()),
+                    2,
+                    2,
+                ),
+            )),
             DefinitionError::InvalidResolutionPaymentCost,
         ),
     ] {

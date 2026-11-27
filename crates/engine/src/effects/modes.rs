@@ -435,13 +435,13 @@ impl EffectWindow {
                 },
                 Instruction::BranchCondition { destination, .. }
                 | Instruction::Jump { destination } => remap(destination),
-                Instruction::OfferDynamicManaPayment {
-                    paid_destination,
-                    declined_destination,
-                    ..
-                } => {
-                    remap(paid_destination);
-                    remap(declined_destination);
+                Instruction::PromptChoice(spec) => {
+                    if let Some((_, paid_destination, declined_destination)) =
+                        spec.as_mana_payment_mut()
+                    {
+                        remap(paid_destination);
+                        remap(declined_destination);
+                    }
                 }
                 _ => {}
             }

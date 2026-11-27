@@ -265,20 +265,24 @@ fn skipped_local_definition() {
             chooser: ResolvingPlayer::Controller,
             instructions: 1,
         },
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(1.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 1,
-            declined_destination: 2,
-        },
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(1.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 2,
-            declined_destination: 1,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(1.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                1,
+                2,
+            ),
+        )),
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(1.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                2,
+                1,
+            ),
+        )),
     ] {
         let program = Program::instant(
             ManaCost::free(),
@@ -328,13 +332,15 @@ fn skipped_local_definition() {
                 ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::OfferDynamicManaPayment {
-                            payer: ResolvingPlayer::Controller,
-                            fixed: ManaCost::generic(1.into()),
-                            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                            paid_destination,
-                            declined_destination,
-                        },
+                        Instruction::PromptChoice(Box::new(
+                            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                ResolvingPlayer::Controller,
+                                ManaCost::generic(1.into()),
+                                crate::program::ValueExpr::Literal(0.into()),
+                                paid_destination,
+                                declined_destination,
+                            ),
+                        )),
                         Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
                             chooser: crate::toolbox::PlayerSelector::Resolving(
                                 crate::program::ResolvingPlayer::Controller,
@@ -419,13 +425,15 @@ fn singular_related_player_definitions() {
                 },
                 gain(1),
             ],
-            vec![Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::UniqueRelatedPlayer,
-                fixed: ManaCost::generic(1.into()),
-                extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                paid_destination: 1,
-                declined_destination: 1,
-            }],
+            vec![Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::UniqueRelatedPlayer,
+                    ManaCost::generic(1.into()),
+                    crate::program::ValueExpr::Literal(0.into()),
+                    1,
+                    1,
+                ),
+            ))],
         ] {
             for (grouping, expected) in [
                 (TriggerGrouping::EachOccurrence, Ok(())),
@@ -604,13 +612,15 @@ fn saved_replay() -> Value {
     .enumerate()
     {
         let initial = initialize(vec![
-            Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::Controller,
-                fixed: ManaCost::generic(2.into()),
-                extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                paid_destination: 1,
-                declined_destination: 4,
-            },
+            Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::Controller,
+                    ManaCost::generic(2.into()),
+                    crate::program::ValueExpr::Literal(0.into()),
+                    1,
+                    4,
+                ),
+            )),
             Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
                 instructions: 1,

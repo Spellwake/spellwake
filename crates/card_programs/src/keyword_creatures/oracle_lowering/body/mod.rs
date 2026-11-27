@@ -165,12 +165,6 @@ fn rewrite_body_after_revealed_top(body: &mut ExecutableBody) {
         }
         if matches!(
             op,
-            Instruction::LookTopChooseExt {
-                reveal_only: true,
-                ..
-            }
-        ) || matches!(
-            op,
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
@@ -189,6 +183,8 @@ fn rewrite_body_after_revealed_top(body: &mut ExecutableBody) {
                 ) && matches!(
                     spec.destination,
                     spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                        | spellwake_engine::toolbox::ZoneDest::RevealOnly
+                        | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
                 )
         ) {
             saw_reveal_top = true;

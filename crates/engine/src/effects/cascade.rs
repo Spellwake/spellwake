@@ -96,15 +96,7 @@ impl EffectWindow {
             {
                 true
             }
-            Instruction::SearchLibrary { .. }
-            | Instruction::LookTopChooseExt {
-                rest_dest: crate::program::LookTopRestDest::BottomRandom,
-                ..
-            }
-            | Instruction::RevealUntilMatchExt {
-                rest_dest: crate::program::LookTopRestDest::BottomRandom,
-                ..
-            } => true,
+            Instruction::SearchLibrary { .. } => true,
             Instruction::RepeatLoop { body, .. }
             | Instruction::EmitReflexiveTrigger { body }
             | Instruction::FixedTargetClause(body) => {

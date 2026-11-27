@@ -844,10 +844,7 @@ fn has_prior_non_attached_object_op(op: &Instruction) -> bool {
                         | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
                 )
         }
-        Instruction::CreateTokens { .. }
-        | Instruction::SearchLibrary { .. }
-        | Instruction::LookTopChooseExt { .. }
-        | Instruction::RevealUntilMatchExt { .. } => true,
+        Instruction::CreateTokens { .. } | Instruction::SearchLibrary { .. } => true,
         Instruction::MutateObject(spec)
             if matches!(
                 spec.op,
@@ -1198,6 +1195,9 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
                 spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
                     value_expr_uses_chosen_x(min) || value_expr_uses_chosen_x(max)
                 }
+                spellwake_engine::toolbox::PromptDomain::ManaPayment { extra_generic, .. } => {
+                    value_expr_uses_chosen_x(extra_generic)
+                }
                 _ => false,
             };
             domain_x || spec.option_branches.iter().any(body_uses_chosen_x)
@@ -1257,7 +1257,6 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             spellwake_engine::toolbox::StackOpKind::Discover { value: amount }
                 if value_expr_uses_chosen_x(amount)
         ),
-        Instruction::LookTopChooseExt { count: amount, .. } => value_expr_uses_chosen_x(amount),
         Instruction::CreateTokens { creations } => creations
             .iter()
             .any(|c| value_expr_uses_chosen_x(&c.amount)),
@@ -1338,7 +1337,13 @@ fn try_append_fixed_first_target_parts(
             Instruction::BranchCondition { .. }
                 | Instruction::Jump { .. }
                 | Instruction::OptionalSequence { .. }
-                | Instruction::OfferDynamicManaPayment { .. }
+        ) || matches!(
+            op,
+            Instruction::PromptChoice(spec)
+                if matches!(
+                    spec.domain,
+                    spellwake_engine::toolbox::PromptDomain::ManaPayment { .. }
+                )
         )
     };
     let rest = &builder.instructions[1..];

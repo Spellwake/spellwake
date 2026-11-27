@@ -1350,15 +1350,12 @@ pub(super) fn lower_search_library_group(
                         CostAtomAst::PayMana(raw) => {
                             let idx = builder.instructions.len();
                             if let Some(cost) = parse_fixed_mana_cost(raw) {
-                                builder
-                                    .instructions
-                                    .push(Instruction::OfferDynamicManaPayment {
-                                        payer: ResolvingPlayer::TriggerSubjectController,
-                                        fixed: cost,
-                                        extra_generic: ValueExpr::Literal(0.into()),
-                                        paid_destination: idx + 2,
-                                        declined_destination: idx + 1,
-                                    });
+                                builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                        ResolvingPlayer::TriggerSubjectController,
+                                        cost, ValueExpr::Literal(0.into()), idx + 2, idx + 1,
+                                    ),
+                                )));
                             } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
                                 && x_cnt > 0
                             {
@@ -1369,15 +1366,12 @@ pub(super) fn lower_search_library_group(
                                     None => ValueExpr::chosen_x(),
                                 };
                                 let extra_generic = scale_value_expr(x_val, i64::from(x_cnt));
-                                builder
-                                    .instructions
-                                    .push(Instruction::OfferDynamicManaPayment {
-                                        payer: ResolvingPlayer::TriggerSubjectController,
-                                        fixed,
-                                        extra_generic,
-                                        paid_destination: idx + 2,
-                                        declined_destination: idx + 1,
-                                    });
+                                builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                        ResolvingPlayer::TriggerSubjectController,
+                                        fixed, extra_generic, idx + 2, idx + 1,
+                                    ),
+                                )));
                             } else {
                                 return Err("oracle:counter-unless-x");
                             }
@@ -1391,15 +1385,12 @@ pub(super) fn lower_search_library_group(
                                 cost_atom, builder, in_trigger, vocabulary, bound_x,
                             )?;
                             let idx = builder.instructions.len();
-                            builder
-                                .instructions
-                                .push(Instruction::OfferDynamicManaPayment {
-                                    payer: ResolvingPlayer::TriggerSubjectController,
-                                    fixed,
-                                    extra_generic,
-                                    paid_destination: idx + 2,
-                                    declined_destination: idx + 1,
-                                });
+                            builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                    ResolvingPlayer::TriggerSubjectController,
+                                    fixed, extra_generic, idx + 2, idx + 1,
+                                ),
+                            )));
                             builder.instructions.push(Instruction::StackOp(Box::new(
                                 spellwake_engine::toolbox::StackOpSpec::counter_triggering(),
                             )));
@@ -1440,15 +1431,12 @@ pub(super) fn lower_search_library_group(
                     CostAtomAst::PayMana(raw) => {
                         let idx = builder.instructions.len();
                         if let Some(cost) = parse_fixed_mana_cost(raw) {
-                            builder
-                                .instructions
-                                .push(Instruction::OfferDynamicManaPayment {
-                                    payer: ResolvingPlayer::TargetSpellController,
-                                    fixed: cost,
-                                    extra_generic: ValueExpr::Literal(0.into()),
-                                    paid_destination: idx + 2,
-                                    declined_destination: idx + 1,
-                                });
+                            builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                    ResolvingPlayer::TargetSpellController,
+                                    cost, ValueExpr::Literal(0.into()), idx + 2, idx + 1,
+                                ),
+                            )));
                         } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
                             && x_cnt > 0
                         {
@@ -1459,15 +1447,12 @@ pub(super) fn lower_search_library_group(
                                 None => ValueExpr::chosen_x(),
                             };
                             let extra_generic = scale_value_expr(x_val, i64::from(x_cnt));
-                            builder
-                                .instructions
-                                .push(Instruction::OfferDynamicManaPayment {
-                                    payer: ResolvingPlayer::TargetSpellController,
-                                    fixed,
-                                    extra_generic,
-                                    paid_destination: idx + 2,
-                                    declined_destination: idx + 1,
-                                });
+                            builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                    ResolvingPlayer::TargetSpellController,
+                                    fixed, extra_generic, idx + 2, idx + 1,
+                                ),
+                            )));
                         } else {
                             return Err("oracle:counter-unless-x");
                         }
@@ -1485,13 +1470,15 @@ pub(super) fn lower_search_library_group(
                         let idx = builder.instructions.len();
                         builder
                             .instructions
-                            .push(Instruction::OfferDynamicManaPayment {
-                                payer: ResolvingPlayer::TargetSpellController,
+                            .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                ResolvingPlayer::TargetSpellController,
                                 fixed,
                                 extra_generic,
-                                paid_destination: idx + 2,
-                                declined_destination: idx + 1,
-                            });
+                                idx + 2,
+                                idx + 1,
+                            ),
+                        )));
                         builder.instructions.push(Instruction::StackOp(Box::new(
                             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                                 spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -3439,20 +3426,20 @@ pub(super) fn lower_search_library_group(
                 )?;
                 push_for_each_player(
                     players,
-                    vec![Instruction::LookTopChooseExt {
-                        library_owner: ResolvingPlayer::LoopPlayer,
-                        chooser: ResolvingPlayer::Controller,
-                        count: cnt,
-                        filter: None,
-                        max_picks: 0,
-                        take_all_matching: false,
-                        keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                        rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                        reveal_kept: false,
-                        reveal_all: *reveal,
-                        reveal_only: true,
-                        secondary: None,
-                    }],
+                    spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                        ResolvingPlayer::LoopPlayer,
+                        ResolvingPlayer::Controller,
+                        cnt,
+                        None,
+                        0,
+                        false,
+                        spellwake_engine::program::LookTopKeepDest::Hand,
+                        spellwake_engine::program::LookTopRestDest::BottomOrder,
+                        false,
+                        *reveal,
+                        true,
+                        None,
+                    ),
                     builder,
                 );
                 return Ok(());
@@ -3572,20 +3559,22 @@ pub(super) fn lower_search_library_group(
                 in_trigger,
                 vocabulary,
             )?;
-            builder.instructions.push(Instruction::LookTopChooseExt {
-                library_owner,
-                chooser: ResolvingPlayer::Controller,
-                count: cnt,
-                filter: None,
-                max_picks: 0,
-                take_all_matching: false,
-                keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                reveal_kept: false,
-                reveal_all: *reveal,
-                reveal_only: true,
-                secondary: None,
-            });
+            builder.instructions.extend(
+                spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                    library_owner,
+                    ResolvingPlayer::Controller,
+                    cnt,
+                    None,
+                    0,
+                    false,
+                    spellwake_engine::program::LookTopKeepDest::Hand,
+                    spellwake_engine::program::LookTopRestDest::BottomOrder,
+                    false,
+                    *reveal,
+                    true,
+                    None,
+                ),
+            );
             Ok(())
         }
         InstructionAst::GrantCastPermission {
@@ -4309,13 +4298,15 @@ pub(super) fn lower_search_library_group(
             let idx = builder.instructions.len();
             builder
                 .instructions
-                .push(Instruction::OfferDynamicManaPayment {
-                    payer,
-                    fixed: ManaCost::free(),
-                    extra_generic: ValueExpr::chosen_x(),
-                    paid_destination: idx + 1,
-                    declined_destination: idx + 1,
-                });
+                .push(Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        payer,
+                        ManaCost::free(),
+                        ValueExpr::chosen_x(),
+                        idx + 1,
+                        idx + 1,
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::PlayerLookTopLibrary {
@@ -4480,20 +4471,20 @@ pub(super) fn lower_search_library_group(
                 if *reveal {
                     push_for_each_player(
                         group_players,
-                        vec![Instruction::LookTopChooseExt {
+                        spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
                             library_owner,
-                            chooser: ResolvingPlayer::Controller,
-                            count: cnt,
-                            filter: None,
-                            max_picks: 0,
-                            take_all_matching: false,
-                            keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                            rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                            reveal_kept: false,
-                            reveal_all: true,
-                            reveal_only: true,
-                            secondary: None,
-                        }],
+                            ResolvingPlayer::Controller,
+                            cnt,
+                            None,
+                            0,
+                            false,
+                            spellwake_engine::program::LookTopKeepDest::Hand,
+                            spellwake_engine::program::LookTopRestDest::BottomOrder,
+                            false,
+                            true,
+                            true,
+                            None,
+                        ),
                         &mut trial,
                     );
                 } else {
@@ -4661,20 +4652,22 @@ pub(super) fn lower_search_library_group(
                     ),
                 ));
             } else {
-                trial.instructions.push(Instruction::LookTopChooseExt {
-                    library_owner,
-                    chooser: ResolvingPlayer::Controller,
-                    count: cnt,
-                    filter: None,
-                    max_picks: 0,
-                    take_all_matching: false,
-                    keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                    rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                    reveal_kept: false,
-                    reveal_all: *reveal,
-                    reveal_only: true,
-                    secondary: None,
-                });
+                trial.instructions.extend(
+                    spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                        library_owner,
+                        ResolvingPlayer::Controller,
+                        cnt,
+                        None,
+                        0,
+                        false,
+                        spellwake_engine::program::LookTopKeepDest::Hand,
+                        spellwake_engine::program::LookTopRestDest::BottomOrder,
+                        false,
+                        *reveal,
+                        true,
+                        None,
+                    ),
+                );
             }
             *builder = trial;
             Ok(())
@@ -4819,18 +4812,6 @@ fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool
                 || matches!(
                     spec.destination,
                     spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                )
-        }
-        Instruction::LookTopChooseExt { keep_dest, .. }
-        | Instruction::RevealUntilMatchExt {
-            match_dest: keep_dest,
-            ..
-        } => {
-            !expected_exile_only
-                || matches!(
-                    keep_dest,
-                    spellwake_engine::program::LookTopKeepDest::Exile { .. }
-                        | spellwake_engine::program::LookTopKeepDest::ExileLinked { .. }
                 )
         }
         Instruction::PromptChoice(spec)

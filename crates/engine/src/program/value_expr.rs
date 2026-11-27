@@ -81,7 +81,7 @@ pub enum ValueObjectRef {
     RevealedCostCard,
     TriggeringSpell,
     FinalSaga,
-    /// Top card revealed by `LookTopChooseExt { reveal_only: true, .. }` or `MayRevealLibraryTop`.
+    /// Top card revealed by a reveal-only library look (`ZoneOp` with `ZoneDest::RevealOnly`) or `MayRevealLibraryTop`.
     RevealedTop,
     /// Object that caused the current triggered ability to fire (e.g., entering/attacking/targeted/dying permanent).
     TriggerSubject,

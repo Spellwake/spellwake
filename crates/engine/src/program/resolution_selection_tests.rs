@@ -157,13 +157,15 @@ fn target_player_uses_the_shared_optional_and_payment_role_owner() {
             chooser: ResolvingPlayer::TargetPlayer,
             instructions: 1,
         },
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::TargetPlayer,
-            fixed: ManaCost::free(),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 1,
-            declined_destination: 2,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::TargetPlayer,
+                ManaCost::free(),
+                crate::program::ValueExpr::Literal(0.into()),
+                1,
+                2,
+            ),
+        )),
     ] {
         assert_eq!(
             check(BodyTarget::SinglePlayer, vec![effect.clone(), gain()]),
