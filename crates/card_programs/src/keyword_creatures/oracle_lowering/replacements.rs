@@ -6817,7 +6817,7 @@ fn lower_inline_replacement_instructions(
                     || sub.instructions.iter().any(|inst| {
                         matches!(
                             inst,
-                            Instruction::Jump { .. } | Instruction::BranchIfFalse { .. }
+                            Instruction::Jump { .. } | Instruction::BranchCondition { .. }
                         )
                     })
                 {

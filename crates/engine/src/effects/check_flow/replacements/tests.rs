@@ -604,15 +604,17 @@ fn copied_cleanup_source_functions_before_expiry_then_waiting_only_triggers_repe
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::BecomeCopy {
-                receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-                donor: crate::program::MoveSubjectRef::TargetObject,
-                duration: ResolvedDuration::UntilEndOfTurn,
-                exceptions: Box::new(crate::program::CopyExceptions {
-                    override_pt: None,
-                    ..Default::default()
-                }),
-            }],
+            vec![Instruction::ApplyContinuous(Box::new(
+                crate::toolbox::ApplyContinuousSpec::become_copy(
+                    crate::toolbox::ObjectQuery::Source,
+                    crate::toolbox::ObjectQuery::Targets,
+                    ResolvedDuration::UntilEndOfTurn,
+                    crate::program::CopyExceptions {
+                        override_pt: None,
+                        ..Default::default()
+                    },
+                ),
+            ))],
         ),
     });
     cards.push(bf(300, A, A, holder));

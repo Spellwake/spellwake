@@ -524,6 +524,10 @@ fn rewrite_offer_chosen_to_loop_cond(cond: &mut spellwake_engine::toolbox::Condi
             }
         }
         ConditionExpr::Not(c) => rewrite_offer_chosen_to_loop_cond(c),
+        ConditionExpr::Resolution(rc) => {
+            rewrite_offer_chosen_to_loop_ve(&mut rc.left);
+            rewrite_offer_chosen_to_loop_ve(&mut rc.right);
+        }
     }
 }
 
@@ -562,7 +566,15 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             &rewrite_offer_chosen_to_loop_ve,
                         );
                     }
-                    spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+                    spellwake_engine::toolbox::LifeOp::ExchangeTotals { other } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            other,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    _ => {}
                 }
             }
             Instruction::DealDamage(spec) => {
@@ -615,18 +627,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     spellwake_engine::toolbox::DamageTargetQuery::Divided { total, .. } => {
                         rewrite_offer_chosen_to_loop_ve(total);
                     }
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets
-                    | spellwake_engine::toolbox::DamageTargetQuery::AnnouncedTargets { .. }
-                    | spellwake_engine::toolbox::DamageTargetQuery::FromPower(_)
-                    | spellwake_engine::toolbox::DamageTargetQuery::CreaturePowerToOther {
-                        ..
-                    }
-                    | spellwake_engine::toolbox::DamageTargetQuery::TargetControllersCreatures {
-                        ..
-                    }
-                    | spellwake_engine::toolbox::DamageTargetQuery::OrderedTargets { .. }
-                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree
-                    | spellwake_engine::toolbox::DamageTargetQuery::FromGrantingPermanent => {}
+                    _ => {}
                 }
                 if let spellwake_engine::program::DamageAmountSpec::Expr(e) = &mut spec.amount {
                     rewrite_offer_chosen_to_loop_ve(e);
@@ -801,8 +802,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_offer_chosen_to_loop_rp(payer);
                 rewrite_offer_chosen_to_loop_ve(extra_generic);
             }
-            Instruction::OptionalEffect { chooser }
-            | Instruction::OptionalSequence { chooser, .. }
+            Instruction::OptionalSequence { chooser, .. }
             | Instruction::ChooseValue { chooser, .. } => {
                 rewrite_offer_chosen_to_loop_rp(chooser);
             }
@@ -869,7 +869,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             &rewrite_offer_chosen_to_loop_ve,
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::Attach { host } => {
+                    spellwake_engine::toolbox::ObjectMutation::Attach { host, .. } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
                             host,
                             &rewrite_offer_chosen_to_loop_rp,
@@ -998,10 +998,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     _ => {}
                 }
             }
-            Instruction::BranchIfFalse { condition, .. } => {
-                rewrite_offer_chosen_to_loop_ve(&mut condition.left);
-                rewrite_offer_chosen_to_loop_ve(&mut condition.right);
-            }
             Instruction::BranchCondition { condition, .. } => {
                 rewrite_offer_chosen_to_loop_cond(condition);
             }
@@ -1009,18 +1005,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_offer_chosen_to_loop_ve(count);
                 rewrite_offer_chosen_to_loop_ops(&mut body.instructions);
             }
-
-            Instruction::Exchange(spec) => match spec {
-                spellwake_engine::program::ExchangeSpec::LifeTotals { first, second } => {
-                    rewrite_offer_chosen_to_loop_rp(first);
-                    rewrite_offer_chosen_to_loop_rp(second);
-                }
-                spellwake_engine::program::ExchangeSpec::LifeWithStat { player, .. }
-                | spellwake_engine::program::ExchangeSpec::Zones { player, .. } => {
-                    rewrite_offer_chosen_to_loop_rp(player);
-                }
-                spellwake_engine::program::ExchangeSpec::Control { .. } => {}
-            },
 
             Instruction::SearchLibrary { filter } => {
                 rewrite_offer_chosen_to_loop_rp(&mut filter.searcher);

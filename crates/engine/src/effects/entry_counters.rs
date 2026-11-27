@@ -99,6 +99,20 @@ fn condition_uses_damage_pairs(cond: &crate::program::ResolutionCondition) -> bo
     value_expr_uses_damage_pairs(&cond.left) || value_expr_uses_damage_pairs(&cond.right)
 }
 
+fn condition_expr_uses_damage_pairs(cond: &crate::toolbox::ConditionExpr) -> bool {
+    match cond {
+        crate::toolbox::ConditionExpr::Resolution(c) => condition_uses_damage_pairs(c),
+        crate::toolbox::ConditionExpr::Compare { left, right, .. } => {
+            value_expr_uses_damage_pairs(left) || value_expr_uses_damage_pairs(right)
+        }
+        crate::toolbox::ConditionExpr::And(cs) | crate::toolbox::ConditionExpr::Or(cs) => {
+            cs.iter().any(condition_expr_uses_damage_pairs)
+        }
+        crate::toolbox::ConditionExpr::Not(c) => condition_expr_uses_damage_pairs(c),
+        _ => false,
+    }
+}
+
 fn static_cond_uses_damage_pairs(cond: &crate::characteristics::StaticSourceCondition) -> bool {
     use crate::characteristics::StaticSourceCondition;
     match cond {
@@ -239,7 +253,9 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
                         .is_some_and(trigger_cond_uses_damage_pairs)
                     || body_uses_damage_pairs(body)
             }
-            Instruction::BranchIfFalse { condition, .. } => condition_uses_damage_pairs(condition),
+            Instruction::BranchCondition { condition, .. } => {
+                condition_expr_uses_damage_pairs(condition)
+            }
             _ => false,
         })
 }
@@ -456,6 +472,20 @@ fn condition_uses_damage_dealt_by(cond: &crate::program::ResolutionCondition) ->
     value_expr_uses_damage_dealt_by(&cond.left) || value_expr_uses_damage_dealt_by(&cond.right)
 }
 
+fn condition_expr_uses_damage_dealt_by(cond: &crate::toolbox::ConditionExpr) -> bool {
+    match cond {
+        crate::toolbox::ConditionExpr::Resolution(c) => condition_uses_damage_dealt_by(c),
+        crate::toolbox::ConditionExpr::Compare { left, right, .. } => {
+            value_expr_uses_damage_dealt_by(left) || value_expr_uses_damage_dealt_by(right)
+        }
+        crate::toolbox::ConditionExpr::And(cs) | crate::toolbox::ConditionExpr::Or(cs) => {
+            cs.iter().any(condition_expr_uses_damage_dealt_by)
+        }
+        crate::toolbox::ConditionExpr::Not(c) => condition_expr_uses_damage_dealt_by(c),
+        _ => false,
+    }
+}
+
 fn static_cond_uses_damage_dealt_by(cond: &crate::characteristics::StaticSourceCondition) -> bool {
     use crate::characteristics::StaticSourceCondition;
     match cond {
@@ -568,7 +598,7 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
         return true;
     }
     body.instructions.iter().any(|op| match op {
-        Instruction::BranchIfFalse { condition, .. } => condition_uses_damage_dealt_by(condition),
+        Instruction::BranchCondition { condition, .. } => condition_expr_uses_damage_dealt_by(condition),
         Instruction::ForEachPlayerQuery { body, .. } => body_uses_damage_dealt_by(body),
         Instruction::ScheduleDelayedStepTrigger { body, .. }
         | Instruction::ScheduleDelayedEventTrigger { body, .. }
@@ -584,7 +614,9 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
             | crate::toolbox::LifeOp::Set(v)
             | crate::toolbox::LifeOp::Pay(v)
             | crate::toolbox::LifeOp::Drain { amount: v, .. } => value_expr_uses_damage_dealt_by(v),
-            crate::toolbox::LifeOp::LoseHalf { .. } => false,
+            crate::toolbox::LifeOp::LoseHalf { .. }
+            | crate::toolbox::LifeOp::ExchangeTotals { .. }
+            | crate::toolbox::LifeOp::ExchangeWithStat { .. } => false,
         },
         Instruction::DealDamage(spec) => {
             matches!(

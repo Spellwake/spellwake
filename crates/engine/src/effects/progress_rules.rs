@@ -427,7 +427,7 @@ impl EffectWindow {
                     .and_then(StackPayload::body)
                     .is_some_and(ExecutableBody::is_up_to_one_target)
                 && instruction.uses_mode_target()
-                && !matches!(instruction, Instruction::BranchIfFalse { .. })
+                && !matches!(instruction, Instruction::BranchCondition { .. })
             {
                 if let Some(cursor) = self.resolution_cursor_mut() {
                     cursor.results.last_action_succeeded = false;
@@ -612,19 +612,18 @@ impl EffectWindow {
             index,
             Some(&instruction),
         );
-        if matches!(
-            instruction,
-            Instruction::OptionalSequence { .. } | Instruction::OptionalEffect { .. }
-        ) && matches!(
-            next_instruction,
-            Some(Instruction::MutateObject(spec))
-                if matches!(
-                    spec.op,
-                    crate::toolbox::ObjectMutation::ResolveTransfer(
-                        crate::program::TransferKeyword::Graft(_)
+        if matches!(instruction, Instruction::OptionalSequence { .. })
+            && matches!(
+                next_instruction,
+                Some(Instruction::MutateObject(spec))
+                    if matches!(
+                        spec.op,
+                        crate::toolbox::ObjectMutation::ResolveTransfer(
+                            crate::program::TransferKeyword::Graft(_)
+                        )
                     )
-                )
-        ) && self.graft_pair(entry.id()).is_none()
+            )
+            && self.graft_pair(entry.id()).is_none()
         {
             self.set_instruction(index + 2)?;
             return Ok(StepOutcome::Continue);
@@ -1144,14 +1143,16 @@ impl EffectWindow {
                 let mut combined = cost_body.instructions;
                 if !paid_body.instructions.is_empty() {
                     let combined_end = combined.len() + 1 + paid_body.instructions.len();
-                    combined.push(Instruction::BranchIfFalse {
-                        condition: crate::program::ResolutionCondition {
-                            left: ValueExpr::event(
-                                crate::program::EventValueKind::LastActionSucceeded,
-                            ),
-                            comparison: crate::program::Comparison::GreaterOrEqual,
-                            right: ValueExpr::literal(1),
-                        },
+                    combined.push(Instruction::BranchCondition {
+                        condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+                            crate::program::ResolutionCondition {
+                                left: ValueExpr::event(
+                                    crate::program::EventValueKind::LastActionSucceeded,
+                                ),
+                                comparison: crate::program::Comparison::GreaterOrEqual,
+                                right: ValueExpr::literal(1),
+                            },
+                        ))),
                         destination: combined_end,
                     });
                     let shift = isize::try_from(combined.len())
@@ -1944,130 +1945,6 @@ impl EffectWindow {
                         )?])
                     },
                 )?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::BecomeCopy {
-            receiver,
-            donor,
-            duration,
-            exceptions,
-        } = instruction
-        {
-            let donor_id = match donor {
-                crate::program::MoveSubjectRef::TargetObject => self
-                    .instruction_target(entry)
-                    .ok()
-                    .and_then(|bound| match bound.choice().target {
-                        TargetRef::Object(id) => Some(id),
-                        _ => None,
-                    }),
-                crate::program::MoveSubjectRef::AbilitySource => match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => Some(source.id()),
-                    StackKind::CardSpell(id) => Some(*id),
-                    _ => None,
-                },
-                crate::program::MoveSubjectRef::TriggeringObject => self
-                    .execution_bindings(entry.id())
-                    .and_then(|b| b.trigger.as_ref())
-                    .and_then(|t| t.causes.members().first())
-                    .and_then(|m| m.subject_object_id()),
-                crate::program::MoveSubjectRef::AttachedHost => match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => {
-                        match self.attachment_host_for_ability(source.id()) {
-                            Some(TargetRef::Object(host)) => Some(host),
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                },
-                crate::program::MoveSubjectRef::RevealedCard => self
-                    .resolution_cursor()
-                    .and_then(|c| c.impulse.exiled.or(c.results.revealed_top_card)),
-                crate::program::MoveSubjectRef::CreatedTokens => self
-                    .resolution_cursor()
-                    .and_then(|c| c.last_created_tokens.first().copied()),
-                crate::program::MoveSubjectRef::LastMoved => {
-                    self.resolution_cursor().and_then(|c| {
-                        c.results
-                            .last_moved_objects
-                            .first()
-                            .copied()
-                            .or(c.results.returned_target_permanent)
-                    })
-                }
-                crate::program::MoveSubjectRef::RememberedFirst => {
-                    self.legal_linked_targets()?.map(|(a, _)| a)
-                }
-                crate::program::MoveSubjectRef::RememberedSecond => {
-                    self.legal_linked_targets()?.map(|(_, b)| b)
-                }
-            };
-            if let Some(resolved_dur) = self.resolve_duration(entry, duration)?
-                && let Some(donor_id) = donor_id
-                && let Some(base) = self.copiable_program(donor_id).cloned()
-            {
-                let receivers: Vec<ObjectId> = self
-                    .effect_group(entry, *receiver)?
-                    .into_iter()
-                    .filter(|id| {
-                        self.window
-                            .cards()
-                            .get(*id)
-                            .is_some_and(|obj| obj.zone() == ObjectZone::Battlefield)
-                    })
-                    .collect();
-                if !receivers.is_empty() {
-                    let before = self.rules_snapshot(None)?;
-                    let mut created = Vec::new();
-                    for recv_id in receivers {
-                        let mut copied = base.clone();
-                        apply_copy_exceptions(
-                            &mut copied,
-                            &exceptions,
-                            self.copiable_program(recv_id),
-                        );
-                        let effect = self.characteristics.add_effect(
-                            entry.id(),
-                            recv_id,
-                            crate::characteristics::ResolvedParts(vec![
-                                crate::characteristics::ResolvedPart::Copy(Box::new(copied)),
-                            ]),
-                            resolved_dur,
-                        )?;
-                        created.push(effect);
-                    }
-                    self.emit_from(
-                        crate::occurrence::EventCause::Instruction {
-                            entry: entry.id(),
-                            instruction: index,
-                        },
-                        &before,
-                        None,
-                        ctx.append,
-                        |old, new, _| {
-                            let mut occs = Vec::with_capacity(created.len());
-                            for effect in created {
-                                let appearances =
-                                    occurrence_flow::characteristic_appearance_changes(
-                                        old,
-                                        new,
-                                        effect.affected.iter().copied(),
-                                    )?;
-                                occs.push(
-                                    crate::occurrence::RulesOccurrence::ContinuousEffectCreated {
-                                        effect,
-                                        appearances,
-                                    },
-                                );
-                            }
-                            Ok(occs)
-                        },
-                    )?;
-                }
             }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -4278,124 +4155,6 @@ impl EffectWindow {
             }
         }
         Ok(false)
-    }
-}
-
-fn apply_copy_exceptions(
-    copied: &mut Program,
-    exceptions: &crate::program::CopyExceptions,
-    receiver_base: Option<&Program>,
-) {
-    if exceptions.nonlegendary {
-        copied
-            .supertypes
-            .remove(&crate::program::Supertype::Legendary);
-    }
-    if let Some(orig) = receiver_base {
-        if exceptions.keep_name {
-            copied.names = orig.names.clone();
-        }
-        if exceptions.keep_types {
-            copied.card_types.extend(orig.card_types.iter().copied());
-            copied
-                .creature_subtypes
-                .extend(orig.creature_subtypes.iter().copied());
-            copied
-                .artifact_subtypes
-                .extend(orig.artifact_subtypes.iter().copied());
-            copied
-                .enchantment_subtypes
-                .extend(orig.enchantment_subtypes.iter().copied());
-            copied
-                .land_subtypes
-                .extend(orig.land_subtypes.iter().copied());
-        }
-        if exceptions.keep_abilities {
-            copied
-                .printed_keywords
-                .extend(orig.printed_keywords.iter().copied());
-            let mut next_trig = copied
-                .triggered
-                .iter()
-                .map(|t| t.id.0)
-                .max()
-                .map_or(0, |m| m.saturating_add(1));
-            for tr in &orig.triggered {
-                let mut cloned = tr.clone();
-                cloned.id = crate::program::TriggeredAbilityId(next_trig);
-                next_trig = next_trig.saturating_add(1);
-                copied.triggered.push(cloned);
-            }
-            let mut next_act = copied
-                .activated
-                .iter()
-                .map(|a| a.id.0)
-                .max()
-                .map_or(0, |m| m.saturating_add(1));
-            for act in &orig.activated {
-                let mut cloned = act.clone();
-                cloned.id = crate::activated::ActivatedAbilityId(next_act);
-                next_act = next_act.saturating_add(1);
-                copied.activated.push(cloned);
-            }
-        }
-    }
-    copied
-        .card_types
-        .extend(exceptions.extra_types.iter().copied());
-    copied
-        .artifact_subtypes
-        .extend(exceptions.extra_artifact_subtypes.iter().copied());
-    copied
-        .creature_subtypes
-        .extend(exceptions.extra_creature_subtypes.iter().copied());
-    copied
-        .printed_keywords
-        .extend(exceptions.extra_keywords.iter().copied());
-    if let Some(pt) = &exceptions.override_pt
-        && let ProgramKind::Permanent(permanent) = &mut copied.kind
-    {
-        permanent.printed_pt = Some(pt.clone().into());
-        if matches!(
-            &copied.continuous,
-            Some(crate::characteristics::StaticContinuousAbility::CharacteristicDefining {
-                parts,
-                ..
-            }) if parts
-                .0
-                .iter()
-                .any(|part| matches!(part, crate::characteristics::DefiningPart::PowerToughness { .. }))
-        ) {
-            copied.continuous = None;
-        }
-    }
-    if !exceptions.extra_triggered.is_empty() {
-        let mut next_trig = copied
-            .triggered
-            .iter()
-            .map(|t| t.id.0)
-            .max()
-            .map_or(0, |m| m.saturating_add(1));
-        for tr in &exceptions.extra_triggered {
-            let mut cloned = tr.clone();
-            cloned.id = crate::program::TriggeredAbilityId(next_trig);
-            next_trig = next_trig.saturating_add(1);
-            copied.triggered.push(cloned);
-        }
-    }
-    if !exceptions.extra_activated.is_empty() {
-        let mut next_act = copied
-            .activated
-            .iter()
-            .map(|a| a.id.0)
-            .max()
-            .map_or(0, |m| m.saturating_add(1));
-        for act in &exceptions.extra_activated {
-            let mut cloned = act.clone();
-            cloned.id = crate::activated::ActivatedAbilityId(next_act);
-            next_act = next_act.saturating_add(1);
-            copied.activated.push(cloned);
-        }
     }
 }
 

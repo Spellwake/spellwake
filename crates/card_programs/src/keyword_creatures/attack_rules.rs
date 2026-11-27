@@ -214,7 +214,11 @@ pub(super) fn compile(
             mana_cost: super::fixed_cost(price)?,
             body: spellwake_engine::program::ExecutableBody::new(
                 spellwake_engine::program::BodyTarget::SingleCreature,
-                vec![spellwake_engine::program::Instruction::Attach(ability)],
+                vec![spellwake_engine::program::Instruction::MutateObject(
+                    Box::new(spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                        ability,
+                    )),
+                )],
             ),
         };
         use spellwake_engine::characteristics::{
@@ -439,8 +443,9 @@ pub(super) fn compile(
         {
             body.instructions.insert(
                 0,
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: spellwake_engine::program::ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
             );
             if entry_search.replace(body).is_some() {

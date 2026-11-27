@@ -4002,8 +4002,9 @@ pub(super) fn lower_static(
                 let body = ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::exert_source(),
                     ],
@@ -15625,7 +15626,11 @@ fn parse_granted_equip_or_crew_part(
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
                     BodyTarget::SingleCreature,
-                    vec![Instruction::Attach(AttachAbility::Equip)],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                            AttachAbility::Equip,
+                        ),
+                    ))],
                 ),
             })));
         }
@@ -15669,7 +15674,11 @@ fn parse_granted_equip_or_crew_part(
                     source_cost: SourceCost::None,
                     body: ExecutableBody::new(
                         BodyTarget::FilteredPermanent(obj),
-                        vec![Instruction::Attach(AttachAbility::Equip)],
+                        vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                                AttachAbility::Equip,
+                            ),
+                        ))],
                     ),
                 })));
             }
@@ -15991,8 +16000,9 @@ pub(super) fn lower_ability_change(
                     body: ExecutableBody::new(
                         BodyTarget::None,
                         vec![
-                            Instruction::OptionalEffect {
+                            Instruction::OptionalSequence {
                                 chooser: ResolvingPlayer::Controller,
+                                instructions: 1,
                             },
                             Instruction::Sacrifice {
                                 players: AffectedPlayers::One(ResolvingPlayer::Controller),
@@ -16064,8 +16074,9 @@ pub(super) fn lower_ability_change(
                     body: ExecutableBody::new(
                         BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
                         vec![
-                            Instruction::OptionalEffect {
+                            Instruction::OptionalSequence {
                                 chooser: ResolvingPlayer::Controller,
+                                instructions: 1,
                             },
                             Instruction::AffectPermanentTargets {
                                 minimum: 1,
@@ -16828,7 +16839,19 @@ fn lower_anaphora_cost_modifier(
                 ab.body
                     .instructions
                     .iter()
-                    .any(|op| matches!(op, Instruction::Attach(AttachAbility::Equip)))
+                    .any(|op| {
+                        matches!(
+                            op,
+                            Instruction::MutateObject(spec)
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::ObjectMutation::Attach {
+                                        ability: Some(AttachAbility::Equip),
+                                        ..
+                                    }
+                                )
+                        )
+                    })
                     .then_some(ab.id)
             });
             match (equip_ids.next(), equip_ids.next()) {

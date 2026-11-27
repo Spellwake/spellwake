@@ -17,8 +17,9 @@ use std::collections::BTreeSet;
 /// Optional search performed by the controller captured before the target was exiled.
 pub(super) fn exiled_target_controller_search() -> [Instruction; 2] {
     [
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::ExiledTargetController,
+            instructions: 1,
         },
         Instruction::SearchLibrary {
             filter: Box::new(
@@ -507,8 +508,9 @@ fn triggered(
         let mut body = body(text)?;
         body.instructions.insert(
             0,
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
         );
         Some(body)
@@ -570,8 +572,9 @@ fn triggered(
                 ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                             spellwake_engine::program::ValueExpr::Literal(1.into()),

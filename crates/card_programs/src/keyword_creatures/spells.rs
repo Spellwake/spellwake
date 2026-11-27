@@ -477,14 +477,16 @@ pub(super) fn compile(
                         ),
                         spellwake_engine::program::ValueExpr::literal(3),
                     ),
-                    Instruction::BranchIfFalse {
-                        condition: ResolutionCondition {
-                            left: spellwake_engine::program::ValueExpr::event(
-                                spellwake_engine::program::EventValueKind::PaidAlternative,
-                            ),
-                            comparison: Comparison::Equal,
-                            right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
+                    Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                            Box::new(ResolutionCondition {
+                                left: spellwake_engine::program::ValueExpr::event(
+                                    spellwake_engine::program::EventValueKind::PaidAlternative,
+                                ),
+                                comparison: Comparison::Equal,
+                                right: spellwake_engine::program::ValueExpr::Literal(1.into()),
+                            }),
+                        )),
                         destination: 4,
                     },
                     draw(1),
@@ -753,14 +755,16 @@ pub(super) fn compile(
 }
 
 fn if_not_bargained(destination: usize) -> Instruction {
-    Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: spellwake_engine::program::ValueExpr::event(
-                spellwake_engine::program::EventValueKind::Bargained,
-            ),
-            comparison: Comparison::Equal,
-            right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        },
+    Instruction::BranchCondition {
+        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+            Box::new(ResolutionCondition {
+                left: spellwake_engine::program::ValueExpr::event(
+                    spellwake_engine::program::EventValueKind::Bargained,
+                ),
+                comparison: Comparison::Equal,
+                right: spellwake_engine::program::ValueExpr::Literal(1.into()),
+            }),
+        )),
         destination,
     }
 }
@@ -772,14 +776,16 @@ fn draw(amount: i64) -> Instruction {
 }
 
 fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<ExecutableBody> {
-    let if_kicked = |index, destination| Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: spellwake_engine::program::ValueExpr::event(
-                spellwake_engine::program::EventValueKind::KickerCount(index),
-            ),
-            comparison: Comparison::Greater,
-            right: spellwake_engine::program::ValueExpr::Literal(0.into()),
-        },
+    let if_kicked = |index, destination| Instruction::BranchCondition {
+        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+            Box::new(ResolutionCondition {
+                left: spellwake_engine::program::ValueExpr::event(
+                    spellwake_engine::program::EventValueKind::KickerCount(index),
+                ),
+                comparison: Comparison::Greater,
+                right: spellwake_engine::program::ValueExpr::Literal(0.into()),
+            }),
+        )),
         destination,
     };
     let (target, effects) = match line {

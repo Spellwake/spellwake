@@ -261,8 +261,9 @@ fn skipped_local_definition() {
             .of_chosen_slot(CreatureTypeSlot::new(0)),
     );
     for first in [
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::Controller,
@@ -376,8 +377,9 @@ fn singular_related_player_definitions() {
     for condition in conditions {
         for instructions in [
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::UniqueRelatedPlayer,
+                    instructions: 1,
                 },
                 gain(1),
             ],
@@ -423,8 +425,9 @@ fn moved_donor_definition() {
             body: ExecutableBody::new(
                 BodyTarget::SinglePermanent,
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     crate::program::Instruction::ZoneOp(Box::new(
                         crate::toolbox::ZoneOpSpec::move_all(
@@ -432,15 +435,17 @@ fn moved_donor_definition() {
                             crate::toolbox::ZoneDest::Hand,
                         ),
                     )),
-                    Instruction::BecomeCopy {
-                        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-                        donor: crate::program::MoveSubjectRef::TargetObject,
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                        exceptions: Box::new(crate::program::CopyExceptions {
-                            override_pt: None,
-                            ..Default::default()
-                        }),
-                    },
+                    Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec::become_copy(
+                            crate::toolbox::ObjectQuery::Source,
+                            crate::toolbox::ObjectQuery::Targets,
+                            ResolvedDuration::UntilEndOfTurn,
+                            crate::program::CopyExceptions {
+                                override_pt: None,
+                                ..Default::default()
+                            },
+                        ),
+                    )),
                 ],
             ),
         }],
@@ -570,8 +575,9 @@ fn saved_replay() -> Value {
                 paid_destination: 1,
                 declined_destination: 4,
             },
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             gain(1),
             gain(2),

@@ -2180,9 +2180,8 @@ fn has_live_interactive_last_moved(
             Instruction::ChooseObjects { .. } | Instruction::SearchLibrary { .. } => {
                 return matches!(expected, InteractiveLastMovedKind::Any);
             }
-            Instruction::OptionalEffect { .. }
-            | Instruction::OptionalSequence { .. }
-            | Instruction::BranchIfFalse { .. }
+            Instruction::OptionalSequence { .. }
+            | Instruction::BranchCondition { .. }
             | Instruction::Jump { .. }
             | Instruction::ApplyContinuous(_)
             | Instruction::AdjustLife(_) => continue,

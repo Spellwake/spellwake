@@ -21,8 +21,13 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
         return false;
     }
     body.instructions.iter().all(|ins| match ins {
+        Instruction::BranchCondition { condition, .. } => {
+            matches!(
+                condition.as_ref(),
+                crate::toolbox::ConditionExpr::Resolution(_)
+            )
+        }
         Instruction::Jump { .. }
-        | Instruction::BranchIfFalse { .. }
         | Instruction::DrawCards(_)
         | Instruction::AdjustLife(_)
         | Instruction::MutatePlayer(_)
@@ -1167,17 +1172,20 @@ impl EffectWindow {
                     pc = destination;
                     continue;
                 }
-                Instruction::BranchIfFalse {
+                Instruction::BranchCondition {
                     condition,
                     destination,
                 } => {
-                    let left =
-                        self.resolve_inline_value_expr(rep, &condition.left, event_amount)?;
-                    let right =
-                        self.resolve_inline_value_expr(rep, &condition.right, event_amount)?;
-                    if !condition.comparison.evaluate(&left, &right) {
-                        pc = destination;
-                        continue;
+                    if let crate::toolbox::ConditionExpr::Resolution(condition) = condition.as_ref()
+                    {
+                        let left =
+                            self.resolve_inline_value_expr(rep, &condition.left, event_amount)?;
+                        let right =
+                            self.resolve_inline_value_expr(rep, &condition.right, event_amount)?;
+                        if !condition.comparison.evaluate(&left, &right) {
+                            pc = destination;
+                            continue;
+                        }
                     }
                 }
                 Instruction::AdjustLife(spec) => {

@@ -334,6 +334,37 @@ fn rewrite_object_query(change: CreatureTypeTextChange, query: &mut crate::toolb
     }
 }
 
+fn rewrite_condition_expr(
+    change: CreatureTypeTextChange,
+    cond: &mut crate::toolbox::ConditionExpr,
+) {
+    match cond {
+        crate::toolbox::ConditionExpr::Always(_) | crate::toolbox::ConditionExpr::BoundBool(_) => {}
+        crate::toolbox::ConditionExpr::Compare { left, right, .. } => {
+            left.rewrite_creature_type(change.from, change.to);
+            right.rewrite_creature_type(change.from, change.to);
+        }
+        crate::toolbox::ConditionExpr::Resolution(rc) => {
+            rc.rewrite_creature_type(change.from, change.to);
+        }
+        crate::toolbox::ConditionExpr::NonEmpty(q)
+        | crate::toolbox::ConditionExpr::HasTag { query: q, .. } => {
+            rewrite_object_query(change, q);
+        }
+        crate::toolbox::ConditionExpr::AllMatch { query, filter, .. }
+        | crate::toolbox::ConditionExpr::AnyMatch { query, filter } => {
+            rewrite_object_query(change, query);
+            filter.rewrite_creature_type(change.from, change.to);
+        }
+        crate::toolbox::ConditionExpr::And(cs) | crate::toolbox::ConditionExpr::Or(cs) => {
+            for c in cs {
+                rewrite_condition_expr(change, c);
+            }
+        }
+        crate::toolbox::ConditionExpr::Not(c) => rewrite_condition_expr(change, c),
+    }
+}
+
 fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
     if let Some(modes) = &mut value.triggered_modes {
         for option in &mut modes.options {
@@ -409,7 +440,11 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 | crate::toolbox::LifeOp::Set(v)
                 | crate::toolbox::LifeOp::Pay(v)
                 | crate::toolbox::LifeOp::Drain { amount: v, .. } => rewrite_amount(v),
-                crate::toolbox::LifeOp::LoseHalf { .. } => {}
+                crate::toolbox::LifeOp::ExchangeWithStat { object, .. } => {
+                    rewrite_object_query(change, object);
+                }
+                crate::toolbox::LifeOp::LoseHalf { .. }
+                | crate::toolbox::LifeOp::ExchangeTotals { .. } => {}
             },
             Instruction::DealDamage(spec) => {
                 if let crate::toolbox::DamageSourceQuery::Objects(q) = &mut spec.source {
@@ -419,6 +454,10 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     crate::toolbox::DamageTargetQuery::Objects(q)
                     | crate::toolbox::DamageTargetQuery::Both { objects: q, .. } => {
                         rewrite_object_query(change, q);
+                    }
+                    crate::toolbox::DamageTargetQuery::Fight { first, second } => {
+                        rewrite_object_query(change, first);
+                        rewrite_object_query(change, second);
                     }
                     crate::toolbox::DamageTargetQuery::Relative(rel) => {
                         if let crate::program::DamageRecipientsRef::Group(group) = rel.as_mut() {
@@ -562,12 +601,21 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                             rewrite_mana_output(change, &mut mana.output);
                         }
                     }
+                    crate::toolbox::ObjectMutation::Attach { host, .. } => {
+                        rewrite_object_query(change, host);
+                    }
+                    crate::toolbox::ObjectMutation::ExchangeControl { other } => {
+                        rewrite_object_query(change, other);
+                    }
                     _ => {}
                 }
             }
             Instruction::ApplyContinuous(spec) => {
                 if let Some(query) = &mut spec.selector {
                     rewrite_object_query(change, query);
+                }
+                if let Some(cond) = &mut spec.condition {
+                    rewrite_condition_expr(change, cond);
                 }
                 match &mut spec.payload {
                     crate::toolbox::ContinuousPayload::ResolvedParts(value)
@@ -594,48 +642,38 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                             }
                         }
                     }
+                    crate::toolbox::ContinuousPayload::BecomeCopy { donor, exceptions } => {
+                        rewrite_object_query(change, donor);
+                        if exceptions.extra_creature_subtypes.remove(&change.from) {
+                            exceptions.extra_creature_subtypes.insert(change.to);
+                        }
+                        for tr in &mut exceptions.extra_triggered {
+                            trigger(change, tr);
+                        }
+                        for act in &mut exceptions.extra_activated {
+                            body(change, &mut act.body);
+                        }
+                    }
                     _ => {}
                 }
             }
             Instruction::ScheduleDelayedEventTrigger { body: inner, .. } => {
                 body(change, inner);
             }
+            Instruction::BranchCondition { condition, .. } => {
+                rewrite_condition_expr(change, condition);
+            }
             Instruction::ExileTopPlay { .. }
             | Instruction::ChooseValue { .. }
             | Instruction::ZoneOp(_)
             | Instruction::PromptChoice(_)
-            | Instruction::BranchCondition { .. }
             | Instruction::ForEach { .. }
             | Instruction::ForEachPlayerQuery { .. }
             | Instruction::BindEnv { .. }
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::StackOp(_)
-            | Instruction::Fight { .. }
-            | Instruction::Exchange(_) => {}
-            Instruction::BecomeCopy {
-                receiver,
-                exceptions,
-                ..
-            } => {
-                receiver.rewrite_creature_type(change.from, change.to);
-                if exceptions.extra_creature_subtypes.remove(&change.from) {
-                    exceptions.extra_creature_subtypes.insert(change.to);
-                }
-                for tr in &mut exceptions.extra_triggered {
-                    trigger(change, tr);
-                }
-                for act in &mut exceptions.extra_activated {
-                    body(change, &mut act.body);
-                }
-            }
-            Instruction::BranchIfFalse { condition, .. } => {
-                condition.left.rewrite_creature_type(change.from, change.to);
-                condition
-                    .right
-                    .rewrite_creature_type(change.from, change.to);
-            }
+            | Instruction::StackOp(_) => {}
             Instruction::FixedTargetClause(clause) => body(change, clause),
             Instruction::CreateTokens { creations } => {
                 for creation in creations {
@@ -713,13 +751,11 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             // These admitted instructions contain no literal creature-type words.
             // Draw's chosen-type reference remains a runtime local value.
             Instruction::OptionalSequence { .. }
-            | Instruction::OptionalEffect { .. }
             | Instruction::Discard { .. }
             | Instruction::Jump { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
-            | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Attach(_) => {}
+            | Instruction::EmitReflexiveTrigger { .. } => {}
         }
     }
 }

@@ -31,6 +31,15 @@ pub enum LifeOp {
     LoseHalf {
         round_up: bool,
     },
+    /// Exchange life totals between the first player in `spec.players` and the first in `other` (CR 701.10a, 119.5).
+    ExchangeTotals {
+        other: Box<PlayerSelector>,
+    },
+    /// Exchange the first player in `spec.players`'s life total with `object`'s `stat` (CR 701.10a).
+    ExchangeWithStat {
+        object: Box<ObjectQuery>,
+        stat: crate::program::ObjectStatKind,
+    },
 }
 
 impl LifeOp {
@@ -42,6 +51,8 @@ impl LifeOp {
                 amount, gain_to, ..
             } => amount.uses_target() || gain_to.uses_target(),
             Self::LoseHalf { .. } => false,
+            Self::ExchangeTotals { other } => other.uses_target(),
+            Self::ExchangeWithStat { object, .. } => object.uses_target(),
         }
     }
 
@@ -62,6 +73,8 @@ impl LifeOp {
                 gain_to.validate_vocabulary(vocabulary)
             }
             Self::LoseHalf { .. } => Ok(()),
+            Self::ExchangeTotals { other } => other.validate_vocabulary(vocabulary),
+            Self::ExchangeWithStat { object, .. } => object.validate_vocabulary(vocabulary),
         }
     }
 }
@@ -124,6 +137,31 @@ impl AdjustLifeSpec {
     #[must_use]
     pub const fn lose_half(players: PlayerSelector, round_up: bool) -> Self {
         Self::new(players, LifeOp::LoseHalf { round_up })
+    }
+
+    #[must_use]
+    pub fn exchange_totals(first: PlayerSelector, second: PlayerSelector) -> Self {
+        Self::new(
+            first,
+            LifeOp::ExchangeTotals {
+                other: Box::new(second),
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn exchange_with_stat(
+        player: PlayerSelector,
+        object: ObjectQuery,
+        stat: crate::program::ObjectStatKind,
+    ) -> Self {
+        Self::new(
+            player,
+            LifeOp::ExchangeWithStat {
+                object: Box::new(object),
+                stat,
+            },
+        )
     }
 
     #[must_use]
@@ -208,6 +246,11 @@ pub enum DamageTargetQuery {
     },
     /// Triggered/activated ability granted by another permanent dealing damage from that permanent.
     FromGrantingPermanent,
+    /// CR 701.12: Two resolved creatures deal damage equal to their powers to each other simultaneously.
+    Fight {
+        first: Box<ObjectQuery>,
+        second: Box<ObjectQuery>,
+    },
 }
 
 impl DamageTargetQuery {
@@ -223,6 +266,7 @@ impl DamageTargetQuery {
             | Self::Divided { .. } => true,
             Self::FromPower(_) => true,
             Self::FromGrantingPermanent => false,
+            Self::Fight { first, second } => first.uses_target() || second.uses_target(),
             Self::Objects(q) => q.uses_target(),
             Self::Players(p) => p.uses_target(),
             Self::Both { objects, players } => objects.uses_target() || players.uses_target(),
@@ -260,6 +304,10 @@ impl DamageTargetQuery {
             | Self::OrderedTargets { .. }
             | Self::DivideThree
             | Self::FromGrantingPermanent => Ok(()),
+            Self::Fight { first, second } => {
+                first.validate_vocabulary(vocabulary)?;
+                second.validate_vocabulary(vocabulary)
+            }
             Self::Divided { total, .. } => total
                 .validate_vocabulary(vocabulary)
                 .map_err(|_| DefinitionError::InvalidInstruction),
@@ -401,6 +449,19 @@ impl DealDamageSpec {
                 max_targets,
             },
             DamageAmountSpec::Expr(ValueExpr::Literal(0.into())),
+        )
+    }
+
+    /// CR 701.12: Two resolved creatures deal damage equal to their powers to each other simultaneously.
+    #[must_use]
+    pub fn fight(first: ObjectQuery, second: ObjectQuery) -> Self {
+        Self::new(
+            DamageSourceQuery::EntrySource,
+            DamageTargetQuery::Fight {
+                first: Box::new(first),
+                second: Box::new(second),
+            },
+            DamageAmountSpec::Expr(ValueExpr::literal(0)),
         )
     }
 

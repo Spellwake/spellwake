@@ -3117,21 +3117,15 @@ impl TriggerState {
                 {
                     let prepend = |target_body: &mut ExecutableBody| {
                         for op in &mut target_body.instructions {
-                            match op {
-                                crate::program::Instruction::BranchIfFalse {
-                                    destination, ..
-                                }
-                                | crate::program::Instruction::Jump { destination } => {
-                                    *destination = destination.saturating_add(1);
-                                }
-                                _ => {}
-                            }
+                            op.shift_jumps(1, 0);
                         }
                         let end = target_body.instructions.len().saturating_add(1);
                         target_body.instructions.insert(
                             0,
-                            crate::program::Instruction::BranchIfFalse {
-                                condition: rc.as_ref().clone(),
+                            crate::program::Instruction::BranchCondition {
+                                condition: Box::new(crate::toolbox::ConditionExpr::Resolution(
+                                    Box::new(rc.as_ref().clone()),
+                                )),
                                 destination: end,
                             },
                         );

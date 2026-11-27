@@ -466,14 +466,16 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
         return Some(ExecutableBody::new(
             BodyTarget::SingleCreature,
             vec![
-                Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
-                        left: spellwake_engine::program::ValueExpr::event(
-                            spellwake_engine::program::EventValueKind::CreaturesDiedThisTurn,
-                        ),
-                        comparison: Comparison::GreaterOrEqual,
-                        right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                        Box::new(ResolutionCondition {
+                            left: spellwake_engine::program::ValueExpr::event(
+                                spellwake_engine::program::EventValueKind::CreaturesDiedThisTurn,
+                            ),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        }),
+                    )),
                     destination: 3,
                 },
                 pump(-13, -13, None),
@@ -500,16 +502,18 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
             BodyTarget::SingleCreature,
             vec![
                 grant(KeywordAbility::DoubleStrike),
-                Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
-                        left: spellwake_engine::program::ValueExpr::aggregate(
-                            spellwake_engine::program::ObjectFilter::creature().controlled(),
-                            spellwake_engine::program::ObjectStatKind::Power,
-                            spellwake_engine::program::StatAggregate::Max,
-                        ),
-                        comparison: Comparison::GreaterOrEqual,
-                        right: spellwake_engine::program::ValueExpr::Literal(4.into()),
-                    },
+                Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                        Box::new(ResolutionCondition {
+                            left: spellwake_engine::program::ValueExpr::aggregate(
+                                spellwake_engine::program::ObjectFilter::creature().controlled(),
+                                spellwake_engine::program::ObjectStatKind::Power,
+                                spellwake_engine::program::StatAggregate::Max,
+                            ),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: spellwake_engine::program::ValueExpr::Literal(4.into()),
+                        }),
+                    )),
                     destination: 3,
                 },
                 grant(KeywordAbility::Trample),
@@ -532,8 +536,8 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
                 ),
             )
         };
-        return Some(ExecutableBody::new(BodyTarget::None,vec![Instruction::BranchIfFalse {condition:ResolutionCondition {left:spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::CastDuringOwnMain),
-            comparison:Comparison::Equal,right:spellwake_engine::program::ValueExpr::Literal(1.into())},destination:3},damage(enhanced)?,Instruction::Jump {destination:4},damage(normal)?]));
+        return Some(ExecutableBody::new(BodyTarget::None,vec![Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {left:spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::CastDuringOwnMain),
+            comparison:Comparison::Equal,right:spellwake_engine::program::ValueExpr::Literal(1.into())}))), destination:3 },damage(enhanced)?,Instruction::Jump {destination:4},damage(normal)?]));
     }
     if lower
         == "draw a card. until end of turn, target creature gains trample and gets +1/+0 for each card you've drawn this turn."
@@ -1920,15 +1924,17 @@ pub(super) fn threshold_destruction(
     Some(ExecutableBody::new(
         BodyTarget::None,
         vec![
-            Instruction::BranchIfFalse {
-                condition: ResolutionCondition {
-                    left: spellwake_engine::program::ValueExpr::count_graveyard(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                        spellwake_engine::program::ObjectFilter::any(),
-                    ),
-                    comparison: Comparison::GreaterOrEqual,
-                    right: spellwake_engine::program::ValueExpr::Literal(7.into()),
-                },
+            Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(ResolutionCondition {
+                        left: spellwake_engine::program::ValueExpr::count_graveyard(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                            spellwake_engine::program::ObjectFilter::any(),
+                        ),
+                        comparison: Comparison::GreaterOrEqual,
+                        right: spellwake_engine::program::ValueExpr::Literal(7.into()),
+                    }),
+                )),
                 destination: 4,
             },
             destroy.clone(),

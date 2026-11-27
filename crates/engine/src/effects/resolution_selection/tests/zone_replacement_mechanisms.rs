@@ -452,15 +452,17 @@ fn copied_sources_keep_recipient_instance_identity_after_donor_departure() {
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::BecomeCopy {
-                    receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-                    donor: crate::program::MoveSubjectRef::TargetObject,
-                    duration: ResolvedDuration::NoStatedDuration,
-                    exceptions: Box::new(crate::program::CopyExceptions {
-                        override_pt: None,
-                        ..Default::default()
-                    }),
-                }],
+                vec![Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec::become_copy(
+                        crate::toolbox::ObjectQuery::Source,
+                        crate::toolbox::ObjectQuery::Targets,
+                        ResolvedDuration::NoStatedDuration,
+                        crate::program::CopyExceptions {
+                            override_pt: None,
+                            ..Default::default()
+                        },
+                    ),
+                ))],
             ),
         }],
     );
@@ -600,8 +602,9 @@ fn token_owned_source_and_token_filter_use_the_same_program_path() {
         ),
     );
     let mut body = sacrifice_body(2);
-    body.push(Instruction::OptionalEffect {
+    body.push(Instruction::OptionalSequence {
         chooser: ResolvingPlayer::Controller,
+        instructions: 1,
     });
     body.push(gain(1));
     let mut t = Trace::new(fixture(

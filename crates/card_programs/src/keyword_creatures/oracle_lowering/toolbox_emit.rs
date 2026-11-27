@@ -662,6 +662,7 @@ pub(crate) fn rewrite_zone_op(
             _ => {}
         },
         ZoneDest::LookOnly { viewer } => rewrite_player_selector(viewer, map_rp, map_ap, map_ve),
+        ZoneDest::SwapZones { other } => rewrite_query_zone(other, map_rp, map_ap, map_ve),
         ZoneDest::Delayed(
             spellwake_engine::toolbox::DelayedZoneAction::PutHandPermanentsOntoBattlefield {
                 player,
@@ -1396,7 +1397,10 @@ pub(crate) fn skip_next_untap(subject: EffectSubject) -> Instruction {
 pub(crate) fn attach_query(attachment: ObjectQuery, host: ObjectQuery) -> Instruction {
     mutate_all(
         attachment,
-        spellwake_engine::toolbox::ObjectMutation::Attach { host },
+        spellwake_engine::toolbox::ObjectMutation::Attach {
+            host: Box::new(host),
+            ability: None,
+        },
     )
 }
 

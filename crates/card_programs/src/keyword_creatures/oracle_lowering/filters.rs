@@ -7731,7 +7731,7 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
             | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
                 find_value_expr_cost_object_ref(amount)
             }
-            spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => None,
+            _ => None,
         },
         Instruction::DealDamage(spec) => match &spec.amount {
             spellwake_engine::program::DamageAmountSpec::Expr(amount) => {
@@ -7905,8 +7905,7 @@ fn resolve_that_player_for_value_expr(
         }
         _ => {
             if let Some(prior_p) = builder.instructions.iter().rev().find_map(|op| match op {
-                Instruction::OptionalEffect { chooser }
-                | Instruction::OptionalSequence { chooser, .. }
+                Instruction::OptionalSequence { chooser, .. }
                     if *chooser != ResolvingPlayer::Controller
                         && (*chooser != ResolvingPlayer::UniqueRelatedPlayer || in_trigger) =>
                 {

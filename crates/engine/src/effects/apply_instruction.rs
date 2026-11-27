@@ -37,34 +37,17 @@ impl EffectWindow {
             instruction: index,
         };
         let receipt = match instruction {
-            Instruction::Attach(_) => {
-                let (StackKind::ActivatedAbility { source }
-                | StackKind::TriggeredAbility { source }) = entry.kind()
-                else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let Some(occurrence) = self.attach_if_legal(entry.id(), source.id(), target)?
-                else {
-                    return Ok(());
-                };
-                InstructionCut::Ready(occurrence)
-            }
             Instruction::AffectPermanentTargets { .. }
             | Instruction::Sacrifice { .. }
             | Instruction::Discard { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
             Instruction::OptionalSequence { .. }
-            | Instruction::OptionalEffect { .. }
-            | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::BecomeCopy { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Fight { .. }
-            | Instruction::Exchange(_)
             | Instruction::ZoneOp(_)
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)

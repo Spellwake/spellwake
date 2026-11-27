@@ -1236,7 +1236,14 @@ impl EffectWindow {
                     ActivatedCostScope::Equip => selected.body.instructions.iter().any(|op| {
                         matches!(
                             op,
-                            Instruction::Attach(crate::attachment::AttachAbility::Equip)
+                            Instruction::MutateObject(spec)
+                                if matches!(
+                                    spec.op,
+                                    crate::toolbox::ObjectMutation::Attach {
+                                        ability: Some(crate::attachment::AttachAbility::Equip),
+                                        ..
+                                    }
+                                )
                         )
                     }),
                     ActivatedCostScope::Boast => restriction
@@ -1314,7 +1321,14 @@ impl EffectWindow {
                         let is_equip = selected.body.instructions.iter().any(|op| {
                             matches!(
                                 op,
-                                Instruction::Attach(crate::attachment::AttachAbility::Equip)
+                                Instruction::MutateObject(spec)
+                                    if matches!(
+                                        spec.op,
+                                        crate::toolbox::ObjectMutation::Attach {
+                                            ability: Some(crate::attachment::AttachAbility::Equip),
+                                            ..
+                                        }
+                                    )
                             )
                         });
                         if !is_equip {
@@ -1525,7 +1539,14 @@ impl EffectWindow {
         } else if selected.body.instructions.iter().any(|ins| {
             matches!(
                 ins,
-                Instruction::Attach(crate::attachment::AttachAbility::Equip)
+                Instruction::MutateObject(spec)
+                    if matches!(
+                        spec.op,
+                        crate::toolbox::ObjectMutation::Attach {
+                            ability: Some(crate::attachment::AttachAbility::Equip),
+                            ..
+                        }
+                    )
             )
         }) {
             Some(crate::mana::AbilitySpendKind::Equip)

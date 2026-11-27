@@ -48,6 +48,8 @@ pub enum ConditionExpr {
     Or(Vec<ConditionExpr>),
     /// Logical negation.
     Not(Box<ConditionExpr>),
+    /// Typed resolution-time scalar comparison condition.
+    Resolution(Box<crate::program::ResolutionCondition>),
 }
 
 impl ConditionExpr {
@@ -57,6 +59,7 @@ impl ConditionExpr {
         match self {
             Self::Always(_) | Self::BoundBool(_) => false,
             Self::Compare { left, right, .. } => left.uses_target() || right.uses_target(),
+            Self::Resolution(cond) => cond.left.uses_target() || cond.right.uses_target(),
             Self::NonEmpty(q) | Self::HasTag { query: q, .. } => q.uses_target(),
             Self::AllMatch { query, filter, .. } | Self::AnyMatch { query, filter } => {
                 query.uses_target() || filter.uses_target_permanent()
@@ -80,6 +83,14 @@ impl ConditionExpr {
                 left.validate_vocabulary(vocabulary)
                     .map_err(|_| DefinitionError::InvalidInstruction)?;
                 right
+                    .validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)
+            }
+            Self::Resolution(cond) => {
+                cond.left
+                    .validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+                cond.right
                     .validate_vocabulary(vocabulary)
                     .map_err(|_| DefinitionError::InvalidInstruction)
             }

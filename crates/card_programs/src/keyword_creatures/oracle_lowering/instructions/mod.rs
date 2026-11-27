@@ -3,8 +3,7 @@ pub(super) use control_misc::lower_loop_player_sub_body;
 use spellwake_engine::characteristics::ActivationSuppression;
 use spellwake_engine::day_night::DayNight;
 use spellwake_engine::program::{
-    DynamicStatAnchor, ExchangeSpec, ExchangeZone, LinkedExileGroup, ResolutionChoiceDomain,
-    StackCopyTarget,
+    DynamicStatAnchor, LinkedExileGroup, ResolutionChoiceDomain, StackCopyTarget,
 };
 use spellwake_oracle_compiler::ast::ExchangeKind;
 
@@ -1221,7 +1220,7 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
                 value_expr_uses_chosen_x(amount)
             }
-            spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => false,
+            _ => false,
         },
         Instruction::DealDamage(spec) => {
             matches!(
@@ -1279,9 +1278,11 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
         Instruction::CreateTokens { creations } => creations
             .iter()
             .any(|c| value_expr_uses_chosen_x(&c.amount)),
-        Instruction::BranchIfFalse { condition, .. } => {
-            value_expr_uses_chosen_x(&condition.left) || value_expr_uses_chosen_x(&condition.right)
-        }
+        Instruction::BranchCondition { condition, .. } => matches!(
+            condition.as_ref(),
+            spellwake_engine::toolbox::ConditionExpr::Resolution(rc)
+                if value_expr_uses_chosen_x(&rc.left) || value_expr_uses_chosen_x(&rc.right)
+        ),
         Instruction::RepeatLoop { count, body } => {
             value_expr_uses_chosen_x(count) || body_uses_chosen_x(body.as_ref())
         }
@@ -1354,9 +1355,8 @@ fn try_append_fixed_first_target_parts(
     let is_control_flow = |op: &Instruction| {
         matches!(
             op,
-            Instruction::BranchIfFalse { .. }
+            Instruction::BranchCondition { .. }
                 | Instruction::Jump { .. }
-                | Instruction::OptionalEffect { .. }
                 | Instruction::OptionalSequence { .. }
                 | Instruction::OfferDynamicManaPayment { .. }
         )
@@ -1377,16 +1377,20 @@ fn try_append_fixed_first_target_parts(
     }
     if !rest.is_empty()
         && !rest[..rest.len() - 1].iter().any(is_control_flow)
-        && let Some(Instruction::BranchIfFalse {
+        && let Some(Instruction::BranchCondition {
             condition,
             destination: 0,
         }) = rest.last()
-        && resolution_condition_is_spell_cast_invariant(condition)
+        && matches!(
+            condition.as_ref(),
+            spellwake_engine::toolbox::ConditionExpr::Resolution(rc)
+                if resolution_condition_is_spell_cast_invariant(rc)
+        )
     {
         let cond_clone = condition.clone();
         if let Some(Instruction::FixedTargetClause(first_body)) = builder.instructions.first_mut() {
             let next_dest = first_body.instructions.len() + 2;
-            first_body.instructions.push(Instruction::BranchIfFalse {
+            first_body.instructions.push(Instruction::BranchCondition {
                 condition: cond_clone,
                 destination: next_dest,
             });

@@ -162,8 +162,9 @@ pub(super) fn lower_keyword(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         Instruction::Sacrifice {
                             players: AffectedPlayers::One(ResolvingPlayer::Controller),
@@ -652,12 +653,16 @@ pub(super) fn lower_keyword(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::BranchIfFalse {
-                            condition: ResolutionCondition {
-                                left: ValueExpr::EventValue(EventValueKind::EnteredKickerX),
-                                comparison: Comparison::GreaterOrEqual,
-                                right: ValueExpr::literal(5),
-                            },
+                        Instruction::BranchCondition {
+                            condition: Box::new(
+                                spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(
+                                    ResolutionCondition {
+                                        left: ValueExpr::EventValue(EventValueKind::EnteredKickerX),
+                                        comparison: Comparison::GreaterOrEqual,
+                                        right: ValueExpr::literal(5),
+                                    },
+                                )),
+                            ),
                             destination: 2,
                         },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
@@ -678,7 +683,11 @@ pub(super) fn lower_keyword(
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
                     BodyTarget::SingleCreature,
-                    vec![Instruction::Attach(AttachAbility::Reconfigure)],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                            AttachAbility::Reconfigure,
+                        ),
+                    ))],
                 ),
             });
             program.activated.push(ActivatedAbility {
@@ -706,7 +715,11 @@ pub(super) fn lower_keyword(
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
                     BodyTarget::SinglePermanent,
-                    vec![Instruction::Attach(AttachAbility::Fortify)],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                            AttachAbility::Fortify,
+                        ),
+                    ))],
                 ),
             });
             Ok(())
@@ -932,8 +945,9 @@ pub(super) fn lower_keyword(
                 body: ExecutableBody::new(
                     BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         Instruction::AffectPermanentTargets {
                             minimum: 1,
@@ -1706,8 +1720,9 @@ pub(super) fn lower_keyword(
                 body: ExecutableBody::new(
                     BodyTarget::SinglePlayer,
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::TargetPlayer,
+                            instructions: 1,
                         },
                         Instruction::SearchLibrary {
                             filter: Box::new(search),
@@ -3251,7 +3266,12 @@ fn emit_equip_ability(
         id,
         mana_cost,
         source_cost,
-        body: ExecutableBody::new(target, vec![Instruction::Attach(AttachAbility::Equip)]),
+        body: ExecutableBody::new(
+            target,
+            vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::attach_ability(AttachAbility::Equip),
+            ))],
+        ),
     });
 }
 
@@ -3772,12 +3792,14 @@ fn lower_champion_keyword(
                     },
                     false,
                 ),
-                Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
-                        left: ValueExpr::EventValue(EventValueKind::LastActionSucceeded),
-                        comparison: Comparison::Equal,
-                        right: ValueExpr::literal(0),
-                    },
+                Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                        Box::new(ResolutionCondition {
+                            left: ValueExpr::EventValue(EventValueKind::LastActionSucceeded),
+                            comparison: Comparison::Equal,
+                            right: ValueExpr::literal(0),
+                        }),
+                    )),
                     destination: 3,
                 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(
@@ -4088,8 +4110,10 @@ fn lower_non_mana_cumulative_upkeep(
     );
     let sac_idx = 1 + usize::from(pre_guard.is_some()) + 1 + cost_ops.len() + 1;
     if let Some(cond) = pre_guard {
-        instructions.push(Instruction::BranchIfFalse {
-            condition: cond,
+        instructions.push(Instruction::BranchCondition {
+            condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                Box::new(cond),
+            )),
             destination: sac_idx,
         });
     }

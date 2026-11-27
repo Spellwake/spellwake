@@ -32,8 +32,9 @@ fn every_wrong_reply_kind_variant_retains_the_latest_prefix_before_its_own_valid
             paid_destination: 4,
             declined_destination: 1,
         },
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         gain(1),
         gain(2),
@@ -275,8 +276,9 @@ fn replay_body() -> Vec<Instruction> {
             paid_destination: 1,
             declined_destination: 4,
         },
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         gain(1),
         gain(2),
@@ -525,8 +527,9 @@ fn optional_token_two_apnap_order_children_keep_locals_and_reject_each_bad_reply
             into: CreatureTypeSlot::new(0),
             excluding: BTreeSet::new(),
         },
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         Instruction::CreateTokens {
             creations: vec![creation],
@@ -1003,8 +1006,9 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
                     Instruction::ApplyContinuous(Box::new(
                         crate::toolbox::ApplyContinuousSpec::damage_multiplier(2.into()),
                     )),
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
                         source: crate::toolbox::DamageSourceQuery::EntrySource,

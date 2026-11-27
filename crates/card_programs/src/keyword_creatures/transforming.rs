@@ -146,14 +146,11 @@ fn compile_face(
                         Instruction::MutatePlayer(Box::new(
                             spellwake_engine::toolbox::MutatePlayerSpec::may_reveal_library_top(),
                         )),
-                        BranchIfFalse {
-                            condition: ResolutionCondition {
+                        BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                                 left: spellwake_engine::program::ValueExpr::object_matches(spellwake_engine::program::MatchObjectRef::RevealedTop, spellwake_engine::program::ObjectFilter::any_types(spellwake_engine::program::CardTypeMask::from_card_type(CardType::Instant).union(spellwake_engine::program::CardTypeMask::from_card_type(CardType::Sorcery)))),
                                 comparison: Comparison::Equal,
                                 right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                            },
-                            destination: 3,
-                        },
+                            }))), destination: 3 },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
                 )
@@ -173,14 +170,11 @@ fn compile_face(
                             ),
                             spellwake_engine::program::ValueExpr::literal(1),
                         ),
-                        BranchIfFalse {
-                            condition: ResolutionCondition {
+                        BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                                 left: spellwake_engine::program::ValueExpr::PlayerStat(spellwake_engine::program::PlayerStatExpr::ControllerLifeAboveStarting),
                                 comparison: Comparison::GreaterOrEqual,
                                 right: spellwake_engine::program::ValueExpr::Literal(10.into()),
-                            },
-                            destination: 3,
-                        },
+                            }))), destination: 3 },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
                 ));
@@ -305,14 +299,11 @@ fn compile_face(
                                 },
                             ),
                         )),
-                        BranchIfFalse {
-                            condition: ResolutionCondition {
+                        BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                                 left: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::LastSacrificeSucceeded),
                                 comparison: Comparison::Equal,
                                 right: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                            },
-                            destination: 4,
-                        },
+                            }))), destination: 4 },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::tap_ability_source(),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                             spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
@@ -331,8 +322,9 @@ fn compile_face(
                 (
                     upkeep.clone(),
                     vec![
-                        OptionalEffect {
+                        OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
@@ -360,8 +352,9 @@ fn compile_face(
                 (
                     spellwake_engine::program::TriggerSpec::dies(spellwake_engine::program::ObjectFilter::creature().controlled().other_than_ability_source()),
                     vec![
-                        OptionalEffect {
+                        OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
@@ -449,10 +442,7 @@ fn compile_face(
                     fixed_cost("{R}")?,
                     SourceCost::Tap,
                     BodyTarget::SingleCreature,
-                    vec![Instruction::Fight {
-                        first: Box::new(spellwake_engine::program::MoveSubjectRef::AbilitySource),
-                        second: Box::new(spellwake_engine::program::MoveSubjectRef::TargetObject),
-                    }],
+                    vec![Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec::fight(spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::AbilitySource), spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::TargetObject))))],
                 ));
                 continue;
             }
@@ -470,14 +460,11 @@ fn compile_face(
                     NoTarget,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(kind, spellwake_engine::program::ValueExpr::literal(1)),
-                        BranchIfFalse {
-                            condition: ResolutionCondition {
+                        BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                                 left: spellwake_engine::program::ValueExpr::counters(spellwake_engine::program::CounterSubjectRef::AbilitySource, Some(kind)),
                                 comparison: Comparison::GreaterOrEqual,
                                 right: spellwake_engine::program::ValueExpr::Literal(5.into()),
-                            },
-                            destination: 4,
-                        },
+                            }))), destination: 4 },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::clear_source_counters(Some(kind)),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
@@ -530,14 +517,11 @@ fn compile_face(
                             players: spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::Controller),
                             amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
                         },
-                        BranchIfFalse {
-                            condition: ResolutionCondition {
+                        BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                                 left: spellwake_engine::program::ValueExpr::object_matches(spellwake_engine::program::MatchObjectRef::DiscardedCard, spellwake_engine::program::ObjectFilter::any_types(spellwake_engine::program::CardTypeMask::from_card_type(CardType::Creature))),
                                 comparison: Comparison::Equal,
                                 right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                            },
-                            destination: 5,
-                        },
+                            }))), destination: 5 },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::untap_ability_source(),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                     ],
@@ -547,14 +531,11 @@ fn compile_face(
             "At the beginning of your end step, if this creature didn't attack this turn, tap this creature, then transform it." => (
                 spellwake_engine::program::TriggerSpec::step_began(spellwake_engine::turn::Step::End, spellwake_engine::program::PlayerRelation::Controller).only_if(spellwake_engine::program::TriggerCondition::SourceDidNotAttackThisTurn),
                 vec![
-                    BranchIfFalse {
-                        condition: ResolutionCondition {
+                    BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                             left: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::SourceAttackedThisTurn),
                             comparison: Comparison::Equal,
                             right: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                        },
-                        destination: 3,
-                    },
+                        }))), destination: 3 },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::tap_ability_source(),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
                 ],
@@ -574,7 +555,8 @@ fn compile_face(
                             spellwake_engine::toolbox::MutateObjectSpec::all(
                                 spellwake_engine::toolbox::ObjectQuery::Source,
                                 spellwake_engine::toolbox::ObjectMutation::Attach {
-                                    host: spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    host: Box::new(spellwake_engine::toolbox::ObjectQuery::Targets),
+                                    ability: None,
                                 },
                             ),
                         )),

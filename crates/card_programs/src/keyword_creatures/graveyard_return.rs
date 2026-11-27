@@ -220,8 +220,9 @@ pub(super) fn compile(
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_hand(),
                 ],
@@ -262,8 +263,9 @@ pub(super) fn compile(
         body: ExecutableBody::new(
             BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()),
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
             ],

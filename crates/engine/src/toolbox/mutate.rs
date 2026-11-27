@@ -111,7 +111,13 @@ pub enum ObjectMutation {
     /// Exert each selected permanent (skips next untap step + emits Exert occurrence).
     Exert,
     /// Attach each selected attachment (Aura/Equipment/Fortification) to the first object in `host`.
-    Attach { host: ObjectQuery },
+    /// When `ability` is `Some`, enforces sorcery-speed Equip/Fortify/Reconfigure rules.
+    Attach {
+        host: Box<ObjectQuery>,
+        ability: Option<crate::attachment::AttachAbility>,
+    },
+    /// Exchange control of each selected permanent with the first permanent in `other` (CR 701.10a).
+    ExchangeControl { other: Box<ObjectQuery> },
     /// Attach each selected attachment to the first player in `player`.
     AttachToPlayer { player: PlayerSelector },
     /// Unattach each selected attachment from whatever it is attached to.
@@ -228,7 +234,8 @@ impl ObjectMutation {
     pub fn uses_target(&self) -> bool {
         match self {
             Self::Goad { by } | Self::GoadPermanent { by } => by.uses_target(),
-            Self::Attach { host } => host.uses_target(),
+            Self::Attach { host, ability } => ability.is_some() || host.uses_target(),
+            Self::ExchangeControl { other } => other.uses_target(),
             Self::AttachToPlayer { player } => player.uses_target(),
             Self::AddCounters { amount, .. }
             | Self::RemoveCounters { amount, .. }
@@ -305,7 +312,8 @@ impl ObjectMutation {
     ) -> Result<(), DefinitionError> {
         match self {
             Self::Goad { by } | Self::GoadPermanent { by } => by.validate_vocabulary(vocabulary),
-            Self::Attach { host } => host.validate_vocabulary(vocabulary),
+            Self::Attach { host, .. } => host.validate_vocabulary(vocabulary),
+            Self::ExchangeControl { other } => other.validate_vocabulary(vocabulary),
             Self::AttachToPlayer { player } => player.validate_vocabulary(vocabulary),
             Self::AddCounters { amount, .. }
             | Self::RemoveCounters { amount, .. }
@@ -699,6 +707,29 @@ impl MutateObjectSpec {
         Self::all(
             ObjectQuery::Targets,
             ObjectMutation::RememberPermanentTarget,
+        )
+    }
+
+    /// Attach the resolving source using an Equip, Fortify, or Reconfigure ability.
+    #[must_use]
+    pub fn attach_ability(ability: crate::attachment::AttachAbility) -> Self {
+        Self::all(
+            ObjectQuery::Source,
+            ObjectMutation::Attach {
+                host: Box::new(ObjectQuery::Targets),
+                ability: Some(ability),
+            },
+        )
+    }
+
+    /// Exchange control of two battlefield permanents (CR 701.10a).
+    #[must_use]
+    pub fn exchange_control(first: ObjectQuery, second: ObjectQuery) -> Self {
+        Self::all(
+            first,
+            ObjectMutation::ExchangeControl {
+                other: Box::new(second),
+            },
         )
     }
 

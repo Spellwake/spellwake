@@ -54,15 +54,21 @@ fn copier() -> Program {
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::BecomeCopy {
-                    receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-                    donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-                    duration: no_duration(),
-                    exceptions: Box::new(spellwake_engine::program::CopyExceptions {
-                        override_pt: None,
-                        ..Default::default()
-                    }),
-                }],
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            spellwake_engine::program::EffectSubject::AbilitySource,
+                        )),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            spellwake_engine::program::MoveSubjectRef::TargetObject,
+                        ),
+                        no_duration(),
+                        spellwake_engine::program::CopyExceptions {
+                            override_pt: None,
+                            ..Default::default()
+                        },
+                    ),
+                ))],
             ),
         }],
     )

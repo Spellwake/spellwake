@@ -3,12 +3,14 @@
 use super::*;
 use spellwake_engine::program::{Comparison, CreatureTypeSlot, ResolutionCondition, ValueExpr};
 fn branch(left: ValueExpr, comparison: Comparison, right: i64, destination: usize) -> Instruction {
-    Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left,
-            comparison,
-            right: spellwake_engine::program::ValueExpr::Literal(right.into()),
-        },
+    Instruction::BranchCondition {
+        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+            Box::new(ResolutionCondition {
+                left,
+                comparison,
+                right: spellwake_engine::program::ValueExpr::Literal(right.into()),
+            }),
+        )),
         destination,
     }
 }

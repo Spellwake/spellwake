@@ -109,7 +109,7 @@ pub(super) fn compile(
             triggers.push((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::AttackTriggerMode::Individual { capture_defender: true }),ExecutableBody::new(BodyTarget::None,vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::myriad())),Instruction::ScheduleDelayedStepTrigger { step: spellwake_engine::turn::Step::EndCombat, own_step_only: false, body: Box::new(ExecutableBody::new(BodyTarget::None, vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::CreatedTokens, spellwake_engine::toolbox::ZoneDest::exile())))])) }])));
         } else if line == "Whenever you cast a planeswalker spell, you may return this card from your graveyard to the battlefield." {
             triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(spellwake_engine::program::PlayerRelation::Controller, spellwake_engine::program::SpellFilter::of_type(spellwake_engine::program::CardType::Planeswalker)).in_zone(spellwake_engine::program::TriggerZone::Graveyard),ExecutableBody::new(BodyTarget::None,vec![
-                Instruction::OptionalEffect {chooser:ResolvingPlayer::Controller},crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_battlefield(false),
+                Instruction::OptionalSequence { chooser:ResolvingPlayer::Controller, instructions: 1 },crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_battlefield(false),
             ])));
         } else if line == "Whenever the final chapter ability of a Saga you control resolves, each opponent loses X life and you gain X life, where X is that Saga's mana value." {
             triggers.push((
@@ -140,7 +140,7 @@ pub(super) fn compile(
             triggers.push((spellwake_engine::program::TriggerSpec::enters(spellwake_engine::program::ObjectFilter::any_types(spellwake_engine::program::CardTypeMask::from_card_type(CardType::Planeswalker)).controlled()).only_if(spellwake_engine::program::TriggerCondition::SourceHasLoyalty),
                 ExecutableBody::new(BodyTarget::None, vec![
                     Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::require_condition(spellwake_engine::program::InterveningCondition::SourceLoyalty))),
-                    Instruction::OptionalEffect { chooser: ResolvingPlayer::Controller },
+                    Instruction::OptionalSequence { chooser: ResolvingPlayer::Controller, instructions: 1 },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::move_counters(
                         spellwake_engine::toolbox::ObjectQuery::Source,
                         spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
@@ -330,11 +330,11 @@ pub(super) fn compile(
             let keyword = static_keyword(effect.strip_prefix("target creature you control gains ")?.strip_suffix(" until end of turn.")?)?;
             triggers.push((spellwake_engine::program::TriggerSpec::step_began(spellwake_engine::turn::Step::BeginningCombat, spellwake_engine::program::PlayerRelation::Controller).only_if(spellwake_engine::program::TriggerCondition::TotalControlledPowerAtLeast(minimum)),
                 ExecutableBody::new(BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()), vec![
-                    Instruction::BranchIfFalse { condition: ResolutionCondition {
+                    Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                         left: spellwake_engine::program::ValueExpr::aggregate(spellwake_engine::program::ObjectFilter::creature().controlled(), spellwake_engine::program::ObjectStatKind::Power, spellwake_engine::program::StatAggregate::Sum),
                         comparison: Comparison::GreaterOrEqual,
                         right: spellwake_engine::program::ValueExpr::Literal(i64::from(minimum).into()),
-                    }, destination: 2 },
+                    }))), destination: 2 },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(AbilityChange::grant_keywords([keyword]))]),
@@ -353,10 +353,10 @@ pub(super) fn compile(
             use spellwake_engine::program::{Comparison,ResolutionCondition};
             let mut consequence=body(effect,&card.name,vocabulary)?;
             if consequence.target!=BodyTarget::None || !matches!(consequence.instructions.as_slice(),[Instruction::DrawCards(_)]) {return None;}
-            consequence.instructions.insert(0,Instruction::BranchIfFalse {condition:ResolutionCondition {
+            consequence.instructions.insert(0,Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                 left:spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::DeclaredAttackersAtController),comparison:Comparison::GreaterOrEqual,
                 right:spellwake_engine::program::ValueExpr::Literal(2.into()),
-            },destination:2});
+            }))), destination:2 });
             triggers.push((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::any(), spellwake_engine::program::AttackTriggerMode::OpponentsAtController { minimum: 2 }),consequence));
         } else if let Some((position,effect))=line.strip_prefix("Whenever an opponent casts their ")
             .and_then(|clause|clause.split_once(" spell each turn, ")) {
@@ -485,9 +485,9 @@ pub(super) fn compile(
                 for spec in &mut creations {spec.recipients=spellwake_engine::token::TokenRecipients::CombatDamageSourceController;}
                 Instruction::CreateTokens {creations}
             };
-            triggers.push((spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::any().with_subtype(kind), spellwake_engine::program::DamageTriggerRecipient::AnyPlayer, true),ExecutableBody::new(BodyTarget::None,vec![Instruction::OptionalEffect {chooser},consequence])));
+            triggers.push((spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::any().with_subtype(kind), spellwake_engine::program::DamageTriggerRecipient::AnyPlayer, true),ExecutableBody::new(BodyTarget::None,vec![Instruction::OptionalSequence { chooser, instructions: 1 },consequence])));
         } else if let Some(reference)=line.strip_prefix("Whenever you put one or more +1/+1 counters on another colorless creature, you may put a +1/+1 counter on ").and_then(|s|s.strip_suffix('.')) && (reference==face.name || Some(reference)==face.name.split_once(", ").map(|(name,_)|name)) {
-            triggers.push((spellwake_engine::program::TriggerSpec::counters_changed(spellwake_engine::program::ObjectFilter::creature().with_color(spellwake_engine::program::ObjectColorFilter::Colorless).other_than_ability_source(), spellwake_engine::program::CounterTriggerKind::PlusOnePlaced { by_controller_only: true }), ExecutableBody::new(BodyTarget::None,vec![Instruction::OptionalEffect {chooser:ResolvingPlayer::Controller},crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne,spellwake_engine::program::ValueExpr::literal(1))])));
+            triggers.push((spellwake_engine::program::TriggerSpec::counters_changed(spellwake_engine::program::ObjectFilter::creature().with_color(spellwake_engine::program::ObjectColorFilter::Colorless).other_than_ability_source(), spellwake_engine::program::CounterTriggerKind::PlusOnePlaced { by_controller_only: true }), ExecutableBody::new(BodyTarget::None,vec![Instruction::OptionalSequence { chooser:ResolvingPlayer::Controller, instructions: 1 },crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne,spellwake_engine::program::ValueExpr::literal(1))])));
         } else if line=="Whenever you cast a colorless creature spell, manifest the top card of your library." {
             triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::creature().with_colorless()), ExecutableBody::new(BodyTarget::None,vec![Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::manifest_top(ResolvingPlayer::Controller, spellwake_engine::program::ValueExpr::Literal(1.into()))))])));
         } else if let Some(minimum)=line.strip_prefix("Whenever you attack with creatures with total power ").and_then(|s|s.strip_suffix(" or greater, you may turn a face-down creature you control face up.")) {
@@ -1468,14 +1468,16 @@ pub(super) fn body(
         } else {
             let minimum=amount(rest.strip_prefix(" If you control ")?.strip_suffix(" or more enchantments, instead you may put a creature or land card from your hand onto the battlefield tapped.")?)?;
             vec![
-                Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
-                        left: spellwake_engine::program::ValueExpr::controlled_type(
-                            CardType::Enchantment,
-                        ),
-                        comparison: Comparison::GreaterOrEqual,
-                        right: spellwake_engine::program::ValueExpr::Literal(minimum.into()),
-                    },
+                Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                        Box::new(ResolutionCondition {
+                            left: spellwake_engine::program::ValueExpr::controlled_type(
+                                CardType::Enchantment,
+                            ),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: spellwake_engine::program::ValueExpr::Literal(minimum.into()),
+                        }),
+                    )),
                     destination: 3,
                 },
                 put([CardType::Creature, CardType::Land].into()),
@@ -1704,16 +1706,18 @@ pub(super) fn body(
                     spellwake_engine::effects::CounterKind::PlusOne,
                     spellwake_engine::program::ValueExpr::literal(1),
                 ),
-                Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
-                        left: spellwake_engine::program::ValueExpr::object_matches(
-                            spellwake_engine::program::MatchObjectRef::DyingCreature,
-                            spellwake_engine::program::ObjectFilter::creature()
-                                .with_subtype(vocabulary.resolve_label(subtype)?),
-                        ),
-                        comparison: Comparison::Equal,
-                        right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                        Box::new(ResolutionCondition {
+                            left: spellwake_engine::program::ValueExpr::object_matches(
+                                spellwake_engine::program::MatchObjectRef::DyingCreature,
+                                spellwake_engine::program::ObjectFilter::creature()
+                                    .with_subtype(vocabulary.resolve_label(subtype)?),
+                            ),
+                            comparison: Comparison::Equal,
+                            right: spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        }),
+                    )),
                     destination: 5,
                 },
                 Instruction::OptionalSequence {
@@ -1736,8 +1740,9 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
                     spellwake_engine::effects::CounterKind::Quest,
@@ -1860,8 +1865,7 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()),
             vec![
-                Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
+                Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                         left: spellwake_engine::program::ValueExpr::object_stat(
                             spellwake_engine::program::ValueObjectRef::TargetObject,
                             spellwake_engine::program::ObjectStatKind::ManaValue,
@@ -1871,9 +1875,7 @@ pub(super) fn body(
                             spellwake_engine::program::CounterSubjectRef::ControllerExperience,
                             None,
                         ),
-                    },
-                    destination: 3,
-                },
+                    }))), destination: 3 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
                 Instruction::Jump { destination: 4 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
@@ -2015,8 +2017,9 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::HighestEntrantController,
+                    instructions: 1,
                 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_resolving_player(
                     ResolvingPlayer::HighestEntrantController,
@@ -2050,8 +2053,9 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
@@ -2193,19 +2197,17 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
+                Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                         left: spellwake_engine::program::ValueExpr::event(
                             spellwake_engine::program::EventValueKind::TriggerSourceOnBattlefield,
                         ),
                         comparison: Comparison::Equal,
                         right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
-                    destination: 4,
-                },
+                    }))), destination: 4 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_to_hand(),
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 Instruction::SearchLibrary {
                     filter: Box::new(LibrarySearch::land_subtypes_to_battlefield(
@@ -2247,8 +2249,9 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 Instruction::SearchLibrary {
                     filter: Box::new(
@@ -2292,14 +2295,16 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
-                        left: spellwake_engine::program::ValueExpr::event(
-                            spellwake_engine::program::EventValueKind::CreaturesDiedThisTurn,
-                        ),
-                        comparison: Comparison::GreaterOrEqual,
-                        right: spellwake_engine::program::ValueExpr::Literal(3.into()),
-                    },
+                Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                        Box::new(ResolutionCondition {
+                            left: spellwake_engine::program::ValueExpr::event(
+                                spellwake_engine::program::EventValueKind::CreaturesDiedThisTurn,
+                            ),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: spellwake_engine::program::ValueExpr::Literal(3.into()),
+                        }),
+                    )),
                     destination: 2,
                 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
@@ -2498,8 +2503,9 @@ pub(super) fn body(
                 ObjectFilter::creature().with_mana_value(ManaValueFilter::AtMost(limit)),
             ),
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
             ],
@@ -2599,8 +2605,9 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target_until_source_leaves(),
             ],
@@ -2636,8 +2643,9 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 create,
             ],
@@ -2675,8 +2683,9 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::mill(
@@ -2693,8 +2702,9 @@ pub(super) fn body(
         {
             search.instructions.insert(
                 0,
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
             );
             return Some(search);
@@ -2708,8 +2718,9 @@ pub(super) fn body(
         }
         effect.instructions.insert(
             0,
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
         );
         return Some(effect);

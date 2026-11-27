@@ -27,15 +27,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use trajectories::*;
 
 fn copy_op(duration: ResolvedDuration, power_toughness: Option<PowerToughness>) -> Instruction {
-    Instruction::BecomeCopy {
-        receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-        donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-        duration,
-        exceptions: Box::new(spellwake_engine::program::CopyExceptions {
-            override_pt: power_toughness,
-            ..Default::default()
-        }),
-    }
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                spellwake_engine::program::EffectSubject::AbilitySource,
+            )),
+            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                spellwake_engine::program::MoveSubjectRef::TargetObject,
+            ),
+            duration,
+            spellwake_engine::program::CopyExceptions {
+                override_pt: power_toughness,
+                ..Default::default()
+            },
+        ),
+    ))
 }
 fn copier(
     cost: SourceCost,

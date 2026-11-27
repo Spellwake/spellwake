@@ -334,8 +334,9 @@ impl AuthoredTrigger {
             AuthoredTriggerEffect::OptionalGainOne => (
                 BodyTarget::None,
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     gain,
                 ],
@@ -343,8 +344,9 @@ impl AuthoredTrigger {
             AuthoredTriggerEffect::OptionalDrawOne => (
                 BodyTarget::None,
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     draw,
                 ],
@@ -359,8 +361,9 @@ impl AuthoredTrigger {
                         paid_destination: 3,
                         declined_destination: 1,
                     },
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     draw,
                 ],

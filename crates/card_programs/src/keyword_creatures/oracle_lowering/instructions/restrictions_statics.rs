@@ -4432,14 +4432,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                     prepend_instruction_at(
                         &mut builder.instructions,
                         0,
-                        Instruction::BranchIfFalse {
-                            condition: ResolutionCondition {
+                        Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                                 left: x_val,
                                 comparison: Comparison::Greater,
                                 right: ValueExpr::literal(0),
-                            },
-                            destination: end_dest,
-                        },
+                            }))), destination: end_dest },
                     );
                     return Ok(());
                 }
@@ -6365,7 +6362,6 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     action: PermanentTargetAction::Damage(_),
                                     ..
                                 }
-                                | Instruction::Fight { .. }
                         )
                     });
                 if has_damage_op {
@@ -8175,7 +8171,6 @@ fn try_lower_temp_exile_replacement(
                             action: PermanentTargetAction::Damage(_),
                             ..
                         }
-                        | Instruction::Fight { .. }
                 )
             });
         if has_damage_op {
@@ -8310,9 +8305,7 @@ pub(super) fn has_unconditional_mill_one(ops: &[Instruction]) -> bool {
     let mut in_conditional = false;
     for op in ops {
         match op {
-            Instruction::BranchIfFalse { .. }
-            | Instruction::OptionalEffect { .. }
-            | Instruction::OptionalSequence { .. } => {
+            Instruction::BranchCondition { .. } | Instruction::OptionalSequence { .. } => {
                 in_conditional = true;
             }
             Instruction::MutatePlayer(spec)

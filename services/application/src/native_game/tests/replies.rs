@@ -160,8 +160,9 @@ fn scheduled(
 fn optional_and_creature_type_use_actual_chooser_options_and_exclusions() {
     let source = start(
         vec![
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
                 spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),

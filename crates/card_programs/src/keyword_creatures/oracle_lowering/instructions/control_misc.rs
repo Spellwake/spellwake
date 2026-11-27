@@ -49,11 +49,10 @@ fn instruction_supports_optional_wrapper(op: &Instruction) -> bool {
             players: AffectedPlayers::One(_),
             ..
         } => true,
-        Instruction::BranchIfFalse { .. }
+        Instruction::BranchCondition { .. }
         | Instruction::Jump { .. }
         | Instruction::OfferDynamicManaPayment { .. }
         | Instruction::OptionalSequence { .. }
-        | Instruction::OptionalEffect { .. }
         | Instruction::Sacrifice { .. }
         | Instruction::Discard { .. } => false,
         _ => true,
@@ -86,15 +85,21 @@ fn wrap_optional_instructions(
             )
             || matches!(
                 head,
-                Instruction::OptionalEffect { chooser: existing }
-                    | Instruction::OptionalSequence { chooser: existing, .. }
+                Instruction::OptionalSequence { chooser: existing, .. }
                     if *existing == chooser
             );
         if already_optional {
             return Ok(());
         }
         if instruction_supports_optional_wrapper(head) {
-            prepend_instruction_at(ops, start, Instruction::OptionalEffect { chooser });
+            prepend_instruction_at(
+                ops,
+                start,
+                Instruction::OptionalSequence {
+                    chooser,
+                    instructions: 1,
+                },
+            );
             return Ok(());
         }
     } else if instruction_supports_optional_wrapper(head)
@@ -1323,12 +1328,14 @@ pub(super) fn lower_control_misc_instruction(
                             semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard,
                         },
                     ))),
-                    Instruction::BranchIfFalse {
-                        condition: ResolutionCondition {
-                            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                            comparison: Comparison::GreaterOrEqual,
-                            right: ValueExpr::literal(1),
-                        },
+                    Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                            Box::new(ResolutionCondition {
+                                left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                                comparison: Comparison::GreaterOrEqual,
+                                right: ValueExpr::literal(1),
+                            }),
+                        )),
                         destination: 3,
                     },
                     super::super::toolbox_emit::draw_controller(ValueExpr::literal(1)),
@@ -1544,8 +1551,10 @@ pub(super) fn lower_control_misc_instruction(
                 lower_resolution_condition(cond, builder, vocabulary, in_trigger, bound_x)?;
             rc.comparison = negate_comparison(rc.comparison);
             let branch_idx = builder.instructions.len();
-            builder.instructions.push(Instruction::BranchIfFalse {
-                condition: rc,
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(rc),
+                )),
                 destination: 0,
             });
             lower_instruction_seq(
@@ -1558,7 +1567,7 @@ pub(super) fn lower_control_misc_instruction(
                 bound_x,
             )?;
             let end_dest = builder.instructions.len();
-            if let Some(Instruction::BranchIfFalse { destination, .. }) =
+            if let Some(Instruction::BranchCondition { destination, .. }) =
                 builder.instructions.get_mut(branch_idx)
             {
                 *destination = end_dest;
@@ -1824,17 +1833,19 @@ pub(super) fn lower_control_misc_instruction(
                         bound_x,
                     )?;
                     let branch_idx = builder.instructions.len();
-                    builder.instructions.push(Instruction::BranchIfFalse {
-                        condition: ResolutionCondition {
-                            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                            comparison: Comparison::Equal,
-                            right: ValueExpr::literal(0),
-                        },
+                    builder.instructions.push(Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                            Box::new(ResolutionCondition {
+                                left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                                comparison: Comparison::Equal,
+                                right: ValueExpr::literal(0),
+                            }),
+                        )),
                         destination: 0,
                     });
                     splice_probed_body(builder, probe)?;
                     let end_dest = builder.instructions.len();
-                    if let Some(Instruction::BranchIfFalse { destination, .. }) =
+                    if let Some(Instruction::BranchCondition { destination, .. }) =
                         builder.instructions.get_mut(branch_idx)
                     {
                         *destination = end_dest;
@@ -2245,8 +2256,9 @@ pub(super) fn lower_control_misc_instruction(
                 return Ok(());
             }
             if min_u == 0 {
-                builder.instructions.push(Instruction::OptionalEffect {
+                builder.instructions.push(Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 });
             }
             builder.instructions.push(Instruction::ChooseOption {
@@ -6868,7 +6880,15 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             &rewrite_chosen_to_loop_ve,
                         );
                     }
-                    spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+                    spellwake_engine::toolbox::LifeOp::ExchangeTotals { other } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            other,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    _ => {}
                 }
             }
             Instruction::DealDamage(spec) => {
@@ -6919,18 +6939,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     spellwake_engine::toolbox::DamageTargetQuery::Divided { total, .. } => {
                         rewrite_chosen_to_loop_ve(total);
                     }
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets
-                    | spellwake_engine::toolbox::DamageTargetQuery::AnnouncedTargets { .. }
-                    | spellwake_engine::toolbox::DamageTargetQuery::FromPower(_)
-                    | spellwake_engine::toolbox::DamageTargetQuery::CreaturePowerToOther {
-                        ..
-                    }
-                    | spellwake_engine::toolbox::DamageTargetQuery::TargetControllersCreatures {
-                        ..
-                    }
-                    | spellwake_engine::toolbox::DamageTargetQuery::OrderedTargets { .. }
-                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree
-                    | spellwake_engine::toolbox::DamageTargetQuery::FromGrantingPermanent => {}
+                    _ => {}
                 }
                 if let DamageAmountSpec::Expr(e) = &mut spec.amount {
                     rewrite_chosen_to_loop_ve(e);
@@ -7128,7 +7137,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             &rewrite_chosen_to_loop_ve,
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::Attach { host } => {
+                    spellwake_engine::toolbox::ObjectMutation::Attach { host, .. } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
                             host,
                             &rewrite_chosen_to_loop_rp,
@@ -7277,8 +7286,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_chosen_to_loop_rp(payer);
                 rewrite_chosen_to_loop_ve(extra_generic);
             }
-            Instruction::OptionalEffect { chooser }
-            | Instruction::OptionalSequence { chooser, .. }
+            Instruction::OptionalSequence { chooser, .. }
             | Instruction::ChooseValue { chooser, .. } => {
                 rewrite_chosen_to_loop_rp(chooser);
             }
@@ -7306,24 +7314,16 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 }
             }
 
-            Instruction::BranchIfFalse { condition, .. } => {
-                rewrite_chosen_to_loop_cond(condition);
+            Instruction::BranchCondition { condition, .. } => {
+                if let spellwake_engine::toolbox::ConditionExpr::Resolution(rc) = condition.as_mut()
+                {
+                    rewrite_chosen_to_loop_cond(rc);
+                }
             }
             Instruction::RepeatLoop { count, body } => {
                 rewrite_chosen_to_loop_ve(count);
                 rewrite_chosen_to_loop_ops(&mut body.instructions);
             }
-
-            Instruction::Exchange(spec) => match spec {
-                ExchangeSpec::LifeTotals { first, second } => {
-                    rewrite_chosen_to_loop_rp(first);
-                    rewrite_chosen_to_loop_rp(second);
-                }
-                ExchangeSpec::LifeWithStat { player, .. } | ExchangeSpec::Zones { player, .. } => {
-                    rewrite_chosen_to_loop_rp(player);
-                }
-                ExchangeSpec::Control { .. } => {}
-            },
 
             Instruction::SearchLibrary { filter } => {
                 rewrite_chosen_to_loop_rp(&mut filter.searcher);

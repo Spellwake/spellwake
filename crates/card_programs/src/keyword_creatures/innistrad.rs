@@ -72,12 +72,14 @@ fn choose_effect(
     when_false: Instruction,
 ) -> Vec<Instruction> {
     vec![
-        Instruction::BranchIfFalse {
-            condition: ResolutionCondition {
-                left,
-                comparison,
-                right: spellwake_engine::program::ValueExpr::Literal(right.into()),
-            },
+        Instruction::BranchCondition {
+            condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                Box::new(ResolutionCondition {
+                    left,
+                    comparison,
+                    right: spellwake_engine::program::ValueExpr::Literal(right.into()),
+                }),
+            )),
             destination: 3,
         },
         when_true,
@@ -450,14 +452,11 @@ pub(super) fn spell(
             (
                 FilteredPermanent(ObjectFilter::permanent().controlled()),
                 vec![
-                    BranchIfFalse {
-                        condition: ResolutionCondition {
+                    BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                             left: spellwake_engine::program::ValueExpr::PlayerStat(spellwake_engine::program::PlayerStatExpr::ControllerLife),
                             comparison: Comparison::LessOrEqual,
                             right: spellwake_engine::program::ValueExpr::Literal(5.into()),
-                        },
-                        destination: 3,
-                    },
+                        }))), destination: 3 },
                     Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::chosen_color_protection(ProtectionRecipients::ControllerAndPermanents, ResolvedDuration::UntilEndOfTurn))),
                     Jump { destination: 4 },
                     Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::chosen_color_protection(ProtectionRecipients::TargetPermanent, ResolvedDuration::UntilEndOfTurn))),
@@ -476,14 +475,11 @@ pub(super) fn spell(
                             both_directions: false,
                         },
                     ),
-                    BranchIfFalse {
-                        condition: ResolutionCondition {
+                    BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                             left: spellwake_engine::program::ValueExpr::PlayerStat(spellwake_engine::program::PlayerStatExpr::ControllerLife),
                             comparison: Comparison::LessOrEqual,
                             right: spellwake_engine::program::ValueExpr::Literal(5.into()),
-                        },
-                        destination: 4,
-                    },
+                        }))), destination: 4 },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::set_group_tapped(
                         ObjectFilter::creature().attacking(),
                         true,
@@ -717,14 +713,11 @@ pub(super) fn spell(
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::instant_or_sorcery().controlled()),
             vec![
                 Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell())),
-                BranchIfFalse {
-                    condition: ResolutionCondition {
+                BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                         left: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::CastFromGraveyard),
                         comparison: Comparison::Equal,
                         right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
-                    destination: 3,
-                },
+                    }))), destination: 3 },
                 Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell())),
             ],
         ),
@@ -799,7 +792,7 @@ pub(super) fn spell(
                         spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
                     )),
                 ),
-                Instruction::Fight { first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst), second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond) },
+                Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec::fight(spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::RememberedFirst), spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::RememberedSecond)))),
             ],
         ),
         "Target creature fights another target creature." => (
@@ -817,7 +810,7 @@ pub(super) fn spell(
                         spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
                     )),
                 ),
-                Instruction::Fight { first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst), second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond) },
+                Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec::fight(spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::RememberedFirst), spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::RememberedSecond)))),
             ],
         ),
         "Counter target spell. Return target permanent to its owner's hand." => (
@@ -1174,14 +1167,16 @@ pub(super) fn compile(
     let etb = spellwake_engine::program::TriggerSpec::enters(ObjectFilter::self_object());
     let morbid = |instruction| {
         vec![
-            BranchIfFalse {
-                condition: ResolutionCondition {
-                    left: spellwake_engine::program::ValueExpr::event(
-                        spellwake_engine::program::EventValueKind::CreaturesDiedThisTurn,
-                    ),
-                    comparison: Comparison::Greater,
-                    right: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                },
+            BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(ResolutionCondition {
+                        left: spellwake_engine::program::ValueExpr::event(
+                            spellwake_engine::program::EventValueKind::CreaturesDiedThisTurn,
+                        ),
+                        comparison: Comparison::Greater,
+                        right: spellwake_engine::program::ValueExpr::Literal(0.into()),
+                    }),
+                )),
                 destination: 2,
             },
             instruction,
@@ -1266,7 +1261,7 @@ pub(super) fn compile(
         "Deathtouch\nWhen this creature dies, you may search your library for a Curse card, put it onto the battlefield attached to target player, then shuffle." => (
             "Deathtouch",
             vec![(spellwake_engine::program::TriggerSpec::dies(ObjectFilter::self_object()), SinglePlayer, vec![
-                OptionalEffect { chooser: ResolvingPlayer::Controller },
+                OptionalSequence { chooser: ResolvingPlayer::Controller, instructions: 1 },
                 SearchLibrary { filter: Box::new(spellwake_engine::program::LibrarySearch::to_battlefield(
                         spellwake_engine::program::SearchCardMatcher::CurseForHost(
                             spellwake_engine::program::AuraSearchHost::TargetPlayer,
@@ -1292,7 +1287,7 @@ pub(super) fn compile(
                 spellwake_engine::program::TriggerSpec::step_began(Step::Upkeep, PlayerRelation::Controller),
                 NoTarget,
                 vec![
-                    OptionalEffect { chooser: ResolvingPlayer::Controller },
+                    OptionalSequence { chooser: ResolvingPlayer::Controller, instructions: 1 },
                     SearchLibrary { filter: Box::new(spellwake_engine::program::LibrarySearch::to_battlefield(
                             spellwake_engine::program::SearchCardMatcher::CurseForHost(
                                 spellwake_engine::program::AuraSearchHost::EnchantedPlayerWithDifferentCurseNames,
@@ -1384,7 +1379,7 @@ pub(super) fn compile(
                 "",
                 vec![
                     (etb, BodyTarget::FilteredPermanent(ObjectFilter::creature().other_than_trigger_source()), vec![
-                        OptionalEffect { chooser: ResolvingPlayer::Controller },
+                        OptionalSequence { chooser: ResolvingPlayer::Controller, instructions: 1 },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Exile { face_down: false, viewer: None, link_to_source: false, delayed_return: None, link_group: Some(link) })),
                     ]),
                     (spellwake_engine::program::TriggerSpec::leaves_battlefield(ObjectFilter::self_object()), NoTarget, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_cards_exiled_with_link(link, false, false)]),
@@ -1509,7 +1504,7 @@ pub(super) fn compile(
                             },
                         ),
                     ),
-                    OptionalEffect { chooser: ResolvingPlayer::TargetController },
+                    OptionalSequence { chooser: ResolvingPlayer::TargetController, instructions: 1 },
                     SearchLibrary { filter: Box::new(spellwake_engine::program::LibrarySearch::to_battlefield(
                             spellwake_engine::program::SearchCardMatcher::BasicLand,
                             false,
@@ -2117,14 +2112,11 @@ pub(super) fn compile(
                         [granted].into(),
                         Default::default(),
                     ),
-                    BranchIfFalse {
-                        condition: ResolutionCondition {
+                    BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                             left: spellwake_engine::program::ValueExpr::object_matches(spellwake_engine::program::MatchObjectRef::SacrificedCreature, spellwake_engine::program::ObjectFilter::creature().with_subtype(human()?)),
                             comparison: Comparison::Equal,
                             right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
-                        destination: 3,
-                    },
+                        }))), destination: 3 },
                     counter(),
                 ],
             ));
@@ -2381,14 +2373,11 @@ pub(super) fn compile(
                 SinglePlayer,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_cards_from_graveyard(ResolvingPlayer::TargetPlayer, std::num::NonZeroU8::new(1)?),
-                    BranchIfFalse {
-                        condition: ResolutionCondition {
+                    BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                             left: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::SelectedGraveyardExileCreatures),
                             comparison: Comparison::Equal,
                             right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
-                        destination: 3,
-                    },
+                        }))), destination: 3 },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             ResolvingPlayer::Controller,
@@ -2707,8 +2696,9 @@ pub(super) fn compile(
                     vocabulary.resolve_label("Zombie")?,
                 ])),
                 vec![
-                    OptionalEffect {
+                    OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } })),
                 ],
@@ -2762,8 +2752,9 @@ pub(super) fn compile(
                     etb,
                     BodyTarget::FilteredPermanent(ObjectFilter::creature().with_keyword(KeywordAbility::Flying)),
                     vec![
-                        OptionalEffect {
+                        OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                             spellwake_engine::toolbox::DamageTargetQuery::Targets,

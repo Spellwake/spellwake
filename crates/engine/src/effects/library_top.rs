@@ -487,17 +487,12 @@ impl EffectWindow {
                     _ => return Ok(false),
                 }
             }
-            Instruction::BranchIfFalse { .. }
-            | Instruction::Jump { .. }
+            Instruction::Jump { .. }
             | Instruction::OptionalSequence { .. }
-            | Instruction::OptionalEffect { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::BecomeCopy { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Fight { .. }
-            | Instruction::Exchange(_)
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -516,7 +511,6 @@ impl EffectWindow {
             | Instruction::ChooseCreatureType { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Attach(_)
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }
             | Instruction::AffectPermanentTargets { .. }

@@ -1023,9 +1023,14 @@ impl EffectWindow {
         let distinct_pair = body.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::Fight { first, second }
-                    if **first == crate::program::MoveSubjectRef::RememberedFirst
-                        && **second == crate::program::MoveSubjectRef::RememberedSecond
+                Instruction::DealDamage(spec)
+                    if matches!(
+                        &spec.recipients,
+                        crate::toolbox::DamageTargetQuery::Fight { first, second }
+                            if **first == crate::toolbox::ObjectQuery::LinkedTarget { index: 0 }
+                                && **second
+                                    == crate::toolbox::ObjectQuery::LinkedTarget { index: 1 }
+                    )
             )
         });
         if distinct_pair

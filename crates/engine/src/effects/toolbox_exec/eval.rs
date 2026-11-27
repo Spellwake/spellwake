@@ -238,7 +238,7 @@ impl EffectWindow {
         Ok(out)
     }
 
-    fn collect_zone_objects(
+    pub(super) fn collect_zone_objects(
         &self,
         controller: SeatId,
         entry: Option<&StackEntry>,
@@ -724,6 +724,21 @@ impl EffectWindow {
             }
             ConditionExpr::Not(c) => {
                 Ok(!self.eval_condition_expr_at(controller, entry, c, cursor)?)
+            }
+            ConditionExpr::Resolution(res_cond) => {
+                let lhs = self.resolve_value_expr_with_source(
+                    controller,
+                    &res_cond.left,
+                    cursor,
+                    source_id,
+                )?;
+                let rhs = self.resolve_value_expr_with_source(
+                    controller,
+                    &res_cond.right,
+                    cursor,
+                    source_id,
+                )?;
+                Ok(res_cond.comparison.evaluate(&lhs, &rhs))
             }
         }
     }

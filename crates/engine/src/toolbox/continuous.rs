@@ -75,6 +75,11 @@ pub enum ContinuousPayload {
     ChosenColorProtection { recipients: ProtectionRecipients },
     /// Prompt to modify any number of permanents matching target/filter with `parts` for `spec.duration`.
     ModifyAnyNumber { parts: Box<ResolvedPartsSpec> },
+    /// Layer 1 copy effect copying `donor` onto `spec.selector` with optional CR 707.9 exceptions.
+    BecomeCopy {
+        donor: Box<ObjectQuery>,
+        exceptions: Box<crate::program::CopyExceptions>,
+    },
 }
 
 impl ContinuousPayload {
@@ -113,6 +118,7 @@ impl ContinuousPayload {
                 ProtectionRecipients::AbilitySource
                 | ProtectionRecipients::ControllerAndPermanents => false,
             },
+            Self::BecomeCopy { donor, .. } => donor.uses_target(),
         }
     }
 
@@ -155,6 +161,22 @@ impl ContinuousPayload {
                     filter
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
+                }
+                Ok(())
+            }
+            Self::BecomeCopy { donor, exceptions } => {
+                donor.validate_vocabulary(vocabulary)?;
+                for sub in &exceptions.extra_creature_subtypes {
+                    if vocabulary.label(*sub).is_none() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                }
+                for tr in &exceptions.extra_triggered {
+                    tr.validate_body(vocabulary)?;
+                }
+                for act in &exceptions.extra_activated {
+                    act.body
+                        .validate_in(vocabulary, crate::program::BodyContext::ACTIVATED)?;
                 }
                 Ok(())
             }
@@ -423,6 +445,28 @@ impl ApplyContinuousSpec {
             selector: None,
             payload: ContinuousPayload::ModifyAnyNumber {
                 parts: Box::new(parts),
+            },
+            duration,
+            condition: None,
+            one_shot: false,
+            as_emblem: None,
+            emblem_label: None,
+        }
+    }
+
+    /// Construct a Layer 1 copy effect making `receiver` become a copy of `donor` for `duration`.
+    #[must_use]
+    pub fn become_copy(
+        receiver: ObjectQuery,
+        donor: ObjectQuery,
+        duration: ResolvedDuration,
+        exceptions: crate::program::CopyExceptions,
+    ) -> Self {
+        Self {
+            selector: Some(receiver),
+            payload: ContinuousPayload::BecomeCopy {
+                donor: Box::new(donor),
+                exceptions: Box::new(exceptions),
             },
             duration,
             condition: None,

@@ -678,6 +678,96 @@ impl EffectWindow {
                     )?;
                 }
             }
+            ContinuousPayload::BecomeCopy { donor, exceptions } => {
+                let donor_id = if matches!(donor.as_ref(), crate::toolbox::ObjectQuery::Targets) {
+                    self.instruction_target(entry)
+                        .ok()
+                        .and_then(|bound| match bound.choice().target {
+                            TargetRef::Object(id) => Some(id),
+                            _ => None,
+                        })
+                        .or_else(|| {
+                            self.eval_object_query_at(
+                                controller,
+                                Some(entry),
+                                donor,
+                                self.resolution_cursor(),
+                            )
+                            .ok()
+                            .and_then(|v| v.into_iter().next())
+                        })
+                } else {
+                    self.eval_object_query_at(
+                        controller,
+                        Some(entry),
+                        donor,
+                        self.resolution_cursor(),
+                    )?
+                    .into_iter()
+                    .next()
+                };
+                if let Some(resolved_dur) = self.resolve_duration(entry, spec.duration)?
+                    && let Some(donor_id) = donor_id
+                    && let Some(base) = self.copiable_program(donor_id).cloned()
+                {
+                    let receivers: Vec<ObjectId> = locked_objects
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|id| {
+                            self.window
+                                .cards()
+                                .get(*id)
+                                .is_some_and(|obj| obj.zone() == ObjectZone::Battlefield)
+                        })
+                        .collect();
+                    if !receivers.is_empty() {
+                        let before = self.rules_snapshot(None)?;
+                        let mut created = Vec::new();
+                        for recv_id in receivers {
+                            let mut copied = base.clone();
+                            apply_copy_exceptions(
+                                &mut copied,
+                                exceptions,
+                                self.copiable_program(recv_id),
+                            );
+                            let effect = self.characteristics.add_effect(
+                                entry.id(),
+                                recv_id,
+                                crate::characteristics::ResolvedParts(vec![
+                                    crate::characteristics::ResolvedPart::Copy(Box::new(copied)),
+                                ]),
+                                resolved_dur,
+                            )?;
+                            created.push(effect);
+                        }
+                        self.emit_from(
+                            EventCause::Instruction {
+                                entry: entry.id(),
+                                instruction: index,
+                            },
+                            &before,
+                            None,
+                            ctx.append,
+                            |old, new, _| {
+                                let mut occs = Vec::with_capacity(created.len());
+                                for effect in created {
+                                    let appearances =
+                                        occurrence_flow::characteristic_appearance_changes(
+                                            old,
+                                            new,
+                                            effect.affected.iter().copied(),
+                                        )?;
+                                    occs.push(RulesOccurrence::ContinuousEffectCreated {
+                                        effect,
+                                        appearances,
+                                    });
+                                }
+                                Ok(occs)
+                            },
+                        )?;
+                    }
+                }
+            }
         }
 
         self.advance_instruction()?;
@@ -838,6 +928,58 @@ impl EffectWindow {
                 condition,
                 destination,
             } => {
+                if let crate::toolbox::ConditionExpr::Resolution(res_cond) = condition.as_ref() {
+                    if self.window.resolving() != Some(entry)
+                        || self.resolution_cursor().map(|cursor| cursor.entry) != Some(entry.id())
+                    {
+                        return Err(EffectError::InconsistentProgram);
+                    }
+                    let zero_target_skip = entry.targets().targets().is_empty()
+                        && self
+                            .payloads
+                            .get(&entry.id())
+                            .and_then(StackPayload::body)
+                            .is_some_and(ExecutableBody::is_up_to_one_target)
+                        && (res_cond.left.uses_target() || res_cond.right.uses_target());
+                    if zero_target_skip {
+                        self.set_instruction(destination)?;
+                        ctx.append.records.push(
+                            crate::occurrence::RulesRecord::InstructionBranch {
+                                entry: entry.id(),
+                                instruction: index,
+                                condition: (**res_cond).clone(),
+                                left: 0.into(),
+                                right: 0.into(),
+                                result: false,
+                                next: destination,
+                            },
+                        );
+                        return Ok(StepOutcome::Continue);
+                    }
+                    let left = self.resolve_value_expr(controller, &res_cond.left)?;
+                    let right = self.resolve_value_expr(controller, &res_cond.right)?;
+                    let result = res_cond.comparison.evaluate(&left, &right);
+                    let next = if result {
+                        index
+                            .checked_add(1)
+                            .ok_or(EffectError::InconsistentProgram)?
+                    } else {
+                        destination
+                    };
+                    self.set_instruction(next)?;
+                    ctx.append
+                        .records
+                        .push(crate::occurrence::RulesRecord::InstructionBranch {
+                            entry: entry.id(),
+                            instruction: index,
+                            condition: (**res_cond).clone(),
+                            left,
+                            right,
+                            result,
+                            next,
+                        });
+                    return Ok(StepOutcome::Continue);
+                }
                 let holds = self.eval_condition_expr_at(
                     controller,
                     Some(entry),
@@ -1023,6 +1165,124 @@ impl EffectWindow {
                 self.execute_non_targeted_stack_op(ctx, entry, index, &spec)
             }
             other => Ok(StepOutcome::Next(other)),
+        }
+    }
+}
+
+fn apply_copy_exceptions(
+    copied: &mut Program,
+    exceptions: &crate::program::CopyExceptions,
+    receiver_base: Option<&Program>,
+) {
+    if exceptions.nonlegendary {
+        copied
+            .supertypes
+            .remove(&crate::program::Supertype::Legendary);
+    }
+    if let Some(orig) = receiver_base {
+        if exceptions.keep_name {
+            copied.names = orig.names.clone();
+        }
+        if exceptions.keep_types {
+            copied.card_types.extend(orig.card_types.iter().copied());
+            copied
+                .creature_subtypes
+                .extend(orig.creature_subtypes.iter().copied());
+            copied
+                .artifact_subtypes
+                .extend(orig.artifact_subtypes.iter().copied());
+            copied
+                .enchantment_subtypes
+                .extend(orig.enchantment_subtypes.iter().copied());
+            copied
+                .land_subtypes
+                .extend(orig.land_subtypes.iter().copied());
+        }
+        if exceptions.keep_abilities {
+            copied
+                .printed_keywords
+                .extend(orig.printed_keywords.iter().copied());
+            let mut next_trig = copied
+                .triggered
+                .iter()
+                .map(|t| t.id.0)
+                .max()
+                .map_or(0, |m| m.saturating_add(1));
+            for tr in &orig.triggered {
+                let mut cloned = tr.clone();
+                cloned.id = crate::program::TriggeredAbilityId(next_trig);
+                next_trig = next_trig.saturating_add(1);
+                copied.triggered.push(cloned);
+            }
+            let mut next_act = copied
+                .activated
+                .iter()
+                .map(|a| a.id.0)
+                .max()
+                .map_or(0, |m| m.saturating_add(1));
+            for act in &orig.activated {
+                let mut cloned = act.clone();
+                cloned.id = crate::activated::ActivatedAbilityId(next_act);
+                next_act = next_act.saturating_add(1);
+                copied.activated.push(cloned);
+            }
+        }
+    }
+    copied
+        .card_types
+        .extend(exceptions.extra_types.iter().copied());
+    copied
+        .artifact_subtypes
+        .extend(exceptions.extra_artifact_subtypes.iter().copied());
+    copied
+        .creature_subtypes
+        .extend(exceptions.extra_creature_subtypes.iter().copied());
+    copied
+        .printed_keywords
+        .extend(exceptions.extra_keywords.iter().copied());
+    if let Some(pt) = &exceptions.override_pt
+        && let ProgramKind::Permanent(permanent) = &mut copied.kind
+    {
+        permanent.printed_pt = Some(pt.clone().into());
+        if matches!(
+            &copied.continuous,
+            Some(crate::characteristics::StaticContinuousAbility::CharacteristicDefining {
+                parts,
+                ..
+            }) if parts
+                .0
+                .iter()
+                .any(|part| matches!(part, crate::characteristics::DefiningPart::PowerToughness { .. }))
+        ) {
+            copied.continuous = None;
+        }
+    }
+    if !exceptions.extra_triggered.is_empty() {
+        let mut next_trig = copied
+            .triggered
+            .iter()
+            .map(|t| t.id.0)
+            .max()
+            .map_or(0, |m| m.saturating_add(1));
+        for tr in &exceptions.extra_triggered {
+            let mut cloned = tr.clone();
+            cloned.id = crate::program::TriggeredAbilityId(next_trig);
+            next_trig = next_trig.saturating_add(1);
+            copied.triggered.push(cloned);
+        }
+    }
+    if !exceptions.extra_activated.is_empty() {
+        let mut next_act = copied
+            .activated
+            .iter()
+            .map(|a| a.id.0)
+            .max()
+            .map_or(0, |m| m.saturating_add(1));
+        for act in &exceptions.extra_activated {
+            let mut cloned = act.clone();
+            cloned.id = crate::activated::ActivatedAbilityId(next_act);
+            next_act = next_act.saturating_add(1);
+            copied.activated.push(cloned);
         }
     }
 }

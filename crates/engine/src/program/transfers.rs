@@ -45,8 +45,9 @@ impl TransferKeyword {
             body: ExecutableBody::new(
                 self.target(),
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     Instruction::MutateObject(Box::new(
                         crate::toolbox::MutateObjectSpec::resolve_transfer(self),

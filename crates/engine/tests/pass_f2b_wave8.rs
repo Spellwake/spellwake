@@ -288,10 +288,16 @@ fn triggered_fixed_target_clause_fight_resolves_and_handles_removed_target() {
                         spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
                     ))],
                 ))),
-                Instruction::Fight {
-                    first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst),
-                    second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond),
-                },
+                Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::fight(
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            spellwake_engine::program::MoveSubjectRef::RememberedFirst,
+                        ),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            spellwake_engine::program::MoveSubjectRef::RememberedSecond,
+                        ),
+                    ),
+                )),
             ],
         ),
     });

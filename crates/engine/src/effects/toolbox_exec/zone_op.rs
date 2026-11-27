@@ -993,6 +993,109 @@ impl EffectWindow {
                     }
                 }
             }
+            ZoneDest::SwapZones { other } => {
+                let crate::toolbox::ObjectQuery::ZoneScan {
+                    zone: from_zone, ..
+                } = &spec.source
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                fn zone_player(
+                    z: &crate::toolbox::QueryZone,
+                ) -> Option<&crate::toolbox::PlayerSelector> {
+                    match z {
+                        crate::toolbox::QueryZone::Hand(p)
+                        | crate::toolbox::QueryZone::Library(p)
+                        | crate::toolbox::QueryZone::Graveyard(p)
+                        | crate::toolbox::QueryZone::ExileOwnedBy(p)
+                        | crate::toolbox::QueryZone::BattlefieldControlledBy(p) => Some(p.as_ref()),
+                        _ => None,
+                    }
+                }
+                let seat = match zone_player(from_zone).or_else(|| zone_player(other)) {
+                    Some(sel) => self
+                        .eval_player_selector_at(
+                            controller,
+                            Some(entry),
+                            sel,
+                            self.resolution_cursor(),
+                        )?
+                        .into_iter()
+                        .next()
+                        .unwrap_or(controller),
+                    None => controller,
+                };
+                let to_dest =
+                    |z: &crate::toolbox::QueryZone| -> Option<crate::program::SubjectDestination> {
+                        match z {
+                            crate::toolbox::QueryZone::Hand(_) => {
+                                Some(crate::program::SubjectDestination::Hand)
+                            }
+                            crate::toolbox::QueryZone::Graveyard(_) => {
+                                Some(crate::program::SubjectDestination::Graveyard)
+                            }
+                            crate::toolbox::QueryZone::Library(_) => Some(
+                                crate::program::SubjectDestination::Library(LibraryPlacement::Top),
+                            ),
+                            crate::toolbox::QueryZone::Exile
+                            | crate::toolbox::QueryZone::ExileOwnedBy(_) => {
+                                Some(crate::program::SubjectDestination::Exile {
+                                    delayed_return: None,
+                                })
+                            }
+                            _ => None,
+                        }
+                    };
+                let (Some(from_dest), Some(other_dest)) = (to_dest(from_zone), to_dest(other))
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let from_cards: Vec<ObjectId> =
+                    if matches!(from_zone, crate::toolbox::QueryZone::Exile) {
+                        selected
+                            .into_iter()
+                            .filter(|id| {
+                                self.window
+                                    .cards()
+                                    .get(*id)
+                                    .is_some_and(|c| c.owner() == seat)
+                            })
+                            .collect()
+                    } else {
+                        selected
+                    };
+                let mut to_cards = self.collect_zone_objects(
+                    controller,
+                    Some(entry),
+                    other,
+                    self.resolution_cursor(),
+                )?;
+                if matches!(other, crate::toolbox::QueryZone::Exile) {
+                    to_cards.retain(|id| {
+                        self.window
+                            .cards()
+                            .get(*id)
+                            .is_some_and(|c| c.owner() == seat)
+                    });
+                }
+                if !from_cards.is_empty() {
+                    let moved = self.move_objects_to_subject_destination_ids(
+                        entry,
+                        index,
+                        seat,
+                        &from_cards,
+                        other_dest,
+                        ctx.append,
+                    )?;
+                    moved_ids.extend(moved);
+                }
+                if !to_cards.is_empty() {
+                    let moved = self.move_objects_to_subject_destination_ids(
+                        entry, index, seat, &to_cards, from_dest, ctx.append,
+                    )?;
+                    moved_ids.extend(moved);
+                }
+            }
             ZoneDest::Delayed(_) => return Err(EffectError::InconsistentProgram),
         }
 

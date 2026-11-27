@@ -3178,10 +3178,16 @@ pub(super) fn lower_combat_damage_instruction(
                         ))],
                         ),
                     )));
-                builder.instructions.push(Instruction::Fight {
-                    first: Box::new(MoveSubjectRef::RememberedFirst),
-                    second: Box::new(MoveSubjectRef::RememberedSecond),
-                });
+                builder.instructions.push(Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::fight(
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::RememberedFirst,
+                        ),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::RememberedSecond,
+                        ),
+                    ),
+                )));
                 return Ok(());
             }
             let second_fight_target = match (a.as_ref(), b.as_ref()) {
@@ -3239,10 +3245,16 @@ pub(super) fn lower_combat_damage_instruction(
                         ))],
                         ),
                     )));
-                builder.instructions.push(Instruction::Fight {
-                    first: Box::new(MoveSubjectRef::RememberedFirst),
-                    second: Box::new(MoveSubjectRef::RememberedSecond),
-                });
+                builder.instructions.push(Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::fight(
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::RememberedFirst,
+                        ),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::RememberedSecond,
+                        ),
+                    ),
+                )));
                 return Ok(());
             }
             let had_perm_target = matches!(
@@ -3269,10 +3281,12 @@ pub(super) fn lower_combat_damage_instruction(
                 false,
                 had_perm_target,
             )?;
-            builder.instructions.push(Instruction::Fight {
-                first: Box::new(first),
-                second: Box::new(second),
-            });
+            builder.instructions.push(Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec::fight(
+                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(first),
+                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(second),
+                ),
+            )));
             Ok(())
         }
         InstructionAst::PreventAllDamageFrom {
@@ -4015,20 +4029,26 @@ pub(super) fn lower_combat_damage_instruction(
                 }
                 let prev_branch = builder.instructions[len - 2].clone();
                 let prev_grant = builder.instructions[len - 1].clone();
-                let Instruction::BranchIfFalse {
-                    condition:
-                        ResolutionCondition {
-                            left:
-                                ValueExpr::Count {
-                                    zone: prev_zone,
-                                    filter: prev_filter,
-                                    controller_scope,
-                                },
-                            comparison: Comparison::GreaterOrEqual,
-                            right,
-                        },
+                let Instruction::BranchCondition {
+                    condition,
                     destination,
                 } = prev_branch
+                else {
+                    return Err("oracle:unsupported-combat-mod");
+                };
+                let spellwake_engine::toolbox::ConditionExpr::Resolution(rc) = *condition else {
+                    return Err("oracle:unsupported-combat-mod");
+                };
+                let ResolutionCondition {
+                    left:
+                        ValueExpr::Count {
+                            zone: prev_zone,
+                            filter: prev_filter,
+                            controller_scope,
+                        },
+                    comparison: Comparison::GreaterOrEqual,
+                    right,
+                } = *rc
                 else {
                     return Err("oracle:unsupported-combat-mod");
                 };
@@ -4133,8 +4153,10 @@ pub(super) fn lower_combat_damage_instruction(
                         right: ValueExpr::literal(1),
                     };
                     let next_dest = builder.instructions.len() + 2;
-                    builder.instructions.push(Instruction::BranchIfFalse {
-                        condition: cond,
+                    builder.instructions.push(Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                            Box::new(cond),
+                        )),
                         destination: next_dest,
                     });
                     let grant_op = match &shape {
@@ -7006,27 +7028,32 @@ pub(super) fn extract_resolving_player_from_subject(
     }
 }
 
-pub(super) fn parse_exchange_zone_from_subject(subj: &SubjectRefAst) -> Option<ExchangeZone> {
+pub(super) fn parse_exchange_zone_from_subject(
+    subj: &SubjectRefAst,
+    player: ResolvingPlayer,
+) -> Option<spellwake_engine::toolbox::QueryZone> {
+    use spellwake_engine::toolbox::{PlayerSelector, QueryZone};
+    let ps = || Box::new(PlayerSelector::Resolving(player));
     match subj {
         SubjectRefAst::Anaphora(raw) => {
             let low = raw.trim().to_ascii_lowercase();
             if low.contains("hand") {
-                Some(ExchangeZone::Hand)
+                Some(QueryZone::Hand(ps()))
             } else if low.contains("graveyard") {
-                Some(ExchangeZone::Graveyard)
+                Some(QueryZone::Graveyard(ps()))
             } else if low.contains("library") {
-                Some(ExchangeZone::Library)
+                Some(QueryZone::Library(ps()))
             } else if low.contains("exile") {
-                Some(ExchangeZone::Exile)
+                Some(QueryZone::Exile)
             } else {
                 None
             }
         }
         SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f) => match f.zone {
-            Some(ZoneFilter::YourHand) => Some(ExchangeZone::Hand),
-            Some(ZoneFilter::YourGraveyard) => Some(ExchangeZone::Graveyard),
-            Some(ZoneFilter::YourLibrary) => Some(ExchangeZone::Library),
-            Some(ZoneFilter::Exile) => Some(ExchangeZone::Exile),
+            Some(ZoneFilter::YourHand) => Some(QueryZone::Hand(ps())),
+            Some(ZoneFilter::YourGraveyard) => Some(QueryZone::Graveyard(ps())),
+            Some(ZoneFilter::YourLibrary) => Some(QueryZone::Library(ps())),
+            Some(ZoneFilter::Exile) => Some(QueryZone::Exile),
             _ => None,
         },
         _ => None,

@@ -63,8 +63,9 @@ pub(super) fn compile(
                     body: ExecutableBody::new(
                         BodyTarget::None,
                         vec![
-                            Instruction::OptionalEffect {
+                            Instruction::OptionalSequence {
                                 chooser: ResolvingPlayer::Controller,
+                                instructions: 1,
                             },
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                                 spellwake_engine::program::ValueExpr::Literal(2.into()),

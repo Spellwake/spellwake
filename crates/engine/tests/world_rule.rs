@@ -353,15 +353,21 @@ fn normal_entries_and_resolved_gain_regain_or_copy_use_actual_world_history() {
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
                     BodyTarget::SinglePermanent,
-                    vec![Instruction::BecomeCopy {
-                        receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-                        donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-                        duration: ResolvedDuration::NoStatedDuration,
-                        exceptions: Box::new(spellwake_engine::program::CopyExceptions {
-                            override_pt: None,
-                            ..Default::default()
-                        }),
-                    }],
+                    vec![Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                spellwake_engine::program::EffectSubject::AbilitySource,
+                            )),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                spellwake_engine::program::MoveSubjectRef::TargetObject,
+                            ),
+                            ResolvedDuration::NoStatedDuration,
+                            spellwake_engine::program::CopyExceptions {
+                                override_pt: None,
+                                ..Default::default()
+                            },
+                        ),
+                    ))],
                 ),
             });
         }
@@ -626,15 +632,21 @@ fn copy_and_source_controller_changes_track_continuity_instead_of_restarting_eve
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::BecomeCopy {
-                receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-                donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-                duration: ResolvedDuration::NoStatedDuration,
-                exceptions: Box::new(spellwake_engine::program::CopyExceptions {
-                    override_pt: None,
-                    ..Default::default()
-                }),
-            }],
+            vec![Instruction::ApplyContinuous(Box::new(
+                spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        spellwake_engine::program::EffectSubject::AbilitySource,
+                    )),
+                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                        spellwake_engine::program::MoveSubjectRef::TargetObject,
+                    ),
+                    ResolvedDuration::NoStatedDuration,
+                    spellwake_engine::program::CopyExceptions {
+                        override_pt: None,
+                        ..Default::default()
+                    },
+                ),
+            ))],
         ),
     }];
     let mut enabler = artifact(false);

@@ -32,12 +32,14 @@ fn literal(value: i64) -> ValueExpr {
 }
 
 fn skip_unless_present(value: ValueExpr, destination: usize) -> Instruction {
-    Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: value,
-            comparison: Comparison::Greater,
-            right: spellwake_engine::program::ValueExpr::Literal(0.into()),
-        },
+    Instruction::BranchCondition {
+        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+            Box::new(ResolutionCondition {
+                left: value,
+                comparison: Comparison::Greater,
+                right: spellwake_engine::program::ValueExpr::Literal(0.into()),
+            }),
+        )),
         destination,
     }
 }
@@ -70,8 +72,9 @@ fn controlled_creature_pair(second: BodyTarget, effect: Instruction) -> Vec<Inst
 
 fn optional_tap_change() -> Vec<Instruction> {
     vec![
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         affect(1, 1, PermanentTargetAction::ToggleTap),
     ]
@@ -1182,8 +1185,9 @@ fn artifact(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) ->
                 ),
                 BodyTarget::None,
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Source,
@@ -1660,7 +1664,7 @@ fn creature(
                 fixed_cost("{1}{G}")?,
                 SourceCost::Tap,
                 NoTarget,
-                controlled_creature_pair(SingleCreature, Instruction::Fight { first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst), second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond) }),
+                controlled_creature_pair(SingleCreature, Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec::fight(spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::RememberedFirst), spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::RememberedSecond))))),
             ));
             return Some(program);
         }
@@ -1986,8 +1990,9 @@ fn creature(
                 spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::self_object(), mode: spellwake_engine::program::DiesTriggerMode::Permanent }),
                 SingleCreature,
                 vec![
-                    OptionalEffect {
+                    OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     modify_target(vec![ResolvedPartSpec::ModifyPT(stats(-2, -2))]),
                 ],

@@ -349,6 +349,36 @@ impl EffectWindow {
                 self.advance_instruction()?;
                 return Ok(StepOutcome::Continue);
             }
+            ObjectMutation::Attach {
+                ability: Some(_), ..
+            } => {
+                let (StackKind::ActivatedAbility { source }
+                | StackKind::TriggeredAbility { source }) = entry.kind()
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let bound = self.instruction_target(entry)?;
+                let target = self
+                    .resolution_cursor()
+                    .and_then(|c| c.results.returned_target_permanent)
+                    .map(TargetRef::Object)
+                    .unwrap_or(bound.choice().target);
+                let before = self.rules_snapshot(None)?;
+                if let Some(occurrence) = self.attach_if_legal(entry.id(), source.id(), target)? {
+                    self.emit_from(
+                        EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before,
+                        None,
+                        ctx.append,
+                        |_, _, _| Ok(vec![occurrence]),
+                    )?;
+                }
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
             ObjectMutation::BecomeMonstrous { .. }
             | ObjectMutation::UnlockDoor { .. }
             | ObjectMutation::Enlist
@@ -670,7 +700,10 @@ impl EffectWindow {
                 }
                 succeeded = !mutated.is_empty();
             }
-            ObjectMutation::Attach { host } => {
+            ObjectMutation::Attach {
+                host,
+                ability: None,
+            } => {
                 let host_opt = self
                     .eval_object_query_at(controller, Some(entry), host, self.resolution_cursor())?
                     .into_iter()
@@ -689,6 +722,83 @@ impl EffectWindow {
                     if !changes.is_empty() {
                         succeeded = true;
                         self.emit_from(cause, &before, None, ctx.append, |_, _, _| Ok(changes))?;
+                    }
+                }
+            }
+            ObjectMutation::ExchangeControl { other } => {
+                let a_opt = if matches!(spec.source, crate::toolbox::ObjectQuery::Targets)
+                    && self.window.target_assessment().is_some()
+                {
+                    self.legal_permanent_targets()?.into_iter().next()
+                } else {
+                    selected.first().copied()
+                };
+                let b_opt = if matches!(other.as_ref(), crate::toolbox::ObjectQuery::Targets)
+                    && self.window.target_assessment().is_some()
+                {
+                    self.legal_permanent_targets()?.into_iter().next()
+                } else {
+                    self.eval_object_query_at(
+                        controller,
+                        Some(entry),
+                        other,
+                        self.resolution_cursor(),
+                    )?
+                    .into_iter()
+                    .next()
+                };
+                if let (Some(a), Some(b)) = (a_opt, b_opt)
+                    && a != b
+                {
+                    let before = self.rules_snapshot(None)?;
+                    let current = &before.view().evaluated;
+                    let ctrl_a = current
+                        .get(a)
+                        .filter(|o| o.zone == ObjectZone::Battlefield)
+                        .and_then(|o| o.controller);
+                    let ctrl_b = current
+                        .get(b)
+                        .filter(|o| o.zone == ObjectZone::Battlefield)
+                        .and_then(|o| o.controller);
+                    if let (Some(ca), Some(cb)) = (ctrl_a, ctrl_b)
+                        && ca != cb
+                    {
+                        let eff_a = self.characteristics.add_effect(
+                            entry.id(),
+                            a,
+                            ResolvedParts(vec![ResolvedPart::Control(cb)]),
+                            crate::characteristics::ResolvedDuration::NoStatedDuration,
+                        )?;
+                        let eff_b = self.characteristics.add_effect(
+                            entry.id(),
+                            b,
+                            ResolvedParts(vec![ResolvedPart::Control(ca)]),
+                            crate::characteristics::ResolvedDuration::NoStatedDuration,
+                        )?;
+                        self.emit_from(cause, &before, None, ctx.append, |old, new, _| {
+                            let app_a = characteristic_appearance_changes(
+                                old,
+                                new,
+                                eff_a.affected.iter().copied(),
+                            )?;
+                            let app_b = characteristic_appearance_changes(
+                                old,
+                                new,
+                                eff_b.affected.iter().copied(),
+                            )?;
+                            Ok(vec![
+                                RulesOccurrence::ContinuousEffectCreated {
+                                    effect: eff_a,
+                                    appearances: app_a,
+                                },
+                                RulesOccurrence::ContinuousEffectCreated {
+                                    effect: eff_b,
+                                    appearances: app_b,
+                                },
+                            ])
+                        })?;
+                        mutated = vec![a, b];
+                        succeeded = true;
                     }
                 }
             }
@@ -1007,6 +1117,9 @@ impl EffectWindow {
             | ObjectMutation::AdvanceClassLevel(_)
             | ObjectMutation::ReselectAttackDefender
             | ObjectMutation::SoulbondPair { .. }
+            | ObjectMutation::Attach {
+                ability: Some(_), ..
+            }
             | ObjectMutation::Explore => unreachable!("handled before candidate selection"),
             _ => return Err(EffectError::InconsistentProgram),
         }

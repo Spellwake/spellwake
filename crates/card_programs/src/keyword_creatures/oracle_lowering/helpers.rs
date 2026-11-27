@@ -2883,23 +2883,20 @@ pub(super) fn lower_ward_cost_body(
     if non_mana_ops.is_empty() {
         return Err("oracle:ward-non-mana");
     }
-    if non_mana_ops.len() == 1 {
-        instructions.push(Instruction::OptionalEffect { chooser: payer });
-    } else {
-        instructions.push(Instruction::OptionalSequence {
-            chooser: payer,
-            instructions: non_mana_ops.len(),
-        });
-    }
+    instructions.push(Instruction::OptionalSequence {
+        chooser: payer,
+        instructions: non_mana_ops.len(),
+    });
     instructions.extend(non_mana_ops);
     let branch_idx = instructions.len();
-    instructions.push(Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-            comparison: Comparison::Less,
-            right: ValueExpr::literal(1),
-        },
-        // Skip CounterWardSource (which caller appends at branch_idx + 1) when paid.
+    instructions.push(Instruction::BranchCondition {
+        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+            Box::new(ResolutionCondition {
+                left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                comparison: Comparison::Less,
+                right: ValueExpr::literal(1),
+            }),
+        )), // Skip CounterWardSource (which caller appends at branch_idx + 1) when paid.
         destination: branch_idx + 2,
     });
     Ok(ExecutableBody::new(BodyTarget::None, instructions))

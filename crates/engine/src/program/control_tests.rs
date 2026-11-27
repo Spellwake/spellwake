@@ -11,10 +11,12 @@ fn condition(left: ValueExpr) -> ResolutionCondition {
     }
 }
 fn branch(destination: usize) -> Instruction {
-    Instruction::BranchIfFalse {
-        condition: condition(crate::program::ValueExpr::PlayerStat(
-            crate::program::PlayerStatExpr::ControllerLife,
-        )),
+    Instruction::BranchCondition {
+        condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+            condition(crate::program::ValueExpr::PlayerStat(
+                crate::program::PlayerStatExpr::ControllerLife,
+            )),
+        ))),
         destination,
     }
 }
@@ -101,15 +103,16 @@ fn join_requires_definite_reads_and_rejects_possible_duplicate_producers() {
 }
 #[test]
 fn moved_donor_at_a_join_is_rejected_but_disjoint_paths_remain_admitted() {
-    let copy = Instruction::BecomeCopy {
-        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-        donor: crate::program::MoveSubjectRef::TargetObject,
-        duration: ResolvedDuration::UntilEndOfTurn,
-        exceptions: Box::new(crate::program::CopyExceptions {
-            override_pt: None,
-            ..Default::default()
-        }),
-    };
+    let copy =
+        Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec::become_copy(
+            crate::toolbox::ObjectQuery::Source,
+            crate::toolbox::ObjectQuery::Targets,
+            ResolvedDuration::UntilEndOfTurn,
+            crate::program::CopyExceptions {
+                override_pt: None,
+                ..Default::default()
+            },
+        )));
     assert_eq!(
         check(
             BodyTarget::SinglePermanent,
@@ -148,10 +151,12 @@ fn moved_donor_at_a_join_is_rejected_but_disjoint_paths_remain_admitted() {
 #[test]
 fn trigger_count_conditions_require_actual_bound_admission_even_when_unreachable() {
     let instructions = vec![
-        Instruction::BranchIfFalse {
-            condition: condition(crate::program::ValueExpr::event(
-                crate::program::EventValueKind::MatchedOccurrences,
-            )),
+        Instruction::BranchCondition {
+            condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+                condition(crate::program::ValueExpr::event(
+                    crate::program::EventValueKind::MatchedOccurrences,
+                )),
+            ))),
             destination: 2,
         },
         gain(),

@@ -22,13 +22,25 @@ pub(super) fn lower_search_library_group(
                 let draw_op =
                     super::super::toolbox_emit::draw_resolving_player(rp, ValueExpr::literal(1));
                 if n == 1 {
-                    vec![Instruction::OptionalEffect { chooser: rp }, draw_op]
+                    vec![
+                        Instruction::OptionalSequence {
+                            chooser: rp,
+                            instructions: 1,
+                        },
+                        draw_op,
+                    ]
                 } else {
                     vec![Instruction::RepeatLoop {
                         count: ValueExpr::literal(i64::from(n)),
                         body: Box::new(ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::OptionalEffect { chooser: rp }, draw_op],
+                            vec![
+                                Instruction::OptionalSequence {
+                                    chooser: rp,
+                                    instructions: 1,
+                                },
+                                draw_op,
+                            ],
                         )),
                     }]
                 }
@@ -1557,24 +1569,22 @@ pub(super) fn lower_search_library_group(
                             bound_x,
                         )
                         .map_err(|_| "oracle:counter-unless-non-mana")?;
-                        if pay_ops.len() == 1 {
-                            builder.instructions.push(Instruction::OptionalEffect {
-                                chooser: ResolvingPlayer::TargetSpellController,
-                            });
-                        } else {
-                            builder.instructions.push(Instruction::OptionalSequence {
-                                chooser: ResolvingPlayer::TargetSpellController,
-                                instructions: pay_ops.len(),
-                            });
-                        }
+                        builder.instructions.push(Instruction::OptionalSequence {
+                            chooser: ResolvingPlayer::TargetSpellController,
+                            instructions: pay_ops.len(),
+                        });
                         builder.instructions.extend(pay_ops);
                         let branch_idx = builder.instructions.len();
-                        builder.instructions.push(Instruction::BranchIfFalse {
-                            condition: ResolutionCondition {
-                                left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                                comparison: Comparison::Less,
-                                right: ValueExpr::literal(1),
-                            },
+                        builder.instructions.push(Instruction::BranchCondition {
+                            condition: Box::new(
+                                spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(
+                                    ResolutionCondition {
+                                        left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                                        comparison: Comparison::Less,
+                                        right: ValueExpr::literal(1),
+                                    },
+                                )),
+                            ),
                             destination: branch_idx + 2,
                         });
                         builder.instructions.push(Instruction::StackOp(Box::new(
@@ -1640,24 +1650,20 @@ pub(super) fn lower_search_library_group(
             {
                 return Err("oracle:counter-unless-action");
             }
-            if act_builder.instructions.len() == 1 {
-                builder
-                    .instructions
-                    .push(Instruction::OptionalEffect { chooser });
-            } else {
-                builder.instructions.push(Instruction::OptionalSequence {
-                    chooser,
-                    instructions: act_builder.instructions.len(),
-                });
-            }
+            builder.instructions.push(Instruction::OptionalSequence {
+                chooser,
+                instructions: act_builder.instructions.len(),
+            });
             builder.instructions.extend(act_builder.instructions);
             let branch_idx = builder.instructions.len();
-            builder.instructions.push(Instruction::BranchIfFalse {
-                condition: ResolutionCondition {
-                    left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                    comparison: Comparison::Less,
-                    right: ValueExpr::literal(1),
-                },
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(ResolutionCondition {
+                        left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                        comparison: Comparison::Less,
+                        right: ValueExpr::literal(1),
+                    }),
+                )),
                 destination: branch_idx + 2,
             });
             builder.instructions.push(if is_trigger_target {
@@ -2697,10 +2703,12 @@ pub(super) fn lower_search_library_group(
                 )?;
                 builder
                     .instructions
-                    .push(Instruction::Exchange(ExchangeSpec::Control {
-                        first: Box::new(first),
-                        second: Box::new(second),
-                    }));
+                    .push(Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::exchange_control(
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(first),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(second),
+                        ),
+                    )));
                 Ok(())
             }
             ExchangeKind::LifeTotals => {
@@ -2713,12 +2721,12 @@ pub(super) fn lower_search_library_group(
                 };
                 let first = extract_resolving_player_from_subject(a, builder, in_trigger)?;
                 let second = extract_resolving_player_from_subject(b, builder, in_trigger)?;
-                builder
-                    .instructions
-                    .push(Instruction::Exchange(ExchangeSpec::LifeTotals {
-                        first,
-                        second,
-                    }));
+                builder.instructions.push(Instruction::AdjustLife(Box::new(
+                    spellwake_engine::toolbox::AdjustLifeSpec::exchange_totals(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(first),
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(second),
+                    ),
+                )));
                 Ok(())
             }
             ExchangeKind::LifeWithStat(stat_kind) => {
@@ -2764,13 +2772,13 @@ pub(super) fn lower_search_library_group(
                     false,
                     had_perm_target,
                 )?;
-                builder
-                    .instructions
-                    .push(Instruction::Exchange(ExchangeSpec::LifeWithStat {
-                        player,
-                        object: Box::new(object),
+                builder.instructions.push(Instruction::AdjustLife(Box::new(
+                    spellwake_engine::toolbox::AdjustLifeSpec::exchange_with_stat(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(player),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(object),
                         stat,
-                    }));
+                    ),
+                )));
                 Ok(())
             }
             ExchangeKind::Zones => {
@@ -2778,21 +2786,17 @@ pub(super) fn lower_search_library_group(
                     return Err("oracle:unsupported-exchange-zones");
                 };
                 let (Some(from), Some(to)) = (
-                    parse_exchange_zone_from_subject(left.as_ref()),
-                    parse_exchange_zone_from_subject(r),
+                    parse_exchange_zone_from_subject(left.as_ref(), ResolvingPlayer::Controller),
+                    parse_exchange_zone_from_subject(r, ResolvingPlayer::Controller),
                 ) else {
                     return Err("oracle:unsupported-exchange-zones");
                 };
                 if from == to {
                     return Err("oracle:unsupported-exchange-zones");
                 }
-                builder
-                    .instructions
-                    .push(Instruction::Exchange(ExchangeSpec::Zones {
-                        player: ResolvingPlayer::Controller,
-                        from,
-                        to,
-                    }));
+                builder.instructions.push(Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::swap_zones(from, to),
+                )));
                 Ok(())
             }
         },
@@ -3362,7 +3366,10 @@ pub(super) fn lower_search_library_group(
                             ),
                             selection,
                             spellwake_engine::toolbox::ObjectMutation::Attach {
-                                host: super::super::toolbox_emit::move_subject_to_query(host_ref),
+                                host: Box::new(super::super::toolbox_emit::move_subject_to_query(
+                                    host_ref,
+                                )),
+                                ability: None,
                             },
                         ),
                     )));
@@ -5039,9 +5046,8 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
         }
         match op {
             Instruction::DrawCards(_)
-            | Instruction::OptionalEffect { .. }
             | Instruction::OptionalSequence { .. }
-            | Instruction::BranchIfFalse { .. }
+            | Instruction::BranchCondition { .. }
             | Instruction::Jump { .. }
             | Instruction::AdjustLife(_) => continue,
             Instruction::MutatePlayer(spec)

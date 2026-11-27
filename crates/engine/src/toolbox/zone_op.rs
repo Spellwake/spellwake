@@ -8,12 +8,12 @@ use crate::{
     object_identity::ObjectId,
     program::{
         CardType, DefinitionError, DelayedReturnTiming, LibraryPlacement, LinkedExileGroup,
-        ResolvingPlayer, ValueExpr,
+        ObjectFilter, ResolvingPlayer, ValueExpr,
     },
     toolbox::{
         choice::ChoiceCategory,
         env::BindingId,
-        query::{ObjectQuery, PlayerSelector},
+        query::{ObjectQuery, PlayerSelector, QuerySlice, QueryZone},
         tags::{TagKey, TagValue},
     },
 };
@@ -188,6 +188,10 @@ pub enum ZoneDest {
     },
     /// Specialized delayed, cohort, or hand/graveyard return zone operation.
     Delayed(DelayedZoneAction),
+    /// Atomically swap all cards between the zone scanned by `source` and `other` (CR 701.10).
+    SwapZones {
+        other: QueryZone,
+    },
 }
 
 /// Specialized delayed, cohort, or hand/graveyard return semantics executed via `ZoneOp`.
@@ -327,6 +331,19 @@ impl ZoneOpSpec {
             tag_moved: None,
             shuffle_library: Some(player),
         }
+    }
+
+    /// Atomically swap all cards between `from` and `to` (CR 701.10).
+    #[must_use]
+    pub fn swap_zones(from: QueryZone, to: QueryZone) -> Self {
+        Self::move_all(
+            ObjectQuery::ZoneScan {
+                zone: from,
+                filter: Box::new(ObjectFilter::any()),
+                slice: QuerySlice::All,
+            },
+            ZoneDest::SwapZones { other: to },
+        )
     }
 
     #[must_use]
@@ -499,6 +516,7 @@ impl ZoneOpSpec {
                 | DelayedZoneAction::ReturnGraveyardCreatureWithCorpse(_) => true,
                 _ => false,
             },
+            ZoneDest::SwapZones { other } => other.uses_target(),
             ZoneDest::None
             | ZoneDest::Graveyard { .. }
             | ZoneDest::Hand
@@ -592,6 +610,7 @@ impl ZoneOpSpec {
                 position: LibraryOrderPos::ChoiceTopOrBottom { chooser },
             } => chooser.validate_vocabulary(vocabulary)?,
             ZoneDest::LookOnly { viewer } => viewer.validate_vocabulary(vocabulary)?,
+            ZoneDest::SwapZones { other } => other.validate_vocabulary(vocabulary)?,
             ZoneDest::None
             | ZoneDest::Graveyard { .. }
             | ZoneDest::Hand

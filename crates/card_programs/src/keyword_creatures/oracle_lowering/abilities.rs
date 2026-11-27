@@ -1501,19 +1501,7 @@ fn rewrite_instructions_unique_related_player(
                             rewrite_affected_players_if_unique(ap, replacement);
                         }
                     }
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets
-                    | spellwake_engine::toolbox::DamageTargetQuery::AnnouncedTargets { .. }
-                    | spellwake_engine::toolbox::DamageTargetQuery::FromPower(_)
-                    | spellwake_engine::toolbox::DamageTargetQuery::CreaturePowerToOther {
-                        ..
-                    }
-                    | spellwake_engine::toolbox::DamageTargetQuery::TargetControllersCreatures {
-                        ..
-                    }
-                    | spellwake_engine::toolbox::DamageTargetQuery::OrderedTargets { .. }
-                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree
-                    | spellwake_engine::toolbox::DamageTargetQuery::FromGrantingPermanent
-                    | spellwake_engine::toolbox::DamageTargetQuery::Divided { .. } => {}
+                    _ => {}
                 }
             }
             Instruction::MutatePlayer(spec) => {
@@ -1617,7 +1605,7 @@ fn rewrite_instructions_unique_related_player(
                             &|_| {},
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::Attach { host } => {
+                    spellwake_engine::toolbox::ObjectMutation::Attach { host, .. } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
                             host,
                             &|p| rewrite_resolving_player_if_unique(p, replacement),
@@ -1736,8 +1724,7 @@ fn rewrite_instructions_unique_related_player(
             Instruction::OfferDynamicManaPayment { payer, .. } => {
                 rewrite_resolving_player_if_unique(payer, replacement);
             }
-            Instruction::OptionalEffect { chooser }
-            | Instruction::OptionalSequence { chooser, .. } => {
+            Instruction::OptionalSequence { chooser, .. } => {
                 rewrite_resolving_player_if_unique(chooser, replacement);
             }
             Instruction::EmitReflexiveTrigger { body } => {

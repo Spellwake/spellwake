@@ -29,14 +29,16 @@ fn before_resolution() -> GameState {
         )))
     };
     let ops = vec![
-        Instruction::BranchIfFalse {
-            condition: ResolutionCondition {
-                left: crate::program::ValueExpr::PlayerStat(
-                    crate::program::PlayerStatExpr::ControllerLife,
-                ),
-                comparison: Comparison::GreaterOrEqual,
-                right: crate::program::ValueExpr::Literal(20.into()),
-            },
+        Instruction::BranchCondition {
+            condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+                ResolutionCondition {
+                    left: crate::program::ValueExpr::PlayerStat(
+                        crate::program::PlayerStatExpr::ControllerLife,
+                    ),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: crate::program::ValueExpr::Literal(20.into()),
+                },
+            ))),
             destination: 3,
         },
         Instruction::ChooseCreatureType {

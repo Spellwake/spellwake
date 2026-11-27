@@ -34,7 +34,10 @@ fn sacrifice(player: ResolvingPlayer, amount: i64) -> Instruction {
 }
 
 fn optional(player: ResolvingPlayer) -> Instruction {
-    Instruction::OptionalEffect { chooser: player }
+    Instruction::OptionalSequence {
+        chooser: player,
+        instructions: 1,
+    }
 }
 
 fn payment(player: ResolvingPlayer, destination: usize) -> Instruction {
@@ -48,14 +51,16 @@ fn payment(player: ResolvingPlayer, destination: usize) -> Instruction {
 }
 
 fn branch(destination: usize) -> Instruction {
-    Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: crate::program::ValueExpr::PlayerStat(
-                crate::program::PlayerStatExpr::ControllerLife,
-            ),
-            comparison: Comparison::Greater,
-            right: crate::program::ValueExpr::Literal(0.into()),
-        },
+    Instruction::BranchCondition {
+        condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+            ResolutionCondition {
+                left: crate::program::ValueExpr::PlayerStat(
+                    crate::program::PlayerStatExpr::ControllerLife,
+                ),
+                comparison: Comparison::Greater,
+                right: crate::program::ValueExpr::Literal(0.into()),
+            },
+        ))),
         destination,
     }
 }
@@ -361,15 +366,21 @@ fn independent_departed_permanent_donor_guard_still_rejects_copy_lki() {
                         crate::toolbox::ZoneDest::Hand
                     )
                 )),
-                Instruction::BecomeCopy {
-                    receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-                    donor: crate::program::MoveSubjectRef::TargetObject,
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                    exceptions: Box::new(crate::program::CopyExceptions {
-                        override_pt: None,
-                        ..Default::default()
-                    }),
-                },
+                Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec::become_copy(
+                        crate::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            crate::program::EffectSubject::AbilitySource,
+                        )),
+                        crate::toolbox::ObjectQuery::from_move_subject(
+                            crate::program::MoveSubjectRef::TargetObject,
+                        ),
+                        ResolvedDuration::UntilEndOfTurn,
+                        crate::program::CopyExceptions {
+                            override_pt: None,
+                            ..Default::default()
+                        },
+                    ),
+                )),
             ],
         ),
         Err(DefinitionError::InvalidInstruction)

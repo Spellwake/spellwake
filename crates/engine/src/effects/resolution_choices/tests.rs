@@ -265,8 +265,9 @@ fn optional_outcome_executes_or_skips_one_primitive_before_the_same_tail() {
         (OptionalEffectChoice::Decline, 22),
     ] {
         let state = pending(vec![
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             gain(1),
             gain(2),
@@ -431,8 +432,9 @@ fn zero_count_production_refreshes_payment_authority_without_mana_produced() {
 #[test]
 fn taking_optional_type_choice_preserves_the_actual_child_and_tail() {
     let state = pending(vec![
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         Instruction::ChooseCreatureType {
             into: CreatureTypeSlot::new(0),

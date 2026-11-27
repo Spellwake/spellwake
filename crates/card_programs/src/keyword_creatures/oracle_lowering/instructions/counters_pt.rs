@@ -101,16 +101,16 @@ pub(super) fn prior_op_acted_on_ability_source(ops: &[Instruction]) -> bool {
                     return true;
                 }
             }
-            Instruction::BranchIfFalse { condition, .. } => {
-                if value_expr_references_ability_source(&condition.left)
-                    || value_expr_references_ability_source(&condition.right)
+            Instruction::BranchCondition { condition, .. } => {
+                if let spellwake_engine::toolbox::ConditionExpr::Resolution(condition) =
+                    condition.as_ref()
+                    && (value_expr_references_ability_source(&condition.left)
+                        || value_expr_references_ability_source(&condition.right))
                 {
                     return true;
                 }
             }
-            Instruction::OptionalEffect { .. }
-            | Instruction::OptionalSequence { .. }
-            | Instruction::Jump { .. } => {}
+            Instruction::OptionalSequence { .. } | Instruction::Jump { .. } => {}
             _ => return false,
         }
     }
@@ -150,9 +150,11 @@ pub(super) fn infer_prior_counter_kind(ops: &[Instruction]) -> Option<CounterKin
                 }
                 _ => {}
             },
-            Instruction::BranchIfFalse { condition, .. } => {
-                if let Some(ck) = value_expr_counter_kind(&condition.left)
-                    .or_else(|| value_expr_counter_kind(&condition.right))
+            Instruction::BranchCondition { condition, .. } => {
+                if let spellwake_engine::toolbox::ConditionExpr::Resolution(condition) =
+                    condition.as_ref()
+                    && let Some(ck) = value_expr_counter_kind(&condition.left)
+                        .or_else(|| value_expr_counter_kind(&condition.right))
                 {
                     return Some(ck);
                 }
@@ -214,7 +216,7 @@ fn try_append_fixed_first_target_pt_parts(
     if rest[..rest.len() - 1]
         .iter()
         .all(is_pure_remember_target_clause)
-        && let Some(Instruction::BranchIfFalse {
+        && let Some(Instruction::BranchCondition {
             condition,
             destination: 0,
         }) = rest.last()
@@ -222,7 +224,7 @@ fn try_append_fixed_first_target_pt_parts(
         let cond_clone = condition.clone();
         if let Some(Instruction::FixedTargetClause(first_body)) = builder.instructions.first_mut() {
             let next_dest = first_body.instructions.len() + 2;
-            first_body.instructions.push(Instruction::BranchIfFalse {
+            first_body.instructions.push(Instruction::BranchCondition {
                 condition: cond_clone,
                 destination: next_dest,
             });
@@ -271,9 +273,8 @@ fn try_append_fixed_first_target_counters(
     let is_control_flow = |op: &Instruction| {
         matches!(
             op,
-            Instruction::BranchIfFalse { .. }
+            Instruction::BranchCondition { .. }
                 | Instruction::Jump { .. }
-                | Instruction::OptionalEffect { .. }
                 | Instruction::OptionalSequence { .. }
                 | Instruction::OfferDynamicManaPayment { .. }
         )
@@ -292,19 +293,22 @@ fn try_append_fixed_first_target_counters(
     }
     if !rest.is_empty()
         && !rest[..rest.len() - 1].iter().any(is_control_flow)
-        && let Some(Instruction::BranchIfFalse {
+        && let Some(Instruction::BranchCondition {
             condition,
             destination: 0,
         }) = rest.last()
-        && (resolution_condition_is_spell_cast_invariant(condition)
-            || rest[..rest.len() - 1]
-                .iter()
-                .all(is_pure_remember_target_clause))
+        && (matches!(
+            condition.as_ref(),
+            spellwake_engine::toolbox::ConditionExpr::Resolution(rc)
+                if resolution_condition_is_spell_cast_invariant(rc)
+        ) || rest[..rest.len() - 1]
+            .iter()
+            .all(is_pure_remember_target_clause))
     {
         let cond_clone = condition.clone();
         if let Some(Instruction::FixedTargetClause(first_body)) = builder.instructions.first_mut() {
             let next_dest = first_body.instructions.len() + 2;
-            first_body.instructions.push(Instruction::BranchIfFalse {
+            first_body.instructions.push(Instruction::BranchCondition {
                 condition: cond_clone,
                 destination: next_dest,
             });
@@ -6931,7 +6935,11 @@ pub(super) fn partition_temp_keyword_grants(
                         source_cost: SourceCost::None,
                         body: ExecutableBody::new(
                             BodyTarget::SingleCreature,
-                            vec![Instruction::Attach(AttachAbility::Equip)],
+                            vec![Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                                    AttachAbility::Equip,
+                                ),
+                            ))],
                         ),
                     },
                 )));

@@ -304,10 +304,7 @@ pub(super) fn impulse(
         program.triggered.push(trigger(
             spellwake_engine::program::TriggerSpec::step_began(spellwake_engine::turn::Step::End, spellwake_engine::program::PlayerRelation::Controller).only_if(spellwake_engine::program::TriggerCondition::ControlledCreaturePowerAtLeast(minimum)),
             vec![
-                Instruction::BranchIfFalse {
-                    condition: gate,
-                    destination: 2,
-                },
+                Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(gate))), destination: 2 },
                 Instruction::ExileTopPlay {
                     count: spellwake_engine::program::ValueExpr::Literal(1.into()),
                     library_owner: spellwake_engine::program::AffectedPlayers::One(

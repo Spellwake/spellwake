@@ -4208,8 +4208,9 @@ impl Body {
                         ),
                     )),
                     Op::OptionalSequence { chooser, instructions } => Instruction::OptionalSequence { chooser: chooser.into(), instructions },
-                    Op::OptionalEffect { chooser } => Instruction::OptionalEffect {
+                    Op::OptionalEffect { chooser } => Instruction::OptionalSequence {
                         chooser: chooser.into(),
+                        instructions: 1,
                     },
                     Op::OfferManaPayment {
                         payer,
@@ -4226,8 +4227,10 @@ impl Body {
                     Op::BranchIfFalse {
                         condition,
                         destination,
-                    } => Instruction::BranchIfFalse {
-                        condition: condition.native(vocabulary)?,
+                    } => Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                            Box::new(condition.native(vocabulary)?),
+                        )),
                         destination: instruction_destination(destination)?,
                     },
                     Op::Jump { destination } => Instruction::Jump {
@@ -4791,10 +4794,16 @@ impl Body {
                     Op::ExileLibraryTop {player,amount} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::ZoneScan { zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(player.into()))), filter: Box::new(spellwake_engine::program::ObjectFilter::default()), slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(ValueExpr::Literal(i64::from(amount).into()))) }, spellwake_engine::toolbox::ZoneDest::exile()))),
                     Op::FixedTargetClause { body } => Instruction::FixedTargetClause(Box::new(body.native(vocabulary)?)),
                     Op::ExileResolvingSpell {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ZoneDest::exile()))),
-                    Op::FightFixedTargets {} => Instruction::Fight {
-                        first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst),
-                        second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond),
-                    },
+                    Op::FightFixedTargets {} => Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec::fight(
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                spellwake_engine::program::MoveSubjectRef::RememberedFirst,
+                            ),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                spellwake_engine::program::MoveSubjectRef::RememberedSecond,
+                            ),
+                        ),
+                    )),
                     Op::PairWithCreature { entrant_only } => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::soulbond_pair(entrant_only))),
                     Op::PhaseOut { subject } => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(match subject.as_str() {
                         "Target" => spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -4908,12 +4917,16 @@ impl Body {
                     }
                     Op::BoostSource{power_toughness,keywords}=>{ let pt: Option<spellwake_engine::characteristics::PowerToughness> = power_toughness.map(Into::into); let (pw, tw) = pt.map_or((0.into(), 0.into()), |v| (v.power, v.toughness)); Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec { selector: Some(spellwake_engine::toolbox::ObjectQuery::Source), payload: spellwake_engine::toolbox::ContinuousPayload::DynamicBoost { power: ValueExpr::Literal(pw), toughness: ValueExpr::Literal(tw), keywords: keyword_set(keywords)?, suppress_keywords: BTreeSet::new() }, duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn, condition: None, one_shot: false, as_emblem: None, emblem_label: None })) },
                     Op::BoostLoneAttacker {} => return Err("BoostLoneAttacker retired".to_owned()),
-                    Op::Equip {} => {
-                        Instruction::Attach(spellwake_engine::attachment::AttachAbility::Equip)
-                    }
-                    Op::Reconfigure {} => Instruction::Attach(
-                        spellwake_engine::attachment::AttachAbility::Reconfigure,
-                    ),
+                    Op::Equip {} => Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                            spellwake_engine::attachment::AttachAbility::Equip,
+                        ),
+                    )),
+                    Op::Reconfigure {} => Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                            spellwake_engine::attachment::AttachAbility::Reconfigure,
+                        ),
+                    )),
                     Op::ResolvePowerAbility { kind } => Instruction::MutateObject(Box::new(
                         spellwake_engine::toolbox::MutateObjectSpec::resolve_power_ability(
                             match kind.as_str() {
@@ -4928,9 +4941,11 @@ impl Body {
                         Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::PlusOne, amount: ValueExpr::Literal(amount) })))
                     }
                     Op::Unattach {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Unattach))),
-                    Op::Fortify {} => {
-                        Instruction::Attach(spellwake_engine::attachment::AttachAbility::Fortify)
-                    }
+                    Op::Fortify {} => Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                            spellwake_engine::attachment::AttachAbility::Fortify,
+                        ),
+                    )),
                     Op::ExileTarget {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::exile()))),
                     Op::ExileAbilitySource {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ZoneDest::exile()))),
                     Op::ExileAllGraveyards {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(spellwake_engine::toolbox::PlayerSelector::Group(spellwake_engine::program::AffectedPlayers::EachPlayer))), spellwake_engine::program::ObjectFilter::any()), spellwake_engine::toolbox::ZoneDest::exile()))),
@@ -4997,15 +5012,21 @@ impl Body {
                     Op::CopyTargetToSource {
                         duration,
                         power_toughness,
-                    } => Instruction::BecomeCopy {
-                        receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-                        donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-                        duration: duration.into(),
-                        exceptions: Box::new(spellwake_engine::program::CopyExceptions {
-                            override_pt: power_toughness.map(Into::into),
-                            ..Default::default()
-                        }),
-                    },
+                    } => Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                spellwake_engine::program::EffectSubject::AbilitySource,
+                            )),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                spellwake_engine::program::MoveSubjectRef::TargetObject,
+                            ),
+                            duration.into(),
+                            spellwake_engine::program::CopyExceptions {
+                                override_pt: power_toughness.map(Into::into),
+                                ..Default::default()
+                            },
+                        ),
+                    )),
                     Op::PutIndestructibleCounter {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::Indestructible, amount: ValueExpr::Literal(1.into()) }))),
                     Op::PutLoyaltyCounter {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::Loyalty, amount: ValueExpr::Literal(1.into()) }))),
                     Op::GrantProtectionChosenColor { for_controller_and_permanents } => Instruction::ApplyContinuous(Box::new(
@@ -10552,9 +10573,13 @@ pub fn body(value: &ExecutableBody) -> Value {
         .instructions
         .iter()
         .map(|instruction| match instruction {
-            Instruction::OptionalSequence { chooser, instructions } => json!({"op":"OptionalSequence","chooser":format!("{chooser:?}"),"instructions":instructions}),
-            Instruction::OptionalEffect { chooser } => json!({"op":"OptionalEffect","chooser":format!("{chooser:?}")}),
-            Instruction::BranchIfFalse { condition, destination } => json!({"op":"BranchIfFalse","condition":resolution_condition(condition),"destination":destination.to_string()}),
+            Instruction::OptionalSequence { chooser, instructions } => {
+                if *instructions == 1 {
+                    json!({"op":"OptionalEffect","chooser":format!("{chooser:?}")})
+                } else {
+                    json!({"op":"OptionalSequence","chooser":format!("{chooser:?}"),"instructions":instructions})
+                }
+            }
             Instruction::Jump { destination } => json!({"op":"Jump","destination":destination.to_string()}),
             Instruction::ZoneOp(spec) => {
                 if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
@@ -10614,6 +10639,10 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::MutateObject(spec) => {
                 use spellwake_engine::toolbox::ObjectMutation;
                 match &spec.op {
+                    ObjectMutation::Attach {
+                        ability: Some(kind),
+                        ..
+                    } => json!({"op":format!("{kind:?}")}),
                     ObjectMutation::CreateTokenAndAttach { definition } => {
                         json!({"op":"CreateTokenAndAttach","definition":token_definition(definition)})
                     }
@@ -10844,12 +10873,24 @@ pub fn body(value: &ExecutableBody) -> Value {
                     && let spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield { amount } = &spec.payload
                 {
                     json!({"op":"CreatePreventionShield","amount":amount})
+                } else if spec.condition.is_none()
+                    && !spec.one_shot
+                    && spec.as_emblem.is_none()
+                    && let spellwake_engine::toolbox::ContinuousPayload::BecomeCopy { donor, exceptions } = &spec.payload
+                {
+                    json!({"op":"BecomeCopy","receiver":format!("{:?}", spec.selector),"donor":format!("{donor:?}"),"duration":format!("{:?}", spec.duration),"exceptions":format!("{exceptions:?}")})
                 } else {
                     json!({"op":"ApplyContinuous","spec":format!("{spec:?}")})
                 }
             }
             Instruction::PromptChoice(spec) => json!({"op":"PromptChoice","spec":format!("{spec:?}")}),
-            Instruction::BranchCondition { condition, destination } => json!({"op":"BranchCondition","condition":format!("{condition:?}"),"destination":destination.to_string()}),
+            Instruction::BranchCondition { condition, destination } => {
+                if let spellwake_engine::toolbox::ConditionExpr::Resolution(cond) = condition.as_ref() {
+                    json!({"op":"BranchIfFalse","condition":resolution_condition(cond),"destination":destination.to_string()})
+                } else {
+                    json!({"op":"BranchCondition","condition":format!("{condition:?}"),"destination":destination.to_string()})
+                }
+            }
             Instruction::ForEach { query, bind_item, .. } => json!({"op":"ForEach","query":format!("{query:?}"),"bind_item":bind_item.0}),
             Instruction::ForEachPlayerQuery { selector, bind_player, .. } => json!({"op":"ForEachPlayerQuery","selector":format!("{selector:?}"),"bind_player":bind_player.0}),
             Instruction::BindEnv { binding, value } => json!({"op":"BindEnv","binding":binding.0,"value":format!("{value:?}")}),
@@ -11038,7 +11079,6 @@ pub fn body(value: &ExecutableBody) -> Value {
                 })
             }
             Instruction::FixedTargetClause(clause)=>json!({"op":"FixedTargetClause","body":body(clause)}),
-            Instruction::Attach(kind) => json!({"op":format!("{kind:?}")}),
             Instruction::ExileTopPlay { count, library_owner, duration, cast_only, free, any_color, face_down, grant_play } => {
                 json!({"op":"ExileTopPlay","count":instruction_amount(count),"library_owner":affected_players(*library_owner),"duration":format!("{duration:?}"),"cast_only":cast_only,"free":free,"any_color":any_color,"face_down":face_down,"grant_play":grant_play})
             }
@@ -11077,14 +11117,9 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::ScheduleDelayedEventTrigger { trigger, body: inner, expires, once } => {
                 json!({"op":"ScheduleDelayedEventTrigger","trigger":format!("{trigger:?}"),"body":body(inner),"expires":format!("{expires:?}"),"once":once})
             }
-            Instruction::BecomeCopy { receiver, donor, duration, exceptions } => {
-                json!({"op":"BecomeCopy","receiver":format!("{receiver:?}"),"donor":format!("{donor:?}"),"duration":format!("{duration:?}"),"exceptions":format!("{exceptions:?}")})
-            }
             Instruction::ChooseValue { chooser, domain } => {
                 json!({"op":"ChooseValue","chooser":format!("{chooser:?}"),"domain":format!("{domain:?}")})
             }
-            Instruction::Fight { first, second } => json!({"op":"Fight","first":format!("{first:?}"),"second":format!("{second:?}")}),
-            Instruction::Exchange(spec) => json!({"op":"Exchange","spec":format!("{spec:?}")}),
             Instruction::LookTopChooseExt { library_owner, chooser, count, filter, max_picks, take_all_matching, keep_dest, rest_dest, reveal_kept, .. } => json!({"op":"LookTopChooseExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"count":instruction_amount(count),"filter":format!("{filter:?}"),"max_picks":max_picks,"take_all_matching":take_all_matching,"keep_dest":format!("{keep_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"reveal_kept":reveal_kept}),
             Instruction::RevealUntilMatchExt { library_owner, chooser, filter, count, match_dest, rest_dest, keep_all_revealed, .. } => json!({"op":"RevealUntilMatchExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"filter":format!("{filter:?}"),"count":instruction_amount(count),"match_dest":format!("{match_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"keep_all_revealed":keep_all_revealed}),
         })
@@ -13798,7 +13833,13 @@ mod tests {
                 }
             };
             for instructions in [
-                vec![Instruction::OptionalEffect { chooser: role }, primitive],
+                vec![
+                    Instruction::OptionalSequence {
+                        chooser: role,
+                        instructions: 1,
+                    },
+                    primitive,
+                ],
                 vec![Instruction::OfferDynamicManaPayment {
                     payer: role,
                     fixed: quoted.clone(),

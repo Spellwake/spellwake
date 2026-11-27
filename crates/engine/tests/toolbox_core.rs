@@ -1501,10 +1501,11 @@ fn mutate_object_attach_unattach_and_gain_control() {
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::artifact()),
             ObjectMutation::Attach {
-                host: ObjectQuery::zone(
+                host: Box::new(ObjectQuery::zone(
                     QueryZone::Battlefield,
                     ObjectFilter::creature().controlled(),
-                ),
+                )),
+                ability: None,
             },
         )))],
         &vocab,

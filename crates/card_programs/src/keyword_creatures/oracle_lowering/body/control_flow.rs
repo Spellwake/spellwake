@@ -1888,8 +1888,7 @@ pub(super) fn lower_multi_target_fixed_clauses(
             let has_internal_jumps = clause.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::BranchIfFalse { .. }
-                        | Instruction::BranchCondition { .. }
+                    Instruction::BranchCondition { .. }
                         | Instruction::Jump { .. }
                         | Instruction::OptionalSequence { .. }
                         | Instruction::OfferDynamicManaPayment { .. }
@@ -3035,9 +3034,13 @@ pub(super) fn try_fuse_search_library(
     if let Some(chooser) = opt_resolved {
         let span = probe.instructions.len().saturating_sub(search_idx);
         if span == 1 {
-            probe
-                .instructions
-                .insert(search_idx, Instruction::OptionalEffect { chooser });
+            probe.instructions.insert(
+                search_idx,
+                Instruction::OptionalSequence {
+                    chooser,
+                    instructions: 1,
+                },
+            );
         } else if span >= 2 {
             probe.instructions.insert(
                 search_idx,
@@ -4254,8 +4257,9 @@ pub(super) fn try_fuse_look_top_extended(
                 secondary: None,
             });
             if is_opt {
-                builder.instructions.push(Instruction::OptionalEffect {
+                builder.instructions.push(Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 });
             }
             builder.instructions.push(
@@ -4828,13 +4832,17 @@ fn emit_condition_branches_resolution(
             let rc_a = lower_resolution_condition(a, builder, vocabulary, in_trigger, bound_x)?;
             let rc_b = lower_resolution_condition(b, builder, vocabulary, in_trigger, bound_x)?;
             false_branches.push(builder.instructions.len());
-            builder.instructions.push(Instruction::BranchIfFalse {
-                condition: rc_a,
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(rc_a),
+                )),
                 destination: 0,
             });
             false_branches.push(builder.instructions.len());
-            builder.instructions.push(Instruction::BranchIfFalse {
-                condition: rc_b,
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(rc_b),
+                )),
                 destination: 0,
             });
         }
@@ -4843,17 +4851,21 @@ fn emit_condition_branches_resolution(
             let rc_b = lower_resolution_condition(b, builder, vocabulary, in_trigger, bound_x)?;
             rc_a.comparison = negate_comparison(rc_a.comparison);
             let true_jump_idx = builder.instructions.len();
-            builder.instructions.push(Instruction::BranchIfFalse {
-                condition: rc_a,
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(rc_a),
+                )),
                 destination: 0,
             });
             false_branches.push(builder.instructions.len());
-            builder.instructions.push(Instruction::BranchIfFalse {
-                condition: rc_b,
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(rc_b),
+                )),
                 destination: 0,
             });
             let then_start = builder.instructions.len();
-            if let Some(Instruction::BranchIfFalse { destination, .. }) =
+            if let Some(Instruction::BranchCondition { destination, .. }) =
                 builder.instructions.get_mut(true_jump_idx)
             {
                 *destination = then_start;
@@ -4863,8 +4875,10 @@ fn emit_condition_branches_resolution(
             let res_cond =
                 lower_resolution_condition(other, builder, vocabulary, in_trigger, bound_x)?;
             false_branches.push(builder.instructions.len());
-            builder.instructions.push(Instruction::BranchIfFalse {
-                condition: res_cond,
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(res_cond),
+                )),
                 destination: 0,
             });
         }
@@ -6115,12 +6129,16 @@ pub(in super::super) fn lower_instruction_seq(
                             ) {
                                 Ok(cnt_val) => {
                                     guard_idx = Some(probe.instructions.len());
-                                    probe.instructions.push(Instruction::BranchIfFalse {
-                                        condition: ResolutionCondition {
-                                            left: cnt_val,
-                                            comparison: Comparison::GreaterOrEqual,
-                                            right: ValueExpr::literal(1),
-                                        },
+                                    probe.instructions.push(Instruction::BranchCondition {
+                                        condition: Box::new(
+                                            spellwake_engine::toolbox::ConditionExpr::Resolution(
+                                                Box::new(ResolutionCondition {
+                                                    left: cnt_val,
+                                                    comparison: Comparison::GreaterOrEqual,
+                                                    right: ValueExpr::literal(1),
+                                                }),
+                                            ),
+                                        ),
                                         destination: 0,
                                     });
                                 }
@@ -6144,7 +6162,7 @@ pub(in super::super) fn lower_instruction_seq(
                     {
                         let end_dest = probe.instructions.len();
                         if let Some(g_idx) = guard_idx
-                            && let Some(Instruction::BranchIfFalse { destination, .. }) =
+                            && let Some(Instruction::BranchCondition { destination, .. }) =
                                 probe.instructions.get_mut(g_idx)
                         {
                             *destination = end_dest;
@@ -6500,16 +6518,18 @@ pub(in super::super) fn lower_instruction_seq(
                 None => None,
             };
             let branch_idx = builder.instructions.len();
-            builder.instructions.push(Instruction::BranchIfFalse {
-                condition: ResolutionCondition {
-                    left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                    comparison: if prev_cond {
-                        Comparison::GreaterOrEqual
-                    } else {
-                        Comparison::Equal
-                    },
-                    right: ValueExpr::literal(if prev_cond { 1 } else { 0 }),
-                },
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(ResolutionCondition {
+                        left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                        comparison: if prev_cond {
+                            Comparison::GreaterOrEqual
+                        } else {
+                            Comparison::Equal
+                        },
+                        right: ValueExpr::literal(if prev_cond { 1 } else { 0 }),
+                    }),
+                )),
                 destination: 0,
             });
             if let Some(chooser) = resolved_chooser {
@@ -6529,7 +6549,7 @@ pub(in super::super) fn lower_instruction_seq(
                 .instructions
                 .push(Instruction::Jump { destination: 0 });
             let base_start = builder.instructions.len();
-            if let Some(Instruction::BranchIfFalse { destination, .. }) =
+            if let Some(Instruction::BranchCondition { destination, .. }) =
                 builder.instructions.get_mut(branch_idx)
             {
                 *destination = base_start;
@@ -6658,10 +6678,8 @@ pub(in super::super) fn lower_instruction_seq(
                 .push(Instruction::Jump { destination: 0 });
             let base_start = builder.instructions.len();
             for rel_idx in false_branches {
-                if let Some(
-                    Instruction::BranchIfFalse { destination, .. }
-                    | Instruction::BranchCondition { destination, .. },
-                ) = builder.instructions.get_mut(cond_start + rel_idx)
+                if let Some(Instruction::BranchCondition { destination, .. }) =
+                    builder.instructions.get_mut(cond_start + rel_idx)
                 {
                     *destination = base_start;
                 }
@@ -7251,15 +7269,17 @@ pub(in super::super) fn lower_instruction_seq(
                     })
                 {
                     let branch_idx = builder.instructions.len();
-                    builder.instructions.push(Instruction::BranchIfFalse {
-                        condition: ResolutionCondition {
-                            left: ValueExpr::object_matches(
-                                MatchObjectRef::RevealedTop,
-                                obj_filter,
-                            ),
-                            comparison: Comparison::Equal,
-                            right: ValueExpr::literal(1),
-                        },
+                    builder.instructions.push(Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                            Box::new(ResolutionCondition {
+                                left: ValueExpr::object_matches(
+                                    MatchObjectRef::RevealedTop,
+                                    obj_filter,
+                                ),
+                                comparison: Comparison::Equal,
+                                right: ValueExpr::literal(1),
+                            }),
+                        )),
                         destination: 0,
                     });
                     let then_shift = isize::try_from(builder.instructions.len())
@@ -7274,7 +7294,7 @@ pub(in super::super) fn lower_instruction_seq(
                             .instructions
                             .push(Instruction::Jump { destination: 0 });
                         let else_start = builder.instructions.len();
-                        if let Some(Instruction::BranchIfFalse { destination, .. }) =
+                        if let Some(Instruction::BranchCondition { destination, .. }) =
                             builder.instructions.get_mut(branch_idx)
                         {
                             *destination = else_start;
@@ -7293,7 +7313,7 @@ pub(in super::super) fn lower_instruction_seq(
                         }
                     } else {
                         let end_dest = builder.instructions.len();
-                        if let Some(Instruction::BranchIfFalse { destination, .. }) =
+                        if let Some(Instruction::BranchCondition { destination, .. }) =
                             builder.instructions.get_mut(branch_idx)
                         {
                             *destination = end_dest;
@@ -7443,10 +7463,8 @@ pub(in super::super) fn lower_instruction_seq(
                     .push(Instruction::Jump { destination: 0 });
                 let else_dest = builder.instructions.len();
                 for b_idx in false_branches {
-                    if let Some(
-                        Instruction::BranchIfFalse { destination, .. }
-                        | Instruction::BranchCondition { destination, .. },
-                    ) = builder.instructions.get_mut(b_idx)
+                    if let Some(Instruction::BranchCondition { destination, .. }) =
+                        builder.instructions.get_mut(b_idx)
                     {
                         *destination = else_dest;
                     }
@@ -7478,10 +7496,8 @@ pub(in super::super) fn lower_instruction_seq(
             } else {
                 let end_dest = builder.instructions.len();
                 for b_idx in false_branches {
-                    if let Some(
-                        Instruction::BranchIfFalse { destination, .. }
-                        | Instruction::BranchCondition { destination, .. },
-                    ) = builder.instructions.get_mut(b_idx)
+                    if let Some(Instruction::BranchCondition { destination, .. }) =
+                        builder.instructions.get_mut(b_idx)
                     {
                         *destination = end_dest;
                     }
@@ -7859,12 +7875,14 @@ pub(in super::super) fn lower_instruction_seq(
                 if paid_ops.is_empty() && else_ops.is_empty() {
                     // PayLife alone suffices when no follow-up branch exists.
                 } else if else_ops.is_empty() {
-                    branch_ops.push(Instruction::BranchIfFalse {
-                        condition: ResolutionCondition {
-                            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                            comparison: Comparison::GreaterOrEqual,
-                            right: ValueExpr::literal(1),
-                        },
+                    branch_ops.push(Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                            Box::new(ResolutionCondition {
+                                left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                                comparison: Comparison::GreaterOrEqual,
+                                right: ValueExpr::literal(1),
+                            }),
+                        )),
                         destination: 2 + paid_ops.len(),
                     });
                     for op in paid_ops {
@@ -7873,12 +7891,14 @@ pub(in super::super) fn lower_instruction_seq(
                         branch_ops.push(cloned);
                     }
                 } else if paid_ops.is_empty() {
-                    branch_ops.push(Instruction::BranchIfFalse {
-                        condition: ResolutionCondition {
-                            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                            comparison: Comparison::Equal,
-                            right: ValueExpr::literal(0),
-                        },
+                    branch_ops.push(Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                            Box::new(ResolutionCondition {
+                                left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                                comparison: Comparison::Equal,
+                                right: ValueExpr::literal(0),
+                            }),
+                        )),
                         destination: 2 + else_ops.len(),
                     });
                     for op in else_ops {
@@ -7891,12 +7911,14 @@ pub(in super::super) fn lower_instruction_seq(
                     let end_dest = else_start + else_ops.len();
                     let else_shift =
                         isize::try_from(else_start).map_err(|_| "oracle:unsupported-pay-cost")?;
-                    branch_ops.push(Instruction::BranchIfFalse {
-                        condition: ResolutionCondition {
-                            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                            comparison: Comparison::GreaterOrEqual,
-                            right: ValueExpr::literal(1),
-                        },
+                    branch_ops.push(Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                            Box::new(ResolutionCondition {
+                                left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                                comparison: Comparison::GreaterOrEqual,
+                                right: ValueExpr::literal(1),
+                            }),
+                        )),
                         destination: else_start,
                     });
                     for op in paid_ops {
@@ -8823,12 +8845,14 @@ pub(in super::super) fn lower_instruction_seq(
             if prev_tracks_action {
                 let branch_idx = builder.instructions.len();
                 let body_len = if bind_val.is_some() { 2 } else { 1 };
-                builder.instructions.push(Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
-                        left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                        comparison: Comparison::GreaterOrEqual,
-                        right: ValueExpr::literal(1),
-                    },
+                builder.instructions.push(Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                        Box::new(ResolutionCondition {
+                            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        }),
+                    )),
                     destination: branch_idx + 1 + body_len,
                 });
             }
@@ -9094,16 +9118,18 @@ pub(in super::super) fn lower_instruction_seq(
                     EventValueKind::LastActionSucceeded
                 };
                 let branch_idx = builder.instructions.len();
-                builder.instructions.push(Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
-                        left: ValueExpr::event(kind),
-                        comparison: if succeeded {
-                            Comparison::GreaterOrEqual
-                        } else {
-                            Comparison::Equal
-                        },
-                        right: ValueExpr::literal(if succeeded { 1 } else { 0 }),
-                    },
+                builder.instructions.push(Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                        Box::new(ResolutionCondition {
+                            left: ValueExpr::event(kind),
+                            comparison: if succeeded {
+                                Comparison::GreaterOrEqual
+                            } else {
+                                Comparison::Equal
+                            },
+                            right: ValueExpr::literal(if succeeded { 1 } else { 0 }),
+                        }),
+                    )),
                     destination: 0,
                 });
                 lower_instruction_seq(
@@ -9132,7 +9158,7 @@ pub(in super::super) fn lower_instruction_seq(
                         .instructions
                         .push(Instruction::Jump { destination: 0 });
                     let else_dest = builder.instructions.len();
-                    if let Some(Instruction::BranchIfFalse { destination, .. }) =
+                    if let Some(Instruction::BranchCondition { destination, .. }) =
                         builder.instructions.get_mut(branch_idx)
                     {
                         *destination = else_dest;
@@ -9163,7 +9189,7 @@ pub(in super::super) fn lower_instruction_seq(
                     i += 2;
                 } else {
                     let end_dest = builder.instructions.len();
-                    if let Some(Instruction::BranchIfFalse { destination, .. }) =
+                    if let Some(Instruction::BranchCondition { destination, .. }) =
                         builder.instructions.get_mut(branch_idx)
                     {
                         *destination = end_dest;
@@ -9359,7 +9385,10 @@ pub(in super::super) fn lower_instruction_seq(
                             prepend_instruction_at(
                                 &mut probe.instructions,
                                 start,
-                                Instruction::OptionalEffect { chooser },
+                                Instruction::OptionalSequence {
+                                    chooser,
+                                    instructions: 1,
+                                },
                             );
                         } else {
                             prepend_instruction_at(
@@ -9928,9 +9957,7 @@ pub(in super::super) fn lower_instruction_seq(
                                 }
                                 _ => break,
                             },
-                            Instruction::OptionalEffect { .. }
-                            | Instruction::OptionalSequence { .. }
-                            | Instruction::BranchIfFalse { .. }
+                            Instruction::OptionalSequence { .. }
                             | Instruction::BranchCondition { .. }
                             | Instruction::Jump { .. }
                             | Instruction::ChooseValue { .. }
@@ -10247,8 +10274,9 @@ pub(in super::super) fn lower_instruction_seq(
             let rest_exile = rest_low.contains("exile");
             let random_rest = rest_low.contains("random order");
             if (to_hand || to_battlefield) && (rest_bottom || rest_gy || rest_exile || keep_all) {
-                builder.instructions.push(Instruction::OptionalEffect {
+                builder.instructions.push(Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 });
                 builder.instructions.push(Instruction::RevealUntilMatchExt {
                     library_owner: ResolvingPlayer::Controller,
@@ -10373,8 +10401,9 @@ pub(in super::super) fn lower_instruction_seq(
                         instructions: 2,
                     });
                 } else {
-                    builder.instructions.push(Instruction::OptionalEffect {
+                    builder.instructions.push(Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     });
                 }
                 builder.instructions.push(Instruction::RevealUntilMatchExt {
@@ -11593,15 +11622,17 @@ pub(in super::super) fn lower_instruction_seq(
                         secondary: None,
                     });
                     let branch_idx = builder.instructions.len();
-                    builder.instructions.push(Instruction::BranchIfFalse {
-                        condition: ResolutionCondition {
-                            left: ValueExpr::object_matches(
-                                MatchObjectRef::RevealedTop,
-                                obj_filter,
-                            ),
-                            comparison: Comparison::Equal,
-                            right: ValueExpr::literal(1),
-                        },
+                    builder.instructions.push(Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                            Box::new(ResolutionCondition {
+                                left: ValueExpr::object_matches(
+                                    MatchObjectRef::RevealedTop,
+                                    obj_filter,
+                                ),
+                                comparison: Comparison::Equal,
+                                right: ValueExpr::literal(1),
+                            }),
+                        )),
                         destination: 0,
                     });
                     let then_shift = isize::try_from(builder.instructions.len())
@@ -11616,7 +11647,7 @@ pub(in super::super) fn lower_instruction_seq(
                             .instructions
                             .push(Instruction::Jump { destination: 0 });
                         let else_start = builder.instructions.len();
-                        if let Some(Instruction::BranchIfFalse { destination, .. }) =
+                        if let Some(Instruction::BranchCondition { destination, .. }) =
                             builder.instructions.get_mut(branch_idx)
                         {
                             *destination = else_start;
@@ -11635,7 +11666,7 @@ pub(in super::super) fn lower_instruction_seq(
                         }
                     } else {
                         let end_dest = builder.instructions.len();
-                        if let Some(Instruction::BranchIfFalse { destination, .. }) =
+                        if let Some(Instruction::BranchCondition { destination, .. }) =
                             builder.instructions.get_mut(branch_idx)
                         {
                             *destination = end_dest;
@@ -11777,8 +11808,9 @@ pub(in super::super) fn lower_instruction_seq(
                                 ),
                             )));
                         } else {
-                            builder.instructions.push(Instruction::OptionalEffect {
+                            builder.instructions.push(Instruction::OptionalSequence {
                                 chooser: ResolvingPlayer::Controller,
+                                instructions: 1,
                             });
                             builder.instructions.push(Instruction::LookTopChooseExt {
                                 library_owner: ResolvingPlayer::Controller,
@@ -11796,15 +11828,19 @@ pub(in super::super) fn lower_instruction_seq(
                             });
                         }
                         let branch_idx = builder.instructions.len();
-                        builder.instructions.push(Instruction::BranchIfFalse {
-                            condition: ResolutionCondition {
-                                left: ValueExpr::object_matches(
-                                    MatchObjectRef::RevealedTop,
-                                    obj_filter,
-                                ),
-                                comparison: Comparison::Equal,
-                                right: ValueExpr::literal(1),
-                            },
+                        builder.instructions.push(Instruction::BranchCondition {
+                            condition: Box::new(
+                                spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(
+                                    ResolutionCondition {
+                                        left: ValueExpr::object_matches(
+                                            MatchObjectRef::RevealedTop,
+                                            obj_filter,
+                                        ),
+                                        comparison: Comparison::Equal,
+                                        right: ValueExpr::literal(1),
+                                    },
+                                )),
+                            ),
                             destination: 0,
                         });
                         let then_shift = isize::try_from(builder.instructions.len())
@@ -11819,7 +11855,7 @@ pub(in super::super) fn lower_instruction_seq(
                                 .instructions
                                 .push(Instruction::Jump { destination: 0 });
                             let else_start = builder.instructions.len();
-                            if let Some(Instruction::BranchIfFalse { destination, .. }) =
+                            if let Some(Instruction::BranchCondition { destination, .. }) =
                                 builder.instructions.get_mut(branch_idx)
                             {
                                 *destination = else_start;
@@ -11838,7 +11874,7 @@ pub(in super::super) fn lower_instruction_seq(
                             }
                         } else {
                             let end_dest = builder.instructions.len();
-                            if let Some(Instruction::BranchIfFalse { destination, .. }) =
+                            if let Some(Instruction::BranchCondition { destination, .. }) =
                                 builder.instructions.get_mut(branch_idx)
                             {
                                 *destination = end_dest;
@@ -11883,8 +11919,9 @@ pub(in super::super) fn lower_instruction_seq(
                     [Instruction::LookTopChooseExt { .. }
                         | Instruction::RevealUntilMatchExt { .. }]
                 ) {
-                    builder.instructions.push(Instruction::OptionalEffect {
+                    builder.instructions.push(Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     });
                     builder.instructions.extend(converted);
                     i += 1;
@@ -12952,8 +12989,9 @@ pub(in super::super) fn lower_instruction_seq(
                                     instructions: 2,
                                 });
                             } else {
-                                builder.instructions.push(Instruction::OptionalEffect {
+                                builder.instructions.push(Instruction::OptionalSequence {
                                     chooser: ResolvingPlayer::Controller,
+                                    instructions: 1,
                                 });
                             }
                         }
@@ -13619,12 +13657,18 @@ pub(in super::super) fn lower_instruction_seq(
                             ),
                         ))];
                         if let Some(draw_amt) = trailing_target_draw {
-                            take_ops.push(Instruction::BranchIfFalse {
-                                condition: ResolutionCondition {
-                                    left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                                    comparison: Comparison::GreaterOrEqual,
-                                    right: ValueExpr::literal(1),
-                                },
+                            take_ops.push(Instruction::BranchCondition {
+                                condition: Box::new(
+                                    spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(
+                                        ResolutionCondition {
+                                            left: ValueExpr::event(
+                                                EventValueKind::LastActionSucceeded,
+                                            ),
+                                            comparison: Comparison::GreaterOrEqual,
+                                            right: ValueExpr::literal(1),
+                                        },
+                                    )),
+                                ),
                                 destination: 3,
                             });
                             take_ops.push(super::super::toolbox_emit::draw_target_player(draw_amt));
@@ -13924,9 +13968,7 @@ pub(in super::super) fn lower_instruction_seq(
                     }
                     if matches!(
                         op,
-                        Instruction::BranchIfFalse { .. }
-                            | Instruction::BranchCondition { .. }
-                            | Instruction::Jump { .. }
+                        Instruction::BranchCondition { .. } | Instruction::Jump { .. }
                     ) {
                         break;
                     }
@@ -13944,9 +13986,7 @@ pub(in super::super) fn lower_instruction_seq(
                     }
                     if matches!(
                         op,
-                        Instruction::BranchIfFalse { .. }
-                            | Instruction::BranchCondition { .. }
-                            | Instruction::Jump { .. }
+                        Instruction::BranchCondition { .. } | Instruction::Jump { .. }
                     ) {
                         break;
                     }
@@ -13967,10 +14007,8 @@ pub(in super::super) fn lower_instruction_seq(
                 }
                 if matches!(
                     op,
-                    Instruction::BranchIfFalse { .. }
-                        | Instruction::BranchCondition { .. }
+                    Instruction::BranchCondition { .. }
                         | Instruction::Jump { .. }
-                        | Instruction::OptionalEffect { .. }
                         | Instruction::OptionalSequence { .. }
                 ) {
                     break;
@@ -14175,8 +14213,9 @@ pub(in super::super) fn lower_instruction_seq(
                 ) {
                     *builder = probe;
                     if is_optional {
-                        builder.instructions.push(Instruction::OptionalEffect {
+                        builder.instructions.push(Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         });
                     }
                     builder.instructions.push(Instruction::StackOp(Box::new(
@@ -14303,16 +14342,23 @@ pub(in super::super) fn lower_instruction_seq(
                             ExecutableBody::new(bt_b, vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))]),
                         )));
                     if is_optional {
-                        builder.instructions.push(Instruction::OptionalEffect {
+                        builder.instructions.push(Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         });
                     }
-                    builder.instructions.push(Instruction::Exchange(
-                        spellwake_engine::program::ExchangeSpec::Control {
-                            first: Box::new(MoveSubjectRef::RememberedFirst),
-                            second: Box::new(MoveSubjectRef::RememberedSecond),
-                        },
-                    ));
+                    builder
+                        .instructions
+                        .push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::exchange_control(
+                                spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                    MoveSubjectRef::RememberedFirst,
+                                ),
+                                spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                    MoveSubjectRef::RememberedSecond,
+                                ),
+                            ),
+                        )));
                     i += 1;
                     continue;
                 }
@@ -14378,8 +14424,9 @@ pub(in super::super) fn lower_instruction_seq(
                             ExecutableBody::new(bt_b, vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))]),
                         )));
                     if is_optional_attach {
-                        builder.instructions.push(Instruction::OptionalEffect {
+                        builder.instructions.push(Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         });
                     }
                     builder
@@ -14471,8 +14518,9 @@ pub(in super::super) fn lower_instruction_seq(
                             ExecutableBody::new(bt_b, vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target()))]),
                         )));
                     if is_optional_attach {
-                        builder.instructions.push(Instruction::OptionalEffect {
+                        builder.instructions.push(Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         });
                     }
                     let (attachment, host) = if swapped {
@@ -14552,18 +14600,31 @@ pub(in super::super) fn lower_instruction_seq(
                         ),
                     )));
                 if is_optional_fight {
-                    builder.instructions.push(Instruction::OptionalEffect {
+                    builder.instructions.push(Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     });
-                    builder.instructions.push(Instruction::Fight {
-                        first: Box::new(MoveSubjectRef::RememberedFirst),
-                        second: Box::new(MoveSubjectRef::RememberedSecond),
-                    });
+                    builder.instructions.push(Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec::fight(
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                MoveSubjectRef::RememberedFirst,
+                            ),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                MoveSubjectRef::RememberedSecond,
+                            ),
+                        ),
+                    )));
                 } else {
-                    builder.instructions.push(Instruction::Fight {
-                        first: Box::new(MoveSubjectRef::RememberedFirst),
-                        second: Box::new(MoveSubjectRef::RememberedSecond),
-                    });
+                    builder.instructions.push(Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec::fight(
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                MoveSubjectRef::RememberedFirst,
+                            ),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                MoveSubjectRef::RememberedSecond,
+                            ),
+                        ),
+                    )));
                 }
                 i += 1;
                 continue;
@@ -14637,18 +14698,31 @@ pub(in super::super) fn lower_instruction_seq(
                         ),
                     )));
                 if is_optional_fight {
-                    builder.instructions.push(Instruction::OptionalEffect {
+                    builder.instructions.push(Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     });
-                    builder.instructions.push(Instruction::Fight {
-                        first: Box::new(MoveSubjectRef::RememberedFirst),
-                        second: Box::new(MoveSubjectRef::RememberedSecond),
-                    });
+                    builder.instructions.push(Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec::fight(
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                MoveSubjectRef::RememberedFirst,
+                            ),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                MoveSubjectRef::RememberedSecond,
+                            ),
+                        ),
+                    )));
                 } else {
-                    builder.instructions.push(Instruction::Fight {
-                        first: Box::new(MoveSubjectRef::RememberedFirst),
-                        second: Box::new(MoveSubjectRef::RememberedSecond),
-                    });
+                    builder.instructions.push(Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec::fight(
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                MoveSubjectRef::RememberedFirst,
+                            ),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                MoveSubjectRef::RememberedSecond,
+                            ),
+                        ),
+                    )));
                 }
                 i += 1;
                 continue;
@@ -14698,14 +14772,19 @@ pub(in super::super) fn lower_instruction_seq(
             {
                 builder.bind_target(bt)?;
                 if is_optional_fight {
-                    builder.instructions.push(Instruction::OptionalEffect {
+                    builder.instructions.push(Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     });
                 }
-                builder.instructions.push(Instruction::Fight {
-                    first: Box::new(first_ref),
-                    second: Box::new(MoveSubjectRef::TargetObject),
-                });
+                builder.instructions.push(Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::fight(
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(first_ref),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::TargetObject,
+                        ),
+                    ),
+                )));
                 i += 1;
                 continue;
             }
@@ -14718,14 +14797,21 @@ pub(in super::super) fn lower_instruction_seq(
                 )
             {
                 if is_optional_fight {
-                    builder.instructions.push(Instruction::OptionalEffect {
+                    builder.instructions.push(Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     });
                 }
-                builder.instructions.push(Instruction::Fight {
-                    first: Box::new(MoveSubjectRef::AbilitySource),
-                    second: Box::new(MoveSubjectRef::TargetObject),
-                });
+                builder.instructions.push(Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::fight(
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::AbilitySource,
+                        ),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::TargetObject,
+                        ),
+                    ),
+                )));
                 i += 1;
                 continue;
             }

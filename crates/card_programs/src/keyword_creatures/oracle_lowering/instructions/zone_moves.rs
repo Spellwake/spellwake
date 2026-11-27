@@ -9238,18 +9238,25 @@ pub(super) fn lower_zone_moves_instruction(
                 push_for_each_player(
                     players,
                     vec![
-                        Instruction::OptionalEffect { chooser: rp },
+                        Instruction::OptionalSequence {
+                            chooser: rp,
+                            instructions: 1,
+                        },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_filtered(
                             AffectedPlayers::One(rp),
                             ValueExpr::literal(1),
                             obj_filter,
                         ),
-                        Instruction::BranchIfFalse {
-                            condition: ResolutionCondition {
-                                left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                                comparison: Comparison::Less,
-                                right: ValueExpr::literal(1),
-                            },
+                        Instruction::BranchCondition {
+                            condition: Box::new(
+                                spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(
+                                    ResolutionCondition {
+                                        left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                                        comparison: Comparison::Less,
+                                        right: ValueExpr::literal(1),
+                                    },
+                                )),
+                            ),
                             destination: 4,
                         },
                         Instruction::Discard {
@@ -9262,9 +9269,10 @@ pub(super) fn lower_zone_moves_instruction(
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder
-                .instructions
-                .push(Instruction::OptionalEffect { chooser: rp });
+            builder.instructions.push(Instruction::OptionalSequence {
+                chooser: rp,
+                instructions: 1,
+            });
             builder.instructions.push(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_filtered(
                     AffectedPlayers::One(rp),
@@ -9273,12 +9281,14 @@ pub(super) fn lower_zone_moves_instruction(
                 ),
             );
             let branch_idx = builder.instructions.len();
-            builder.instructions.push(Instruction::BranchIfFalse {
-                condition: ResolutionCondition {
-                    left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                    comparison: Comparison::Less,
-                    right: ValueExpr::literal(1),
-                },
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(ResolutionCondition {
+                        left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                        comparison: Comparison::Less,
+                        right: ValueExpr::literal(1),
+                    }),
+                )),
                 destination: branch_idx + 2,
             });
             builder.instructions.push(Instruction::Discard {
@@ -11219,12 +11229,10 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             {
                 return false;
             }
-            Instruction::OptionalEffect { .. }
-            | Instruction::OptionalSequence { .. }
+            Instruction::OptionalSequence { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::AdjustLife(_)
             | Instruction::MutatePlayer(_)
-            | Instruction::BranchIfFalse { .. }
             | Instruction::BranchCondition { .. }
             | Instruction::Jump { .. }
             | Instruction::BindEnv { .. }
@@ -11490,12 +11498,10 @@ pub(super) fn has_live_last_moved_producer(
             {
                 return false;
             }
-            Instruction::OptionalEffect { .. }
-            | Instruction::OptionalSequence { .. }
+            Instruction::OptionalSequence { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::AdjustLife(_)
             | Instruction::MutatePlayer(_)
-            | Instruction::BranchIfFalse { .. }
             | Instruction::BranchCondition { .. }
             | Instruction::Jump { .. }
             | Instruction::BindEnv { .. }
@@ -12069,14 +12075,6 @@ fn try_upgrade_affect_destroy_no_regen_in_ops(ops: &mut Vec<Instruction>) -> boo
                 *instructions += 1;
             }
         }
-        if pos > 0
-            && let Instruction::OptionalEffect { chooser } = ops[pos - 1]
-        {
-            ops[pos - 1] = Instruction::OptionalSequence {
-                chooser,
-                instructions: 2,
-            };
-        }
         ops.insert(
             pos,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
@@ -12269,13 +12267,7 @@ fn damage_no_regen_object_query(
                     ))
                 }
             }
-            DamageTargetQuery::Players(_)
-            | DamageTargetQuery::AnnouncedTargets { .. }
-            | DamageTargetQuery::FromPower(_)
-            | DamageTargetQuery::TargetControllersCreatures { .. }
-            | DamageTargetQuery::OrderedTargets { .. }
-            | DamageTargetQuery::DivideThree
-            | DamageTargetQuery::FromGrantingPermanent => None,
+            _ => None,
         },
         Instruction::AffectPermanentTargets {
             action: PermanentTargetAction::Damage(_),
@@ -12370,8 +12362,7 @@ fn extract_prior_resolving_player_for_shuffle(
         {
             from_sel(&spec.players)
         }
-        Instruction::OptionalEffect { chooser: p }
-        | Instruction::OptionalSequence { chooser: p, .. }
+        Instruction::OptionalSequence { chooser: p, .. }
         | Instruction::OfferDynamicManaPayment { payer: p, .. }
         | Instruction::RevealUntilMatchExt {
             library_owner: p, ..
@@ -12662,8 +12653,7 @@ pub(super) fn has_prior_moved_object(ops: &[Instruction]) -> bool {
             return true;
         }
         match op {
-            Instruction::OptionalEffect { .. }
-            | Instruction::OptionalSequence { .. }
+            Instruction::OptionalSequence { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::AdjustLife(_)
             | Instruction::DealDamage(_)
@@ -12671,7 +12661,6 @@ pub(super) fn has_prior_moved_object(ops: &[Instruction]) -> bool {
             | Instruction::ApplyContinuous(_)
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
-            | Instruction::BranchIfFalse { .. }
             | Instruction::BranchCondition { .. }
             | Instruction::Jump { .. }
             | Instruction::BindEnv { .. }
@@ -13505,24 +13494,14 @@ pub(super) fn lower_search_library_instruction<'a>(
     }
     if optional_search {
         let emitted = builder.instructions.len() - start;
-        if emitted == 1 {
-            prepend_instruction_at(
-                &mut builder.instructions,
-                start,
-                Instruction::OptionalEffect {
-                    chooser: ResolvingPlayer::Controller,
-                },
-            );
-        } else {
-            prepend_instruction_at(
-                &mut builder.instructions,
-                start,
-                Instruction::OptionalSequence {
-                    chooser: ResolvingPlayer::Controller,
-                    instructions: emitted,
-                },
-            );
-        }
+        prepend_instruction_at(
+            &mut builder.instructions,
+            start,
+            Instruction::OptionalSequence {
+                chooser: ResolvingPlayer::Controller,
+                instructions: emitted,
+            },
+        );
     }
     Ok(())
 }

@@ -106,15 +106,21 @@ fn copied_grouping_uses_current_text_and_excludes_retained_removed_roster_entrie
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
                     BodyTarget::SinglePermanent,
-                    vec![Instruction::BecomeCopy {
-                        receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-                        donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                        exceptions: Box::new(spellwake_engine::program::CopyExceptions {
-                            override_pt: None,
-                            ..Default::default()
-                        }),
-                    }],
+                    vec![Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                spellwake_engine::program::EffectSubject::AbilitySource,
+                            )),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                spellwake_engine::program::MoveSubjectRef::TargetObject,
+                            ),
+                            ResolvedDuration::UntilEndOfTurn,
+                            spellwake_engine::program::CopyExceptions {
+                                override_pt: None,
+                                ..Default::default()
+                            },
+                        ),
+                    ))],
                 ),
             }],
         );

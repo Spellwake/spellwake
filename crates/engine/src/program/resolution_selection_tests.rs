@@ -34,15 +34,15 @@ fn gain() -> Instruction {
 }
 
 fn copy() -> Instruction {
-    Instruction::BecomeCopy {
-        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-        donor: crate::program::MoveSubjectRef::TargetObject,
-        duration: ResolvedDuration::UntilEndOfTurn,
-        exceptions: Box::new(crate::program::CopyExceptions {
+    Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec::become_copy(
+        crate::toolbox::ObjectQuery::Source,
+        crate::toolbox::ObjectQuery::Targets,
+        ResolvedDuration::UntilEndOfTurn,
+        crate::program::CopyExceptions {
             override_pt: None,
             ..Default::default()
-        }),
-    }
+        },
+    )))
 }
 
 fn choose() -> Instruction {
@@ -53,14 +53,16 @@ fn choose() -> Instruction {
 }
 
 fn branch(destination: usize) -> Instruction {
-    Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: crate::program::ValueExpr::PlayerStat(
-                crate::program::PlayerStatExpr::ControllerLife,
-            ),
-            comparison: Comparison::Greater,
-            right: crate::program::ValueExpr::Literal(0.into()),
-        },
+    Instruction::BranchCondition {
+        condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+            ResolutionCondition {
+                left: crate::program::ValueExpr::PlayerStat(
+                    crate::program::PlayerStatExpr::ControllerLife,
+                ),
+                comparison: Comparison::Greater,
+                right: crate::program::ValueExpr::Literal(0.into()),
+            },
+        ))),
         destination,
     }
 }
@@ -147,8 +149,9 @@ fn spell_controller_and_player_roles_remain_distinct_capabilities() {
 #[test]
 fn target_player_uses_the_shared_optional_and_payment_role_owner() {
     for effect in [
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::TargetPlayer,
+            instructions: 1,
         },
         Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::TargetPlayer,
@@ -329,8 +332,9 @@ fn selected_effects_are_not_admitted_as_optional_single_primitives() {
             check(
                 BodyTarget::None,
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     effect
                 ]

@@ -1317,12 +1317,20 @@ pub(super) fn lower_tokens_copies_instruction(
             if *count == TargetCountAst::UpTo(1) {
                 builder.up_to_one_target = true;
             }
-            builder.instructions.push(Instruction::BecomeCopy {
-                receiver: Box::new(EffectSubject::AbilitySource),
-                donor: MoveSubjectRef::TargetObject,
-                duration: dur,
-                exceptions: Box::new(CopyExceptions::default()),
-            });
+            builder
+                .instructions
+                .push(Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::AbilitySource,
+                        )),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::TargetObject,
+                        ),
+                        dur,
+                        CopyExceptions::default(),
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::BecomeCopy {
@@ -1341,12 +1349,20 @@ pub(super) fn lower_tokens_copies_instruction(
             ) =>
         {
             let dur = lower_duration(duration)?;
-            builder.instructions.push(Instruction::BecomeCopy {
-                receiver: Box::new(EffectSubject::AbilitySource),
-                donor: MoveSubjectRef::TargetObject,
-                duration: dur,
-                exceptions: Box::new(CopyExceptions::default()),
-            });
+            builder
+                .instructions
+                .push(Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::AbilitySource,
+                        )),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::TargetObject,
+                        ),
+                        dur,
+                        CopyExceptions::default(),
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::BecomeCopy {
@@ -1396,12 +1412,20 @@ pub(super) fn lower_tokens_copies_instruction(
                         ))],
                         ),
                     )));
-                builder.instructions.push(Instruction::BecomeCopy {
-                    receiver: Box::new(EffectSubject::LinkedFirst),
-                    donor: MoveSubjectRef::RememberedSecond,
-                    duration: dur,
-                    exceptions: Box::new(exc),
-                });
+                builder
+                    .instructions
+                    .push(Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                EffectSubject::LinkedFirst,
+                            )),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                MoveSubjectRef::RememberedSecond,
+                            ),
+                            dur,
+                            exc,
+                        ),
+                    )));
                 return Ok(());
             }
             let eff_receiver =
@@ -1671,12 +1695,16 @@ pub(super) fn lower_tokens_copies_instruction(
                 }
                 _ => return Err("oracle:unsupported-become-copy"),
             };
-            builder.instructions.push(Instruction::BecomeCopy {
-                receiver: Box::new(receiver),
-                donor,
-                duration: dur,
-                exceptions: Box::new(exc),
-            });
+            builder
+                .instructions
+                .push(Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(receiver)),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(donor),
+                        dur,
+                        exc,
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::CreateEmblem(text) => {

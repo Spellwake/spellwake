@@ -516,6 +516,10 @@ fn rewrite_condition_expr_ve(
             }
         }
         ConditionExpr::Not(c) => rewrite_condition_expr_ve(c, map_ve),
+        ConditionExpr::Resolution(rc) => {
+            map_ve(&mut rc.left);
+            map_ve(&mut rc.right);
+        }
     }
 }
 
@@ -1462,7 +1466,7 @@ pub(in super::super) fn rewrite_instruction_anaphora(
             | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
                 rewrite_value_expr_anaphora(amount, replacement);
             }
-            spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+            _ => {}
         },
         Instruction::DealDamage(spec) => {
             if let spellwake_engine::program::DamageAmountSpec::Expr(expr) = &mut spec.amount {
@@ -1597,10 +1601,6 @@ pub(in super::super) fn rewrite_instruction_anaphora(
                 }
             }
         }
-        Instruction::BranchIfFalse { condition, .. } => {
-            rewrite_value_expr_anaphora(&mut condition.left, replacement);
-            rewrite_value_expr_anaphora(&mut condition.right, replacement);
-        }
         Instruction::BranchCondition { condition, .. } => {
             rewrite_condition_expr_ve(condition, &|v| rewrite_value_expr_anaphora(v, replacement));
         }
@@ -1689,7 +1689,7 @@ pub(in super::super) fn rewrite_body_prior_result(
                     | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
                         rewrite_value_expr_prior_result(amount, replacement);
                     }
-                    spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+                    _ => {}
                 },
                 Instruction::DealDamage(spec) => {
                     if let spellwake_engine::program::DamageAmountSpec::Expr(expr) =
@@ -1737,10 +1737,6 @@ pub(in super::super) fn rewrite_body_prior_result(
                             rewrite_value_expr_prior_result(expr, replacement);
                         }
                     }
-                }
-                Instruction::BranchIfFalse { condition, .. } => {
-                    rewrite_value_expr_prior_result(&mut condition.left, replacement);
-                    rewrite_value_expr_prior_result(&mut condition.right, replacement);
                 }
                 Instruction::BranchCondition { condition, .. } => {
                     rewrite_condition_expr_ve(condition, &|v| {
@@ -2833,7 +2829,7 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                 | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
                     rewrite_value_expr_trigger_subject(amount, replacement);
                 }
-                spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+                _ => {}
             },
             Instruction::DealDamage(spec) => {
                 if let spellwake_engine::program::DamageAmountSpec::Expr(expr) = &mut spec.amount {
@@ -2971,10 +2967,6 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                         rewrite_value_expr_trigger_subject(expr, replacement);
                     }
                 }
-            }
-            Instruction::BranchIfFalse { condition, .. } => {
-                rewrite_value_expr_trigger_subject(&mut condition.left, replacement);
-                rewrite_value_expr_trigger_subject(&mut condition.right, replacement);
             }
             Instruction::BranchCondition { condition, .. } => {
                 rewrite_condition_expr_ve(condition, &|v| {

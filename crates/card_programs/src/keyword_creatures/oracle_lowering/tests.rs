@@ -187,11 +187,12 @@ fn stage_a_and_b_fidelity_regressions() {
     prepend_instruction_at(
         &mut jump_ops,
         0,
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
     );
-    assert!(matches!(jump_ops[0], Instruction::OptionalEffect { .. }));
+    assert!(matches!(jump_ops[0], Instruction::OptionalSequence { .. }));
     assert!(matches!(
         &jump_ops[1],
         Instruction::MutatePlayer(spec)
@@ -220,7 +221,8 @@ fn stage_a_and_b_fidelity_regressions() {
     let ops = &p.triggered[0].body.instructions;
     for (idx, op) in ops.iter().enumerate() {
         match op {
-            Instruction::Jump { destination } | Instruction::BranchIfFalse { destination, .. } => {
+            Instruction::Jump { destination }
+            | Instruction::BranchCondition { destination, .. } => {
                 assert!(
                     *destination > idx && *destination <= ops.len(),
                     "corrupted jump destination {destination} at pc {idx} in {ops:?}"

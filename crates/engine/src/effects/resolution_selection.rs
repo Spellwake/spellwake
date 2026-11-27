@@ -1316,17 +1316,12 @@ impl EffectWindow {
                     },
                 )
             }
-            Instruction::BranchIfFalse { .. }
-            | Instruction::Jump { .. }
+            Instruction::Jump { .. }
             | Instruction::OptionalSequence { .. }
-            | Instruction::OptionalEffect { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::ExileTopPlay { .. }
-            | Instruction::BecomeCopy { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Fight { .. }
-            | Instruction::Exchange(_)
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -1346,7 +1341,6 @@ impl EffectWindow {
             | Instruction::SearchLibrary { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Attach(_)
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::DrawCards(_)

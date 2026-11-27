@@ -4,7 +4,10 @@ use crate::life::LifeChangeKind;
 use crate::{mana::ManaType, test_support::creature_types};
 
 fn optional(chooser: ResolvingPlayer) -> Instruction {
-    Instruction::OptionalEffect { chooser }
+    Instruction::OptionalSequence {
+        chooser,
+        instructions: 1,
+    }
 }
 fn offer(payer: ResolvingPlayer, paid: usize, declined: usize) -> Instruction {
     Instruction::OfferDynamicManaPayment {
@@ -65,14 +68,16 @@ fn optional_rejects_missing_effect_and_each_control_wrapper() {
         ),
         Err(DefinitionError::MissingOptionalEffect)
     );
-    let branch = Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: crate::program::ValueExpr::PlayerStat(
-                crate::program::PlayerStatExpr::ControllerLife,
-            ),
-            comparison: Comparison::Equal,
-            right: crate::program::ValueExpr::Literal(20.into()),
-        },
+    let branch = Instruction::BranchCondition {
+        condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+            ResolutionCondition {
+                left: crate::program::ValueExpr::PlayerStat(
+                    crate::program::PlayerStatExpr::ControllerLife,
+                ),
+                comparison: Comparison::Equal,
+                right: crate::program::ValueExpr::Literal(20.into()),
+            },
+        ))),
         destination: 3,
     };
     for wrapper in [
@@ -451,14 +456,16 @@ fn either_payment_successor_can_skip_assignment_but_same_slot_branch_merge_is_va
 
 #[test]
 fn optional_and_either_payment_path_preserve_possible_moved_donor() {
-    let copy = || Instruction::BecomeCopy {
-        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-        donor: crate::program::MoveSubjectRef::TargetObject,
-        duration: ResolvedDuration::UntilEndOfTurn,
-        exceptions: Box::new(crate::program::CopyExceptions {
-            override_pt: None,
-            ..Default::default()
-        }),
+    let copy = || {
+        Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec::become_copy(
+            crate::toolbox::ObjectQuery::Source,
+            crate::toolbox::ObjectQuery::Targets,
+            ResolvedDuration::UntilEndOfTurn,
+            crate::program::CopyExceptions {
+                override_pt: None,
+                ..Default::default()
+            },
+        )))
     };
     assert_eq!(
         check(

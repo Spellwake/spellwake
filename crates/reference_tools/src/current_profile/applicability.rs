@@ -297,9 +297,7 @@ native!(ExecutableBody, self, {
         Instruction::OfferDynamicManaPayment { .. }
         | Instruction::ChooseObjects { .. }
         | Instruction::ChooseOption { .. }
-        | Instruction::BecomeCopy { .. }
         | Instruction::PromptChoice(_)
-        | Instruction::BranchCondition { .. }
         | Instruction::ForEach { .. }
         | Instruction::ForEachPlayerQuery { .. }
         | Instruction::BindEnv { .. }
@@ -307,27 +305,32 @@ native!(ExecutableBody, self, {
         | Instruction::UpdateStateTrack { .. }
         | Instruction::SideDeckOp(_)
         | Instruction::ScheduleDelayedEventTrigger { .. }
-        | Instruction::OptionalSequence { .. }
         | Instruction::FixedTargetClause(_)
         | Instruction::SearchLibrary { .. }
         | Instruction::ScheduleDelayedStepTrigger { .. }
         | Instruction::EmitReflexiveTrigger { .. }
-        | Instruction::Attach(_)
         | Instruction::AffectPermanentTargets { .. }
         | Instruction::Sacrifice { .. }
         | Instruction::Discard { .. } => Err(ApplicabilityError),
+        Instruction::OptionalSequence {
+            instructions: 1, ..
+        } => Ok(()),
+        Instruction::OptionalSequence { .. } => Err(ApplicabilityError),
         Instruction::CreateTokens { creations } => creations
             .iter()
             .try_for_each(|creation| creation.definition.program().check_current10()),
         Instruction::ZoneOp(spec) => {
-            if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+            if matches!(
+                spec.destination,
+                spellwake_engine::toolbox::ZoneDest::SwapZones { .. }
+            ) || (matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
                 && matches!(
                     spec.selection,
                     spellwake_engine::toolbox::ZoneSelection::All
                 )
                 && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Hand)
                 && spec.shuffle_library.is_none()
-                && self.target != spellwake_engine::program::BodyTarget::SingleOwnGraveyardCard
+                && self.target != spellwake_engine::program::BodyTarget::SingleOwnGraveyardCard)
             {
                 Ok(())
             } else {
@@ -375,20 +378,23 @@ native!(ExecutableBody, self, {
                 _ => Err(ApplicabilityError),
             }
         }
-        Instruction::BranchIfFalse { condition, .. }
-            if [&condition.left, &condition.right].iter().any(|value| {
-                matches!(
-                    value,
-                    spellwake_engine::program::ValueExpr::EventValue(
-                        spellwake_engine::program::EventValueKind::PaidAlternative
-                            | spellwake_engine::program::EventValueKind::Bargained
-                            | spellwake_engine::program::EventValueKind::KickerCount(_)
+        Instruction::BranchCondition { condition, .. } => match condition.as_ref() {
+            spellwake_engine::toolbox::ConditionExpr::Resolution(condition)
+                if ![&condition.left, &condition.right].iter().any(|value| {
+                    matches!(
+                        value,
+                        spellwake_engine::program::ValueExpr::EventValue(
+                            spellwake_engine::program::EventValueKind::PaidAlternative
+                                | spellwake_engine::program::EventValueKind::Bargained
+                                | spellwake_engine::program::EventValueKind::KickerCount(_)
+                        )
                     )
-                )
-            }) =>
-        {
-            Err(ApplicabilityError)
-        }
+                }) =>
+            {
+                Ok(())
+            }
+            _ => Err(ApplicabilityError),
+        },
         Instruction::MutatePlayer(spec)
             if matches!(
                 spec.op,
@@ -443,6 +449,9 @@ native!(ExecutableBody, self, {
                     | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
                     | spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
                     | spellwake_engine::toolbox::ObjectMutation::ResolvePowerAbility(_)
+                    | spellwake_engine::toolbox::ObjectMutation::Attach {
+                        ability: Some(_), ..
+                    }
             ) =>
         {
             Err(ApplicabilityError)
@@ -482,15 +491,11 @@ native!(ExecutableBody, self, {
         {
             Err(ApplicabilityError)
         }
-        Instruction::BranchIfFalse { .. }
-        | Instruction::Jump { .. }
-        | Instruction::OptionalEffect { .. }
+        Instruction::Jump { .. }
         | Instruction::ChooseCreatureType { .. }
         | Instruction::ExileTopPlay { .. }
         | Instruction::RepeatLoop { .. }
         | Instruction::ChooseValue { .. }
-        | Instruction::Fight { .. }
-        | Instruction::Exchange(_)
         | Instruction::LookTopChooseExt { .. }
         | Instruction::RevealUntilMatchExt { .. }
         | Instruction::DrawCards(_)

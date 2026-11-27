@@ -167,8 +167,9 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
             ValueExpr::Literal(1.into()),
         ),
     ));
-    let optional = Instruction::OptionalEffect {
+    let optional = Instruction::OptionalSequence {
         chooser: ResolvingPlayer::Controller,
+        instructions: 1,
     };
     let trigger = |condition, instructions| TriggeredAbility {
         id: TriggeredAbilityId(1),

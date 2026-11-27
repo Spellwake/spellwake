@@ -206,6 +206,119 @@ impl EffectWindow {
                     self.adjust_players_at_cut(entry.id(), index, adjustments, ctx.append)?;
                 }
             }
+            LifeOp::ExchangeTotals { other } => {
+                let p1_opt = seats.first().copied();
+                let p2_opt = self
+                    .eval_player_selector_at(controller, Some(entry), other, cursor_snap.as_ref())?
+                    .into_iter()
+                    .next();
+                if let (Some(p1), Some(p2)) = (p1_opt, p2_opt)
+                    && p1 != p2
+                    && let (Some(l1), Some(l2)) =
+                        (self.life.get(p1).cloned(), self.life.get(p2).cloned())
+                {
+                    let evaluated = self.evaluated_characteristics()?;
+                    let prohibited = self.life_gain_prohibitions(&evaluated)?;
+                    let blocked = (l2 > l1 && prohibited.contains(&p1))
+                        || (l1 > l2 && prohibited.contains(&p2));
+                    if !blocked {
+                        self.adjust_players_at_cut(
+                            entry.id(),
+                            index,
+                            BTreeMap::from([
+                                (p1, LifeAdjustment::Set(l2)),
+                                (p2, LifeAdjustment::Set(l1)),
+                            ]),
+                            ctx.append,
+                        )?;
+                    }
+                }
+            }
+            LifeOp::ExchangeWithStat { object, stat } => {
+                if let Some(seat) = seats.first().copied() {
+                    let obj_opt = if matches!(object.as_ref(), crate::toolbox::ObjectQuery::Targets)
+                        && self.window.target_assessment().is_some()
+                    {
+                        self.legal_permanent_targets()?.into_iter().next()
+                    } else {
+                        self.eval_object_query_at(
+                            controller,
+                            Some(entry),
+                            object,
+                            cursor_snap.as_ref(),
+                        )?
+                        .into_iter()
+                        .next()
+                    };
+                    if let Some(obj_id) = obj_opt {
+                        let before = self.rules_snapshot(None)?;
+                        let current = &before.view().evaluated;
+                        let stats_opt = current
+                            .get(obj_id)
+                            .filter(|o| o.zone == ObjectZone::Battlefield && o.is_creature())
+                            .and_then(|o| o.power_toughness.as_ref())
+                            .map(|pt| (pt.derived.power.clone(), pt.derived.toughness.clone()));
+                        if let (Some((pwr, tgh)), Some(life)) =
+                            (stats_opt, self.life.get(seat).cloned())
+                        {
+                            let use_power = *stat == crate::program::ObjectStatKind::Power;
+                            let stat_val = if use_power { pwr } else { tgh.clone() };
+                            let blocked = stat_val > life
+                                && self.life_gain_prohibitions(current)?.contains(&seat);
+                            if !blocked {
+                                let part = if use_power {
+                                    crate::characteristics::ResolvedPart::SetPT(
+                                        crate::characteristics::PowerToughness {
+                                            power: life,
+                                            toughness: tgh,
+                                        },
+                                    )
+                                } else {
+                                    crate::characteristics::ResolvedPart::SetToughness(life)
+                                };
+                                let effect = self.characteristics.add_effect(
+                                    entry.id(),
+                                    obj_id,
+                                    crate::characteristics::ResolvedParts(vec![part]),
+                                    crate::characteristics::ResolvedDuration::NoStatedDuration,
+                                )?;
+                                let life_changes = self
+                                    .life
+                                    .apply_adjustments(
+                                        &[(seat, LifeAdjustment::Set(stat_val))].into(),
+                                    )
+                                    .map_err(|_| EffectError::InconsistentProgram)?;
+                                self.emit_from(
+                                    EventCause::Instruction {
+                                        entry: entry.id(),
+                                        instruction: index,
+                                    },
+                                    &before,
+                                    None,
+                                    ctx.append,
+                                    |old, new, _| {
+                                        let appearances =
+                                            crate::effects::occurrence_flow::characteristic_appearance_changes(
+                                                old,
+                                                new,
+                                                effect.affected.iter().copied(),
+                                            )?;
+                                        let mut occs = life_changes
+                                            .into_iter()
+                                            .map(RulesOccurrence::LifeChanged)
+                                            .collect::<Vec<_>>();
+                                        occs.push(RulesOccurrence::ContinuousEffectCreated {
+                                            effect,
+                                            appearances,
+                                        });
+                                        Ok(occs)
+                                    },
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
         }
         if let Some(binding) = spec.bind_amount
             && let Some(cursor) = self.resolution_cursor_mut()
@@ -569,6 +682,54 @@ impl EffectWindow {
                 }
                 return Ok(StepOutcome::Continue);
             }
+            DamageTargetQuery::Fight { first, second } => {
+                let resolve_side =
+                    |q: &crate::toolbox::ObjectQuery| -> Result<Vec<ObjectId>, EffectError> {
+                        if matches!(q, crate::toolbox::ObjectQuery::Targets)
+                            && self.window.target_assessment().is_some()
+                        {
+                            Ok(self
+                                .legal_permanent_targets()?
+                                .into_iter()
+                                .next()
+                                .into_iter()
+                                .collect())
+                        } else {
+                            self.eval_object_query_at(
+                                controller,
+                                Some(entry),
+                                q,
+                                cursor_snap.as_ref(),
+                            )
+                        }
+                    };
+                let first_objs = resolve_side(first)?;
+                let second_objs = resolve_side(second)?;
+                let mut pairs = Vec::new();
+                for &a in &first_objs {
+                    for &b in &second_objs {
+                        if a != b {
+                            pairs.push((a, b));
+                        }
+                    }
+                }
+                self.emit_fight_occurrences(entry.id(), index, &pairs, ctx.append)?;
+                let inputs = self.fight_damage_inputs(&pairs)?;
+                if inputs.is_empty() {
+                    self.advance_instruction()?;
+                } else {
+                    self.install_damage_batch(
+                        DamageOrigin::Resolution {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        DamageKind::Noncombat,
+                        inputs,
+                        ctx.journal,
+                    )?;
+                }
+                return Ok(StepOutcome::Continue);
+            }
             _ => {}
         }
         let current = self.evaluated_characteristics()?;
@@ -744,6 +905,7 @@ impl EffectWindow {
             | DamageTargetQuery::OrderedTargets { .. }
             | DamageTargetQuery::DivideThree
             | DamageTargetQuery::Divided { .. }
+            | DamageTargetQuery::Fight { .. }
             | DamageTargetQuery::FromGrantingPermanent => unreachable!("handled above"),
         };
 

@@ -576,12 +576,18 @@ fn assert_different_rules_copy_mechanism(provenance: &NativeInitialProvenance) {
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::BecomeCopy {
-                    receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-                    donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-                    duration: ResolvedDuration::NoStatedDuration,
-                    exceptions: Box::default(),
-                }],
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            spellwake_engine::program::EffectSubject::AbilitySource,
+                        )),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            spellwake_engine::program::MoveSubjectRef::TargetObject,
+                        ),
+                        ResolvedDuration::NoStatedDuration,
+                        spellwake_engine::program::CopyExceptions::default(),
+                    ),
+                ))],
             ),
         }],
     );

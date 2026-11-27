@@ -278,14 +278,18 @@ pub(super) fn compile_rules(
                     ),
                     BodyTarget::None,
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::all(
                                 spellwake_engine::toolbox::ObjectQuery::Source,
                                 spellwake_engine::toolbox::ObjectMutation::Attach {
-                                    host: spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                    host: Box::new(
+                                        spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                    ),
+                                    ability: None,
                                 },
                             ),
                         )),
@@ -312,14 +316,16 @@ pub(super) fn compile_rules(
                         spellwake_engine::program::ObjectFilter::creature().controlled(),
                     ),
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::all(
                                 spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
                                 spellwake_engine::toolbox::ObjectMutation::Attach {
-                                    host: spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    host: Box::new(spellwake_engine::toolbox::ObjectQuery::Targets),
+                                    ability: None,
                                 },
                             ),
                         )),
@@ -384,9 +390,11 @@ pub(super) fn compile_rules(
                     BodyTarget::FilteredPermanent(
                         spellwake_engine::program::ObjectFilter::creature().controlled(),
                     ),
-                    vec![Instruction::Attach(
-                        spellwake_engine::attachment::AttachAbility::Equip,
-                    )],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                            spellwake_engine::attachment::AttachAbility::Equip,
+                        ),
+                    ))],
                 )
             }
             "Whenever equipped creature attacks, this Equipment deals 1 damage to target creature defending player controls." => {
@@ -419,8 +427,9 @@ pub(super) fn compile_rules(
                     ),
                     BodyTarget::None,
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         Instruction::SearchLibrary {
                             filter: Box::new(

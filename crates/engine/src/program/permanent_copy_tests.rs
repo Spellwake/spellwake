@@ -15,15 +15,15 @@ fn source(instructions: Vec<Instruction>) -> Program {
     )
 }
 fn copy() -> Instruction {
-    Instruction::BecomeCopy {
-        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-        donor: crate::program::MoveSubjectRef::TargetObject,
-        duration: ResolvedDuration::UntilEndOfTurn,
-        exceptions: Box::new(crate::program::CopyExceptions {
+    Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec::become_copy(
+        crate::toolbox::ObjectQuery::Source,
+        crate::toolbox::ObjectQuery::Targets,
+        ResolvedDuration::UntilEndOfTurn,
+        crate::program::CopyExceptions {
             override_pt: None,
             ..Default::default()
-        }),
-    }
+        },
+    )))
 }
 #[test]
 fn copy_origin_and_lki_composition_are_admitted_explicitly() {
@@ -72,15 +72,17 @@ fn strict_copy_codec_requires_explicit_nullable_exception_and_duration() {
             toughness: 12.into(),
         }),
     ] {
-        let p = source(vec![Instruction::BecomeCopy {
-            receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-            donor: crate::program::MoveSubjectRef::TargetObject,
-            duration: ResolvedDuration::UntilEndOfTurn,
-            exceptions: Box::new(crate::program::CopyExceptions {
-                override_pt: exception,
-                ..Default::default()
-            }),
-        }]);
+        let p = source(vec![Instruction::ApplyContinuous(Box::new(
+            crate::toolbox::ApplyContinuousSpec::become_copy(
+                crate::toolbox::ObjectQuery::Source,
+                crate::toolbox::ObjectQuery::Targets,
+                ResolvedDuration::UntilEndOfTurn,
+                crate::program::CopyExceptions {
+                    override_pt: exception,
+                    ..Default::default()
+                },
+            ),
+        ))]);
         assert!(p.validate(&v).is_ok());
         let wire = codec::view(&p);
         assert_eq!(

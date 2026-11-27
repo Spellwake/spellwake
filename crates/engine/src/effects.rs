@@ -8828,7 +8828,11 @@ impl EffectWindow {
         {
             return false;
         }
-        if let [Instruction::Attach(ability)] = body.instructions.as_slice()
+        if let [Instruction::MutateObject(spec)] = body.instructions.as_slice()
+            && let crate::toolbox::ObjectMutation::Attach {
+                ability: Some(ability),
+                ..
+            } = &spec.op
             && !matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|object| object.controller == Some(controller) && object.has_type(ability.host_type())))
         {
             return false;
@@ -10616,6 +10620,9 @@ impl EffectWindow {
                         .is_some_and(|value| value.zone() == ObjectZone::Battlefield),
                     TargetRef::Player(_) | TargetRef::Stack(_) => false,
                 },
+                crate::toolbox::ObjectMutation::Attach {
+                    ability: Some(_), ..
+                } => true,
                 _ => false,
             },
             Instruction::DealDamage(spec) => match &spec.recipients {
@@ -10651,19 +10658,13 @@ impl EffectWindow {
                 },
                 _ => false,
             },
-            Instruction::Attach(_) => true,
             // The iterative driver owns these paths before target availability.
             Instruction::OptionalSequence { .. }
-            | Instruction::OptionalEffect { .. }
-            | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::BecomeCopy { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Fight { .. }
-            | Instruction::Exchange(_)
             | Instruction::ZoneOp(_)
             | Instruction::AdjustLife(_)
             | Instruction::MutatePlayer(_)

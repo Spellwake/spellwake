@@ -28,8 +28,9 @@ impl Lane {
         match self {
             Self::Chooser => vec![
                 gate_instruction(4),
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::UniqueRelatedPlayer,
+                    instructions: 1,
                 },
                 gain(1),
                 gain(2),

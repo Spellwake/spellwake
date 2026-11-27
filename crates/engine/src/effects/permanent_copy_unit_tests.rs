@@ -11,15 +11,17 @@ fn copy_source() -> Program {
             body: body(
                 BodyTarget::SinglePermanent,
                 vec![
-                    Instruction::BecomeCopy {
-                        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-                        donor: crate::program::MoveSubjectRef::TargetObject,
-                        duration: ResolvedDuration::NoStatedDuration,
-                        exceptions: Box::new(crate::program::CopyExceptions {
-                            override_pt: None,
-                            ..Default::default()
-                        }),
-                    },
+                    Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec::become_copy(
+                            crate::toolbox::ObjectQuery::Source,
+                            crate::toolbox::ObjectQuery::Targets,
+                            ResolvedDuration::NoStatedDuration,
+                            crate::program::CopyExceptions {
+                                override_pt: None,
+                                ..Default::default()
+                            },
+                        ),
+                    )),
                     crate::program::Instruction::AdjustLife(Box::new(
                         crate::toolbox::AdjustLifeSpec::gain(
                             crate::toolbox::PlayerSelector::Resolving(

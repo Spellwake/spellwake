@@ -621,8 +621,9 @@ fn same_body_bounce_excludes_hand_tokens_at_domain_and_commit_then_later_checks_
                     players: AffectedPlayers::One(ResolvingPlayer::Controller),
                     amount: crate::program::ValueExpr::Literal(1.into()),
                 },
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 gain(1),
             ],
@@ -886,8 +887,9 @@ fn a_battlefield_token_is_a_real_sacrifice_without_owner_order_or_physical_pile_
         BodyTarget::None,
         vec![
             sacrifice(AffectedPlayers::One(ResolvingPlayer::Controller), 1.into()),
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             gain(1),
         ],

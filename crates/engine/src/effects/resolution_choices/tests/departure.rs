@@ -60,8 +60,9 @@ fn a_replacement_chooser_can_leave_before_answering_the_original_choice() {
     for body in [
         vec![
             gain(2),
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::TargetPlayer,
+                instructions: 1,
             },
             gain(3),
         ],

@@ -165,8 +165,9 @@ fn occurrences(result: &NativeCandidate) -> Vec<&RulesOccurrence> {
 #[test]
 fn optional_rejects_wrong_actor_kind_basis_frame_and_repeated_reply_atomically() {
     let state = pending(vec![
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         gain(1),
         gain(2),
@@ -553,8 +554,9 @@ fn positive_counted_production_restores_quote_then_fixed_production_pays_exactly
 
 fn wrapped(operation: Instruction) -> Vec<Instruction> {
     vec![
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         operation,
         gain(2),
@@ -887,8 +889,9 @@ fn earlier_bounce_removes_take_from_the_real_optional_counter_domain() {
                             crate::toolbox::ZoneDest::Hand,
                         ),
                     )),
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     {
                         struct _Tmp {
@@ -1255,8 +1258,9 @@ fn captured_optional_controller_survives_real_source_departure_and_control_chang
         let state = captured_after_source_change(
             control,
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 gain(1),
             ],
@@ -1292,8 +1296,9 @@ fn captured_offer_body() -> Vec<Instruction> {
             paid_destination: 4,
             declined_destination: 1,
         },
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         crate::program::Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec::simple(
             crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
@@ -1382,8 +1387,9 @@ fn died_source_owner_graveyard_and_captured_controller_draw_are_independent() {
         Program::creature(None, 1.into(), 0.into(), BTreeSet::new()),
         crate::program::TriggerSpec::dies(crate::program::ObjectFilter::self_object()),
         vec![
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             crate::program::Instruction::DrawCards(Box::new(
                 crate::toolbox::DrawCardsSpec::simple(
@@ -1933,15 +1939,17 @@ fn copy_receiver(source_cost: SourceCost) -> Program {
             source_cost,
             body: ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                wrapped(Instruction::BecomeCopy {
-                    receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-                    donor: crate::program::MoveSubjectRef::TargetObject,
-                    duration: ResolvedDuration::NoStatedDuration,
-                    exceptions: Box::new(crate::program::CopyExceptions {
-                        override_pt: None,
-                        ..Default::default()
-                    }),
-                }),
+                wrapped(Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec::become_copy(
+                        crate::toolbox::ObjectQuery::Source,
+                        crate::toolbox::ObjectQuery::Targets,
+                        ResolvedDuration::NoStatedDuration,
+                        crate::program::CopyExceptions {
+                            override_pt: None,
+                            ..Default::default()
+                        },
+                    ),
+                ))),
             ),
         }],
     )
@@ -2094,8 +2102,9 @@ fn fresh_receiver_incarnation_cannot_replace_the_exact_captured_copy_source() {
     execution.pending_work = Some(PendingWork::Resolution(work.cursor));
     execution
         .begin_resolution_choice(
-            &Instruction::OptionalEffect {
+            &Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             &mut RulesJournal::default(),
         )
@@ -2408,8 +2417,9 @@ fn optional_damage_preserves_the_real_order_child_and_consumes_the_offer_once() 
         Instruction::ApplyContinuous(Box::new(
             crate::toolbox::ApplyContinuousSpec::damage_multiplier(2.into()),
         )),
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
             source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -2652,8 +2662,9 @@ fn root_and_decision_exhaustion_during_color_preserve_the_already_paid_tap_prefi
 fn optional_type_literal_zero_draw_continuation_assigns_only_on_take() {
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
         let state = pending(vec![
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             Instruction::ChooseCreatureType {
                 into: CreatureTypeSlot::new(0),
@@ -2804,8 +2815,9 @@ fn same_original_typed_inputs_reexecute_every_payment_parent_child_journal_and_w
             paid_destination: 1,
             declined_destination: 4,
         },
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         gain(1),
         gain(2),
@@ -2957,8 +2969,9 @@ fn nonempty_resolution_locals_survive_each_mana_prefix_and_both_optional_outcome
             paid_destination: 2,
             declined_destination: 5,
         },
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         gain(1),
         gain(2),
@@ -3157,8 +3170,9 @@ fn actual_by_player_group_retains_two_entry_causes_for_distinct_payer_and_option
                     paid_destination: 1,
                     declined_destination: 3,
                 },
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 gain(1),
             ],

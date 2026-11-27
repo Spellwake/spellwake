@@ -21,14 +21,16 @@ fn gain(amount: i64) -> Instruction {
     )))
 }
 fn branch(threshold: i64, destination: usize) -> Instruction {
-    Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: crate::program::ValueExpr::PlayerStat(
-                crate::program::PlayerStatExpr::ControllerLife,
-            ),
-            comparison: Comparison::GreaterOrEqual,
-            right: crate::program::ValueExpr::Literal(threshold.into()),
-        },
+    Instruction::BranchCondition {
+        condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+            ResolutionCondition {
+                left: crate::program::ValueExpr::PlayerStat(
+                    crate::program::PlayerStatExpr::ControllerLife,
+                ),
+                comparison: Comparison::GreaterOrEqual,
+                right: crate::program::ValueExpr::Literal(threshold.into()),
+            },
+        ))),
         destination,
     }
 }
