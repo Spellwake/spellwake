@@ -669,13 +669,64 @@ fn parse_entry_counter_choice_options(choice_rest: &str) -> Option<Vec<(CounterK
     Some(parsed)
 }
 
+fn parse_entry_two_different_counter_choices(
+    choice_rest: &str,
+) -> Option<Vec<Vec<(CounterKind, u8)>>> {
+    let trimmed = choice_rest.trim().trim_end_matches('.').trim();
+    let list_raw = trimmed
+        .strip_prefix("two different counters on it from among ")
+        .or_else(|| trimmed.strip_prefix("two different counters from among "))?
+        .trim();
+    if list_raw.is_empty() || list_raw.contains(" or ") {
+        return None;
+    }
+    let normalized = list_raw.replace(", and ", ", ");
+    let mut parts: Vec<&str> = normalized.split(", ").map(str::trim).collect();
+    if let Some(last) = parts.last_mut() {
+        *last = last.strip_prefix("and ").unwrap_or(last).trim();
+    }
+    if parts.iter().any(|p| p.is_empty() || p.contains(" and ")) {
+        return None;
+    }
+    let mut kinds = Vec::with_capacity(parts.len());
+    for part in parts {
+        let seg = part
+            .strip_suffix(" counters")
+            .or_else(|| part.strip_suffix(" counter"))
+            .unwrap_or(part)
+            .trim();
+        let kind = parse_counter_kind(seg).filter(|k| k.is_permanent())?;
+        if kinds.contains(&kind) {
+            return None;
+        }
+        kinds.push(kind);
+    }
+    // 3 distinct kinds -> 3 pairs; 4 distinct kinds -> 6 pairs (fits ChooseOptions 2..=6).
+    if !(3..=4).contains(&kinds.len()) {
+        return None;
+    }
+    let mut pairs = Vec::new();
+    for i in 0..kinds.len() {
+        for j in (i + 1)..kinds.len() {
+            pairs.push(vec![(kinds[i], 1u8), (kinds[j], 1u8)]);
+        }
+    }
+    Some(pairs)
+}
+
 fn lower_entry_counter_choice(
     choice_rest: &str,
     program: &mut Program,
 ) -> Result<(), &'static str> {
-    let options = parse_entry_counter_choice_options(choice_rest)
-        .ok_or("oracle:unsupported-entry-counters")?;
-    let labels: &'static [&'static str] = match options.len() {
+    let option_bundles: Vec<Vec<(CounterKind, u8)>> =
+        if let Some(options) = parse_entry_counter_choice_options(choice_rest) {
+            options.into_iter().map(|opt| vec![opt]).collect()
+        } else if let Some(pairs) = parse_entry_two_different_counter_choices(choice_rest) {
+            pairs
+        } else {
+            return Err("oracle:unsupported-entry-counters");
+        };
+    let labels: &'static [&'static str] = match option_bundles.len() {
         2 => &["Option 1", "Option 2"],
         3 => &["Option 1", "Option 2", "Option 3"],
         4 => &["Option 1", "Option 2", "Option 3", "Option 4"],
@@ -699,19 +750,21 @@ fn lower_entry_counter_choice(
             return Err("oracle:duplicate-entry-tap");
         }
     }
-    for (idx, (kind, qty)) in options.into_iter().enumerate() {
+    for (idx, bundle) in option_bundles.into_iter().enumerate() {
         let idx_u8 = u8::try_from(idx).map_err(|_| "oracle:unsupported-entry-counters")?;
-        program
-            .entry_counter_abilities
-            .push(EntryCounterAbility::ConditionalCounter {
-                condition: Box::new(ResolutionCondition {
-                    left: ValueExpr::SourceState(SourceStateExpr::EntryOptionChosen(idx_u8)),
-                    comparison: Comparison::Equal,
-                    right: ValueExpr::literal(1),
-                }),
-                kind,
-                amount: ValueExpr::literal(i64::from(qty)),
-            });
+        for (kind, qty) in bundle {
+            program
+                .entry_counter_abilities
+                .push(EntryCounterAbility::ConditionalCounter {
+                    condition: Box::new(ResolutionCondition {
+                        left: ValueExpr::SourceState(SourceStateExpr::EntryOptionChosen(idx_u8)),
+                        comparison: Comparison::Equal,
+                        right: ValueExpr::literal(1),
+                    }),
+                    kind,
+                    amount: ValueExpr::literal(i64::from(qty)),
+                });
+        }
     }
     Ok(())
 }
@@ -912,18 +965,57 @@ pub(super) fn lower_replacement(
             {
                 return lower_entry_counter_choice(choice_rest, program);
             }
+            let is_not_cast_or_no_mana_spent = |c: &ConditionAst| -> bool {
+                let is_not_cast = |sub: &ConditionAst| {
+                    matches!(sub, ConditionAst::Marker(GameMarker::HasNotPlayedOrCast))
+                };
+                let is_no_mana = |sub: &ConditionAst| {
+                    matches!(
+                        sub,
+                        ConditionAst::Compare {
+                            lhs,
+                            op: CompareOp::Eq,
+                            rhs,
+                        } if matches!(
+                            lhs.as_ref(),
+                            ValueExprAst::ManaSpentToCast { mana_filter: None }
+                        ) && matches!(rhs.as_ref(), ValueExprAst::Const(0))
+                    )
+                };
+                matches!(
+                    c,
+                    ConditionAst::Or(a, b)
+                        if (is_not_cast(a) && is_no_mana(b)) || (is_no_mana(a) && is_not_cast(b))
+                )
+            };
             let push_entry_counter = |program: &mut Program,
                                       kind: CounterKind,
                                       amount: ValueExpr,
                                       cond: Option<&ConditionAst>|
              -> Result<(), &'static str> {
                 if let Some(c) = cond {
-                    let mut tmp_builder = BodyBuilder::new();
-                    let rc =
-                        lower_resolution_condition(c, &mut tmp_builder, vocabulary, false, None)?;
-                    if tmp_builder.target != BodyTarget::None {
-                        return Err("oracle:unsupported-entry-counters");
-                    }
+                    let rc = if is_not_cast_or_no_mana_spent(c) {
+                        // SourceStateExpr::ManaSpentToCast evaluates to 0 both when the entering
+                        // permanent was not cast (no cast summary) and when 0 mana was spent.
+                        ResolutionCondition {
+                            left: ValueExpr::SourceState(SourceStateExpr::ManaSpentToCast),
+                            comparison: Comparison::Equal,
+                            right: ValueExpr::literal(0_i64),
+                        }
+                    } else {
+                        let mut tmp_builder = BodyBuilder::new();
+                        let rc = lower_resolution_condition(
+                            c,
+                            &mut tmp_builder,
+                            vocabulary,
+                            false,
+                            None,
+                        )?;
+                        if tmp_builder.target != BodyTarget::None {
+                            return Err("oracle:unsupported-entry-counters");
+                        }
+                        rc
+                    };
                     program
                         .entry_counter_abilities
                         .push(EntryCounterAbility::ConditionalCounter {
@@ -1018,7 +1110,15 @@ pub(super) fn lower_replacement(
                     if !kind.is_permanent() {
                         return Err("oracle:unsupported-entry-counters");
                     }
-                    let base = lower_value_expr(xe, vocabulary)?;
+                    let base = if matches!(xe.as_ref(), ValueExprAst::TotalCardsInAllHands) {
+                        ValueExpr::Count {
+                            zone: spellwake_engine::program::ValueZone::AllHands,
+                            filter: Box::new(ObjectFilter::any()),
+                            controller_scope: None,
+                        }
+                    } else {
+                        lower_value_expr(xe, vocabulary)?
+                    };
                     let amount = if factor == 1 {
                         base
                     } else {

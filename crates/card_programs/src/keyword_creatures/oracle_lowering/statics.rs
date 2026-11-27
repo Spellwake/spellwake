@@ -57,16 +57,25 @@ pub(super) fn lower_static(
             } else {
                 None
             };
+            let mut granted_face_fallback: Option<FaceAst> = None;
             let granted_parts = if let Some(raw_text) = grant_ability_text {
-                let cleaned = raw_text.trim().trim_matches('"').trim();
+                let cleaned = raw_text
+                    .trim()
+                    .trim_matches('"')
+                    .trim()
+                    .trim_end_matches(',')
+                    .trim();
+                if cleaned.is_empty() {
+                    return Err("oracle:unsupported-grant-ability-text");
+                }
                 let compiler_vocab = cached_compiler_vocab(vocabulary);
                 let synthetic = compile_card(
                     &CardInput {
                         oracle_id: "",
-                        name: "Synthetic",
+                        name: "~",
                         layout: "normal",
                         faces: vec![FaceInput {
-                            name: "Synthetic",
+                            name: "~",
                             type_line: if looks_like_loyalty_ability(cleaned) {
                                 "Planeswalker"
                             } else {
@@ -80,7 +89,14 @@ pub(super) fn lower_static(
                 if !synthetic.strictly_compiled || synthetic.faces.len() != 1 {
                     return Err("oracle:unsupported-grant-ability-text");
                 }
-                lower_granted_ability_face_parts(&synthetic.faces[0], vocabulary, ids)?
+                if let Ok(parts) =
+                    lower_granted_ability_face_parts(&synthetic.faces[0], vocabulary, ids)
+                {
+                    parts
+                } else {
+                    granted_face_fallback = synthetic.faces.into_iter().next();
+                    Vec::new()
+                }
             } else {
                 Vec::new()
             };
@@ -116,6 +132,11 @@ pub(super) fn lower_static(
                         selector: selector.clone(),
                         parts: StaticParts(parts),
                     },
+                )?;
+            }
+            if let Some(face) = granted_face_fallback.as_ref() {
+                emit_granted_ability_face_for_selectors(
+                    face, &selectors, program, vocabulary, ids,
                 )?;
             }
             if let Some(paired) = paired_rule {
@@ -275,7 +296,12 @@ pub(super) fn lower_static(
             let face: &FaceAst = if let Some(compiled_face) = compiled.as_deref() {
                 compiled_face
             } else {
-                let cleaned = ability_text.trim().trim_matches('"').trim();
+                let cleaned = ability_text
+                    .trim()
+                    .trim_matches('"')
+                    .trim()
+                    .trim_end_matches(',')
+                    .trim();
                 if cleaned.is_empty() {
                     return Err("oracle:unsupported-grant-ability-text");
                 }
@@ -837,7 +863,35 @@ pub(super) fn lower_static(
                     if generic_n == 0 {
                         return Err("oracle:unsupported-self-discount-delta");
                     }
-                    let base_expr = lower_static_value_expr(se, expr_ctx, vocabulary)?;
+                    let is_life_below_starting = matches!(
+                        condition.as_deref(),
+                        Some(ConditionAst::Compare {
+                            lhs,
+                            op: CompareOp::Lt,
+                            rhs,
+                        }) if matches!(
+                            lhs.as_ref(),
+                            ValueExprAst::PlayerStat {
+                                player: PlayerRefAst::You,
+                                stat: PlayerStatKind::LifeTotal,
+                            }
+                        ) && matches!(
+                            rhs.as_ref(),
+                            ValueExprAst::StartingLifeTotal(PlayerRefAst::You)
+                        )
+                    );
+                    let base_expr = if matches!(se.as_ref(), ValueExprAst::PriorResult)
+                        && is_life_below_starting
+                    {
+                        ValueExpr::Sub(
+                            Box::new(ValueExpr::PlayerStat(
+                                PlayerStatExpr::ControllerStartingLife,
+                            )),
+                            Box::new(ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife)),
+                        )
+                    } else {
+                        lower_static_value_expr(se, expr_ctx, vocabulary)?
+                    };
                     let scaled = if generic_n == 1 {
                         base_expr
                     } else {
@@ -2350,13 +2404,11 @@ pub(super) fn lower_static(
                         controller: ControllerSelector::SourceItself,
                         ..PermanentSelector::default()
                     }],
-                    Some(subj) if !matches!(subj, SubjectRefAst::Anaphora(_)) => {
-                        lower_static_permanent_selectors_with_context(
-                            subj,
-                            condition.as_deref(),
-                            vocabulary,
-                        )?
-                    }
+                    Some(subj) => lower_static_permanent_selectors_with_context(
+                        subj,
+                        condition.as_deref(),
+                        vocabulary,
+                    )?,
                     _ => return Err("oracle:unsupported-rule-restriction"),
                 };
                 if lock.requires_source_controller
@@ -7165,6 +7217,82 @@ fn lower_static_source_condition_ext(
                 _ => None,
             }
         }
+        ConditionAst::ControlsCount {
+            player: PlayerRefAst::You,
+            filter,
+            op: CompareOp::Ge,
+            value,
+        } if *value >= 1
+            && matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+            && filter.extra_zones.is_empty()
+            && matches!(filter.controller, None | Some(ControllerRelation::You)) =>
+        {
+            let mut f_sel = lower_static_filter_to_permanent_selector(filter, vocabulary).ok()?;
+            f_sel.controller = ControllerSelector::SourceController;
+            Some(StaticSourceCondition::ControlsMatching {
+                selector: Box::new(f_sel),
+                minimum: *value,
+            })
+        }
+        ConditionAst::ControlsCount {
+            player: PlayerRefAst::AnyOpponent,
+            filter,
+            op: CompareOp::Ge,
+            value: 1,
+        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+            && filter.extra_zones.is_empty()
+            && filter.controller.is_none() =>
+        {
+            let mut f_sel = lower_static_filter_to_permanent_selector(filter, vocabulary).ok()?;
+            f_sel.controller = ControllerSelector::Opponents;
+            Some(StaticSourceCondition::OpponentControlsMatching {
+                selector: Box::new(f_sel),
+                minimum: 1,
+            })
+        }
+        ConditionAst::CounterCompare {
+            subject,
+            counter_kind,
+            op: CompareOp::Ge,
+            value: 1,
+        } if matches!(
+            subject.as_ref(),
+            SubjectRefAst::All(_) | SubjectRefAst::Each(_) | SubjectRefAst::Group(_)
+        ) =>
+        {
+            let f = match subject.as_ref() {
+                SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f) => f,
+                _ => return None,
+            };
+            if !matches!(f.zone, None | Some(ZoneFilter::Battlefield)) || !f.extra_zones.is_empty()
+            {
+                return None;
+            }
+            let ck_low = counter_kind.trim().to_ascii_lowercase();
+            let flag = match ck_low.as_str() {
+                "-1/-1" => ObjectFilterFlags::WITH_MINUS_ONE_COUNTER,
+                "+1/+1" => ObjectFilterFlags::WITH_PLUS_ONE_COUNTER,
+                "" | "any" | "a" | "one or more" => ObjectFilterFlags::WITH_ANY_COUNTER,
+                _ => return None,
+            };
+            let mut inner = f.as_ref().clone();
+            inner.zone = None;
+            let base = if is_unrestricted_filter(&inner) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter(&inner, vocabulary).ok()?
+            };
+            let rc = ResolutionCondition {
+                left: ValueExpr::count_battlefield(base.with_flags(flag)),
+                comparison: Comparison::GreaterOrEqual,
+                right: ValueExpr::literal(1_i64),
+            };
+            if rc.is_world_evaluable() && rc.validate_world(vocabulary).is_ok() {
+                Some(StaticSourceCondition::Eval(Box::new(rc)))
+            } else {
+                None
+            }
+        }
         ConditionAst::ZoneObjectCount { filter, op, value }
             if filter.zone == Some(ZoneFilter::Exile)
                 && filter.extra_zones.is_empty()
@@ -7246,6 +7374,37 @@ fn static_condition_primary_subject(cond: &ConditionAst) -> Option<&SubjectRefAs
         | ConditionAst::MatchesFilter { subject, .. }
         | ConditionAst::StatCompare { subject, .. } => Some(subject.as_ref()),
         ConditionAst::Marker(GameMarker::SubjectEnteredThisTurn(subject)) => Some(subject.as_ref()),
+        ConditionAst::Compare { lhs, rhs, .. } => {
+            let is_possessive_or_anaphora = |s: &SubjectRefAst| {
+                matches!(
+                    s,
+                    SubjectRefAst::Anaphora(raw)
+                        if matches!(
+                            raw.trim().to_ascii_lowercase().as_str(),
+                            "it" | "its" | "his" | "her" | "their"
+                        )
+                )
+            };
+            match (lhs.as_ref(), rhs.as_ref()) {
+                (
+                    ValueExprAst::ObjectStat { subject: s1, .. },
+                    ValueExprAst::ObjectStat { subject: s2, .. },
+                ) if !matches!(s1.as_ref(), SubjectRefAst::Anaphora(_))
+                    && (s1 == s2 || is_possessive_or_anaphora(s2)) =>
+                {
+                    Some(s1.as_ref())
+                }
+                (
+                    ValueExprAst::ObjectStat { subject: s1, .. },
+                    ValueExprAst::ObjectStat { subject: s2, .. },
+                ) if !matches!(s2.as_ref(), SubjectRefAst::Anaphora(_))
+                    && is_possessive_or_anaphora(s1) =>
+                {
+                    Some(s2.as_ref())
+                }
+                _ => None,
+            }
+        }
         ConditionAst::Not(inner) => static_condition_primary_subject(inner),
         ConditionAst::And(a, b) | ConditionAst::Or(a, b) => {
             let sa = static_condition_primary_subject(a);
@@ -7300,6 +7459,7 @@ fn lower_static_filter_to_permanent_selector_with_host(
     let mut extra_required_keyword: Option<KeywordAbility> = None;
     let mut requires_toxic = false;
     let mut required_counter_kind: Option<CounterKind> = None;
+    let mut minimum_plus_one_counters: u16 = 0;
     let mut toughness_greater_than_power = false;
     let mut needs_clone = false;
 
@@ -7336,7 +7496,10 @@ fn lower_static_filter_to_permanent_selector_with_host(
             .trim_end_matches(" counters")
             .trim_end_matches(" counter")
             .trim();
-        if !matches!(ck_clean, "+1/+1" | "-1/-1" | "any" | "a" | "one or more")
+        if let Some(min_p1) = parse_minimum_plus_one_counter_kind(ck_clean) {
+            minimum_plus_one_counters = minimum_plus_one_counters.max(min_p1);
+            needs_clone = true;
+        } else if !matches!(ck_clean, "+1/+1" | "-1/-1" | "any" | "a" | "one or more")
             && let Some(kind) = parse_counter_kind(ck_clean).filter(|k| k.is_permanent())
         {
             required_counter_kind = Some(kind);
@@ -7344,7 +7507,9 @@ fn lower_static_filter_to_permanent_selector_with_host(
         }
     }
 
-    if f.predicates.iter().any(is_toughness_gt_power_predicate) {
+    if f.predicates.iter().any(is_toughness_gt_power_predicate)
+        || f.stat_bounds.iter().any(is_toughness_gt_power_stat_bound)
+    {
         toughness_greater_than_power = true;
         needs_clone = true;
     }
@@ -7359,7 +7524,7 @@ fn lower_static_filter_to_permanent_selector_with_host(
 
     let mut cloned = f.clone();
     cloned.required_keywords.clear();
-    if required_counter_kind.is_some() {
+    if required_counter_kind.is_some() || minimum_plus_one_counters > 0 {
         cloned.counter_kind = None;
         cloned.flags = AstFilterFlags(cloned.flags.0 & !AstFilterFlags::WITH_ANY_COUNTER.0);
     }
@@ -7367,6 +7532,9 @@ fn lower_static_filter_to_permanent_selector_with_host(
         cloned
             .predicates
             .retain(|p| !is_toughness_gt_power_predicate(p));
+        cloned
+            .stat_bounds
+            .retain(|sb| !is_toughness_gt_power_stat_bound(sb));
     }
     let mut sel = super::lower_filter_to_permanent_selector_with_host_context(
         &cloned,
@@ -7384,8 +7552,69 @@ fn lower_static_filter_to_permanent_selector_with_host(
     if let Some(ck) = required_counter_kind {
         sel.required_counter_kind = Some(ck);
     }
+    if minimum_plus_one_counters > 0 {
+        sel.minimum_plus_one_counters =
+            sel.minimum_plus_one_counters.max(minimum_plus_one_counters);
+    }
     sel.toughness_greater_than_power |= toughness_greater_than_power;
     Ok(sel)
+}
+
+fn parse_minimum_plus_one_counter_kind(ck_clean: &str) -> Option<u16> {
+    let num_raw = ck_clean
+        .strip_suffix(" or more +1/+1")
+        .or_else(|| {
+            ck_clean
+                .strip_prefix("at least ")
+                .and_then(|r| r.strip_suffix(" +1/+1"))
+        })?
+        .trim();
+    let n: u16 = match num_raw {
+        "one" => 1,
+        "two" => 2,
+        "three" => 3,
+        "four" => 4,
+        "five" => 5,
+        "six" => 6,
+        "seven" => 7,
+        "eight" => 8,
+        "nine" => 9,
+        "ten" => 10,
+        other => other.parse().ok()?,
+    };
+    (n >= 1).then_some(n)
+}
+
+fn is_toughness_gt_power_stat_bound(sb: &spellwake_oracle_compiler::ast::StatBoundAst) -> bool {
+    let is_self_possessive = |subj: &SubjectRefAst| {
+        matches!(
+            subj,
+            SubjectRefAst::Anaphora(raw)
+                if matches!(
+                    raw.trim().to_ascii_lowercase().as_str(),
+                    "its" | "their" | "it" | "them" | "his" | "her"
+                )
+        )
+    };
+    match (sb.stat, sb.op, sb.value.as_ref()) {
+        (
+            StatKind::Toughness,
+            CompareOp::Gt,
+            ValueExprAst::ObjectStat {
+                subject,
+                stat: StatKind::Power,
+            },
+        )
+        | (
+            StatKind::Power,
+            CompareOp::Lt,
+            ValueExprAst::ObjectStat {
+                subject,
+                stat: StatKind::Toughness,
+            },
+        ) => is_self_possessive(subject),
+        _ => false,
+    }
 }
 
 fn is_toughness_gt_power_predicate(
@@ -7400,6 +7629,7 @@ fn is_toughness_gt_power_predicate(
                     | "with toughness greater than its power"
                     | "toughness greater than their power"
                     | "toughness greater than its power"
+                    | "toughness_greater_than_power"
             )
     )
 }
@@ -7532,6 +7762,18 @@ fn try_apply_extended_selector_status(
                 sel.token = Some(true);
                 return true;
             }
+            "legendary" => {
+                sel.forbidden_supertypes.insert(Supertype::Legendary);
+                return true;
+            }
+            "snow" => {
+                sel.forbidden_supertypes.insert(Supertype::Snow);
+                return true;
+            }
+            "basic" => {
+                sel.forbidden_supertypes.insert(Supertype::Basic);
+                return true;
+            }
             "face-down" | "face down" => {
                 sel.face_down = Some(false);
                 return true;
@@ -7660,6 +7902,18 @@ fn try_apply_extended_selector_status(
             sel.commander = Some(true);
             true
         }
+        "legendary" => {
+            sel.required_supertypes.insert(Supertype::Legendary);
+            true
+        }
+        "snow" => {
+            sel.required_supertypes.insert(Supertype::Snow);
+            true
+        }
+        "basic" => {
+            sel.required_supertypes.insert(Supertype::Basic);
+            true
+        }
         "attacking" => {
             if sel.combat_role.is_some() && sel.combat_role != Some(CombatSelector::Attacking) {
                 return false;
@@ -7771,6 +8025,102 @@ fn try_apply_extended_selector_status(
     }
 }
 
+fn try_apply_negated_atomic_selector_filter(
+    sel: &mut PermanentSelector,
+    filter: &ObjectFilterAst,
+    vocabulary: &CreatureTypeVocabulary,
+) -> bool {
+    use spellwake_engine::characteristics::CombatSelector;
+
+    if filter.any_permanent || filter.any_spell || filter.any_card || filter.is_ability {
+        return false;
+    }
+    if filter.combat == Some(CombatState::Attacking)
+        && filter_only_has(
+            filter,
+            FilterAllow {
+                combat: true,
+                ..FilterAllow::NONE
+            },
+        )
+    {
+        if sel.combat_role.is_none() || sel.combat_role == Some(CombatSelector::NotAttacking) {
+            sel.combat_role = Some(CombatSelector::NotAttacking);
+            return true;
+        }
+        return false;
+    }
+    if !filter.required_supertypes.is_empty()
+        && filter.forbidden_supertypes.is_empty()
+        && filter_only_has(
+            filter,
+            FilterAllow {
+                req_supertypes: true,
+                ..FilterAllow::NONE
+            },
+        )
+    {
+        let single = if filter.required_supertypes == AstSupertypeMask::LEGENDARY {
+            Some(Supertype::Legendary)
+        } else if filter.required_supertypes == AstSupertypeMask::SNOW {
+            Some(Supertype::Snow)
+        } else if filter.required_supertypes == AstSupertypeMask::BASIC {
+            Some(Supertype::Basic)
+        } else {
+            None
+        };
+        if let Some(st) = single {
+            sel.forbidden_supertypes.insert(st);
+            return true;
+        }
+    }
+    if !filter.any_types.is_empty()
+        && filter.forbidden_types.is_empty()
+        && filter_only_has(
+            filter,
+            FilterAllow {
+                types: true,
+                ..FilterAllow::NONE
+            },
+        )
+    {
+        let single_ty = if filter.any_types == AstCardTypeMask::CREATURE {
+            Some(CardType::Creature)
+        } else if filter.any_types == AstCardTypeMask::ARTIFACT {
+            Some(CardType::Artifact)
+        } else if filter.any_types == AstCardTypeMask::ENCHANTMENT {
+            Some(CardType::Enchantment)
+        } else if filter.any_types == AstCardTypeMask::LAND {
+            Some(CardType::Land)
+        } else if filter.any_types == AstCardTypeMask::PLANESWALKER {
+            Some(CardType::Planeswalker)
+        } else if filter.any_types == AstCardTypeMask::BATTLE {
+            Some(CardType::Battle)
+        } else {
+            None
+        };
+        if let Some(ct) = single_ty {
+            sel.forbidden_types.insert(ct);
+            return true;
+        }
+    }
+    if filter.subtypes.len() == 1
+        && filter_only_has(
+            filter,
+            FilterAllow {
+                subtypes: true,
+                ..FilterAllow::NONE
+            },
+        )
+        && let Some(ct) = vocabulary.resolve_label(&filter.subtypes[0])
+    {
+        sel.forbidden_subtypes
+            .insert(spellwake_engine::characteristics::SelectorSubtype::Creature(ct));
+        return true;
+    }
+    false
+}
+
 fn apply_static_selector_condition(
     sel: &mut PermanentSelector,
     cond: &ConditionAst,
@@ -7798,7 +8148,62 @@ fn apply_static_selector_condition(
     {
         return Ok(());
     }
+    if let ConditionAst::PlayerActionThisTurn {
+        player: PlayerRefAst::You,
+        action,
+    } = cond
+        && sel.attached_to_source
+    {
+        let act = action.trim().to_ascii_lowercase();
+        if matches!(
+            act.as_str(),
+            "enchanted creature is attacking alone" | "equipped creature is attacking alone"
+        ) && (sel.combat_role.is_none()
+            || sel.combat_role
+                == Some(spellwake_engine::characteristics::CombatSelector::Attacking))
+        {
+            sel.combat_role = Some(spellwake_engine::characteristics::CombatSelector::Attacking);
+            and_selector_source_condition(
+                sel,
+                StaticSourceCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_battlefield(ObjectFilter::Clause(
+                        ObjectClause::creature().combat(CombatFilter::Attacking),
+                    )),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(1_i64),
+                })),
+            );
+            return Ok(());
+        }
+        if matches!(
+            act.as_str(),
+            "you control enchanted creature" | "you control equipped creature"
+        ) && matches!(
+            sel.controller,
+            ControllerSelector::Any | ControllerSelector::SourceController
+        ) {
+            sel.controller = ControllerSelector::SourceController;
+            return Ok(());
+        }
+    }
     if let ConditionAst::Not(inner) = cond {
+        if let ConditionAst::PlayerActionThisTurn {
+            player: PlayerRefAst::You,
+            action,
+        } = inner.as_ref()
+            && sel.attached_to_source
+            && matches!(
+                action.trim().to_ascii_lowercase().as_str(),
+                "you control enchanted creature" | "you control equipped creature"
+            )
+            && matches!(
+                sel.controller,
+                ControllerSelector::Any | ControllerSelector::Opponents
+            )
+        {
+            sel.controller = ControllerSelector::Opponents;
+            return Ok(());
+        }
         if let ConditionAst::HasStatus { subject, status } = inner.as_ref()
             && try_apply_extended_selector_status(sel, subject, status, true)
         {
@@ -7809,6 +8214,12 @@ fn apply_static_selector_condition(
             && let Some(ka) = lower_keyword_ability_name(keyword)
         {
             sel.forbidden_keywords.insert(ka);
+            return Ok(());
+        }
+        if let ConditionAst::MatchesFilter { subject, filter } = inner.as_ref()
+            && selector_subject_is_recipient_anchor(sel, subject)
+            && try_apply_negated_atomic_selector_filter(sel, filter, vocabulary)
+        {
             return Ok(());
         }
     }
@@ -7957,10 +8368,18 @@ fn apply_static_selector_condition(
         return Ok(());
     }
     if let ConditionAst::Compare { lhs, op, rhs } = cond {
+        let is_possessive = |subj: &SubjectRefAst| -> bool {
+            matches!(
+                subj,
+                SubjectRefAst::Anaphora(raw)
+                    if matches!(
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "its" | "his" | "her" | "their"
+                    )
+            )
+        };
         let matches_anchor = |subj: &SubjectRefAst| -> bool {
-            (sel.attached_to_source && matches!(subj, SubjectRefAst::AttachedHost(_)))
-                || (sel.controller == ControllerSelector::SourceItself
-                    && matches!(subj, SubjectRefAst::SelfObject))
+            selector_subject_is_recipient_anchor(sel, subj) || is_possessive(subj)
         };
         let is_t_gt_p = match (lhs.as_ref(), op, rhs.as_ref()) {
             (
@@ -7984,7 +8403,12 @@ fn apply_static_selector_condition(
                     subject: s2,
                     stat: StatKind::Toughness,
                 },
-            ) => matches_anchor(s1) && matches_anchor(s2),
+            ) => {
+                matches_anchor(s1)
+                    && matches_anchor(s2)
+                    && (selector_subject_is_recipient_anchor(sel, s1)
+                        || selector_subject_is_recipient_anchor(sel, s2))
+            }
             _ => false,
         };
         if is_t_gt_p {
@@ -8105,9 +8529,38 @@ fn lower_static_permanent_selectors_with_context(
                         | "that artifact"
                         | "that land"
                         | "that enchantment"
-                ) && let Some(primary) = static_condition_primary_subject(cond)
-                {
-                    return lower_static_permanent_selectors(primary, vocabulary);
+                ) {
+                    let attached_action = match cond {
+                        ConditionAst::PlayerActionThisTurn {
+                            player: PlayerRefAst::You,
+                            action,
+                        } => Some(action.as_str()),
+                        ConditionAst::Not(inner) => match inner.as_ref() {
+                            ConditionAst::PlayerActionThisTurn {
+                                player: PlayerRefAst::You,
+                                action,
+                            } => Some(action.as_str()),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(act) = attached_action
+                        && matches!(
+                            act.trim().to_ascii_lowercase().as_str(),
+                            "enchanted creature is attacking alone"
+                                | "equipped creature is attacking alone"
+                                | "you control enchanted creature"
+                                | "you control equipped creature"
+                        )
+                    {
+                        return Ok(vec![PermanentSelector {
+                            attached_to_source: true,
+                            ..PermanentSelector::default()
+                        }]);
+                    }
+                    if let Some(primary) = static_condition_primary_subject(cond) {
+                        return lower_static_permanent_selectors(primary, vocabulary);
+                    }
                 }
             }
             Err("oracle:unsupported-permanent-selector")
@@ -10919,7 +11372,12 @@ fn lower_paired_static(
             let face: &FaceAst = if let Some(compiled_face) = compiled.as_deref() {
                 compiled_face
             } else {
-                let cleaned = ability_text.trim().trim_matches('"').trim();
+                let cleaned = ability_text
+                    .trim()
+                    .trim_matches('"')
+                    .trim()
+                    .trim_end_matches(',')
+                    .trim();
                 if cleaned.is_empty() {
                     return Err("oracle:unsupported-grant-ability-text");
                 }
@@ -12143,7 +12601,12 @@ fn lower_granted_static_parts(
                 push_granted_keyword_strings(parts, grant_keywords, vocabulary, ids)?;
             }
             if let Some(raw_text) = grant_ability_text {
-                let cleaned = raw_text.trim().trim_matches('"').trim();
+                let cleaned = raw_text
+                    .trim()
+                    .trim_matches('"')
+                    .trim()
+                    .trim_end_matches(',')
+                    .trim();
                 let compiler_vocab = cached_compiler_vocab(vocabulary);
                 let synthetic = compile_card(
                     &CardInput {
@@ -16546,19 +17009,6 @@ fn lower_static_value_expr(
                 return Ok(ValueExpr::count_battlefield(ObjectFilter::Clause(clause)));
             }
             match norm.as_str() {
-                "card you've drawn this turn" | "card you drew this turn" => {
-                    return Ok(ValueExpr::PlayerStat(PlayerStatExpr::CardsDrawnThisTurn));
-                }
-                "spell your opponents have cast this turn"
-                | "spell an opponent has cast this turn" => {
-                    return Ok(ValueExpr::PlayerStat(
-                        PlayerStatExpr::SpellsCastMatchingThisTurn {
-                            players: spellwake_engine::program::AffectedPlayers::EachOpponent,
-                            filter: Box::new(ObjectFilter::any()),
-                            from_zone: None,
-                        },
-                    ));
-                }
                 "spell you've cast this turn" | "spell you cast this turn" => {
                     return Ok(ValueExpr::PlayerStat(
                         PlayerStatExpr::ControllerSpellsCastThisTurn,
@@ -16572,6 +17022,21 @@ fn lower_static_value_expr(
                             from_zone: None,
                         },
                     ));
+                }
+                "spell your opponents have cast this turn"
+                | "spell your opponents cast this turn"
+                | "spell an opponent has cast this turn"
+                | "spell an opponent cast this turn" => {
+                    return Ok(ValueExpr::PlayerStat(
+                        PlayerStatExpr::SpellsCastMatchingThisTurn {
+                            players: AffectedPlayers::EachOpponent,
+                            filter: Box::new(ObjectFilter::any()),
+                            from_zone: None,
+                        },
+                    ));
+                }
+                "card you've drawn this turn" | "card you drew this turn" => {
+                    return Ok(ValueExpr::PlayerStat(PlayerStatExpr::CardsDrawnThisTurn));
                 }
                 "life you gained this turn"
                 | "1 life you gained this turn"
@@ -16724,6 +17189,43 @@ fn lower_static_value_expr(
                 _ => {}
             }
             lower_value_expr(expr, vocabulary)
+        }
+        ValueExprAst::AggregateStat { op, stat, filter }
+            if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                && filter.extra_zones.is_empty() =>
+        {
+            let mut inner = filter.as_ref().clone();
+            inner.zone = None;
+            let obj = if is_unrestricted_filter(&inner) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter(&inner, vocabulary)?
+            };
+            let agg_op = match op {
+                AggregateOp::Max => StatAggregate::Max,
+                AggregateOp::Min => StatAggregate::Min,
+                AggregateOp::Sum => StatAggregate::Sum,
+            };
+            Ok(ValueExpr::Aggregate {
+                filter: Box::new(obj),
+                stat: static_lower_stat_kind(*stat),
+                op: agg_op,
+            })
+        }
+        ValueExprAst::DistinctCountAmong { category, filter }
+            if category == "different_mana_values"
+                && filter.zone == Some(ZoneFilter::YourGraveyard)
+                && filter.extra_zones.is_empty() =>
+        {
+            let mut inner = filter.as_ref().clone();
+            inner.zone = None;
+            if inner.any_card || is_unrestricted_filter(&inner) {
+                Ok(ValueExpr::DistinctManaValuesInGraveyard(
+                    ResolvingPlayer::Controller,
+                ))
+            } else {
+                lower_value_expr(expr, vocabulary)
+            }
         }
         ValueExprAst::Add(a, b) => Ok(ValueExpr::Add(
             Box::new(lower_static_value_expr(a, expr_ctx, vocabulary)?),
