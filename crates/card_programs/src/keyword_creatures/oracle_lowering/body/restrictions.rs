@@ -432,13 +432,40 @@ pub(super) fn rewrite_instruction_upto_one_to_exact_one(ins: &mut InstructionAst
     }
 }
 
+fn is_shuffle_target_graveyard_zone_op(op: &Instruction) -> bool {
+    matches!(
+        op,
+        Instruction::ZoneOp(spec)
+            if matches!(
+                &spec.source,
+                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                    zone: spellwake_engine::toolbox::QueryZone::Graveyard(sel),
+                    ..
+                } if matches!(
+                    sel.as_ref(),
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::TargetPlayer
+                    )
+                )
+            ) && matches!(
+                spec.selection,
+                spellwake_engine::toolbox::ZoneSelection::Prompt { .. }
+            ) && matches!(
+                spec.destination,
+                spellwake_engine::toolbox::ZoneDest::Library {
+                    position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto
+                }
+            )
+    )
+}
+
 fn body_has_dependent_targets(body: &ExecutableBody) -> bool {
     matches!(body.target, BodyTarget::OpponentOrPlaneswalkerThenCreature)
         || (body.target == BodyTarget::SinglePlayer
-            && matches!(
-                body.instructions.first(),
-                Some(Instruction::ShuffleTargetGraveyardCards { .. })
-            ))
+            && body
+                .instructions
+                .first()
+                .is_some_and(is_shuffle_target_graveyard_zone_op))
 }
 
 fn body_safe_for_synthesized_mode(body: &ExecutableBody) -> bool {
@@ -454,11 +481,40 @@ fn body_safe_for_synthesized_mode(body: &ExecutableBody) -> bool {
             matches!(
                 op,
                 Instruction::BindOrderedPermanents { .. }
-                    | Instruction::ShuffleOnePermanentPerPlayer
-                    | Instruction::ReturnOneNonlandPerOpponent
                     | Instruction::ExileOnePerPlayerUntilSourceLeaves
             )
         })
+}
+
+fn rewrite_condition_expr_ve(
+    cond: &mut spellwake_engine::toolbox::ConditionExpr,
+    map_ve: &impl Fn(&mut ValueExpr),
+) {
+    use spellwake_engine::toolbox::ConditionExpr;
+    match cond {
+        ConditionExpr::Always(_) | ConditionExpr::BoundBool(_) => {}
+        ConditionExpr::Compare { left, right, .. } => {
+            map_ve(left);
+            map_ve(right);
+        }
+        ConditionExpr::NonEmpty(q)
+        | ConditionExpr::AllMatch { query: q, .. }
+        | ConditionExpr::AnyMatch { query: q, .. }
+        | ConditionExpr::HasTag { query: q, .. } => {
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                q,
+                &|_| {},
+                &|_| {},
+                map_ve,
+            );
+        }
+        ConditionExpr::And(cs) | ConditionExpr::Or(cs) => {
+            for c in cs {
+                rewrite_condition_expr_ve(c, map_ve);
+            }
+        }
+        ConditionExpr::Not(c) => rewrite_condition_expr_ve(c, map_ve),
+    }
 }
 
 fn primary_modifier_subject(ins: &InstructionAst) -> Option<(&SubjectRefAst, u8)> {
@@ -1525,6 +1581,9 @@ pub(in super::super) fn rewrite_instruction_anaphora(
             rewrite_value_expr_anaphora(&mut condition.left, replacement);
             rewrite_value_expr_anaphora(&mut condition.right, replacement);
         }
+        Instruction::BranchCondition { condition, .. } => {
+            rewrite_condition_expr_ve(condition, &|v| rewrite_value_expr_anaphora(v, replacement));
+        }
         Instruction::EmitReflexiveTrigger { body }
         | Instruction::ScheduleDelayedStepTrigger { body, .. } => {
             rewrite_body_anaphora_stats(body, replacement);
@@ -1659,6 +1718,11 @@ pub(in super::super) fn rewrite_body_prior_result(
                 Instruction::BranchIfFalse { condition, .. } => {
                     rewrite_value_expr_prior_result(&mut condition.left, replacement);
                     rewrite_value_expr_prior_result(&mut condition.right, replacement);
+                }
+                Instruction::BranchCondition { condition, .. } => {
+                    rewrite_condition_expr_ve(condition, &|v| {
+                        rewrite_value_expr_prior_result(v, replacement);
+                    });
                 }
                 Instruction::ZoneOp(spec) => {
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
@@ -2825,6 +2889,11 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             Instruction::BranchIfFalse { condition, .. } => {
                 rewrite_value_expr_trigger_subject(&mut condition.left, replacement);
                 rewrite_value_expr_trigger_subject(&mut condition.right, replacement);
+            }
+            Instruction::BranchCondition { condition, .. } => {
+                rewrite_condition_expr_ve(condition, &|v| {
+                    rewrite_value_expr_trigger_subject(v, replacement);
+                });
             }
             Instruction::EmitReflexiveTrigger { body: inner }
             | Instruction::ScheduleDelayedStepTrigger { body: inner, .. }

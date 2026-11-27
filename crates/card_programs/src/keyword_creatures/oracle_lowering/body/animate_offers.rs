@@ -499,6 +499,34 @@ pub(super) fn rewrite_offer_chosen_to_loop_rule(rule: &mut TemporaryRuleKind) {
     }
 }
 
+fn rewrite_offer_chosen_to_loop_cond(cond: &mut spellwake_engine::toolbox::ConditionExpr) {
+    use spellwake_engine::toolbox::ConditionExpr;
+    match cond {
+        ConditionExpr::Always(_) | ConditionExpr::BoundBool(_) => {}
+        ConditionExpr::Compare { left, right, .. } => {
+            rewrite_offer_chosen_to_loop_ve(left);
+            rewrite_offer_chosen_to_loop_ve(right);
+        }
+        ConditionExpr::NonEmpty(q)
+        | ConditionExpr::AllMatch { query: q, .. }
+        | ConditionExpr::AnyMatch { query: q, .. }
+        | ConditionExpr::HasTag { query: q, .. } => {
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                q,
+                &rewrite_offer_chosen_to_loop_rp,
+                &rewrite_offer_chosen_to_loop_ap,
+                &rewrite_offer_chosen_to_loop_ve,
+            );
+        }
+        ConditionExpr::And(cs) | ConditionExpr::Or(cs) => {
+            for c in cs {
+                rewrite_offer_chosen_to_loop_cond(c);
+            }
+        }
+        ConditionExpr::Not(c) => rewrite_offer_chosen_to_loop_cond(c),
+    }
+}
+
 pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
     for op in ops {
         match op {
@@ -707,10 +735,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_offer_chosen_to_loop_rp(player);
                 rewrite_offer_chosen_to_loop_ve(minimum);
             }
-            Instruction::UntapOrTapSelect { chooser, count, .. } => {
-                rewrite_offer_chosen_to_loop_rp(chooser);
-                rewrite_offer_chosen_to_loop_ve(count);
-            }
 
             Instruction::LookTopChoose {
                 count,
@@ -750,8 +774,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             Instruction::OptionalEffect { chooser }
             | Instruction::OptionalSequence { chooser, .. }
             | Instruction::Clash { chooser }
-            | Instruction::ChooseValue { chooser, .. }
-            | Instruction::AttachChoosingPermanent { chooser, .. } => {
+            | Instruction::ChooseValue { chooser, .. } => {
                 rewrite_offer_chosen_to_loop_rp(chooser);
             }
             Instruction::ChooseOption { chooser, options } => {
@@ -967,6 +990,9 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             Instruction::BranchIfFalse { condition, .. } => {
                 rewrite_offer_chosen_to_loop_ve(&mut condition.left);
                 rewrite_offer_chosen_to_loop_ve(&mut condition.right);
+            }
+            Instruction::BranchCondition { condition, .. } => {
+                rewrite_offer_chosen_to_loop_cond(condition);
             }
             Instruction::RepeatLoop { count, body } => {
                 rewrite_offer_chosen_to_loop_ve(count);
@@ -2038,12 +2064,9 @@ pub(in super::super) fn lower_animate_or_set_pt(
                 if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Battlefield { .. })
         ) || matches!(
             op,
-            Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
-                | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
-                | Instruction::ReturnChosenXGraveyardCreatures
+                Instruction::ReturnChosenXGraveyardCreatures
                 | Instruction::ReturnExiledTargetCohort { .. }
                 | Instruction::ReturnCardsDestroyedThisWay
-                | Instruction::ReturnCapturedDyingCreature
         )
     });
     match subject {

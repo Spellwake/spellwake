@@ -899,6 +899,29 @@ pub(super) fn lower_control_misc_instruction(
                         });
                         return Ok(());
                     }
+                    "an opponent at random" | "opponent at random" | "random opponent" => {
+                        builder.instructions.push(Instruction::ChooseValue {
+                            chooser: ResolvingPlayer::Controller,
+                            domain:
+                                spellwake_engine::program::ResolutionChoiceDomain::RandomPlayer {
+                                    opponents_only: true,
+                                },
+                        });
+                        return Ok(());
+                    }
+                    "a player at random"
+                    | "player at random"
+                    | "another player at random"
+                    | "random player" => {
+                        builder.instructions.push(Instruction::ChooseValue {
+                            chooser: ResolvingPlayer::Controller,
+                            domain:
+                                spellwake_engine::program::ResolutionChoiceDomain::RandomPlayer {
+                                    opponents_only: false,
+                                },
+                        });
+                        return Ok(());
+                    }
                     _ => {}
                 }
             }
@@ -992,6 +1015,27 @@ pub(super) fn lower_control_misc_instruction(
             {
                 builder.instructions.push(Instruction::ChooseOneLastMoved {
                     chooser: chooser_rp,
+                });
+                return Ok(());
+            }
+            if matches!(
+                cleaned_choice,
+                "a number greater than 0 and a color"
+                    | "a number greater than zero and a color"
+                    | "a positive number and a color"
+            ) && let Ok(chooser_rp) =
+                lower_resolving_player_in_context(chooser_ref, builder, in_trigger)
+            {
+                builder.instructions.push(Instruction::ChooseValue {
+                    chooser: chooser_rp,
+                    domain: spellwake_engine::program::ResolutionChoiceDomain::Number {
+                        min: 1,
+                        max: 20,
+                    },
+                });
+                builder.instructions.push(Instruction::ChooseValue {
+                    chooser: chooser_rp,
+                    domain: spellwake_engine::program::ResolutionChoiceDomain::Color,
                 });
                 return Ok(());
             }
@@ -2111,6 +2155,103 @@ fn try_lower_choose_objects_new_primitives(
     self_pronoun_valid: bool,
 ) -> Option<Result<(), &'static str>> {
     let raw = cleaned.trim().trim_end_matches('.');
+    // 0. Random card/permanent choice via universal ZoneOp(ZoneSelection::Random, ZoneDest::None).
+    if let Some((prefix_raw, suffix_raw)) = raw.split_once(" at random") {
+        let count_body = prefix_raw
+            .strip_prefix("one ")
+            .or_else(|| prefix_raw.strip_prefix("an "))
+            .or_else(|| prefix_raw.strip_prefix("a "))
+            .map(str::trim);
+        if let Some(card_phrase) = count_body
+            && !card_phrase.is_empty()
+            && !card_phrase.contains("target")
+        {
+            let suffix = suffix_raw.trim();
+            let mut trial = builder.clone();
+            let qz_opt: Option<spellwake_engine::toolbox::QueryZone> = if suffix.is_empty() {
+                Some(spellwake_engine::toolbox::QueryZone::Battlefield)
+            } else if matches!(suffix, "from your graveyard" | "in your graveyard") {
+                Some(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                )))
+            } else if matches!(
+                suffix,
+                "from target opponent's graveyard" | "in target opponent's graveyard"
+            ) {
+                trial
+                    .bind_target(BodyTarget::SingleOpponent)
+                    .ok()
+                    .map(|()| {
+                        spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                        ))
+                    })
+            } else if matches!(
+                suffix,
+                "from target player's graveyard" | "in target player's graveyard"
+            ) {
+                trial.bind_target(BodyTarget::SinglePlayer).ok().map(|()| {
+                    spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::TargetPlayer,
+                        ),
+                    ))
+                })
+            } else if matches!(suffix, "from a graveyard" | "in a graveyard") {
+                Some(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                    spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer),
+                )))
+            } else {
+                None
+            };
+            if let Some(qz) = qz_opt
+                && let Ok(parsed) = spellwake_oracle_compiler::filter::parse_object_filter(
+                    card_phrase,
+                    &cached_compiler_vocab(vocabulary),
+                )
+                && parsed.zone.is_none()
+                && !parsed.any_spell
+                && !parsed.is_ability
+            {
+                let p_sel = if let Some(players) = try_group_affected_players(chooser) {
+                    Some(spellwake_engine::toolbox::PlayerSelector::Group(players))
+                } else {
+                    lower_resolving_player_in_context(chooser, &mut trial, in_trigger)
+                        .ok()
+                        .map(spellwake_engine::toolbox::PlayerSelector::Resolving)
+                };
+                if let Some(p_sel) = p_sel
+                    && let Ok(obj) = if is_unrestricted_filter(&parsed) {
+                        Ok(ObjectFilter::any())
+                    } else {
+                        lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary)
+                    }
+                    && bind_filter_player_target(&mut trial, &obj).is_ok()
+                {
+                    const CHOOSE_OBJ_BIND: spellwake_engine::toolbox::BindingId =
+                        spellwake_engine::toolbox::BindingId(923);
+                    let mut spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                        spellwake_engine::toolbox::ObjectQuery::zone(qz, obj),
+                        spellwake_engine::toolbox::ZoneSelection::Random {
+                            count: Box::new(ValueExpr::literal(1)),
+                            chooser: p_sel,
+                        },
+                        spellwake_engine::toolbox::ZoneDest::None,
+                    );
+                    spec.bind_moved = Some(CHOOSE_OBJ_BIND);
+                    trial.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec),
+                    );
+                    *builder = trial;
+                    return Some(Ok(()));
+                }
+            }
+        }
+    }
     if raw.is_empty()
         || raw.contains("at random")
         || raw.contains("with different")
@@ -2158,10 +2299,42 @@ fn try_lower_choose_objects_new_primitives(
         (0, 3, rest.trim())
     } else if let Some(rest) = raw.strip_prefix("up to four ") {
         (0, 4, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("up to five ") {
+        (0, 5, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("up to six ") {
+        (0, 6, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("up to seven ") {
+        (0, 7, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("up to eight ") {
+        (0, 8, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("up to nine ") {
+        (0, 9, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("up to ten ") {
+        (0, 10, rest.trim())
     } else if let Some(rest) = raw.strip_prefix("any number of ") {
         (0, 100, rest.trim())
     } else if let Some(rest) = raw.strip_prefix("one or more ") {
         (1, 100, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("exactly four ") {
+        (4, 4, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("exactly three ") {
+        (3, 3, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("exactly two ") {
+        (2, 2, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("exactly one ") {
+        (1, 1, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("ten ") {
+        (10, 10, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("nine ") {
+        (9, 9, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("eight ") {
+        (8, 8, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("seven ") {
+        (7, 7, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("six ") {
+        (6, 6, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("five ") {
+        (5, 5, rest.trim())
     } else if let Some(rest) = raw.strip_prefix("four ") {
         (4, 4, rest.trim())
     } else if let Some(rest) = raw.strip_prefix("three ") {
@@ -2604,6 +2777,136 @@ fn try_lower_choose_objects_new_primitives(
                     .instructions
                     .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
                 *builder = trial;
+                return Some(Ok(()));
+            }
+        }
+    }
+
+    // 9b. Graveyard card choices via universal ZoneOp(ZoneSelection::Prompt, ZoneDest::None).
+    {
+        let mut trial_gy = builder.clone();
+        let gy_match: Option<(&str, spellwake_engine::toolbox::QueryZone)> = if let Some(p) =
+            body_raw
+                .strip_suffix(" in your graveyard")
+                .or_else(|| body_raw.strip_suffix(" from your graveyard"))
+        {
+            Some((
+                p,
+                spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                )),
+            ))
+        } else if let Some(p) = body_raw
+            .strip_suffix(" in their graveyard")
+            .or_else(|| body_raw.strip_suffix(" from their graveyard"))
+        {
+            let gy_owner = if let Some(players) = try_group_affected_players(chooser) {
+                Some(spellwake_engine::toolbox::PlayerSelector::Group(players))
+            } else {
+                lower_resolving_player_in_context(chooser, &mut trial_gy, in_trigger)
+                    .ok()
+                    .map(spellwake_engine::toolbox::PlayerSelector::Resolving)
+            };
+            gy_owner.map(|sel| {
+                (
+                    p,
+                    spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(sel)),
+                )
+            })
+        } else if let Some(p) = body_raw
+            .strip_suffix(" in target opponent's graveyard")
+            .or_else(|| body_raw.strip_suffix(" from target opponent's graveyard"))
+        {
+            trial_gy
+                .bind_target(BodyTarget::SingleOpponent)
+                .ok()
+                .map(|()| {
+                    (
+                        p,
+                        spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                        )),
+                    )
+                })
+        } else if let Some(p) = body_raw
+            .strip_suffix(" in target player's graveyard")
+            .or_else(|| body_raw.strip_suffix(" from target player's graveyard"))
+        {
+            trial_gy
+                .bind_target(BodyTarget::SinglePlayer)
+                .ok()
+                .map(|()| {
+                    (
+                        p,
+                        spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                        )),
+                    )
+                })
+        } else if let Some(p) = body_raw
+            .strip_suffix(" in a graveyard")
+            .or_else(|| body_raw.strip_suffix(" from a graveyard"))
+        {
+            Some((
+                p,
+                spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                    spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::EachPlayer),
+                )),
+            ))
+        } else {
+            None
+        };
+        if let Some((card_phrase, qz)) = gy_match
+            && !card_phrase.contains("target")
+            && let Ok(parsed) = spellwake_oracle_compiler::filter::parse_object_filter(
+                card_phrase.trim(),
+                &cached_compiler_vocab(vocabulary),
+            )
+            && parsed.zone.is_none()
+        {
+            let p_sel = if let Some(players) = try_group_affected_players(chooser) {
+                Some(spellwake_engine::toolbox::PlayerSelector::Group(players))
+            } else {
+                lower_resolving_player_in_context(chooser, &mut trial_gy, in_trigger)
+                    .ok()
+                    .map(spellwake_engine::toolbox::PlayerSelector::Resolving)
+            };
+            if let Some(p_sel) = p_sel
+                && let Ok(obj) = if is_unrestricted_filter(&parsed) {
+                    Ok(ObjectFilter::any())
+                } else {
+                    lower_object_filter_in_context(&parsed, &trial_gy, in_trigger, vocabulary)
+                }
+                && bind_filter_player_target(&mut trial_gy, &obj).is_ok()
+            {
+                const CHOOSE_OBJ_BIND: spellwake_engine::toolbox::BindingId =
+                    spellwake_engine::toolbox::BindingId(923);
+                const CHOOSE_UNCHOSEN_BIND: spellwake_engine::toolbox::BindingId =
+                    spellwake_engine::toolbox::BindingId(924);
+                let mut spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                    spellwake_engine::toolbox::ObjectQuery::zone(qz, obj),
+                    spellwake_engine::toolbox::ZoneSelection::Prompt {
+                        chooser: p_sel,
+                        min: Box::new(ValueExpr::literal(min_val)),
+                        max: Box::new(ValueExpr::literal(max_val)),
+                        constraint: None,
+                        category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                        hidden: false,
+                    },
+                    spellwake_engine::toolbox::ZoneDest::None,
+                );
+                spec.bind_moved = Some(CHOOSE_OBJ_BIND);
+                spec.bind_unchosen = Some(CHOOSE_UNCHOSEN_BIND);
+                trial_gy
+                    .instructions
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
+                *builder = trial_gy;
                 return Some(Ok(()));
             }
         }
@@ -3203,6 +3506,19 @@ pub(in super::super) fn parse_choice_kind(
                 opponents_only: false,
             }))
         }
+        "an opponent at random" | "opponent at random" | "random opponent" => Ok(
+            ParsedChoiceKind::Domain(ResolutionChoiceDomain::RandomPlayer {
+                opponents_only: true,
+            }),
+        ),
+        "a player at random"
+        | "player at random"
+        | "another player at random"
+        | "random player" => Ok(ParsedChoiceKind::Domain(
+            ResolutionChoiceDomain::RandomPlayer {
+                opponents_only: false,
+            },
+        )),
         "a number"
         | "a number of your choice"
         | "any number"
@@ -5473,10 +5789,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_chosen_to_loop_rp(player);
                 rewrite_chosen_to_loop_ve(minimum);
             }
-            Instruction::UntapOrTapSelect { chooser, count, .. } => {
-                rewrite_chosen_to_loop_rp(chooser);
-                rewrite_chosen_to_loop_ve(count);
-            }
 
             Instruction::ChooseObjects {
                 players,
@@ -5535,8 +5847,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             Instruction::OptionalEffect { chooser }
             | Instruction::OptionalSequence { chooser, .. }
             | Instruction::Clash { chooser }
-            | Instruction::ChooseValue { chooser, .. }
-            | Instruction::AttachChoosingPermanent { chooser, .. } => {
+            | Instruction::ChooseValue { chooser, .. } => {
                 rewrite_chosen_to_loop_rp(chooser);
             }
             Instruction::ChooseOption { chooser, options } => {

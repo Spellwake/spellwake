@@ -138,8 +138,30 @@ fn death_keyword_uses_predeath_counters_and_returns_once_with_its_counter_under_
             vec![A, B],
             vec![
                 controlled,
-                instant(2, A, Instruction::DestroyTarget),
-                instant(3, A, Instruction::DestroyTarget),
+                instant(
+                    2,
+                    A,
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ))),
+                ),
+                instant(
+                    3,
+                    A,
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    ))),
+                ),
             ],
             Step::PrecombatMain,
         )
@@ -192,7 +214,21 @@ fn a_token_has_a_death_trigger_but_cannot_return_from_its_graveyard() {
     };
     let state = setup(
         vec![A, B],
-        vec![maker, instant(2, A, Instruction::DestroyTarget)],
+        vec![
+            maker,
+            instant(
+                2,
+                A,
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ))),
+            ),
+        ],
         Step::PrecombatMain,
     )
     .into_state();

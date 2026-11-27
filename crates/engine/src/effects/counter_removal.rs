@@ -69,43 +69,6 @@ impl EffectWindow {
                 };
                 (object, 0, *maximum, None)
             }
-            Instruction::RemoveCountersFromPermanent {
-                target_self,
-                kind: None,
-                amount,
-            } => {
-                let object = if *target_self {
-                    match entry.kind() {
-                        StackKind::ActivatedAbility { source }
-                        | StackKind::TriggeredAbility { source } => source.id(),
-                        _ => return Err(EffectError::InconsistentProgram),
-                    }
-                } else {
-                    let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target
-                    else {
-                        return Err(EffectError::InconsistentProgram);
-                    };
-                    object
-                };
-                let resolved = self
-                    .resolve_value_expr(entry.controller(), amount)?
-                    .max(0.into())
-                    .min(i64::from(u8::MAX).into())
-                    .to_usize()
-                    .and_then(|v| u8::try_from(v).ok())
-                    .unwrap_or(0);
-                let mut total_avail: u32 = 0;
-                for kind in self.characteristics.present_permanent_counter_kinds(object) {
-                    let avail = self
-                        .counters_of_kind(object, kind)
-                        .min(i64::from(resolved).into())
-                        .to_usize()
-                        .unwrap_or(0);
-                    total_avail = total_avail.saturating_add(u32::try_from(avail).unwrap_or(0));
-                }
-                let exact = u8::try_from(total_avail.min(u32::from(resolved))).unwrap_or(resolved);
-                (object, exact, exact, None)
-            }
             Instruction::MoveCounters {
                 from,
                 kind,

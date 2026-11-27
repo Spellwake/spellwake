@@ -819,53 +819,6 @@ impl EffectWindow {
             }
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::ReturnSacrificedCardToBattlefield {
-            let binding = self
-                .execution_bindings(entry.id())
-                .and_then(|value| value.trigger.as_ref())
-                .ok_or(EffectError::InconsistentProgram)?;
-            let [member] = binding.causes.members() else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let crate::occurrence::TriggerRelated::ZoneChange { after, .. } = &member.related
-            else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let object = after.object.id();
-            let zone = after.object.zone();
-            if matches!(
-                zone,
-                ObjectZone::Graveyard(_) | ObjectZone::Exile | ObjectZone::Command
-            ) && self
-                .window
-                .cards()
-                .get(object)
-                .is_some_and(|card| card.zone() == zone && card.card_id().is_some())
-                && self
-                    .copiable_program(object)
-                    .is_some_and(|card| card.permanent().is_some())
-            {
-                self.linked_return_work = Some(LinkedReturnWork {
-                    origin: LinkedReturnOrigin::Sacrifice {
-                        zone,
-                        controller: entry.controller(),
-                        entry: entry.id(),
-                        instruction: index,
-                    },
-                    library_bottom: None,
-                    wake_entry: None,
-                    objects: vec![object],
-                    orders: BTreeMap::new(),
-                    graveyard_orders: BTreeMap::new(),
-                    choices: BTreeMap::new(),
-                    auras: BTreeMap::new(),
-                    replacements: None,
-                });
-                self.finish_linked_return_if_ready(ctx.append)?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if instruction == Instruction::ReturnCardsDestroyedThisWay {
             let cards = std::mem::take(
                 &mut self
@@ -892,86 +845,9 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if matches!(
-            instruction,
-            Instruction::ReturnCapturedDyingCreature
-                | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
-        ) {
-            let entry_additions = match instruction {
-                Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { subtype, color } => {
-                    crate::program::EntryAdditions {
-                        creature_subtype: Some(subtype),
-                        color: Some(color),
-                    }
-                }
-                _ => crate::program::EntryAdditions::default(),
-            };
-            if let Some((card, owner)) = self.captured_graveyard_card()? {
-                let origin = LinkedReturnOrigin::Graveyard {
-                    player: Some(owner),
-                    controller: Some(entry.controller()),
-                    subtype_counters: None,
-                    entry_additions,
-                    entry: entry.id(),
-                    instruction: index,
-                    tapped: false,
-                    forest: false,
-                    corpse: false,
-                };
-                self.begin_linked_cohort_return(origin, vec![card], ctx.append)?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ReturnGraveyardCreatureWithSubtypeCounters { subtype, amount } =
-            instruction
-        {
-            let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let origin = LinkedReturnOrigin::Graveyard {
-                player: Some(entry.controller()),
-                controller: None,
-                subtype_counters: Some((subtype, amount)),
-                entry_additions: crate::program::EntryAdditions::default(),
-                entry: entry.id(),
-                instruction: index,
-                tapped: false,
-                forest: false,
-                corpse: false,
-            };
-            self.begin_linked_cohort_return(origin, vec![object], ctx.append)?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if instruction == Instruction::ReturnDyingCreatureAsForest {
             if let Some((card, owner)) = self.captured_graveyard_card()? {
                 self.begin_graveyard_returns(entry, index, owner, vec![card], false, ctx.append)?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::ReturnDyingSourceTapped {
-            let binding = self
-                .execution_bindings(entry.id())
-                .and_then(|bindings| bindings.trigger.as_ref())
-                .ok_or(EffectError::InconsistentProgram)?;
-            let [member] = binding.causes.members() else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let crate::occurrence::TriggerRelated::ZoneChange { after, .. } = &member.related
-            else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let object = after.object.id();
-            let player = after.object.owner();
-            if self.window.cards().get(object).is_some_and(|card| {
-                card.zone() == ObjectZone::Graveyard(player) && card.card_id().is_some()
-            }) && self
-                .copiable_program(object)
-                .is_some_and(|card| card.permanent().is_some())
-            {
-                self.begin_graveyard_returns(entry, index, player, vec![object], true, ctx.append)?;
             }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -1242,15 +1118,6 @@ impl EffectWindow {
         }
         if let Instruction::PairWithCreature { entrant_only } = instruction {
             if let Some(frame) = self.soulbond_selection(entrant_only)? {
-                return Ok(StepOutcome::Pending(EffectDecision::ResolutionSelect(
-                    frame,
-                )));
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::MayTurnControlledCreatureFaceUp {
-            if let Some(frame) = self.turn_face_up_selection()? {
                 return Ok(StepOutcome::Pending(EffectDecision::ResolutionSelect(
                     frame,
                 )));
@@ -2281,26 +2148,6 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
 
-        if matches!(instruction, Instruction::DestroyTarget) {
-            let TargetRef::Object(target) = self.instruction_target(entry)?.choice().target else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let previous = self.current_characteristics(target)?;
-            let results = &mut self
-                .resolution_cursor_mut()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .results;
-            results.destroyed_target_controller = None;
-            results.destruction_target_controller =
-                previous.as_ref().and_then(|card| card.controller);
-            results.destruction_target_toughness = previous
-                .as_ref()
-                .and_then(|card| card.power_toughness.as_ref())
-                .map(|stats| stats.derived.toughness.clone());
-            results.destruction_target_subtypes = previous
-                .map(|card| card.current_creature_subtypes)
-                .unwrap_or_default();
-        }
         if let Instruction::DrawCards(spec) = &instruction
             && let crate::program::ValueExpr::PlayerStat(
                 crate::program::PlayerStatExpr::CardsShortOfHandSize(required),
@@ -3164,91 +3011,6 @@ impl EffectWindow {
         index: usize,
         instruction: Instruction,
     ) -> Result<StepOutcome, EffectError> {
-        if let Instruction::AttachOnEntry { entering_equipment } = instruction {
-            let (equipment, host) = self.entry_attachment(entering_equipment)?;
-            let before = self.rules_snapshot(None)?;
-            if let Some(event) =
-                self.attach_at_cut(entry.id(), equipment, host, &before.view().evaluated)?
-            {
-                self.emit_from(
-                    crate::occurrence::EventCause::Instruction {
-                        entry: entry.id(),
-                        instruction: index,
-                    },
-                    &before,
-                    None,
-                    ctx.append,
-                    |_, _, _| Ok(vec![event]),
-                )?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ControlledSubtypeDamagesAttacker(kind) = &instruction {
-            let binding = self
-                .execution_bindings(entry.id())
-                .and_then(|b| b.trigger.as_ref())
-                .ok_or(EffectError::InconsistentProgram)?;
-            let [member] = binding.causes.members() else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let crate::occurrence::TriggerRelated::Combatant(attacker) = member.related else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let current = self.evaluated_characteristics()?;
-            let recipient = current
-                .get(attacker)
-                .filter(|value| value.zone == ObjectZone::Battlefield)
-                .and_then(|value| {
-                    if value.is_creature() {
-                        Some(DamageRecipient::Creature(attacker))
-                    } else if value.has_type(CardType::Planeswalker) {
-                        Some(DamageRecipient::Planeswalker(attacker))
-                    } else {
-                        None
-                    }
-                });
-            if let Some(target) = recipient {
-                let inputs = current
-                    .objects
-                    .values()
-                    .filter(|value| {
-                        value.zone == ObjectZone::Battlefield
-                            && value.controller == Some(entry.controller())
-                            && value.current_creature_subtypes.contains(kind)
-                    })
-                    .map(|value| {
-                        Ok(DamageInput {
-                            source: DamageSource::Object {
-                                object: self
-                                    .window
-                                    .cards()
-                                    .get(value.object)
-                                    .ok_or(EffectError::UnknownObject)?
-                                    .clone(),
-                                controller: entry.controller(),
-                            },
-                            target,
-                            amount: 1.into(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, EffectError>>()?;
-                if !inputs.is_empty() {
-                    self.install_damage_batch(
-                        DamageOrigin::Resolution {
-                            entry: entry.id(),
-                            instruction: index,
-                        },
-                        DamageKind::Noncombat,
-                        inputs,
-                        ctx.journal,
-                    )?;
-                    return Ok(StepOutcome::Continue);
-                }
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if let Instruction::CreateArmyIfAbsent { army, subtype } = instruction {
             if self.controlled_armies(entry.controller(), army)?.is_empty() {
                 self.create_army(entry.controller(), army, subtype)?;
@@ -3336,11 +3098,6 @@ impl EffectWindow {
                 .entry(entry.controller())
                 .or_insert_with(|| 0.into());
             *value = value.plus(&1.into());
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::MoveLoyaltyCounterToEnteringPermanent {
-            self.move_loyalty_to_entering_permanent(entry, index, ctx.append)?;
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
@@ -3658,66 +3415,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::DrawToChosenOpponentHandSize {
-            let opponents = self
-                .combat_rules
-                .opponents(self.window.participants(), entry.controller())?;
-            let opponent = match opponents.as_slice() {
-                [] => {
-                    self.advance_instruction()?;
-                    return Ok(StepOutcome::Continue);
-                }
-                [only] => *only,
-                _ => {
-                    match self
-                        .resolution_cursor_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .chosen_opponent
-                        .take()
-                    {
-                        Some(player) => player,
-                        None => {
-                            let frame = EffectDecision::OpponentChoice(OpponentChoiceFrame {
-                                revision: self.revision,
-                                entry: entry.id(),
-                                instruction: index,
-                                chooser: entry.controller(),
-                                opponents,
-                            });
-                            return Ok(StepOutcome::Pending(frame));
-                        }
-                    }
-                }
-            };
-            let hand_size = |player| {
-                self.window
-                    .cards()
-                    .iter()
-                    .filter(|card| card.zone() == ObjectZone::Hand(player))
-                    .count()
-            };
-            let difference = self
-                .requested_draw_count(entry.controller())
-                .and_then(|n| n.to_usize())
-                .unwrap_or_else(|| {
-                    hand_size(opponent).saturating_sub(hand_size(entry.controller()))
-                });
-            if difference > 0 {
-                ctx.draws.append(draw_cards_step!(
-                    self,
-                    ctx,
-                    entry.controller(),
-                    RulesInteger::from_usize(difference),
-                    DrawOrigin::Instruction {
-                        entry: entry.id(),
-                        instruction: index
-                    },
-                    ctx.append
-                ));
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if instruction == Instruction::ReselectAttackDefender {
             if let Some(domain) = self.attack_defender_frame()? {
                 let frame = EffectDecision::ReselectAttackDefender(domain);
@@ -3764,42 +3461,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        let phasing_roots = match &instruction {
-            Instruction::PhaseOutObjects(objects) => {
-                Some(std::borrow::Cow::Borrowed(objects.as_slice()))
-            }
-            _ => None,
-        };
-        if let Some(objects) = phasing_roots {
-            let before = self.rules_snapshot(None)?;
-            let changed = self
-                .window
-                .phase_out(&objects, &self.characteristics.attachments)?;
-            if !changed.is_empty() {
-                if let Some(combat) = &mut self.combat {
-                    combat.reconcile(|combatant, _| {
-                        changed.binary_search(&combatant.object()).is_err()
-                    });
-                }
-                self.emit_from(
-                    crate::occurrence::EventCause::Instruction {
-                        entry: entry.id(),
-                        instruction: index,
-                    },
-                    &before,
-                    None,
-                    ctx.append,
-                    |_, _, _| {
-                        Ok(vec![crate::occurrence::RulesOccurrence::Phased {
-                            objects: changed,
-                            out: true,
-                        }])
-                    },
-                )?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if instruction == Instruction::WeakenOpposingAttackersUntilNextTurn {
             let StackKind::ActivatedAbility { source } = entry.kind() else {
                 return Err(EffectError::InconsistentProgram);
@@ -3820,28 +3481,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::WeakenDelayedAttacker(object) = instruction {
-            if self
-                .window
-                .cards()
-                .get(object)
-                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-            {
-                self.modify_objects(
-                    entry,
-                    index,
-                    [object].into(),
-                    Some(crate::characteristics::PowerToughness {
-                        power: (-1).into(),
-                        toughness: 0.into(),
-                    }),
-                    BTreeSet::new(),
-                    ctx.append,
-                )?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if instruction == Instruction::Myriad {
             if let Some(frame) = self.progress_myriad(entry)? {
                 return Ok(StepOutcome::Pending(EffectDecision::MyriadDefender(frame)));
@@ -3859,35 +3498,6 @@ impl EffectWindow {
         index: usize,
         instruction: Instruction,
     ) -> Result<StepOutcome, EffectError> {
-        if let Instruction::LoseLifeAndScryForSubtype(subtype) = instruction {
-            let count = self
-                .resolve_value_expr(entry.controller(), &ValueExpr::controlled_subtype(subtype))?;
-            if !count.is_positive() {
-                self.advance_instruction()?;
-                return Ok(StepOutcome::Continue);
-            }
-            let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry.id())
-            else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            payload.expand_instruction(
-                index,
-                false,
-                [
-                    Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::lose(
-                        crate::toolbox::PlayerSelector::Group(
-                            crate::program::AffectedPlayers::EachOpponent,
-                        ),
-                        ValueExpr::Literal(count.clone()),
-                    ))),
-                    Instruction::Scry {
-                        player: crate::program::ResolvingPlayer::Controller,
-                        amount: ValueExpr::Literal(count),
-                    },
-                ],
-            );
-            return Ok(StepOutcome::Continue);
-        }
         if matches!(
             instruction,
             Instruction::ExileForBlackToken { .. } | Instruction::ExileForSubtypeToken(_)
@@ -4494,10 +4104,6 @@ impl EffectWindow {
                 }
             }
         }
-        if matches!(instruction, Instruction::TabletopHonorAction { .. }) {
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if let Instruction::AddMana(ref mana_yield) = instruction {
             return self.execute_add_mana(ctx, entry, index, entry.controller(), mana_yield);
         }
@@ -4516,11 +4122,6 @@ impl EffectWindow {
                 return Ok(StepOutcome::Continue);
             }
             return self.execute_add_mana(ctx, entry, index, recipient, yield_kind);
-        }
-        if instruction == Instruction::IncreaseSpeed {
-            self.resolve_speed(entry, index, ctx.append)?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
         }
         if matches!(
             instruction,
@@ -4927,168 +4528,6 @@ impl EffectWindow {
     ) -> Result<StepOutcome, EffectError> {
         if matches!(instruction, Instruction::ShuffleTargetGraveyardCards { .. }) {
             self.begin_targeted_graveyard_shuffle()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::RemoveCountersFromPermanent {
-            target_self,
-            kind,
-            ref amount,
-        } = instruction
-        {
-            let resolved = self.resolve_value_expr(entry.controller(), amount)?;
-            let target_id = if target_self {
-                match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => Some(source.id()),
-                    _ => None,
-                }
-            } else if let Ok(target) = self.instruction_target(entry) {
-                match target.choice().target {
-                    TargetRef::Object(id) => Some(id),
-                    TargetRef::Player(_) | TargetRef::Stack(_) => None,
-                }
-            } else {
-                None
-            };
-            if resolved.is_positive()
-                && let Some(object) = target_id
-                && self
-                    .window
-                    .cards()
-                    .get(object)
-                    .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
-            {
-                if kind.is_none() {
-                    let mut present_kinds: Vec<(CounterKind, RulesInteger)> = Vec::new();
-                    let mut total_avail = RulesInteger::from(0);
-                    for ck in self.characteristics.present_permanent_counter_kinds(object) {
-                        let cnt = self.counters_of_kind(object, ck);
-                        if cnt.is_positive() {
-                            total_avail = total_avail.plus(&cnt);
-                            present_kinds.push((ck, cnt));
-                        }
-                    }
-                    if present_kinds.len() > 1 && total_avail > resolved {
-                        let choice = self.counter_removal_choice()?;
-                        if !choice.domain().is_empty() {
-                            return Ok(StepOutcome::Pending(EffectDecision::CounterRemoval(
-                                choice,
-                            )));
-                        }
-                    }
-                    if present_kinds.len() > 1 && total_avail <= resolved {
-                        let choice = self.counter_removal_choice()?;
-                        let all_selected = choice.domain().clone();
-                        self.remove_counters(&choice, &all_selected, ctx.append)?;
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
-                    }
-                }
-                let chosen_kind = kind.or_else(|| {
-                    self.characteristics
-                        .present_permanent_counter_kinds(object)
-                        .into_iter()
-                        .next()
-                });
-                if let Some(ck) = chosen_kind {
-                    let current_count = self.counters_of_kind(object, ck);
-                    let to_remove = if resolved < current_count {
-                        resolved
-                    } else {
-                        current_count.clone()
-                    };
-                    if to_remove.is_positive() {
-                        let before_snapshot = self.rules_snapshot(None)?;
-                        match ck {
-                            CounterKind::PlusOne | CounterKind::MinusOne => {
-                                let before = self.characteristics.counters(object);
-                                let delta = crate::characteristics::PowerToughnessCounters {
-                                    plus_one: if ck == CounterKind::PlusOne {
-                                        to_remove.clone()
-                                    } else {
-                                        0.into()
-                                    },
-                                    minus_one: if ck == CounterKind::MinusOne {
-                                        to_remove.clone()
-                                    } else {
-                                        0.into()
-                                    },
-                                };
-                                let after = self
-                                    .characteristics
-                                    .take_power_toughness_counters(object, &delta)
-                                    .map_err(|_| EffectError::InconsistentProgram)?;
-                                self.emit_from(
-                                    crate::occurrence::EventCause::Instruction {
-                                        entry: entry.id(),
-                                        instruction: index,
-                                    },
-                                    &before_snapshot,
-                                    None,
-                                    ctx.append,
-                                    |_, _, _| {
-                                        Ok(vec![
-                                            crate::occurrence::RulesOccurrence::PermanentCounterChanged {
-                                                object,
-                                                kind: ck,
-                                                before: if ck == CounterKind::PlusOne {
-                                                    before.plus_one.clone()
-                                                } else {
-                                                    before.minus_one.clone()
-                                                },
-                                                after: if ck == CounterKind::PlusOne {
-                                                    after.plus_one.clone()
-                                                } else {
-                                                    after.minus_one.clone()
-                                                },
-                                            },
-                                        ])
-                                    },
-                                )?;
-                            }
-                            other => {
-                                let after = current_count.minus(&to_remove);
-                                if let Some(map) =
-                                    self.characteristics.named_permanent_counters_mut(other)
-                                {
-                                    if after.is_positive() {
-                                        map.insert(object, after.clone());
-                                    } else {
-                                        map.remove(&object);
-                                        if other.keyword_counter_ability().is_some() {
-                                            self.characteristics
-                                                .clear_keyword_counter_grant(object, other);
-                                        }
-                                    }
-                                    self.emit_from(
-                                        crate::occurrence::EventCause::Instruction {
-                                            entry: entry.id(),
-                                            instruction: index,
-                                        },
-                                        &before_snapshot,
-                                        None,
-                                        ctx.append,
-                                        |_, _, _| {
-                                            Ok(vec![
-                                                crate::occurrence::RulesOccurrence::PermanentCounterChanged {
-                                                    object,
-                                                    kind: other,
-                                                    before: current_count.clone(),
-                                                    after: after.clone(),
-                                                },
-                                            ])
-                                        },
-                                    )?;
-                                }
-                            }
-                        }
-                        if let Some(cursor) = self.resolution_cursor_mut() {
-                            cursor.results.last_action_succeeded = true;
-                        }
-                    }
-                }
-            }
-            self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
         if instruction == Instruction::Ninjutsu {
@@ -5534,49 +4973,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::DrawAndLoseLifeForTargetGraveyardCreatures {
-            let player = self.resolving_player(crate::program::ResolvingPlayer::TargetPlayer)?;
-            let current = self.evaluated_characteristics()?;
-            let amount = self
-                .requested_draw_count(entry.controller())
-                .unwrap_or_else(|| {
-                    RulesInteger::from_usize(
-                        current
-                            .objects
-                            .values()
-                            .filter(|card| {
-                                card.zone == ObjectZone::Graveyard(player)
-                                    && card.is_creature()
-                                    && self
-                                        .window
-                                        .cards()
-                                        .get(card.object)
-                                        .is_some_and(|object| object.card_id().is_some())
-                            })
-                            .count(),
-                    )
-                });
-            ctx.draws.append(draw_cards_step!(
-                self,
-                ctx,
-                entry.controller(),
-                amount.clone(),
-                DrawOrigin::Instruction {
-                    entry: entry.id(),
-                    instruction: index
-                },
-                ctx.append
-            ));
-            self.adjust_life_at_cut(
-                entry.id(),
-                index,
-                entry.controller(),
-                &crate::life::LifeAdjustment::Lose(amount),
-                ctx.append,
-            )?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if instruction == Instruction::DrawEachPlayerForPayments {
             let paid = self
                 .resolution_cursor()
@@ -5593,35 +4989,6 @@ impl EffectWindow {
                     ValueExpr::Literal(paid),
                 ))),
             );
-        }
-        if let Instruction::DrawPlayersControllingName(ref name) = instruction {
-            let evaluated = self.evaluated_characteristics()?;
-            let players = self
-                .window
-                .apnap_players()?
-                .filter(|player| {
-                    evaluated.objects.values().any(|object| {
-                        object.zone == ObjectZone::Battlefield
-                            && object.controller == Some(*player)
-                            && self.name_rules.has_name(&object.current_names, name)
-                    })
-                })
-                .collect::<Vec<_>>();
-            for player in players {
-                ctx.draws.append(draw_cards_step!(
-                    self,
-                    ctx,
-                    player,
-                    1.into(),
-                    DrawOrigin::Instruction {
-                        entry: entry.id(),
-                        instruction: index
-                    },
-                    ctx.append
-                ));
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
         }
         if instruction == Instruction::RevealTopAndRemoveAttackerIfForest {
             self.reveal_top_against_attacker(entry, index, ctx.append)?;
@@ -5642,21 +5009,6 @@ impl EffectWindow {
             self.resolution_cursor_mut()
                 .ok_or(EffectError::WrongResolutionFrame)?
                 .remembered_permanent = Some((controller, value));
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::ControllerLosesRememberedManaValue {
-            let (_, value) = self
-                .resolution_cursor()
-                .and_then(|c| c.remembered_permanent.clone())
-                .ok_or(EffectError::InconsistentProgram)?;
-            self.adjust_life_at_cut(
-                entry.id(),
-                index,
-                entry.controller(),
-                &crate::life::LifeAdjustment::Lose(value),
-                ctx.append,
-            )?;
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
@@ -5765,28 +5117,6 @@ impl EffectWindow {
         index: usize,
         instruction: Instruction,
     ) -> Result<StepOutcome, EffectError> {
-        if matches!(
-            instruction,
-            Instruction::TargetDamagesItsControllersOtherCreatures
-                | Instruction::OtherCreaturesReturnPowerDamage
-        ) {
-            let returning = instruction == Instruction::OtherCreaturesReturnPowerDamage;
-            let inputs = self.cohort_power_damage(entry, returning)?;
-            if inputs.is_empty() {
-                self.advance_instruction()?;
-            } else {
-                self.install_damage_batch(
-                    DamageOrigin::Resolution {
-                        entry: entry.id(),
-                        instruction: index,
-                    },
-                    DamageKind::Noncombat,
-                    inputs,
-                    ctx.journal,
-                )?;
-            }
-            return Ok(StepOutcome::Continue);
-        }
         if instruction == Instruction::ReflectAttachedCreatureDamage {
             if let Some(input) = self.reflected_attached_damage(entry.id())? {
                 self.install_damage_batch(
@@ -5941,52 +5271,6 @@ impl EffectWindow {
                     ctx.journal,
                 )?;
             }
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::DamageCreatureAtSpellMastery { amount, minimum } = &instruction {
-            let amount = self.resolve_value_expr(entry.controller(), amount)?;
-            if !amount.is_positive() {
-                self.advance_instruction()?;
-                return Ok(StepOutcome::Continue);
-            }
-            let TargetRef::Object(target) = self.instruction_target(entry)?.choice().target else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let recipient = DamageRecipient::Creature(target);
-            let source = self.resolution_damage_source(entry)?;
-            let mut inputs = vec![DamageInput {
-                source: source.clone(),
-                target: recipient,
-                amount: amount.clone(),
-            }];
-            let eligible_cards = self.resolve_value_expr(
-                entry.controller(),
-                &ValueExpr::count_graveyard(
-                    crate::program::ResolvingPlayer::Controller,
-                    ObjectFilter::instant_or_sorcery(),
-                ),
-            )?;
-            if eligible_cards >= i64::from(*minimum).into() {
-                let controller = self
-                    .evaluated_characteristics()?
-                    .get(target)
-                    .and_then(|value| value.controller)
-                    .ok_or(EffectError::InconsistentProgram)?;
-                inputs.push(DamageInput {
-                    source,
-                    target: DamageRecipient::Player(controller),
-                    amount,
-                });
-            }
-            self.install_damage_batch(
-                DamageOrigin::Resolution {
-                    entry: entry.id(),
-                    instruction: index,
-                },
-                DamageKind::Noncombat,
-                inputs,
-                ctx.journal,
-            )?;
             return Ok(StepOutcome::Continue);
         }
         if let Instruction::DamageTargetControllersCreatures {
@@ -6618,82 +5902,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::ControlManaSourceThroughNextTurn {
-            let binding = self
-                .execution_bindings(entry.id())
-                .and_then(|b| b.trigger.as_ref())
-                .ok_or(EffectError::InconsistentProgram)?;
-            let [member] = binding.causes.members() else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let crate::occurrence::TriggerRelated::ManaSource(object) = member.related else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            if self
-                .window
-                .cards()
-                .get(object)
-                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-            {
-                let before = self.rules_snapshot(None)?;
-                let effect = self.characteristics.add_effect(
-                    entry.id(),
-                    object,
-                    crate::characteristics::ResolvedParts(vec![
-                        crate::characteristics::ResolvedPart::Control(entry.controller()),
-                    ]),
-                    crate::characteristics::ResolvedDuration::ThroughNextTurn {
-                        player: entry.controller(),
-                        created_in_turn: self.current_turn_number,
-                    },
-                )?;
-                self.emit_from(
-                    crate::occurrence::EventCause::Instruction {
-                        entry: entry.id(),
-                        instruction: index,
-                    },
-                    &before,
-                    None,
-                    ctx.append,
-                    |old, new, _| {
-                        let appearances = characteristic_appearance_changes(
-                            old,
-                            new,
-                            effect.affected.iter().copied(),
-                        )?;
-                        Ok(vec![
-                            crate::occurrence::RulesOccurrence::ContinuousEffectCreated {
-                                effect,
-                                appearances,
-                            },
-                        ])
-                    },
-                )?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::TransformSourceAndAttachToTarget {
-            let target = self.instruction_target(entry)?.choice().target;
-            if let Some(source) = self.available_transform_source(entry)? {
-                self.transform_ability_source(entry, index, ctx.append)?;
-                let before = self.rules_snapshot(None)?;
-                if let Some(attachment) = self.attach_if_legal(entry.id(), source, target)? {
-                    self.emit_from(
-                        crate::occurrence::EventCause::Instruction {
-                            entry: entry.id(),
-                            instruction: index,
-                        },
-                        &before,
-                        None,
-                        ctx.append,
-                        |_, _, _| Ok(vec![attachment]),
-                    )?;
-                }
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if let Instruction::AdvanceClassLevel(level) = instruction {
             if let StackKind::ActivatedAbility { source } = entry.kind() {
                 let id = source.id();
@@ -6873,6 +6081,7 @@ impl EffectWindow {
         index: usize,
         instruction: Instruction,
     ) -> Result<StepOutcome, EffectError> {
+        let _ = index;
         let bound = self.instruction_target(&entry)?;
         let target = bound.choice().target;
         if !self.operation_available(&instruction, target)? {
@@ -6885,47 +6094,6 @@ impl EffectWindow {
                 index,
                 None,
             );
-            return Ok(StepOutcome::Continue);
-        }
-        if matches!(
-            instruction,
-            Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
-        ) && let TargetRef::Object(object) = target
-            && let Some(destination) = self.settled_entry_destinations.get(&object).copied()
-            && destination != crate::program::PublicZoneDestination::Battlefield
-        {
-            self.settled_entry_destinations.remove(&object);
-            let physical = destination
-                .physical(Some(entry.controller()))
-                .ok_or(EffectError::InconsistentProgram)?;
-            if physical != ObjectDestination::Graveyard {
-                let before = self.rules_snapshot(None)?;
-                let (window, exit) = self.window.record_targeted_resolution_move_with_exit(
-                    self.window.revision(),
-                    bound.choice().id,
-                    physical,
-                )?;
-                self.window = window;
-                self.emit_from(
-                    crate::occurrence::EventCause::Instruction {
-                        entry: entry.id(),
-                        instruction: index,
-                    },
-                    &before,
-                    None,
-                    ctx.append,
-                    |old, current, controllers| {
-                        Ok(vec![exit_occurrence_at(
-                            old,
-                            current,
-                            exit,
-                            crate::occurrence::ZoneReason::ReturnFromGraveyardToBattlefield,
-                            controllers,
-                        )?])
-                    },
-                )?;
-            }
-            self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
         if let Some(frame) = self.graveyard_aura_entry_frame()? {
@@ -7619,77 +6787,6 @@ impl EffectWindow {
             }
         }
         Ok(())
-    }
-
-    pub(super) fn resolve_move_subject_objects(
-        &self,
-        entry: &crate::stack_window::StackEntry,
-        subject: crate::program::MoveSubjectRef,
-    ) -> Result<Vec<ObjectId>, EffectError> {
-        Ok(match subject {
-            crate::program::MoveSubjectRef::TargetObject => {
-                self.legal_permanent_targets()?.into_iter().collect()
-            }
-            crate::program::MoveSubjectRef::AbilitySource => match entry.kind() {
-                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
-                    vec![source.id()]
-                }
-                StackKind::CardSpell(id) => vec![*id],
-                _ => Vec::new(),
-            },
-            crate::program::MoveSubjectRef::TriggeringObject => self
-                .execution_bindings(entry.id())
-                .and_then(|b| b.trigger.as_ref())
-                .and_then(|t| t.causes.members().first())
-                .and_then(|cause| cause.subject_object_id())
-                .into_iter()
-                .collect(),
-            crate::program::MoveSubjectRef::AttachedHost => match entry.kind() {
-                StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
-                    match self.attachment_host_for_ability(source.id()) {
-                        Some(TargetRef::Object(host)) => vec![host],
-                        _ => Vec::new(),
-                    }
-                }
-                _ => Vec::new(),
-            },
-            crate::program::MoveSubjectRef::RevealedCard => self
-                .resolution_cursor()
-                .and_then(|c| c.results.revealed_top_card)
-                .or_else(|| {
-                    self.window
-                        .cards()
-                        .library(entry.controller())
-                        .first()
-                        .copied()
-                })
-                .into_iter()
-                .collect(),
-            crate::program::MoveSubjectRef::CreatedTokens => self
-                .resolution_cursor()
-                .map(|c| c.last_created_tokens.clone())
-                .unwrap_or_default(),
-            crate::program::MoveSubjectRef::LastMoved => self
-                .resolution_cursor()
-                .map(|c| {
-                    if !c.results.last_moved_objects.is_empty() {
-                        c.results.last_moved_objects.clone()
-                    } else {
-                        c.results.returned_target_permanent.into_iter().collect()
-                    }
-                })
-                .unwrap_or_default(),
-            crate::program::MoveSubjectRef::RememberedFirst => self
-                .legal_linked_targets()?
-                .map(|(a, _)| a)
-                .into_iter()
-                .collect(),
-            crate::program::MoveSubjectRef::RememberedSecond => self
-                .legal_linked_targets()?
-                .map(|(_, b)| b)
-                .into_iter()
-                .collect(),
-        })
     }
 
     fn execute_add_mana(

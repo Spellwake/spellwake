@@ -397,7 +397,6 @@ pub struct ZoneReplacementBatch {
     copies: BTreeMap<ObjectId, entry_copy::EntryCopyResult>,
     entry_opponents: BTreeMap<SeatId, Vec<SeatId>>,
     entry_history: Vec<(ObjectId, ZoneReplacementReply)>,
-    regeneration_prohibited: bool,
     ordered_library_placement: Option<crate::program::LibraryPlacement>,
     cause: EventCause,
     intents: Vec<ZoneMoveIntent>,
@@ -833,15 +832,13 @@ impl ZoneReplacementBatch {
             let prohibited = matches!(
                 source.instance.created,
                 Some(CreatedZoneEffect::Regenerate { .. })
-            ) && (self.regeneration_prohibited
-                || self
-                    .evaluated
-                    .get(candidate.before.id())
-                    .is_some_and(|view| {
-                        view.blocking_restrictions.contains(
-                            &crate::characteristics::BlockingRestriction::CannotBeRegenerated,
-                        )
-                    }));
+            ) && self
+                .evaluated
+                .get(candidate.before.id())
+                .is_some_and(|view| {
+                    view.blocking_restrictions
+                        .contains(&crate::characteristics::BlockingRestriction::CannotBeRegenerated)
+                });
             if prohibited || !destroyed {
                 return false;
             }
@@ -1143,8 +1140,7 @@ impl ZoneReplacementBatch {
             replay = initial;
             &replay.sources
         };
-        if self.regeneration_prohibited != fresh.regeneration_prohibited
-            || self.ordered_library_placement != fresh.ordered_library_placement
+        if self.ordered_library_placement != fresh.ordered_library_placement
             || self.cause != fresh.cause
             || self.intents != fresh.intents
             || self.window_revision != fresh.window_revision
@@ -2191,18 +2187,6 @@ impl EffectWindow {
                 }
             }
         }
-        let regeneration_prohibited = match &input.cause {
-            EventCause::Instruction { entry, instruction } => matches!(
-                self.payloads
-                    .get(entry)
-                    .and_then(StackPayload::instructions)
-                    .and_then(|ops| ops.get(*instruction)),
-                Some(Instruction::DestroyCapturedCombatCreature {
-                    no_regeneration: true
-                })
-            ),
-            _ => false,
-        };
         let mut controller_domains = BTreeMap::new();
         for candidate in candidates.values() {
             if let Some(controller) = candidate.entering_controller
@@ -2468,7 +2452,6 @@ impl EffectWindow {
             entry_history: Vec::new(),
             controller_domains,
             selected_controllers: Vec::new(),
-            regeneration_prohibited,
             ordered_library_placement: None,
             cause: input.cause,
             intents: input.intents,

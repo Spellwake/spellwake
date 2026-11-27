@@ -2055,22 +2055,6 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                             }
                             None => {
-                                let is_unrestricted_cast_tail = filter.is_some()
-                                    || rule_low.split_once("can't cast ").is_some_and(
-                                        |(_, tail)| {
-                                            matches!(
-                                                tail.trim().trim_end_matches('.'),
-                                                "spells"
-                                                    | "spells this turn"
-                                                    | "any spells"
-                                                    | "any spells this turn"
-                                                    | "additional spells"
-                                                    | "additional spells this turn"
-                                                    | "more spells"
-                                                    | "more spells this turn"
-                                            )
-                                        },
-                                    );
                                 if rule_low.starts_with("players ")
                                     || rule_low.starts_with("each player ")
                                 {
@@ -2083,23 +2067,18 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     || rule_low == "cant_cast_spells"
                                 {
                                     AffectedPlayers::EachOpponent
-                                } else if is_unrestricted_cast_tail
-                                    && (rule_low.starts_with("that player ")
-                                        || rule_low.starts_with("they "))
+                                } else if rule_low.starts_with("that player ")
+                                    || rule_low.starts_with("they ")
                                 {
                                     lower_affected_players_in_context(
                                         PlayerRefAst::ThatPlayer,
                                         builder,
                                         in_trigger,
                                     )?
-                                } else if is_unrestricted_cast_tail
-                                    && rule_low.starts_with("target player ")
-                                {
+                                } else if rule_low.starts_with("target player ") {
                                     builder.bind_target(BodyTarget::SinglePlayer)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
-                                } else if is_unrestricted_cast_tail
-                                    && rule_low.starts_with("target opponent ")
-                                {
+                                } else if rule_low.starts_with("target opponent ") {
                                     builder.bind_target(BodyTarget::SingleOpponent)?;
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 } else {
@@ -2108,19 +2087,71 @@ pub(super) fn lower_restrictions_statics_instruction(
                             }
                             _ => return Err("oracle:unsupported-temp-static"),
                         };
-                        let flt = filter
-                            .as_deref()
-                            .map(|f| {
+                        let flt = match filter.as_deref() {
+                            Some(f) => {
                                 let mut inner = f.clone();
                                 inner.any_spell = false;
                                 if is_unrestricted_filter(&inner) {
-                                    Ok(None)
+                                    None
                                 } else {
-                                    lower_object_filter(&inner, vocabulary).map(Some)
+                                    Some(lower_object_filter(&inner, vocabulary)?)
                                 }
-                            })
-                            .transpose()?
-                            .flatten();
+                            }
+                            None => {
+                                if let Some((_, tail_raw)) = rule_low.split_once("can't cast ") {
+                                    let mut tail = tail_raw.trim().trim_end_matches('.').trim();
+                                    for suf in [
+                                        " this turn",
+                                        " until end of turn",
+                                        " until your next turn",
+                                        " for the rest of the game",
+                                    ] {
+                                        if let Some(s) = tail.strip_suffix(suf) {
+                                            tail = s.trim();
+                                        }
+                                    }
+                                    if matches!(
+                                        tail,
+                                        "" | "spells"
+                                            | "a spell"
+                                            | "any spells"
+                                            | "additional spells"
+                                            | "more spells"
+                                    ) {
+                                        None
+                                    } else {
+                                        let stem = tail
+                                            .strip_suffix(" spells")
+                                            .or_else(|| tail.strip_suffix(" spell"))
+                                            .unwrap_or(tail)
+                                            .trim();
+                                        let vocab_ref = cached_compiler_vocab(vocabulary);
+                                        let Ok(mut ast_f) =
+                                            spellwake_oracle_compiler::filter::parse_object_filter(
+                                                stem, &vocab_ref,
+                                            )
+                                        else {
+                                            return Err("oracle:unsupported-temp-static");
+                                        };
+                                        if ast_f.zone.is_some()
+                                            || !ast_f.extra_zones.is_empty()
+                                            || ast_f.is_ability
+                                            || ast_f.named.is_some()
+                                        {
+                                            return Err("oracle:unsupported-temp-static");
+                                        }
+                                        ast_f.any_spell = false;
+                                        if is_unrestricted_filter(&ast_f) {
+                                            None
+                                        } else {
+                                            Some(lower_object_filter(&ast_f, vocabulary)?)
+                                        }
+                                    }
+                                } else {
+                                    None
+                                }
+                            }
+                        };
                         builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantCastSpells {
                                 players,
                                 filter: flt,
@@ -2188,6 +2219,99 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 _ => {}
                             }
                         }
+                    }
+                    if rule_low.contains("as though they didn't have hexproof")
+                        || rule_low.contains("as though it didn't have hexproof")
+                    {
+                        let sel = if rule_low.contains("opponent") {
+                            PermanentSelector {
+                                controller: ControllerSelector::Opponents,
+                                ..PermanentSelector::default()
+                            }
+                        } else {
+                            PermanentSelector::default()
+                        };
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                                TemporaryRuleKind::TemporaryStatic(Box::new(
+                                    StaticContinuousAbility::Restriction {
+                                        id: ids.static_id(),
+                                        rule: StaticRestriction::IgnoreOpponentsHexproof(Box::new(
+                                            sel,
+                                        )),
+                                    },
+                                )),
+                                dur,
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    if rule_low.contains("play with their hand revealed")
+                        || rule_low.contains("plays with their hand revealed")
+                        || rule_low.contains("play with their hands revealed")
+                    {
+                        let opponents_only = !rule_low.starts_with("players ")
+                            && !rule_low.starts_with("each player ");
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                                TemporaryRuleKind::TemporaryStatic(Box::new(
+                                    StaticContinuousAbility::CastPermission {
+                                        id: ids.static_id(),
+                                        permission: CastPermissionRule::RevealHands {
+                                            opponents_only,
+                                        },
+                                    },
+                                )),
+                                dur,
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    if (rule_low.contains("can't attack you or planeswalkers you control")
+                        || rule_low.contains("can't attack you or permanents you control")
+                        || rule_low.contains("can't attack you"))
+                        && !rule_low.contains(" unless ")
+                    {
+                        let affected = if rule_low.contains("creatures your opponents control")
+                            || rule_low.contains("creatures they control")
+                            || rule_low.contains("creatures that player controls")
+                        {
+                            ObjectFilter::Clause(ObjectClause::creature().opposing())
+                        } else {
+                            ObjectFilter::creature()
+                        };
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::Matching(affected),
+                                )),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                                    BlockingRestriction::CannotAttackSourceController,
+                                )]),
+                                dur,
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    if (rule_low.contains("creatures that player controls attack you if able")
+                        || rule_low.contains("creatures they control attack you if able")
+                        || rule_low.contains("creatures your opponents control attack you if able"))
+                        && !rule_low.contains(" unless ")
+                    {
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::Matching(ObjectFilter::Clause(
+                                        ObjectClause::creature().opposing(),
+                                    )),
+                                )),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                                    BlockingRestriction::MustAttackEachCombatIfAble,
+                                )]),
+                                dur,
+                            ),
+                        );
+                        return Ok(());
                     }
                     if is_temp_menace_blocking_rule(rule, &rule_low, filter.as_deref()) {
                         let mut ab = AbilityChange::default();
@@ -4717,6 +4841,625 @@ pub(super) fn lower_restrictions_statics_instruction(
             );
             Ok(())
         }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } => {
+            let raw_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let mut dur = ResolvedDuration::UntilEndOfTurn;
+            let mut body = raw_low.as_str();
+            for (pref, d) in [
+                (
+                    "until your next turn, ",
+                    ResolvedDuration::UntilControllerNextTurn,
+                ),
+                (
+                    "until the end of your next turn, ",
+                    ResolvedDuration::ThroughControllerNextTurn,
+                ),
+                ("until end of turn, ", ResolvedDuration::UntilEndOfTurn),
+                ("until the end of turn, ", ResolvedDuration::UntilEndOfTurn),
+                ("until end of combat, ", ResolvedDuration::UntilEndOfCombat),
+                ("this turn, ", ResolvedDuration::UntilEndOfTurn),
+                ("this combat, ", ResolvedDuration::UntilEndOfCombat),
+                (
+                    "for the rest of the game, ",
+                    ResolvedDuration::NoStatedDuration,
+                ),
+            ] {
+                if let Some(rest) = body.strip_prefix(pref) {
+                    body = rest.trim();
+                    dur = d;
+                    break;
+                }
+            }
+            for (suf, d) in [
+                (
+                    " until your next turn",
+                    ResolvedDuration::UntilControllerNextTurn,
+                ),
+                (
+                    " until the end of your next turn",
+                    ResolvedDuration::ThroughControllerNextTurn,
+                ),
+                (" until end of turn", ResolvedDuration::UntilEndOfTurn),
+                (" until the end of turn", ResolvedDuration::UntilEndOfTurn),
+                (" until end of combat", ResolvedDuration::UntilEndOfCombat),
+                (
+                    " until the end of combat",
+                    ResolvedDuration::UntilEndOfCombat,
+                ),
+                (
+                    " for the rest of the game",
+                    ResolvedDuration::NoStatedDuration,
+                ),
+                (
+                    " for the rest of the turn",
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+                (" this combat", ResolvedDuration::UntilEndOfCombat),
+                (" this turn", ResolvedDuration::UntilEndOfTurn),
+            ] {
+                if let Some(rest) = body.strip_suffix(suf) {
+                    body = rest.trim();
+                    dur = d;
+                    break;
+                }
+            }
+            if matches!(
+                body,
+                "skip the untap step of that turn"
+                    | "skip that turn's untap step"
+                    | "skip your next untap step"
+                    | "you skip your next untap step"
+            ) {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_step(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::turn::Step::Untap,
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(
+                body,
+                "skip your next draw step"
+                    | "you skip your next draw step"
+                    | "skip the draw step of that turn"
+            ) {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_step(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::turn::Step::Draw,
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(
+                body,
+                "skip your next combat phase" | "you skip your next combat phase"
+            ) {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_step(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::turn::Step::BeginningCombat,
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(
+                body,
+                "it doesn't untap during its controller's next untap step"
+                    | "that creature doesn't untap during its controller's next untap step"
+                    | "that permanent doesn't untap during its controller's next untap step"
+                    | "they don't untap during their controllers' next untap steps"
+                    | "those creatures don't untap during their controllers' next untap steps"
+                    | "those permanents don't untap during their controllers' next untap steps"
+            ) {
+                if is_permanent_body_target(builder.target) {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(
+                            EffectSubject::TargetObject,
+                        ),
+                    );
+                    return Ok(());
+                }
+                if last_instruction_moved_object(&builder.instructions)
+                    || matches!(
+                        builder.instructions.last(),
+                        Some(Instruction::MutateObject(_))
+                    )
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(
+                            EffectSubject::LastMoved,
+                        ),
+                    );
+                    return Ok(());
+                }
+                if let Some(group_obj) = builder.last_group_filter {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(
+                            EffectSubject::Matching(group_obj),
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+            if matches!(
+                body,
+                "damage can't be prevented" | "damage cannot be prevented"
+            ) {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::DamageCantBePrevented,
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(
+                body,
+                "players have no maximum hand size" | "each player has no maximum hand size"
+            ) {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::DrawRule {
+                                id: ids.static_id(),
+                                rule: StaticDrawRule::AllPlayersNoMaximumHandSize,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(
+                body,
+                "opponents can't draw more than one card each turn"
+                    | "your opponents can't draw more than one card each turn"
+                    | "each opponent can't draw more than one card each turn"
+                    | "each opponent can't draw more than one card"
+            ) {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::DrawRule {
+                                id: ids.static_id(),
+                                rule: StaticDrawRule::OpponentsAtMostOne,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(
+                body,
+                "your opponents can't cast spells during combat"
+                    | "opponents can't cast spells during combat"
+            ) {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::OpponentsCantCastDuringCombat,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(
+                body,
+                "your opponents can cast spells only any time they could cast a sorcery"
+                    | "opponents can cast spells only any time they could cast a sorcery"
+                    | "each opponent can cast spells only any time they could cast a sorcery"
+            ) {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::OpponentsSorceryOnly,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(
+                body,
+                "each player can't cast more than one spell each turn"
+                    | "players can't cast more than one spell each turn"
+                    | "each player can cast only one spell each turn"
+            ) {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::OneSpellPerTurn,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(
+                body,
+                "you can't cast more than one spell each turn"
+                    | "you can cast only one spell each turn"
+            ) {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::ControllerOneSpellPerTurn,
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
+            if let Some((who_str, kw)) = body
+                .strip_suffix(" gain hexproof")
+                .or_else(|| body.strip_suffix(" gains hexproof"))
+                .or_else(|| body.strip_suffix(" have hexproof"))
+                .or_else(|| body.strip_suffix(" has hexproof"))
+                .map(|w| (w.trim(), KeywordAbility::Hexproof))
+                .or_else(|| {
+                    body.strip_suffix(" gain shroud")
+                        .or_else(|| body.strip_suffix(" gains shroud"))
+                        .or_else(|| body.strip_suffix(" have shroud"))
+                        .or_else(|| body.strip_suffix(" has shroud"))
+                        .map(|w| (w.trim(), KeywordAbility::Shroud))
+                })
+            {
+                let players_opt = match who_str {
+                    "you" => Some(AffectedPlayers::One(ResolvingPlayer::Controller)),
+                    "players" | "each player" => Some(AffectedPlayers::EachPlayer),
+                    "your opponents" | "opponents" | "each opponent" => {
+                        Some(AffectedPlayers::EachOpponent)
+                    }
+                    _ => None,
+                };
+                if let Some(players) = players_opt {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                            TemporaryRuleKind::PlayerGrantKeyword {
+                                players,
+                                keywords: BTreeSet::from([kw]),
+                            },
+                            dur,
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+            if let Some(subj_str) = body.strip_suffix(" can't be countered") {
+                let subj = subj_str.trim();
+                let (stem, controller_only, next_only) =
+                    if let Some(s) = subj.strip_suffix(" you control") {
+                        let s = s.trim();
+                        if let Some(n) = s.strip_prefix("the next ") {
+                            (n.trim(), true, true)
+                        } else {
+                            (s, true, false)
+                        }
+                    } else if let Some(s) = subj.strip_suffix(" you cast") {
+                        let s = s.trim();
+                        if let Some(n) = s.strip_prefix("the next ") {
+                            (n.trim(), true, true)
+                        } else {
+                            (s, true, false)
+                        }
+                    } else if let Some(n) = subj.strip_prefix("the next ") {
+                        (n.trim(), true, true)
+                    } else {
+                        (subj, false, false)
+                    };
+                let flt_opt = if matches!(stem, "spells" | "spell" | "a spell" | "any spells") {
+                    Some(None)
+                } else if let Some(type_stem) = stem
+                    .strip_suffix(" spells")
+                    .or_else(|| stem.strip_suffix(" spell"))
+                {
+                    let vocab_ref = cached_compiler_vocab(vocabulary);
+                    spellwake_oracle_compiler::filter::parse_object_filter(
+                        type_stem.trim(),
+                        &vocab_ref,
+                    )
+                    .ok()
+                    .filter(|f| f.zone.is_none() && f.extra_zones.is_empty() && !f.is_ability)
+                    .and_then(|mut f| {
+                        f.any_spell = false;
+                        if is_unrestricted_filter(&f) {
+                            Some(None)
+                        } else {
+                            lower_object_filter(&f, vocabulary).ok().map(Some)
+                        }
+                    })
+                } else {
+                    None
+                };
+                if let Some(filter) = flt_opt {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                            TemporaryRuleKind::CantBeCountered {
+                                filter,
+                                controller_only,
+                                next_only,
+                            },
+                            dur,
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+            if let Some(subj_str) = body
+                .strip_suffix(" enter tapped")
+                .or_else(|| body.strip_suffix(" enter the battlefield tapped"))
+            {
+                let subj = subj_str.trim();
+                let sel_opt = match subj {
+                    "permanents" => Some(PermanentSelector::default()),
+                    "permanents your opponents control" => Some(PermanentSelector {
+                        controller: ControllerSelector::Opponents,
+                        ..PermanentSelector::default()
+                    }),
+                    "creatures" => Some(PermanentSelector {
+                        required_types: BTreeSet::from([CardType::Creature]),
+                        ..PermanentSelector::default()
+                    }),
+                    "creatures your opponents control" => Some(PermanentSelector {
+                        required_types: BTreeSet::from([CardType::Creature]),
+                        controller: ControllerSelector::Opponents,
+                        ..PermanentSelector::default()
+                    }),
+                    "artifacts" => Some(PermanentSelector {
+                        required_types: BTreeSet::from([CardType::Artifact]),
+                        ..PermanentSelector::default()
+                    }),
+                    "lands" => Some(PermanentSelector {
+                        required_types: BTreeSet::from([CardType::Land]),
+                        ..PermanentSelector::default()
+                    }),
+                    _ => None,
+                };
+                if let Some(sel) = sel_opt {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                            TemporaryRuleKind::TemporaryStatic(Box::new(
+                                StaticContinuousAbility::Restriction {
+                                    id: ids.static_id(),
+                                    rule: StaticRestriction::OthersEnterTapped(Box::new(sel)),
+                                },
+                            )),
+                            dur,
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+            if let Some((who_str, act_tail)) = body.split_once(" can't activate ") {
+                let nonmana_opt = if matches!(act_tail.trim(), "abilities" | "activated abilities")
+                {
+                    Some(false)
+                } else if act_tail.contains("unless they're mana abilities")
+                    || act_tail.contains("that aren't mana abilities")
+                {
+                    Some(true)
+                } else {
+                    None
+                };
+                if let Some(nonmana_only) = nonmana_opt {
+                    let mut trial = builder.clone();
+                    let players_opt = match who_str.trim() {
+                        "players" | "each player" => Some(AffectedPlayers::EachPlayer),
+                        "you" => Some(AffectedPlayers::One(ResolvingPlayer::Controller)),
+                        "opponents" | "your opponents" | "each opponent" => {
+                            Some(AffectedPlayers::EachOpponent)
+                        }
+                        "target player" => trial
+                            .bind_target(BodyTarget::SinglePlayer)
+                            .ok()
+                            .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
+                        "target opponent" => trial
+                            .bind_target(BodyTarget::SingleOpponent)
+                            .ok()
+                            .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
+                        "that player" | "they" => lower_resolving_player_in_context(
+                            PlayerRefAst::ThatPlayer,
+                            &mut trial,
+                            in_trigger,
+                        )
+                        .ok()
+                        .map(AffectedPlayers::One),
+                        _ => None,
+                    };
+                    if let Some(players) = players_opt {
+                        trial.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                                TemporaryRuleKind::CantActivateAbilities {
+                                    players,
+                                    nonmana_only,
+                                },
+                                dur,
+                            ),
+                        );
+                        *builder = trial;
+                        return Ok(());
+                    }
+                }
+            }
+            if body.contains(" can't cast ")
+                && body.contains(" from ")
+                && let Some(res) = try_lower_cant_cast_from_zone(
+                    None, body, None, dur, builder, vocabulary, in_trigger,
+                )
+            {
+                return res;
+            }
+            if let Some((who_str, cast_tail)) = body.split_once(" can't cast ")
+                && !cast_tail.contains(" from ")
+                && !cast_tail.contains(" during ")
+                && !cast_tail.contains(" unless ")
+                && !cast_tail.contains(" more than ")
+                && !cast_tail.contains(" other than ")
+            {
+                let mut trial = builder.clone();
+                let players_opt = match who_str.trim() {
+                    "players" | "each player" => Some(AffectedPlayers::EachPlayer),
+                    "you" => Some(AffectedPlayers::One(ResolvingPlayer::Controller)),
+                    "opponents" | "your opponents" | "each opponent" => {
+                        Some(AffectedPlayers::EachOpponent)
+                    }
+                    "target player" => trial
+                        .bind_target(BodyTarget::SinglePlayer)
+                        .ok()
+                        .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
+                    "target opponent" => trial
+                        .bind_target(BodyTarget::SingleOpponent)
+                        .ok()
+                        .map(|()| AffectedPlayers::One(ResolvingPlayer::TargetPlayer)),
+                    "that player" | "they" => lower_resolving_player_in_context(
+                        PlayerRefAst::ThatPlayer,
+                        &mut trial,
+                        in_trigger,
+                    )
+                    .ok()
+                    .map(AffectedPlayers::One),
+                    _ => None,
+                };
+                if let Some(players) = players_opt {
+                    let tail = cast_tail.trim();
+                    let flt_res: Option<Option<ObjectFilter>> = if matches!(
+                        tail,
+                        "spells" | "a spell" | "any spells" | "additional spells" | "more spells"
+                    ) {
+                        Some(None)
+                    } else if let Some(stem) = tail
+                        .strip_suffix(" spells")
+                        .or_else(|| tail.strip_suffix(" spell"))
+                    {
+                        let vocab_ref = cached_compiler_vocab(vocabulary);
+                        spellwake_oracle_compiler::filter::parse_object_filter(
+                            stem.trim(),
+                            &vocab_ref,
+                        )
+                        .ok()
+                        .filter(|f| {
+                            f.zone.is_none()
+                                && f.extra_zones.is_empty()
+                                && !f.is_ability
+                                && f.named.is_none()
+                        })
+                        .and_then(|mut f| {
+                            f.any_spell = false;
+                            if is_unrestricted_filter(&f) {
+                                Some(None)
+                            } else {
+                                lower_object_filter(&f, vocabulary).ok().map(Some)
+                            }
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some(filter) = flt_res {
+                        trial.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                                TemporaryRuleKind::CantCastSpells { players, filter },
+                                dur,
+                            ),
+                        );
+                        *builder = trial;
+                        return Ok(());
+                    }
+                }
+            }
+            if let Some((who_str, br)) = body
+                .strip_suffix(" can't attack")
+                .map(|w| (w.trim(), BlockingRestriction::CannotAttack))
+                .or_else(|| {
+                    body.strip_suffix(" can't block")
+                        .map(|w| (w.trim(), BlockingRestriction::CannotBlock))
+                })
+                .or_else(|| {
+                    body.strip_suffix(" can't attack or block")
+                        .map(|w| (w.trim(), BlockingRestriction::CannotAttackOrBlock))
+                })
+                .or_else(|| {
+                    body.strip_suffix(" can't be blocked")
+                        .map(|w| (w.trim(), BlockingRestriction::CannotBeBlocked))
+                })
+                .or_else(|| {
+                    body.strip_suffix(" can't attack you or planeswalkers you control")
+                        .or_else(|| {
+                            body.strip_suffix(" can't attack you or permanents you control")
+                        })
+                        .map(|w| (w.trim(), BlockingRestriction::CannotAttackSourceController))
+                })
+            {
+                let flt_opt = match who_str {
+                    "creatures" | "all creatures" => Some(ObjectFilter::creature()),
+                    "creatures you control" => {
+                        Some(ObjectFilter::Clause(ObjectClause::creature().controlled()))
+                    }
+                    "creatures your opponents control" | "creatures opponents control" => {
+                        Some(ObjectFilter::Clause(ObjectClause::creature().opposing()))
+                    }
+                    _ => None,
+                };
+                if let Some(flt) = flt_opt {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                EffectSubject::Matching(flt),
+                            )),
+                            ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                            dur,
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+            if body.contains("as though they didn't have hexproof")
+                || body.contains("as though it didn't have hexproof")
+            {
+                let sel = if body.contains("opponent") {
+                    PermanentSelector {
+                        controller: ControllerSelector::Opponents,
+                        ..PermanentSelector::default()
+                    }
+                } else {
+                    PermanentSelector::default()
+                };
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule: StaticRestriction::IgnoreOpponentsHexproof(Box::new(sel)),
+                            },
+                        )),
+                        dur,
+                    ),
+                );
+                return Ok(());
+            }
+            Err("oracle:unsupported-instruction")
+        }
         InstructionAst::GrantAbilityText {
             subject,
             ability_text,
@@ -5257,7 +6000,6 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 | Instruction::DamageFromPower(_)
                                 | Instruction::DamageFromGrantingPermanent { .. }
                                 | Instruction::DamageTargetControllersCreatures { .. }
-                                | Instruction::DamageCreatureAtSpellMastery { .. }
                                 | Instruction::DealDamageToAnnouncedTargets { .. }
                                 | Instruction::AffectPermanentTargets {
                                     action: PermanentTargetAction::Damage(_),
@@ -7034,7 +7776,6 @@ fn try_lower_temp_exile_replacement(
                         | Instruction::DamageFromPower(_)
                         | Instruction::DamageFromGrantingPermanent { .. }
                         | Instruction::DamageTargetControllersCreatures { .. }
-                        | Instruction::DamageCreatureAtSpellMastery { .. }
                         | Instruction::DealDamageToAnnouncedTargets { .. }
                         | Instruction::AffectPermanentTargets {
                             action: PermanentTargetAction::Damage(_),
@@ -7489,12 +8230,6 @@ fn event_replacement_uses_source(ability: &StaticContinuousAbility) -> bool {
     };
     body.instructions.iter().any(|op| {
         matches!(
-            op,
-            Instruction::RemoveCountersFromPermanent {
-                target_self: true,
-                ..
-            }
-        ) || matches!(
             op,
             Instruction::ZoneOp(spec)
                 if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Source)
@@ -8091,6 +8826,12 @@ pub(super) fn parse_temp_permanent_lock_parts(rule_body: &str) -> Option<Vec<Res
     let (doesnt_untap, suppressed, cant_attack_or_block) = match cleaned {
         "doesnt_untap"
         | "doesntuntap"
+        | "doesn't untap"
+        | "don't untap"
+        | "can't become untapped"
+        | "cannot become untapped"
+        | "can't untap"
+        | "cannot untap"
         | "doesn't untap during its controller's untap step"
         | "don't untap during their controllers' untap steps"
         | "doesn't untap during your untap step" => (true, None, false),

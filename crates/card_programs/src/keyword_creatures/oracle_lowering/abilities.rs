@@ -334,19 +334,56 @@ fn replace_compound_it_with_self(ev: &TriggerEventAst) -> TriggerEventAst {
     }
 }
 
+fn cost_atom_requires_battlefield(atom: &CostAtomAst) -> bool {
+    match atom {
+        CostAtomAst::TapSelf
+        | CostAtomAst::UntapSelf
+        | CostAtomAst::SacrificeSelf
+        | CostAtomAst::ExertSelf
+        | CostAtomAst::ExileSelf {
+            from_graveyard: false,
+            from_hand: false,
+        } => true,
+        CostAtomAst::BounceToHand(subject)
+        | CostAtomAst::RemoveCounters { subject, .. }
+        | CostAtomAst::PutCounters { subject, .. }
+        | CostAtomAst::Unattach { subject, .. } => {
+            matches!(subject.as_ref(), SubjectRefAst::SelfObject)
+        }
+        CostAtomAst::Or(a, b) => {
+            cost_atom_requires_battlefield(a) || cost_atom_requires_battlefield(b)
+        }
+        _ => false,
+    }
+}
+
+fn cost_atoms_require_battlefield(cost: &[CostAtomAst]) -> bool {
+    cost.iter().any(cost_atom_requires_battlefield)
+}
+
 fn body_contains_graveyard_self_return_instruction(body: &ExecutableBody) -> bool {
-    body.instructions.iter().any(|op| {
-        crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op).is_some_and(
-            |spec| {
-                matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Source)
-                    && matches!(
-                        spec.destination,
-                        spellwake_engine::toolbox::ZoneDest::Battlefield { .. }
-                            | spellwake_engine::toolbox::ZoneDest::Hand
-                    )
-            },
-        )
-    })
+    // Only infer a graveyard-zone self-return when the source moves directly to the battlefield
+    // without first leaving the battlefield (blink/flicker). Returning self to hand is a standard
+    // battlefield bounce unless the AST explicitly names a graveyard origin.
+    let mut source_left_battlefield = false;
+    for op in &body.instructions {
+        if let Some(spec) =
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+            && matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Source)
+        {
+            if matches!(
+                spec.destination,
+                spellwake_engine::toolbox::ZoneDest::Battlefield { .. }
+            ) {
+                if !source_left_battlefield {
+                    return true;
+                }
+            } else {
+                source_left_battlefield = true;
+            }
+        }
+    }
+    false
 }
 
 pub(super) fn lower_ability(
@@ -387,8 +424,10 @@ pub(super) fn lower_ability(
                     ActivationRestriction::Boast,
                 ));
             }
+            let cost_on_battlefield = cost_atoms_require_battlefield(cost);
             let effective_zone = zone.as_deref().or_else(|| {
-                body_returns_self_from_graveyard_ext(&filtered_ins).then_some("graveyard")
+                (!cost_on_battlefield && body_returns_self_from_graveyard_ext(&filtered_ins))
+                    .then_some("graveyard")
             });
             let (mut mana_cost, mut source_cost, mut hybrids, mut extra_costs) =
                 lower_activation_cost_full(cost, effective_zone, vocabulary)?;
@@ -606,11 +645,13 @@ pub(super) fn lower_ability(
                 modes
             });
             if effective_zone.is_none()
+                && !cost_on_battlefield
                 && synthesized_modes.is_none()
                 && !source_cost.is_from_graveyard()
                 && !extra_costs
                     .iter()
                     .any(ExtraActivationCost::is_from_graveyard)
+                && !extra_costs.iter().any(extra_cost_requires_battlefield)
                 && body_contains_graveyard_self_return_instruction(&exec_body)
             {
                 let (gy_mc, gy_sc, gy_hybs, gy_extra) =

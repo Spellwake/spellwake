@@ -43,7 +43,39 @@ pub(super) fn compile(
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::SinglePlayer,
-                vec![Instruction::DrawAndLoseLifeForTargetGraveyardCreatures],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec {
+                            bind_moved: Some(spellwake_engine::toolbox::BindingId(0)),
+                            ..spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                            spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                                        ),
+                                    )),
+                                    spellwake_engine::program::ObjectFilter::creature(),
+                                ),
+                                spellwake_engine::toolbox::ZoneDest::None,
+                            )
+                        },
+                    ),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::BoundCount {
+                            binding: spellwake_engine::toolbox::BindingId(0),
+                            filter: None,
+                        },
+                    ),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::BoundCount {
+                            binding: spellwake_engine::toolbox::BindingId(0),
+                            filter: None,
+                        },
+                    ),
+                ],
             ),
         });
         program.validate(vocabulary).ok()?;
@@ -81,9 +113,58 @@ pub(super) fn compile(
             },
             body: ExecutableBody::new(
                 BodyTarget::AnyGraveyardCreature,
-                vec![Instruction::ReturnAnyGraveyardCreatureBlackSubtype(
-                    nightmare,
-                )],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec {
+                            bind_moved: Some(spellwake_engine::toolbox::BindingId(0)),
+                            ..spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Battlefield {
+                                    controller: spellwake_engine::toolbox::ZoneController::Player(
+                                        Box::new(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                spellwake_engine::program::ResolvingPlayer::Controller,
+                                            ),
+                                        ),
+                                    ),
+                                    tapped: false,
+                                    attacking: false,
+                                    transformed: false,
+                                    face_down: false,
+                                    entering_counters: Vec::new(),
+                                    attach_to: None,
+                                },
+                            )
+                        },
+                    ),
+                    Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Bound(
+                                spellwake_engine::toolbox::BindingId(0),
+                            ),
+                            spellwake_engine::characteristics::ResolvedPartsSpec(vec![
+                                spellwake_engine::characteristics::ResolvedPartSpec::Type(
+                                    spellwake_engine::characteristics::TypeChangeSpec {
+                                        types: spellwake_engine::characteristics::TypeOperation::Keep,
+                                        supertypes: spellwake_engine::characteristics::TypeOperation::Keep,
+                                        subtypes: spellwake_engine::characteristics::SubtypeOperation::Add(
+                                            spellwake_engine::characteristics::InstructionSubtypeOperand::Literal(
+                                                [nightmare].into(),
+                                            ),
+                                        ),
+                                        land_subtypes: spellwake_engine::characteristics::SubtypeOperation::Keep,
+                                    },
+                                ),
+                                spellwake_engine::characteristics::ResolvedPartSpec::Color(
+                                    spellwake_engine::characteristics::ColorOperation::Set(
+                                        [spellwake_engine::characteristics::Color::Black].into(),
+                                    ),
+                                ),
+                            ]),
+                            spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
+                        ),
+                    )),
+                ],
             ),
         });
         program.triggered.push(TriggeredAbility {

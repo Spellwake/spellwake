@@ -184,9 +184,6 @@ impl GameObject {
     pub fn prototype(&self) -> bool {
         self.prototype
     }
-    pub(crate) fn last_transformed_at(&self) -> Option<u64> {
-        self.last_transformed_at
-    }
     /// Public face-down status of this incarnation, including the casting announcement.
     pub fn face_down(&self) -> Option<crate::face_down::FaceDownKind> {
         self.face_down

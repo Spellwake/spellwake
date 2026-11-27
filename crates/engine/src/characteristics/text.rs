@@ -349,10 +349,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             amount.rewrite_creature_type(change.from, change.to);
         };
         match instruction {
-            Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { subtype, .. }
-            | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { subtype, .. } => {
-                word(change, subtype)
-            }
             Instruction::ReturnGraveyardCohort(returning) => {
                 if let crate::program::GraveyardReturnFilter::CreatureSubtype(kind) =
                     &mut returning.filter
@@ -396,7 +392,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 minimum: amount, ..
             }
             | Instruction::Blight { amount, .. }
-            | Instruction::RemoveCountersFromPermanent { amount, .. }
             | Instruction::ExileFromHandOrBattlefield(amount)
             | Instruction::Discard { amount, .. }
             | Instruction::ExileTopPlay { count: amount, .. }
@@ -415,8 +410,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
             }
             Instruction::Sacrifice { amount, .. }
-            | Instruction::AnimateTargetAsCountedCreature { amount, .. }
-            | Instruction::DamageCreatureAtSpellMastery { amount, .. } => rewrite_amount(amount),
+            | Instruction::AnimateTargetAsCountedCreature { amount, .. } => rewrite_amount(amount),
             Instruction::CreateTokens { creations }
             | Instruction::CreateAttackingTokens { creations, .. } => {
                 for spec in creations {
@@ -605,15 +599,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::Earthbend { amount } => {
                 amount.rewrite_creature_type(change.from, change.to);
             }
-            Instruction::AttachChoosingPermanent {
-                attachment, host, ..
-            } => {
-                for slot in [attachment, host] {
-                    if let crate::program::AttachSlot::ChooseMatching { filter, .. } = slot {
-                        filter.rewrite_creature_type(change.from, change.to);
-                    }
-                }
-            }
             Instruction::RollDie { bands, .. } => {
                 for band in bands {
                     body(change, &mut band.body);
@@ -674,14 +659,11 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             }
             Instruction::FixedTargetClause(clause) => body(change, clause),
             Instruction::ReturnGraveyardCohort(_)
-            | Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
             | Instruction::DamageTargetControllersCreatures { .. }
             | Instruction::OfferOpponentsDamage => {}
             Instruction::AnimateTargetAsCountedCreature { subtype, .. }
-            | Instruction::LoseLifeAndScryForSubtype(subtype)
             | Instruction::ExileForBlackToken { subtype, .. }
-            | Instruction::ExileForSubtypeToken(subtype)
-            | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(subtype) => word(change, subtype),
+            | Instruction::ExileForSubtypeToken(subtype) => word(change, subtype),
             Instruction::CreateTokenAndAttach { definition } => {
                 definition.rewrite_creature_types(change)
             }
@@ -738,8 +720,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     _ => {}
                 }
             }
-            Instruction::ControlledSubtypeDamagesAttacker(kind)
-            | Instruction::CreateArmyIfAbsent { subtype: kind, .. }
+            Instruction::CreateArmyIfAbsent { subtype: kind, .. }
             | Instruction::Amass { subtype: kind, .. } => word(change, kind),
             Instruction::AffectPermanentTargets { action, .. } => match action {
                 crate::program::PermanentTargetAction::PutCounters { amount, .. }
@@ -784,8 +765,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     rewrite_amount(expr);
                 }
             }
-            Instruction::UntapOrTapSelect { filter, count, .. }
-            | Instruction::RevealUntilMatchExt { filter, count, .. } => {
+            Instruction::RevealUntilMatchExt { filter, count, .. } => {
                 filter.rewrite_creature_type(change.from, change.to);
                 rewrite_amount(count);
             }
@@ -808,8 +788,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             }
             // These admitted instructions contain no literal creature-type words.
             // Draw's chosen-type reference remains a runtime local value.
-            Instruction::AttachOnEntry { .. }
-            | Instruction::OptionalSequence { .. }
+            Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
             | Instruction::SetControlledCreatureSizeToHand
             | Instruction::FightPairedCreatures(_)
@@ -847,18 +826,14 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ExchangeLifeWithSourceToughness
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
-            | Instruction::DamageCreatureAtSpellMastery { .. }
             | Instruction::RememberPermanentTarget
-            | Instruction::ControllerLosesRememberedManaValue
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
             | Instruction::ExileDefeatedSiege
             | Instruction::FightSourceWithTarget
-            | Instruction::TransformSourceAndAttachToTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
-            | Instruction::DestroyCapturedDamageSource
             | Instruction::RemoveCreatureCounters { .. }
             | Instruction::Proliferate
             | Instruction::DamagePlayersHalfLife
@@ -869,15 +844,12 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::OfferSourceCounters { .. }
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnCapturedDyingCreature
-            | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
             | Instruction::DivideThreeDamageAmongTargets
             | Instruction::DistributePlusOneCounters { .. }
             | Instruction::DamageOrderedTargets { .. }
             | Instruction::ExileUntilOtherTargetLeaves
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::DestroyFixedTargets
-            | Instruction::DestroyTargetAndAttachedEquipment
             | Instruction::ReturnFixedTargets
             | Instruction::FightFixedTargets
             | Instruction::BindOrderedPermanents { .. }
@@ -897,8 +869,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::RevealSharedTypeCreatureCastOrBottom
             | Instruction::RevealOddCastOrDraw
-            | Instruction::MayTurnControlledCreatureFaceUp
-            | Instruction::ExploreSource
             | Instruction::MayRevealLibraryTop
             | Instruction::ManifestTop { .. }
             | Instruction::ExileNonlandsToHandAndDamage { .. }
@@ -920,13 +890,11 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::RevealHandAndBottomPiles
             | Instruction::RevealDividePiles
             | Instruction::DivideTargetPermanentsAndSacrificePile
-            | Instruction::DrawToChosenOpponentHandSize
             | Instruction::LookTopPlaneswalkers
             | Instruction::RevealTopPermanentOrHand
             | Instruction::LookTopLandBattlefieldTapped
             | Instruction::LookTopReveal { .. }
             | Instruction::LookTopTakeOne { .. }
-            | Instruction::IncreaseSpeed
             | Instruction::BecomeMonarch(_)
             | Instruction::RequireCondition(_)
             | Instruction::PutEquipmentFromHandOrGraveyard
@@ -937,7 +905,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ReselectAttackDefender
             | Instruction::SetBlockDeclarations(_)
             | Instruction::AdditionalLoyaltyActivation
-            | Instruction::MoveLoyaltyCounterToEnteringPermanent
             | Instruction::ImpulseCastOrDamage(_)
             | Instruction::RevealCreatureOfSacrificedType
             | Instruction::SacrificeCombatContributor
@@ -957,9 +924,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
-            | Instruction::TargetDamagesItsControllersOtherCreatures
-            | Instruction::OtherCreaturesReturnPowerDamage
-            | Instruction::DestroyCapturedCombatCreature { .. }
             | Instruction::ReflectAttachedCreatureDamage
             | Instruction::DestroyAttachedEnchantmentSubtype(_)
             | Instruction::GrantFlashback(_)
@@ -971,7 +935,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ReturnEarthbentCard
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::AttachFixedTargets
-            | Instruction::TabletopHonorAction { .. }
             | Instruction::CreateNonlegendaryLoyaltyCopy
             | Instruction::WeakenOpposingAttackersUntilNextTurn
             | Instruction::PhaseOtherPlaneswalkersNextEndStep
@@ -979,9 +942,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ExileMeldPair
             | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::PhaseOutObjects(_)
             | Instruction::ReturnOneNonlandPerOpponent
-            | Instruction::WeakenDelayedAttacker(_)
             | Instruction::DrawRevealRemoveLoyalty
             | Instruction::CreateReflexiveDiscardDamage
             | Instruction::ScheduleDelayedStepTrigger { .. }
@@ -1009,9 +970,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
             | Instruction::ScheduleGraveyardReturnAtEndStep(_)
-            | Instruction::ReturnSacrificedCardToBattlefield
             | Instruction::ReturnDyingCreatureAsForest
-            | Instruction::ReturnDyingSourceTapped
             | Instruction::ReturnDelayedGraveyardCard(_)
             | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedPermanentToHand(_)
@@ -1040,7 +999,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::DestroyDamagedPlayersNonlandsAtX
             | Instruction::DestroyNonlandsAtSourceChargeCount
             | Instruction::AddCounterAndDischargeOnResolution(_)
-            | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileCreatureAtMostRevealedPower
             | Instruction::ImprintTargetLand
             | Instruction::ImprintTargetCreature
@@ -1049,7 +1007,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ResolvePowerAbility(_)
             | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::Attach(_)
-            | Instruction::DestroyTarget
             | Instruction::CounterSpellToExile
             | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
@@ -1064,9 +1021,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
-            | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
-            | Instruction::DrawPlayersControllingName(_)
-            | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::RevealTopAndRemoveAttackerIfForest => {}
         }
     }

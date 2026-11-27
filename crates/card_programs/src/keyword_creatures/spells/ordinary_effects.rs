@@ -348,7 +348,37 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             id: TriggeredAbilityId(0),
             condition: spellwake_engine::program::TriggerSpec::dies(spellwake_engine::program::ObjectFilter::self_object()),
             grouping: TriggerGrouping::EachOccurrence,
-            body: ExecutableBody::new(BodyTarget::None, vec![Instruction::ReturnDyingSourceTapped]),
+            body: ExecutableBody::new(
+                BodyTarget::None,
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Intersect(
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::OwnersOf(
+                                            Box::new(
+                                                spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                            ),
+                                        ),
+                                    )),
+                                    ObjectFilter::permanent(),
+                                )),
+                            ),
+                            spellwake_engine::toolbox::ZoneDest::Battlefield {
+                                controller: spellwake_engine::toolbox::ZoneController::Owner,
+                                tapped: true,
+                                attacking: false,
+                                transformed: false,
+                                face_down: false,
+                                entering_counters: Vec::new(),
+                                attach_to: None,
+                            },
+                        ),
+                    ),
+                ],
+            ),
         };
         let parts = ResolvedPartsSpec(vec![
             ResolvedPartSpec::Abilities(AbilityChange { granted_triggers: vec![grant], ..Default::default() }),
@@ -1000,12 +1030,29 @@ pub(in crate::keyword_creatures) fn exile_followup(
         {
             return None;
         }
-        destruction
-            .instructions
-            .insert(0, Instruction::RememberPermanentTarget);
-        destruction
-            .instructions
-            .push(Instruction::ControllerLosesRememberedManaValue);
+        destruction.instructions = vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                spellwake_engine::toolbox::ZoneOpSpec {
+                    bind_snapshots: Some(spellwake_engine::toolbox::BindingId(0)),
+                    ..spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                allow_regenerate: true,
+                            },
+                        },
+                    )
+                },
+            ),
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::BoundStat {
+                    binding: spellwake_engine::toolbox::BindingId(0),
+                    stat: spellwake_engine::program::ObjectStatKind::ManaValue,
+                    op: spellwake_engine::program::StatAggregate::Sum,
+                },
+            ),
+        ];
         return Some(destruction);
     }
     let (exile, next) = text.split_once(". Its controller ")?;

@@ -188,7 +188,12 @@ pub(super) fn compile(
                 ExecutableBody::new(BodyTarget::None, vec![
                     Instruction::RequireCondition(spellwake_engine::program::InterveningCondition::SourceLoyalty),
                     Instruction::OptionalEffect { chooser: ResolvingPlayer::Controller },
-                    Instruction::MoveLoyaltyCounterToEnteringPermanent,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::move_counters(
+                        spellwake_engine::toolbox::ObjectQuery::Source,
+                        spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                        Some(spellwake_engine::effects::CounterKind::Loyalty),
+                        Some(spellwake_engine::program::ValueExpr::literal(1)),
+                    ),
                 ])));
         } else if let Some((quantity, subject)) = line.strip_prefix("When you control ").and_then(|text| text.split_once(" or more "))
             && let Some((kind, reference)) = subject.split_once(", sacrifice ")
@@ -204,7 +209,7 @@ pub(super) fn compile(
             .and_then(|text| text.strip_suffix(" deals damage to you, destroy it."))
         {
             triggers.push((spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::any().with_subtype(vocabulary.resolve_label(subtype)?), spellwake_engine::program::DamageTriggerRecipient::Controller, false),
-                ExecutableBody::new(BodyTarget::None, vec![Instruction::DestroyCapturedDamageSource])));
+                ExecutableBody::new(BodyTarget::None, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_subject(spellwake_engine::program::EffectSubject::TriggerSubject, false)])));
         } else if let Some((subtype, effect)) = line.strip_prefix("Whenever a nontoken ")
             .and_then(|text| text.split_once(" you control dies, "))
             && let Some(subtype) = vocabulary.resolve_label(subtype)
@@ -296,7 +301,46 @@ pub(super) fn compile(
             ));
         } else if line == "Whenever an opponent sacrifices a nontoken permanent, put that card onto the battlefield under your control." {
             triggers.push((spellwake_engine::program::TriggerSpec::player_action(PlayerRelation::Opponent, spellwake_engine::program::PlayerTriggerAction::Sacrificed(spellwake_engine::program::ObjectFilter::any().nontoken())),
-                ExecutableBody::new(BodyTarget::None, vec![Instruction::ReturnSacrificedCardToBattlefield])));
+                ExecutableBody::new(BodyTarget::None, vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Intersect(
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::Union(vec![
+                                    spellwake_engine::toolbox::ObjectQuery::zone(
+                                        spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                            spellwake_engine::toolbox::PlayerSelector::Group(
+                                                spellwake_engine::program::AffectedPlayers::EachPlayer,
+                                            ),
+                                        )),
+                                        spellwake_engine::program::ObjectFilter::permanent(),
+                                    ),
+                                    spellwake_engine::toolbox::ObjectQuery::zone(
+                                        spellwake_engine::toolbox::QueryZone::Exile,
+                                        spellwake_engine::program::ObjectFilter::permanent(),
+                                    ),
+                                    spellwake_engine::toolbox::ObjectQuery::zone(
+                                        spellwake_engine::toolbox::QueryZone::Command,
+                                        spellwake_engine::program::ObjectFilter::permanent(),
+                                    ),
+                                ])),
+                            ),
+                            spellwake_engine::toolbox::ZoneDest::Battlefield {
+                                controller: spellwake_engine::toolbox::ZoneController::Player(
+                                    Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        ResolvingPlayer::Controller,
+                                    )),
+                                ),
+                                tapped: false,
+                                attacking: false,
+                                transformed: false,
+                                face_down: false,
+                                entering_counters: Vec::new(),
+                                attach_to: None,
+                            },
+                        ),
+                    ),
+                ])));
         } else if let Some(token) = line.strip_prefix("Whenever one or more creature cards are put into your graveyard from anywhere during your turn, create ")
             .and_then(|effect| effect.strip_suffix(". This ability triggers only once each turn."))
         {
@@ -493,7 +537,27 @@ pub(super) fn compile(
         } else if line=="Whenever you cast a colorless creature spell, manifest the top card of your library." {
             triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::creature().with_colorless()), ExecutableBody::new(BodyTarget::None,vec![Instruction::ManifestTop {player:ResolvingPlayer::Controller,amount:spellwake_engine::program::ValueExpr::Literal(1.into())}])));
         } else if let Some(minimum)=line.strip_prefix("Whenever you attack with creatures with total power ").and_then(|s|s.strip_suffix(" or greater, you may turn a face-down creature you control face up.")) {
-            triggers.push((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::any(), spellwake_engine::program::AttackTriggerMode::GroupTotalPowerAtLeast(minimum.parse().ok()?)),ExecutableBody::new(BodyTarget::None,vec![Instruction::MayTurnControlledCreatureFaceUp])));
+            triggers.push((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::any(), spellwake_engine::program::AttackTriggerMode::GroupTotalPowerAtLeast(minimum.parse().ok()?)),ExecutableBody::new(BodyTarget::None,vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec {
+                source: spellwake_engine::toolbox::ObjectQuery::zone(
+                    spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                    )),
+                    spellwake_engine::program::ObjectFilter::creature().with_flags(
+                        spellwake_engine::program::ObjectFilterFlags::FACE_DOWN,
+                    ),
+                ),
+                selection: spellwake_engine::toolbox::ZoneSelection::Prompt {
+                    chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                    min: Box::new(spellwake_engine::program::ValueExpr::literal(0)),
+                    max: Box::new(spellwake_engine::program::ValueExpr::literal(1)),
+                    constraint: None,
+                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                    hidden: false,
+                },
+                op: spellwake_engine::toolbox::ObjectMutation::TurnFaceUp,
+                bind_mutated: None,
+                bind_succeeded: None,
+            }))])));
         } else if let Some((kind,effect))=line.strip_prefix("Whenever a ").and_then(|s|s.split_once(" you control dies, "))
             && let Some(kind)=vocabulary.resolve_label(kind) {
             triggers.push((spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::any().controlled().with_subtype(kind), mode: spellwake_engine::program::DiesTriggerMode::Permanent }),body(effect,&card.name,vocabulary)?));
@@ -1344,11 +1408,31 @@ pub(super) fn body(
     if text
         == "each opponent loses X life and you scry X, where X is the number of Zombies you control."
     {
+        let zombie = vocabulary.resolve_label("Zombie")?;
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::LoseLifeAndScryForSubtype(
-                vocabulary.resolve_label("Zombie")?,
-            )],
+            vec![
+                Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Compare {
+                        left: Box::new(spellwake_engine::program::ValueExpr::controlled_subtype(
+                            zombie,
+                        )),
+                        op: spellwake_engine::program::Comparison::Greater,
+                        right: Box::new(spellwake_engine::program::ValueExpr::literal(0)),
+                    }),
+                    destination: 3,
+                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    spellwake_engine::toolbox::PlayerSelector::Group(
+                        spellwake_engine::program::AffectedPlayers::EachOpponent,
+                    ),
+                    spellwake_engine::program::ValueExpr::controlled_subtype(zombie),
+                ),
+                Instruction::Scry {
+                    player: ResolvingPlayer::Controller,
+                    amount: spellwake_engine::program::ValueExpr::controlled_subtype(zombie),
+                },
+            ],
         ));
     }
     if text == "return it to its owner's hand at the beginning of the next end step." {
@@ -1806,7 +1890,17 @@ pub(super) fn body(
     {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::ControlManaSourceThroughNextTurn],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_control(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        spellwake_engine::program::EffectSubject::TriggerSubject,
+                    )),
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::characteristics::ResolvedDuration::ThroughControllerNextTurn,
+                ),
+            ],
         ));
     }
     if text == "you get an experience counter." {
@@ -2043,7 +2137,44 @@ pub(super) fn body(
     {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawToChosenOpponentHandSize],
+            vec![
+                Instruction::PromptChoice(Box::new(spellwake_engine::toolbox::PromptChoiceSpec {
+                    chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    domain: spellwake_engine::toolbox::PromptDomain::Players {
+                        selector: spellwake_engine::toolbox::PlayerSelector::Group(
+                            spellwake_engine::program::AffectedPlayers::EachOpponent,
+                        ),
+                        min: 1,
+                        max: 1,
+                    },
+                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                    bind_to: spellwake_engine::toolbox::BindingId(0),
+                    bind_unchosen: None,
+                    tag_partition: None,
+                    auto_resolve_trivial: true,
+                })),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    spellwake_engine::program::ValueExpr::Sub(
+                        Box::new(spellwake_engine::program::ValueExpr::QueryCount(Box::new(
+                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Bound(
+                                        spellwake_engine::toolbox::BindingId(0),
+                                    ),
+                                )),
+                                spellwake_engine::program::ObjectFilter::any(),
+                            ),
+                        ))),
+                        Box::new(spellwake_engine::program::ValueExpr::PlayerStat(
+                            spellwake_engine::program::PlayerStatExpr::PlayerHandSize(
+                                ResolvingPlayer::Controller,
+                            ),
+                        )),
+                    ),
+                ),
+            ],
         ));
     }
     if let Some(kinds) = text

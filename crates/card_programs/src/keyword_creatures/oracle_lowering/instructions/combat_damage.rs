@@ -134,9 +134,6 @@ pub(super) fn lower_combat_damage_instruction(
             ) && builder.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::ReturnGraveyardCreatureWithSubtypeCounters { .. }
-                ) || matches!(
-                    op,
                     Instruction::ZoneOp(spec)
                         if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
                             && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Battlefield { .. })
@@ -3447,7 +3444,11 @@ pub(super) fn lower_combat_damage_instruction(
                         EffectSubject::CreatedTokens
                     }
                     SubjectRefAst::Anaphora(_)
-                        if last_instruction_moved_object(&builder.instructions) =>
+                        if last_instruction_moved_object(&builder.instructions)
+                            || matches!(
+                                builder.instructions.last(),
+                                Some(Instruction::MutateObject(_))
+                            ) =>
                     {
                         EffectSubject::LastMoved
                     }
@@ -3566,7 +3567,11 @@ pub(super) fn lower_combat_damage_instruction(
                         EffectSubject::CreatedTokens
                     }
                     SubjectRefAst::Anaphora(_)
-                        if last_instruction_moved_object(&builder.instructions) =>
+                        if last_instruction_moved_object(&builder.instructions)
+                            || matches!(
+                                builder.instructions.last(),
+                                Some(Instruction::MutateObject(_))
+                            ) =>
                     {
                         EffectSubject::LastMoved
                     }
@@ -4765,7 +4770,11 @@ pub(super) fn lower_combat_damage_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
-                        if last_instruction_moved_object(&builder.instructions) =>
+                        if last_instruction_moved_object(&builder.instructions)
+                            || matches!(
+                                builder.instructions.last(),
+                                Some(Instruction::MutateObject(_))
+                            ) =>
                     {
                         builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(EffectSubject::LastMoved));
                         return Ok(());
@@ -4838,6 +4847,16 @@ pub(super) fn lower_combat_damage_instruction(
                 || low == "must attack this combat if able"
                 || low == "must attack each combat if able"
                 || low == "must attack if able"
+                || low == "attacks you this turn if able"
+                || low == "attacks you this combat if able"
+                || low == "attack you this turn if able"
+                || low == "attack you this combat if able"
+                || low == "attacks that player this turn if able"
+                || low == "attacks that player this combat if able"
+                || low == "attack that player this turn if able"
+                || low == "attack that player this combat if able"
+                || low == "attacks that opponent this turn if able"
+                || low == "attacks that opponent this combat if able"
                 || (!low.contains(" unless ")
                     && !low.contains(" player")
                     && !low.contains(" opponent")
@@ -5302,8 +5321,32 @@ pub(super) fn lower_combat_damage_instruction(
                     break;
                 }
             }
+            if matches!(
+                low.as_str(),
+                "attacks during its controller's next turn if able"
+                    | "attacks during their next turn if able"
+                    | "attack during their controllers' next turn if able"
+                    | "attacks during its controller's next combat if able"
+                    | "attacks next turn if able"
+            ) {
+                let parts = ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                    BlockingRestriction::MustAttackEachCombatIfAble,
+                )]);
+                return emit_resolved_parts_for_subject(
+                    eff_subject,
+                    parts,
+                    ResolvedDuration::UntilControllerNextTurn,
+                    builder,
+                    vocabulary,
+                    in_trigger,
+                    self_pronoun_valid,
+                )
+                .map_err(|_| "oracle:unsupported-combat-mod");
+            }
             if rule_for_br == "attacks or blocks if able"
                 || rule_for_br == "attack or block if able"
+                || rule_for_br == "attacks_or_blocks_if_able"
+                || rule_for_br == "attack_or_block_if_able"
                 || rule_for_br.ends_with(" attacks or blocks if able")
                 || rule_for_br.ends_with(" attack or block if able")
             {
@@ -8043,14 +8086,54 @@ pub(super) fn lower_extra_combat_mod_blocking_restriction(
         "cant_attack_you_or_your_planeswalkers"
         | "cant_attack:you or planeswalkers you control"
         | "cant_attack:you or a planeswalker you control"
+        | "cant_attack:you or permanents you control"
         | "can't attack you or planeswalkers you control"
-        | "can't attack you or a planeswalker you control" => {
+        | "can't attack you or a planeswalker you control"
+        | "can't attack you or permanents you control" => {
             Some(BlockingRestriction::CannotAttackSourceController)
         }
         "must_block_all_attackers"
         | "must block all attackers"
         | "blocks each attacking creature if able"
         | "blocks all creatures able to block" => Some(BlockingRestriction::MustBlockAllAttackers),
+        "can't be blocked by creatures with greater power"
+        | "cannot be blocked by creatures with greater power" => {
+            Some(BlockingRestriction::CannotBeBlockedByGreaterPower)
+        }
+        "can't be blocked by tokens"
+        | "cannot be blocked by tokens"
+        | "can't be blocked by creature tokens" => {
+            Some(BlockingRestriction::CannotBeBlockedByTokens)
+        }
+        "can't be blocked by creatures with flying"
+        | "cannot be blocked by creatures with flying"
+        | "can't be blocked by flying" => Some(BlockingRestriction::CannotBeBlockedByFlying),
+        "can't be blocked except by creatures with flying or reach"
+        | "cannot be blocked except by creatures with flying or reach" => {
+            Some(BlockingRestriction::OnlyBlockedByFlyingOrReach)
+        }
+        "can't be blocked except by artifact creatures"
+        | "cannot be blocked except by artifact creatures" => {
+            Some(BlockingRestriction::OnlyBlockedByArtifact)
+        }
+        "can't be blocked by nonartifact creatures"
+        | "cannot be blocked by nonartifact creatures" => {
+            Some(BlockingRestriction::CannotBeBlockedByNonArtifact)
+        }
+        "can attack as though it didn't have defender"
+        | "can attack as though they didn't have defender" => {
+            Some(BlockingRestriction::CanAttackAsThoughNoDefender)
+        }
+        "can block an additional creature" | "can block an additional creature each combat" => {
+            Some(BlockingRestriction::AdditionalBlock)
+        }
+        "can block any number of creatures" | "can block any number of creatures each combat" => {
+            Some(BlockingRestriction::CanBlockAnyNumber)
+        }
+        "assigns combat damage equal to its toughness"
+        | "assign combat damage equal to their toughness" => {
+            Some(BlockingRestriction::AssignDamageByToughness)
+        }
         _ => {
             if let Some(n_raw) = low
                 .strip_prefix("cant_be_blocked_by_more_than:")
@@ -8061,6 +8144,32 @@ pub(super) fn lower_extra_combat_mod_blocking_restriction(
                 let n = parse_small_number_word(num_tok).and_then(|v| u8::try_from(v).ok())?;
                 if n > 0 {
                     return Some(BlockingRestriction::CannotBeBlockedByMoreThan(n));
+                }
+            }
+            if let Some(n_raw) = low
+                .strip_prefix("cant_block_more_than:")
+                .or_else(|| low.strip_prefix("can't block more than "))
+                .or_else(|| low.strip_prefix("cannot block more than "))
+            {
+                let num_tok = n_raw.split_whitespace().next().unwrap_or("");
+                let n = parse_small_number_word(num_tok).and_then(|v| u8::try_from(v).ok())?;
+                if n > 0 {
+                    return Some(BlockingRestriction::CannotBlockMoreThan(n));
+                }
+            }
+            if let Some(rest) = low
+                .strip_prefix("can't be blocked by creatures with power ")
+                .or_else(|| low.strip_prefix("cannot be blocked by creatures with power "))
+            {
+                if let Some(num_s) = rest.strip_suffix(" or less")
+                    && let Ok(n) = num_s.trim().parse::<u16>()
+                {
+                    return Some(BlockingRestriction::CannotBeBlockedByPowerAtMost(n));
+                }
+                if let Some(num_s) = rest.strip_suffix(" or greater")
+                    && let Ok(n) = num_s.trim().parse::<u16>()
+                {
+                    return Some(BlockingRestriction::CannotBeBlockedByPowerAtLeast(n));
                 }
             }
             None

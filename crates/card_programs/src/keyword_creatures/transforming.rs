@@ -210,16 +210,39 @@ fn compile_face(
                         spellwake_engine::program::ObjectFilter::artifact(),
                     ),
                     vec![
-                        OptionalEffect {
+                        OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 3,
                         },
-                        DestroyTarget,
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
-                            spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
-                                spellwake_engine::program::DamageRecipientsRef::Group(
-                                    DamageCohort::DestroyedTargetController,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec {
+                                bind_snapshots: Some(spellwake_engine::toolbox::BindingId(0)),
+                                bind_succeeded: Some(spellwake_engine::toolbox::BindingId(1)),
+                                ..spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                        semantics:
+                                            spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                                allow_regenerate: true,
+                                            },
+                                    },
+                                )
+                            },
+                        ),
+                        Instruction::BranchCondition {
+                            condition: Box::new(
+                                spellwake_engine::toolbox::ConditionExpr::BoundBool(
+                                    spellwake_engine::toolbox::BindingId(1),
                                 ),
-                            )),
+                            ),
+                            destination: 4,
+                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                spellwake_engine::toolbox::PlayerSelector::Bound(
+                                    spellwake_engine::toolbox::BindingId(0),
+                                ),
+                            ),
                             spellwake_engine::program::ValueExpr::literal(3),
                             false,
                         ),
@@ -536,8 +559,19 @@ fn compile_face(
                     &mut program, spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player(),
                     BodyTarget::FilteredPermanent(spellwake_engine::program::ObjectFilter::creature().of_related_player()),
                     vec![
-                        OptionalEffect { chooser: ResolvingPlayer::Controller },
-                        TransformSourceAndAttachToTarget,
+                        OptionalSequence {
+                            chooser: ResolvingPlayer::Controller,
+                            instructions: 2,
+                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::transform_source(),
+                        Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::all(
+                                spellwake_engine::toolbox::ObjectQuery::Source,
+                                spellwake_engine::toolbox::ObjectMutation::Attach {
+                                    host: spellwake_engine::toolbox::ObjectQuery::Targets,
+                                },
+                            ),
+                        )),
                     ],
                 );
                 continue;

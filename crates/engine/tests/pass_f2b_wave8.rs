@@ -197,7 +197,16 @@ fn destroy_permanent_instant() -> Program {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::DestroyTarget],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                            allow_regenerate: true,
+                        },
+                    },
+                ),
+            ))],
         ),
     )
 }
@@ -414,11 +423,29 @@ fn triggered_fixed_target_clause_destroy_resolves_and_fizzles_when_all_targets_l
             vec![
                 Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
                     BodyTarget::FilteredPermanent(ObjectFilter::artifact()),
-                    vec![Instruction::DestroyTarget],
+                    vec![Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ))],
                 ))),
                 Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
                     BodyTarget::FilteredPermanent(ObjectFilter::creature().not_controlled()),
-                    vec![Instruction::DestroyTarget],
+                    vec![Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                    allow_regenerate: true,
+                                },
+                            },
+                        ),
+                    ))],
                 ))),
                 Instruction::DestroyFixedTargets,
             ],

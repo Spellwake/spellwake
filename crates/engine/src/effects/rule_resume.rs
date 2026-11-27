@@ -62,11 +62,6 @@ impl EffectWindow {
                 self.resume_soulbond(expected, frame, actor, reply)
             }
             EffectDecision::ResolutionSelect(frame)
-                if frame.operation() == ResolutionSelectionKind::TurnCreatureFaceUp =>
-            {
-                self.resume_turn_face_up_effect(expected, frame, actor, reply)
-            }
-            EffectDecision::ResolutionSelect(frame)
                 if matches!(
                     frame.operation(),
                     ResolutionSelectionKind::GraveyardToBattlefield
@@ -214,8 +209,7 @@ impl EffectWindow {
                     || cursor.chosen_opponent.is_some()
                     || !matches!(
                         self.current_instruction()?,
-                        Instruction::DrawToChosenOpponentHandSize
-                            | Instruction::LookTopOneRestGraveyard { .. }
+                        Instruction::LookTopOneRestGraveyard { .. }
                             | Instruction::RevealTopHandRestGraveyard { .. }
                             | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
                             | Instruction::RevealHandAndBottomPiles

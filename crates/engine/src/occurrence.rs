@@ -3629,9 +3629,20 @@ impl TriggerState {
                             controller: *controller,
                             body: ExecutableBody::new(
                                 crate::program::BodyTarget::None,
-                                vec![crate::program::Instruction::WeakenDelayedAttacker(
-                                    attack.attacker,
-                                )],
+                                vec![crate::program::Instruction::ApplyContinuous(Box::new(
+                                    crate::toolbox::ApplyContinuousSpec::resolved_parts(
+                                        crate::toolbox::ObjectQuery::Fixed(vec![attack.attacker]),
+                                        crate::characteristics::ResolvedPartsSpec(vec![
+                                            crate::characteristics::ResolvedPartSpec::ModifyPT(
+                                                crate::characteristics::PowerToughness {
+                                                    power: (-1).into(),
+                                                    toughness: 0.into(),
+                                                },
+                                            ),
+                                        ]),
+                                        crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+                                    ),
+                                ))],
                             ),
                             upkeep_keyword: None,
                         };
@@ -4001,7 +4012,12 @@ impl TriggerState {
                                 vec![Instruction::ReturnDelayedExileWithCounters(objects)]
                             }
                             DelayedStepAction::PhaseOut(objects) => {
-                                vec![Instruction::PhaseOutObjects(objects)]
+                                vec![Instruction::MutateObject(Box::new(
+                                    crate::toolbox::MutateObjectSpec::all(
+                                        crate::toolbox::ObjectQuery::Fixed(objects),
+                                        crate::toolbox::ObjectMutation::PhaseOut,
+                                    ),
+                                ))]
                             }
                             DelayedStepAction::ReturnGraveyardToHand(object) => {
                                 vec![Instruction::ReturnDelayedGraveyardToHand(object)]

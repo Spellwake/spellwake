@@ -4300,26 +4300,8 @@ impl EffectWindow {
                         )
                         | (
                             LinkedReturnOrigin::Graveyard { .. }
-                                | LinkedReturnOrigin::GraveyardTransformed { .. }
-                                | LinkedReturnOrigin::Sacrifice {
-                                    zone: ObjectZone::Graveyard(_),
-                                    ..
-                                },
+                                | LinkedReturnOrigin::GraveyardTransformed { .. },
                             ObjectDestination::Graveyard
-                        )
-                        | (
-                            LinkedReturnOrigin::Sacrifice {
-                                zone: ObjectZone::Command,
-                                ..
-                            },
-                            ObjectDestination::Command
-                        )
-                        | (
-                            LinkedReturnOrigin::Sacrifice {
-                                zone: ObjectZone::Exile,
-                                ..
-                            },
-                            ObjectDestination::Exile
                         )
                         | (
                             LinkedReturnOrigin::LibraryTop { .. },

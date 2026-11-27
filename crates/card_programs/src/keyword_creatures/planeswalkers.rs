@@ -137,9 +137,30 @@ pub(super) fn compile(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::ControlledSubtypeDamagesAttacker(
-                        vocabulary.resolve_label(kind)?,
-                    )],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage_from(
+                            spellwake_engine::toolbox::DamageSourceQuery::Objects(
+                                spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(
+                                        Box::new(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::Controller,
+                                            ),
+                                        ),
+                                    ),
+                                    spellwake_engine::program::ObjectFilter::any()
+                                        .with_subtype(vocabulary.resolve_label(kind)?),
+                                ),
+                            ),
+                            spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                                spellwake_engine::program::DamageRecipientsRef::TriggeringObject,
+                            )),
+                            spellwake_engine::program::DamageAmountSpec::Expr(
+                                spellwake_engine::program::ValueExpr::literal(1),
+                            ),
+                            false,
+                        ),
+                    ],
                 ),
             });
             continue;

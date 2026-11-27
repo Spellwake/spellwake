@@ -812,7 +812,12 @@ pub(super) fn parse(
         return Some((
             mana_cost,
             source_cost,
-            ExecutableBody::new(BodyTarget::None, vec![Instruction::ExploreSource]),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::ExploreSubject(
+                    spellwake_engine::program::MoveSubjectRef::AbilitySource,
+                )],
+            ),
             restriction,
         ));
     }

@@ -1717,7 +1717,12 @@ impl EffectWindow {
             self.payloads.insert(
                 placement.entry,
                 StackPayload::from_body(
-                    ExecutableBody::new(BodyTarget::None, vec![Instruction::IncreaseSpeed]),
+                    ExecutableBody::new(
+                        BodyTarget::None,
+                        vec![Instruction::MutatePlayer(Box::new(
+                            crate::toolbox::MutatePlayerSpec::increase_speed(),
+                        ))],
+                    ),
                     None,
                 ),
             );
