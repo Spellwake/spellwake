@@ -47,11 +47,10 @@ use spellwake_engine::{
     program::{
         AffectedPlayers, BodyTarget, CardType, CastEntryKind, ColorMask, Comparison,
         EventValueKind, ExecutableBody, Instruction, ObjectFilter, PermanentDefinition,
-        PermanentTargetAction, PermanentTypeFilter, PlaneswalkerSubtype, PlayerRelation,
-        PlayerStatExpr, PlayerTriggerAction, Program, ProgramKind, ResolutionCondition,
-        ResolvingPlayer, SpellFilter, StatusTriggerKind, TriggerCondition, TriggerEvent,
-        TriggerFromZone, TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
-        ValueExpr,
+        PermanentTypeFilter, PlaneswalkerSubtype, PlayerRelation, PlayerStatExpr,
+        PlayerTriggerAction, Program, ProgramKind, ResolutionCondition, ResolvingPlayer,
+        SpellFilter, StatusTriggerKind, TriggerCondition, TriggerEvent, TriggerFromZone,
+        TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr,
     },
     targets::TargetRef,
     token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients},
@@ -143,7 +142,7 @@ fn colored_destroy_instant(color: Color) -> Program {
     let mut prog = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -299,7 +298,7 @@ fn prevent_graveyard_targeting_rejects_graveyard_card_and_creature_targets() {
     let bear = Program::creature(None, 2.into(), 2.into(), BTreeSet::new());
     let exile_any_gy = spell(
         2,
-        BodyTarget::AnyGraveyardCard,
+        BodyTarget::ANY_GRAVEYARD_CARD,
         vec![Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -318,7 +317,7 @@ fn prevent_graveyard_targeting_rejects_graveyard_card_and_creature_targets() {
     );
     let exile_gy_creature = spell(
         3,
-        BodyTarget::AnyGraveyardCreature,
+        BodyTarget::ANY_GRAVEYARD_CREATURE,
         vec![Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -426,16 +425,18 @@ fn cannot_be_sacrificed_protects_noncreature_permanent_from_effect_and_cost() {
     let force_sac_artifact = spell(
         4,
         BodyTarget::None,
-        vec![Instruction::Sacrifice {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: ValueExpr::literal(1),
-            filter: PermanentTypeFilter {
-                any_types: BTreeSet::from([CardType::Artifact]),
-                required_types: BTreeSet::new(),
-                forbidden_types: BTreeSet::new(),
-                object_filter: None,
-            },
-        }],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                ValueExpr::literal(1),
+                PermanentTypeFilter {
+                    any_types: BTreeSet::from([CardType::Artifact]),
+                    required_types: BTreeSet::new(),
+                    forbidden_types: BTreeSet::new(),
+                    object_filter: None,
+                },
+            ),
+        ))],
     );
 
     let mut sac_cost_spell = gain_life_instant(3);
@@ -517,7 +518,7 @@ fn cant_be_targeted_by_enforces_aura_only_and_color_mask_restrictions() {
     let aura = Program::aura(Some(ManaCost::free()), EnchantRestriction::Creature);
     let destroy = spell(
         4,
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1058,7 +1059,7 @@ fn planeswalker_subtype_filter_and_permanent_selector_match_jace_and_reject_chan
     // ObjectFilter with SubtypeFilter::Planeswalker(Jace) targets only Jace.
     let exile_jace = spell(
         4,
-        BodyTarget::FilteredPermanent(
+        BodyTarget::filtered_permanent(
             ObjectFilter::planeswalker().with_planeswalker_subtype(PlaneswalkerSubtype::Jace),
         ),
         vec![Instruction::ZoneOp(Box::new(

@@ -61,7 +61,7 @@ fn target_player_is_distinct_from_caster_and_captured_watcher_controller() {
             spellwake_engine::program::SpellFilter::any(),
         ),
         grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(BodyTarget::SinglePlayer, vec![gain_target(2), gain(1)]),
+        body: ExecutableBody::new(BodyTarget::SINGLE_PLAYER, vec![gain_target(2), gain(1)]),
     });
     let game = initial(
         vec![
@@ -115,7 +115,7 @@ fn target_player_is_distinct_from_caster_and_captured_watcher_controller() {
 fn self_cast_trigger_can_counter_causing_spell_and_keep_its_owned_body() {
     let source = targeted(
         instruction(),
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
         vec![Instruction::StackOp(Box::new(
             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                 spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -150,7 +150,7 @@ fn self_cast_trigger_can_counter_causing_spell_and_keep_its_owned_body() {
 fn spell_copy_target_gate_uses_existing_copy_owner_without_an_extra_cast() {
     let source = targeted(
         instruction(),
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         vec![Instruction::StackOp(Box::new(
             spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
         ))],
@@ -177,7 +177,7 @@ fn spell_copy_target_gate_uses_existing_copy_owner_without_an_extra_cast() {
 fn off_domain_wrong_kind_wrong_actor_and_normal_action_preserve_pending_root() {
     let source = targeted(
         instruction(),
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![gain_target(1)],
     );
     let game = two(vec![hand(1, P0, source)]);
@@ -287,7 +287,7 @@ fn nonfirst_active_mixed_cohorts_choose_targets_in_accepted_order_before_priorit
         let mut watcher = Program::artifact(None, vec![]);
         for (definition, target, body) in [
             (1, BodyTarget::None, vec![gain(1)]),
-            (2, BodyTarget::SinglePlayer, vec![gain_target(2)]),
+            (2, BodyTarget::SINGLE_PLAYER, vec![gain_target(2)]),
         ] {
             watcher.triggered.push(TriggeredAbility {
                 id: TriggeredAbilityId(definition),
@@ -381,7 +381,7 @@ fn nonfirst_active_mixed_cohorts_choose_targets_in_accepted_order_before_priorit
 fn targeted_entry_trigger_uses_the_real_new_battlefield_source_identity() {
     let mut source = targeted(
         cast_permanent(true),
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![gain_target(2)],
     );
     source.triggered[0].condition = spellwake_engine::program::TriggerSpec::enters(
@@ -411,7 +411,7 @@ fn targeted_entry_trigger_uses_the_real_new_battlefield_source_identity() {
 fn a_step_trigger_chooses_targets_for_its_controller_during_another_players_upkeep() {
     let mut watcher = targeted(
         Program::artifact(None, vec![]),
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![gain_target(2)],
     );
     watcher.triggered[0].condition = spellwake_engine::program::TriggerSpec::step_began(
@@ -472,14 +472,16 @@ fn both_spell_domains_include_real_noncard_instruction_copies_as_targets() {
     ] {
         let source = targeted(
             instruction(),
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
+            BodyTarget::single_spell(
+                spellwake_engine::program::SpellFilter::copyable_instruction(),
+            ),
             vec![Instruction::StackOp(Box::new(
                 spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
             ))],
         );
         let counter = targeted(
             instruction(),
-            BodyTarget::SingleSpell(filter),
+            BodyTarget::single_spell(filter),
             vec![Instruction::StackOp(Box::new(
                 spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                     spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -544,7 +546,7 @@ fn any_spell_includes_permanent_spells_while_copyable_filter_preserves_interpret
     ] {
         let counter = targeted(
             instruction(),
-            BodyTarget::SingleSpell(filter),
+            BodyTarget::single_spell(filter),
             vec![Instruction::StackOp(Box::new(
                 spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                     spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -605,12 +607,12 @@ fn source_control_change_preserves_the_targeted_trigger_controller_and_untargete
             spellwake_engine::program::SpellFilter::any(),
         ),
         grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(BodyTarget::SinglePlayer, vec![gain_target(2), gain(1)]),
+        body: ExecutableBody::new(BodyTarget::SINGLE_PLAYER, vec![gain_target(2), gain(1)]),
     });
     let control = Program::instant(
         ManaCost::one(ManaType::Blue),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![tr::effect(
                 vec![ResolvedPartSpec::Control(
                     ControlRecipient::ResolvingController,
@@ -677,12 +679,14 @@ fn placement_target_survives_a_later_resolution_type_choice_and_materialized_lay
     let slot = CreatureTypeSlot::new(0);
     let source = targeted(
         instruction(),
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![
-            Instruction::ChooseCreatureType {
-                into: slot,
-                excluding: BTreeSet::new(),
-            },
+            Instruction::PromptChoice(Box::new(
+                spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                    slot,
+                    BTreeSet::new(),
+                ),
+            )),
             tr::effect(
                 vec![tr::type_part(
                     TypeOperation::Keep,
@@ -720,11 +724,14 @@ fn placement_target_survives_a_later_resolution_type_choice_and_materialized_lay
         .trigger
         .clone();
     let pending = resolve(chosen.state());
-    let RuleFrame::CreatureType(frame) = pending.state().pending_decision().unwrap().frame() else {
+    let RuleFrame::PromptChoice(frame) = pending.state().pending_decision().unwrap().frame() else {
         panic!("nested type choice")
     };
-    assert_eq!(frame.entry(), entry);
-    assert_eq!(frame.slot(), slot);
+    assert_eq!(frame.entry, entry);
+    assert!(matches!(
+        frame.domain,
+        spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. }
+    ));
     assert_eq!(
         pending
             .state()
@@ -753,7 +760,13 @@ fn placement_target_survives_a_later_resolution_type_choice_and_materialized_lay
         .creature_vocabulary()
         .resolve_label("Elf")
         .unwrap();
-    let continued = tr::reply(pending.state(), P0, DecisionReply::CreatureType(elf));
+    let continued = tr::reply(
+        pending.state(),
+        P0,
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+            elf,
+        )),
+    );
     assert!(
         tr::current(continued.state(), creature)
             .current_creature_subtypes
@@ -769,9 +782,9 @@ fn nested_copy_choice_changes_only_the_copy_plan_and_keeps_the_trigger_binding()
     let source = targeted(
         Program::instant(
             ManaCost::one(ManaType::Blue),
-            ExecutableBody::new(BodyTarget::SinglePlayer, vec![gain_target(2)]),
+            ExecutableBody::new(BodyTarget::SINGLE_PLAYER, vec![gain_target(2)]),
         ),
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         vec![Instruction::StackOp(Box::new(
             spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
         ))],

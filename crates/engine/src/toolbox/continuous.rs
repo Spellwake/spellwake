@@ -49,6 +49,7 @@ pub enum ContinuousPayload {
         cast_only: bool,
         free: bool,
         any_color: bool,
+        impulse_duration: Option<crate::program::ImpulsePlayDuration>,
     },
     /// Generalized damage-prevention shield for this turn.
     PreventDamage(Box<TurnPreventionSpec>),
@@ -75,6 +76,11 @@ pub enum ContinuousPayload {
     ChosenColorProtection { recipients: ProtectionRecipients },
     /// Prompt to modify any number of permanents matching target/filter with `parts` for `spec.duration`.
     ModifyAnyNumber { parts: Box<ResolvedPartsSpec> },
+    /// Layer 1 copy effect copying `donor` onto `spec.selector` with optional CR 707.9 exceptions.
+    BecomeCopy {
+        donor: Box<ObjectQuery>,
+        exceptions: Box<crate::program::CopyExceptions>,
+    },
 }
 
 impl ContinuousPayload {
@@ -113,6 +119,7 @@ impl ContinuousPayload {
                 ProtectionRecipients::AbilitySource
                 | ProtectionRecipients::ControllerAndPermanents => false,
             },
+            Self::BecomeCopy { donor, .. } => donor.uses_target(),
         }
     }
 
@@ -155,6 +162,22 @@ impl ContinuousPayload {
                     filter
                         .validate_vocabulary(vocabulary)
                         .map_err(|_| DefinitionError::InvalidInstruction)?;
+                }
+                Ok(())
+            }
+            Self::BecomeCopy { donor, exceptions } => {
+                donor.validate_vocabulary(vocabulary)?;
+                for sub in &exceptions.extra_creature_subtypes {
+                    if vocabulary.label(*sub).is_none() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                }
+                for tr in &exceptions.extra_triggered {
+                    tr.validate_body(vocabulary)?;
+                }
+                for act in &exceptions.extra_activated {
+                    act.body
+                        .validate_in(vocabulary, crate::program::BodyContext::ACTIVATED)?;
                 }
                 Ok(())
             }
@@ -309,6 +332,7 @@ impl ApplyContinuousSpec {
                 cast_only,
                 free,
                 any_color,
+                impulse_duration: None,
             },
             duration,
             condition: None,
@@ -316,6 +340,67 @@ impl ApplyContinuousSpec {
             as_emblem: None,
             emblem_label: None,
         }
+    }
+
+    /// Construct an impulse play/cast permission spec on `selector` with an explicit impulse window.
+    #[must_use]
+    pub fn impulse_play_permission(
+        selector: ObjectQuery,
+        player: PlayerSelector,
+        duration: crate::program::ImpulsePlayDuration,
+        cast_only: bool,
+        free: bool,
+        any_color: bool,
+    ) -> Self {
+        Self {
+            selector: Some(selector),
+            payload: ContinuousPayload::PlayPermission {
+                player,
+                cast_only,
+                free,
+                any_color,
+                impulse_duration: Some(duration),
+            },
+            duration: ResolvedDuration::UntilEndOfTurn,
+            condition: None,
+            one_shot: false,
+            as_emblem: None,
+            emblem_label: None,
+        }
+    }
+
+    /// Construct an exiled play/cast permission spec mapping a [`ResolvedDuration`] to
+    /// [`crate::program::ImpulsePlayDuration`].
+    #[must_use]
+    pub fn exile_play_permission_for_duration(
+        player: PlayerSelector,
+        objects: ObjectQuery,
+        duration: ResolvedDuration,
+        free: bool,
+        cast_only: bool,
+        any_color: bool,
+    ) -> Self {
+        use crate::program::ImpulsePlayDuration;
+        let impulse_duration = match duration {
+            ResolvedDuration::UntilEndOfTurn | ResolvedDuration::UntilEndOfCombat => {
+                ImpulsePlayDuration::ThisTurn
+            }
+            ResolvedDuration::ThroughControllerNextTurn
+            | ResolvedDuration::UntilControllerNextTurn
+            | ResolvedDuration::ThroughNextTurn { .. }
+            | ResolvedDuration::UntilPlayerNextTurn { .. } => {
+                ImpulsePlayDuration::UntilEndOfNextTurn
+            }
+            _ => ImpulsePlayDuration::WhileExiled,
+        };
+        Self::impulse_play_permission(
+            objects,
+            player,
+            impulse_duration,
+            cast_only,
+            free,
+            any_color,
+        )
     }
 
     /// Construct a damage-prevention shield spec.
@@ -423,6 +508,28 @@ impl ApplyContinuousSpec {
             selector: None,
             payload: ContinuousPayload::ModifyAnyNumber {
                 parts: Box::new(parts),
+            },
+            duration,
+            condition: None,
+            one_shot: false,
+            as_emblem: None,
+            emblem_label: None,
+        }
+    }
+
+    /// Construct a Layer 1 copy effect making `receiver` become a copy of `donor` for `duration`.
+    #[must_use]
+    pub fn become_copy(
+        receiver: ObjectQuery,
+        donor: ObjectQuery,
+        duration: ResolvedDuration,
+        exceptions: crate::program::CopyExceptions,
+    ) -> Self {
+        Self {
+            selector: Some(receiver),
+            payload: ContinuousPayload::BecomeCopy {
+                donor: Box::new(donor),
+                exceptions: Box::new(exceptions),
             },
             duration,
             condition: None,

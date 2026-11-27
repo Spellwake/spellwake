@@ -31,9 +31,9 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination, ObjectZone},
     program::{
         AffectedPlayers, BodyTarget, CardType, ExecutableBody, Instruction, ObjectFilter,
-        ObjectStatKind, PermanentDefinition, PermanentTargetAction, Program, ProgramKind,
-        ResolvingPlayer, TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
-        ValueExpr, ValueObjectRef,
+        ObjectStatKind, PermanentDefinition, Program, ProgramKind, ResolvingPlayer,
+        TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr,
+        ValueObjectRef,
     },
     targets::TargetRef,
     turn::Step,

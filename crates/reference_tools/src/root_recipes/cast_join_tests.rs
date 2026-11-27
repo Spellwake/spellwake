@@ -114,7 +114,7 @@ fn actual_root_recipe_target_reply_and_frame_guard_use_existing_player_resolver(
             ),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![Instruction::AdjustLife(Box::new(
                     spellwake_engine::toolbox::AdjustLifeSpec::gain(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(

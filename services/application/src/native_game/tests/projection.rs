@@ -343,26 +343,15 @@ pub(super) fn verify_view(view: &mut NativeScope<'_>, original: Option<&PlayerCo
     {
         use spellwake_engine::effects::PileChoice;
         match frame.choice() {
-            PileChoice::OneToHand(ids)
-            | PileChoice::OneToHandRestBottom(ids)
-            | PileChoice::Creature(ids)
-            | PileChoice::Divide(ids)
+            PileChoice::Divide(ids)
             | PileChoice::BottomOrder(ids)
             | PileChoice::GraveyardOrder(ids) => {
                 revealed_by_decision.extend(ids.iter().copied());
             }
-            PileChoice::OptionalCreatureToBattlefield { looked, eligible }
-            | PileChoice::OptionalUpTo {
-                looked, eligible, ..
-            } => {
-                revealed_by_decision.extend(looked.iter().copied());
-                revealed_by_decision.extend(eligible.iter().copied());
-            }
-            PileChoice::Take { first, second } | PileChoice::Sacrifice { first, second } => {
+            PileChoice::Take { first, second } => {
                 revealed_by_decision.extend(first.iter().copied());
                 revealed_by_decision.extend(second.iter().copied());
             }
-            PileChoice::DividePermanents(_) => {}
         }
     }
     let hidden: BTreeSet<_> = source
@@ -936,7 +925,7 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -954,7 +943,7 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1021,7 +1010,7 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -1034,7 +1023,7 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -1224,25 +1213,10 @@ fn assert_display_trace(snapshot: &PlayerSnapshot, view: &NativeScope<'_>, displ
             RuleFrame::RevealedPiles(frame) => {
                 use spellwake_engine::effects::PileChoice;
                 let ids: &[_] = match frame.choice() {
-                    PileChoice::OneToHand(ids)
-                    | PileChoice::OneToHandRestBottom(ids)
-                    | PileChoice::Creature(ids)
-                    | PileChoice::Divide(ids)
+                    PileChoice::Divide(ids)
                     | PileChoice::BottomOrder(ids)
                     | PileChoice::GraveyardOrder(ids) => ids,
-                    PileChoice::OptionalCreatureToBattlefield { looked, eligible }
-                    | PileChoice::OptionalUpTo {
-                        looked, eligible, ..
-                    } => {
-                        for &id in looked.iter().chain(eligible.iter()) {
-                            let obj = source.execution().window().cards().get(id).unwrap();
-                            let prog = source.execution().copiable_program(id).unwrap();
-                            expected.push(DisplayCall::Object(obj.clone(), prog.clone()));
-                        }
-                        &[]
-                    }
-                    PileChoice::Take { first, second }
-                    | PileChoice::Sacrifice { first, second } => {
+                    PileChoice::Take { first, second } => {
                         for &id in first.iter().chain(second.iter()) {
                             let obj = source.execution().window().cards().get(id).unwrap();
                             let prog = source.execution().copiable_program(id).unwrap();
@@ -1250,7 +1224,6 @@ fn assert_display_trace(snapshot: &PlayerSnapshot, view: &NativeScope<'_>, displ
                         }
                         &[]
                     }
-                    PileChoice::DividePermanents(_) => &[],
                 };
                 for &id in ids {
                     let obj = source.execution().window().cards().get(id).unwrap();
@@ -1364,13 +1337,19 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SinglePermanent,
-            vec![Instruction::BecomeCopy {
-                receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-                donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-                duration: ResolvedDuration::NoStatedDuration,
-                exceptions: Box::default(),
-            }],
+            BodyTarget::SINGLE_PERMANENT,
+            vec![Instruction::ApplyContinuous(Box::new(
+                spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        spellwake_engine::program::EffectSubject::AbilitySource,
+                    )),
+                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                        spellwake_engine::program::MoveSubjectRef::TargetObject,
+                    ),
+                    ResolvedDuration::NoStatedDuration,
+                    spellwake_engine::program::CopyExceptions::default(),
+                ),
+            ))],
         ),
     };
     let source = main_state(vec![
@@ -1391,7 +1370,7 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1408,14 +1387,16 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::MutateObject(Box::new(
                     spellwake_engine::toolbox::MutateObjectSpec::all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
-                        spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                            kind: spellwake_engine::effects::CounterKind::PlusOne,
-                            amount: spellwake_engine::program::ValueExpr::literal(2),
-                        },
+                        spellwake_engine::toolbox::ObjectMutation::Counters(
+                            spellwake_engine::toolbox::CounterOp::Add {
+                                kind: spellwake_engine::effects::CounterKind::PlusOne,
+                                amount: spellwake_engine::program::ValueExpr::literal(2),
+                            },
+                        ),
                     ),
                 ))],
             ),
@@ -1425,7 +1406,7 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -1618,7 +1599,7 @@ fn captured_damage_sources_keep_public_provenance_after_departure() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1720,7 +1701,7 @@ fn captured_damage_sources_keep_public_provenance_after_departure() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SingleSpell(
+                BodyTarget::single_spell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
                 vec![Instruction::StackOp(Box::new(
@@ -1990,7 +1971,7 @@ fn check_triggered_exile_cast(rebound: bool) {
         stack_window::WindowPhase,
     };
     let mut spell = instant(
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -2240,7 +2221,7 @@ fn both_seats_see_player_speed_and_its_sourceless_stack_ability() {
             A,
             ObjectDestination::Hand,
             instant(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![Instruction::AdjustLife(Box::new(
                     spellwake_engine::toolbox::AdjustLifeSpec::lose(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -2389,7 +2370,7 @@ fn live_priority_holder_projects_authoritative_cast_offers_and_validates_invaria
     let burn = Program::instant(
         ManaCost::one(ManaType::Red),
         ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![Instruction::AdjustLife(Box::new(
                 spellwake_engine::toolbox::AdjustLifeSpec::lose(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(

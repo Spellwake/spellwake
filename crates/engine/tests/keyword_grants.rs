@@ -45,12 +45,12 @@ fn new_creature_game() -> GameState {
             card(1, source, false),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![grant(&[Haste, Vigilance], ResolvedDuration::UntilEndOfTurn)],
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
                         AbilityRemoval::All,
@@ -60,7 +60,7 @@ fn new_creature_game() -> GameState {
             ),
             spell(
                 5,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
                         AbilityRemoval::NonMana,
@@ -264,7 +264,7 @@ fn one_ability_component_removes_printed_abilities_then_grants_its_own_keywords(
             card(1, source, true),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::Abilities(AbilityChange {
                         removal: Some(AbilityRemoval::All),
@@ -318,7 +318,7 @@ fn removing_a_live_keyword_generator_recomputes_grants_on_other_creatures() {
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
                         AbilityRemoval::All,

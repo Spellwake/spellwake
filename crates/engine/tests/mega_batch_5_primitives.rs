@@ -5,8 +5,8 @@
 //!   `HAS_ACTIVATED_ABILITY`, `NO_ACTIVATED_ABILITIES`, `UNIQUE_NAME_AMONG_CONTROLLED`)
 //! - `DynamicStatAnchor` (`TargetToughness`, `TargetManaValue`)
 //! - `SourceZoneFilter::TargetPlayerHand` inside `SelectZoneCardsToZone`
-//! - `RevealUntilMatchExt { keep_all_revealed: true }` (Treasure Hunt behavior)
-//! - `LookTopChooseExt` with `LookTopKeepDest::ExileLinked` (linked exile + face-down + playable)
+//! - `ZoneOpSpec::reveal_until_match_instructions` (`keep_all_revealed: true`, Treasure Hunt behavior)
+//! - `ZoneOpSpec::look_top_choose_instructions` with `LookTopKeepDest::ExileLinked` (linked exile + face-down + playable)
 
 #[path = "../test_support/creature_vocabulary.rs"]
 mod creature_vocabulary;
@@ -204,7 +204,7 @@ fn shares_color_with_target_and_same_total_pt_filter_flags() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
@@ -283,7 +283,7 @@ fn dynamic_stat_anchor_target_toughness_and_target_mana_value() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
@@ -349,7 +349,7 @@ fn dynamic_stat_anchor_target_toughness_and_target_mana_value() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
@@ -417,7 +417,7 @@ fn source_zone_filter_target_player_hand_exiles_chosen_creature() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::simple(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Hand(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer))), ObjectFilter::Clause(creature_clause())), spellwake_engine::toolbox::ZoneSelection::Prompt { chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller), min: Box::new(ValueExpr::literal(1)), max: Box::new(ValueExpr::literal(1)), constraint: None, category: spellwake_engine::toolbox::ChoiceCategory::Generic, hidden: !(false) }, spellwake_engine::toolbox::ZoneDest::Exile { face_down: false, viewer: None, link_to_source: matches!(None, Some(spellwake_engine::program::DelayedReturnTiming::UntilSourceLeaves)), delayed_return: None, link_group: None })))],
             ),
         ),
@@ -496,17 +496,17 @@ fn reveal_until_match_ext_keep_all_revealed_puts_all_revealed_cards_in_hand() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::RevealUntilMatchExt {
-                    library_owner: ResolvingPlayer::Controller,
-                    chooser: ResolvingPlayer::Controller,
-                    filter: Box::new(ObjectFilter::Clause(nonland_clause)),
-                    count: ValueExpr::literal(1),
-                    match_dest: LookTopKeepDest::Hand,
-                    rest_dest: LookTopRestDest::BottomRandom,
-                    keep_all_revealed: true,
-                    optional_keep: false,
-                    exile_instead_of_reveal: false,
-                }],
+                spellwake_engine::toolbox::ZoneOpSpec::reveal_until_match_instructions(
+                    ResolvingPlayer::Controller,
+                    ResolvingPlayer::Controller,
+                    ObjectFilter::Clause(nonland_clause),
+                    ValueExpr::literal(1),
+                    LookTopKeepDest::Hand,
+                    LookTopRestDest::BottomRandom,
+                    true,
+                    false,
+                    false,
+                ),
             ),
         ),
         &v,
@@ -572,14 +572,14 @@ fn look_top_choose_ext_exile_linked_face_down_and_playable() {
                 source_cost: SourceCost::Tap,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::LookTopChooseExt {
-                        library_owner: ResolvingPlayer::Controller,
-                        chooser: ResolvingPlayer::Controller,
-                        count: ValueExpr::literal(2),
-                        filter: Some(Box::new(ObjectFilter::Clause(creature_clause()))),
-                        max_picks: 1,
-                        take_all_matching: true,
-                        keep_dest: LookTopKeepDest::ExileLinked {
+                    spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                        ResolvingPlayer::Controller,
+                        ResolvingPlayer::Controller,
+                        ValueExpr::literal(2),
+                        Some(ObjectFilter::Clause(creature_clause())),
+                        1,
+                        true,
+                        LookTopKeepDest::ExileLinked {
                             face_down: true,
                             playable: true,
                             free: false,
@@ -587,12 +587,12 @@ fn look_top_choose_ext_exile_linked_face_down_and_playable() {
                             any_color: false,
                             duration: ResolvedDuration::UntilEndOfTurn,
                         },
-                        rest_dest: LookTopRestDest::BottomRandom,
-                        reveal_kept: false,
-                        reveal_all: false,
-                        reveal_only: false,
-                        secondary: None,
-                    }],
+                        LookTopRestDest::BottomRandom,
+                        false,
+                        false,
+                        false,
+                        None,
+                    ),
                 ),
             }],
         ),

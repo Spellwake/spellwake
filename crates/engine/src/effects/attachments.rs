@@ -32,26 +32,30 @@ impl EffectWindow {
         target: Option<TargetRef>,
         evaluated: &EvaluatedCharacteristics,
     ) -> Result<(), EffectError> {
-        match body.instructions.as_slice() {
-            [Instruction::Attach(kind)] => {
-                validate_main_phase(&self.window, turn, actor)?;
-                if *kind == crate::attachment::AttachAbility::Reconfigure
-                    && target == Some(TargetRef::Object(source))
-                {
-                    return Err(EffectError::IllegalTarget);
+        if let [Instruction::MutateObject(spec)] = body.instructions.as_slice() {
+            match &spec.op {
+                crate::toolbox::ObjectMutation::Attach(crate::toolbox::AttachOp::ToObject {
+                    ability: Some(kind),
+                    ..
+                }) => {
+                    validate_main_phase(&self.window, turn, actor)?;
+                    if *kind == crate::attachment::AttachAbility::Reconfigure
+                        && target == Some(TargetRef::Object(source))
+                    {
+                        return Err(EffectError::IllegalTarget);
+                    }
                 }
-            }
-            [Instruction::MutateObject(spec)]
-                if matches!(spec.source, crate::toolbox::ObjectQuery::Source)
-                    && matches!(spec.op, crate::toolbox::ObjectMutation::Unattach) =>
-            {
-                validate_main_phase(&self.window, turn, actor)?;
-                if !matches!(self.attached_to(source),Some(TargetRef::Object(host)) if evaluated.get(host).is_some_and(|v| v.zone==ObjectZone::Battlefield && v.is_creature()))
+                crate::toolbox::ObjectMutation::Attach(crate::toolbox::AttachOp::Unattach)
+                    if matches!(spec.source, crate::toolbox::ObjectQuery::Source) =>
                 {
-                    return Err(EffectError::NotAbilitySource);
+                    validate_main_phase(&self.window, turn, actor)?;
+                    if !matches!(self.attached_to(source),Some(TargetRef::Object(host)) if evaluated.get(host).is_some_and(|v| v.zone==ObjectZone::Battlefield && v.is_creature()))
+                    {
+                        return Err(EffectError::NotAbilitySource);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
         Ok(())
     }
@@ -64,10 +68,19 @@ impl EffectWindow {
             .filter(|a| source.abilities.activated.contains(&a.id))
             .chain(source.granted_activated.values())
             .any(|ability| {
-                ability.body.instructions.as_slice()
-                    == [Instruction::Attach(
-                        crate::attachment::AttachAbility::Reconfigure,
-                    )]
+                matches!(
+                    ability.body.instructions.as_slice(),
+                    [Instruction::MutateObject(spec)]
+                        if matches!(
+                            spec.op,
+                            crate::toolbox::ObjectMutation::Attach(
+                                crate::toolbox::AttachOp::ToObject {
+                                    ability: Some(crate::attachment::AttachAbility::Reconfigure),
+                                    ..
+                                }
+                            )
+                        )
+                )
             })
     }
 
@@ -173,7 +186,9 @@ impl EffectWindow {
             Instruction::MutateObject(spec)
                 if matches!(
                     spec.op,
-                    crate::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
+                    crate::toolbox::ObjectMutation::TokenAttach(
+                        crate::toolbox::TokenAttachOp::CreateAndAttach { .. }
+                    )
                 )
         ) {
             return Err(EffectError::InconsistentProgram);

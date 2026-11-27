@@ -133,7 +133,7 @@ fn fixture_with_sources(
             Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+                    BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
                     vec![Instruction::StackOp(Box::new(
                         crate::toolbox::StackOpSpec::copy_targeted_spell(),
                     ))],
@@ -320,7 +320,7 @@ fn huge_targeted_mill_clamps_before_conversion_and_empty_library_is_not_failed_d
             ),
             gain(2),
         ],
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         B,
         3,
         None,
@@ -568,9 +568,11 @@ fn admission_rejects_negative_undefined_amount_and_unavailable_recipient_capabil
         let mut undefined = operation(kind, ResolvingPlayer::Controller, 1.into());
         match &mut undefined {
             Instruction::MutatePlayer(spec) => match &mut spec.op {
-                crate::toolbox::PlayerMutation::Scry(amount)
-                | crate::toolbox::PlayerMutation::Surveil(amount)
-                | crate::toolbox::PlayerMutation::Mill(amount) => {
+                crate::toolbox::PlayerMutation::LibraryTop(
+                    crate::toolbox::LibraryTopAction::Scry(amount)
+                    | crate::toolbox::LibraryTopAction::Surveil(amount)
+                    | crate::toolbox::LibraryTopAction::Mill(amount),
+                ) => {
                     *amount = crate::program::ValueExpr::count_battlefield(
                         crate::program::ObjectFilter::any()
                             .controlled()

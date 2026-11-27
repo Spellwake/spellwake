@@ -60,6 +60,7 @@ pub(super) struct BodyBuilder {
     pub(super) target: BodyTarget,
     pub(super) instructions: Vec<Instruction>,
     pub(super) graveyard_target_bounds: Option<(usize, usize)>,
+    pub(super) permanent_target_bounds: Option<(u16, u16)>,
     pub(super) x_target_count: bool,
     pub(super) up_to_x_target_count: bool,
     pub(super) up_to_one_target: bool,
@@ -74,6 +75,7 @@ impl BodyBuilder {
             target: BodyTarget::None,
             instructions: Vec::new(),
             graveyard_target_bounds: None,
+            permanent_target_bounds: None,
             x_target_count: false,
             up_to_x_target_count: false,
             up_to_one_target: false,
@@ -113,6 +115,11 @@ impl BodyBuilder {
         }
     }
 
+    pub(super) fn push_bounded_target_op(&mut self, minimum: u16, maximum: u16, op: Instruction) {
+        self.permanent_target_bounds = Some((minimum, maximum));
+        self.instructions.push(op);
+    }
+
     pub(super) fn finish(self) -> Result<ExecutableBody, &'static str> {
         if self.instructions.is_empty() {
             return Err("oracle:empty-body");
@@ -134,6 +141,9 @@ impl BodyBuilder {
             Some((min, max)) => body.with_graveyard_target_bounds(min, max),
             None => body,
         };
+        if let Some((min, max)) = self.permanent_target_bounds {
+            body = body.with_permanent_target_bounds(min, max);
+        }
         if self.x_target_count {
             body = body.with_x_target_count();
         }
@@ -155,16 +165,10 @@ fn rewrite_body_after_revealed_top(body: &mut ExecutableBody) {
         }
         if matches!(
             op,
-            Instruction::LookTopChooseExt {
-                reveal_only: true,
-                ..
-            }
-        ) || matches!(
-            op,
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::MayRevealTop)
                 )
         ) || matches!(
             op,
@@ -179,6 +183,8 @@ fn rewrite_body_after_revealed_top(body: &mut ExecutableBody) {
                 ) && matches!(
                     spec.destination,
                     spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                        | spellwake_engine::toolbox::ZoneDest::RevealOnly
+                        | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
                 )
         ) {
             saw_reveal_top = true;
@@ -198,7 +204,7 @@ fn rewrite_body_after_amass(body: &mut ExecutableBody) {
         if matches!(
             op,
             Instruction::MutatePlayer(spec)
-                if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Amass { .. })
+                if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::KeywordAction(spellwake_engine::toolbox::PlayerKeywordAction::Amass { .. }))
         ) {
             saw_amass = true;
         }
@@ -458,16 +464,16 @@ pub(super) fn lower_spell_effects(
         Err(err) => return Err(err),
     };
     let saw_sacrifice = body.instructions.iter().any(|op| {
-        matches!(op, Instruction::Sacrifice { .. })
-            || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                .is_some_and(|spec| {
-                    matches!(
-                        spec.destination,
-                        spellwake_engine::toolbox::ZoneDest::Graveyard {
-                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
-                        }
-                    )
-                })
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op).is_some_and(
+            |spec| {
+                matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                        semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                    }
+                )
+            },
+        )
     });
     if saw_sacrifice {
         rewrite_body_anaphora_stats(&mut body, ValueObjectRef::LastSacrificedCreature);

@@ -127,7 +127,7 @@ fn seeds(cost: ManaCost) -> Vec<SeedCard> {
                     exile_if_dies: false,
                 },
             )),
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
         ),
         creature(90, B),
     ]

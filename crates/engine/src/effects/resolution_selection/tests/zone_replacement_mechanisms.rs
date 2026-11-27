@@ -252,10 +252,12 @@ fn optional_singleton_discard_apply_and_decline_remain_discard_actions() {
             body: ExecutableBody::new(BodyTarget::None, vec![gain(1)]),
         });
         let mut t = start(
-            vec![Instruction::Discard {
-                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                crate::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
             vec![
                 bf(50, B, p),
                 seed(10, A, ObjectDestination::Hand, creature()),
@@ -451,23 +453,25 @@ fn copied_sources_keep_recipient_instance_identity_after_donor_departure() {
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
-                vec![Instruction::BecomeCopy {
-                    receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-                    donor: crate::program::MoveSubjectRef::TargetObject,
-                    duration: ResolvedDuration::NoStatedDuration,
-                    exceptions: Box::new(crate::program::CopyExceptions {
-                        override_pt: None,
-                        ..Default::default()
-                    }),
-                }],
+                BodyTarget::SINGLE_PERMANENT,
+                vec![Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec::become_copy(
+                        crate::toolbox::ObjectQuery::Source,
+                        crate::toolbox::ObjectQuery::Targets,
+                        ResolvedDuration::NoStatedDuration,
+                        crate::program::CopyExceptions {
+                            override_pt: None,
+                            ..Default::default()
+                        },
+                    ),
+                ))],
             ),
         }],
     );
     let bounce = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![crate::program::Instruction::ZoneOp(Box::new(
                 crate::toolbox::ZoneOpSpec::move_all(
                     crate::toolbox::ObjectQuery::Targets,
@@ -555,7 +559,7 @@ fn removed_replacement_abilities_do_not_execute_retained_printed_text() {
             sacrifice(AffectedPlayers::One(ResolvingPlayer::Controller), 1.into()),
         ];
         let mut t = Trace::new(fixture(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             body,
             vec![A, B],
             A,
@@ -600,8 +604,9 @@ fn token_owned_source_and_token_filter_use_the_same_program_path() {
         ),
     );
     let mut body = sacrifice_body(2);
-    body.push(Instruction::OptionalEffect {
+    body.push(Instruction::OptionalSequence {
         chooser: ResolvingPlayer::Controller,
+        instructions: 1,
     });
     body.push(gain(1));
     let mut t = Trace::new(fixture(
@@ -1049,7 +1054,7 @@ fn captured_activated_body_replaces_sacrifice_after_its_real_source_cost() {
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::Sacrifice,
             body: ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     {
                         struct _Tmp {
@@ -1069,10 +1074,12 @@ fn captured_activated_body_replaces_sacrifice_after_its_real_source_cost() {
                         crate::program::Instruction::MutateObject(Box::new(
                             crate::toolbox::MutateObjectSpec::all(
                                 crate::toolbox::ObjectQuery::Targets,
-                                crate::toolbox::ObjectMutation::AddCounters {
-                                    kind: _k,
-                                    amount: crate::program::ValueExpr::Literal(_a),
-                                },
+                                crate::toolbox::ObjectMutation::Counters(
+                                    crate::toolbox::CounterOp::Add {
+                                        kind: _k,
+                                        amount: crate::program::ValueExpr::Literal(_a),
+                                    },
+                                ),
                             ),
                         ))
                     },

@@ -765,7 +765,7 @@ impl EffectWindow {
                             .get(&entry)
                             .and_then(StackPayload::instructions)
                             .and_then(|p| p.get(instruction)),
-                        Some(Instruction::Fight { .. } | Instruction::DealDamage(_))
+                        Some(Instruction::DealDamage(_))
                     )
                 {
                     return Err(EffectError::WrongDamageFrame);

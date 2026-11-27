@@ -63,7 +63,7 @@ fn fixture(cleanup: bool) -> GameState {
                         mana_cost: ManaCost::free(),
                         source_cost: SourceCost::Sacrifice,
                         body: ExecutableBody::new(
-                            BodyTarget::SingleCreature,
+                            BodyTarget::SINGLE_CREATURE,
                             vec![spellwake_engine::program::Instruction::ZoneOp(Box::new(
                                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                     spellwake_engine::toolbox::ObjectQuery::Targets,

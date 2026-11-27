@@ -870,7 +870,7 @@ fn cmm_chromatic_lantern_grants_each_controlled_land_all_colors_and_removes_the_
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1931,7 +1931,7 @@ fn cmm_crash_of_rhino_beetles_and_molimo_recalculate_their_size_from_only_their_
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1995,7 +1995,7 @@ fn cmm_filigree_attendant_counts_itself_and_other_controlled_artifacts_and_recal
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -2053,7 +2053,7 @@ fn cmm_rampaging_brontodon_counts_its_controllers_lands_on_attack_resolution_and
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -2203,7 +2203,7 @@ fn cmm_wayward_swordtooth_allows_a_second_land_play_and_can_attack_or_block_only
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -2543,7 +2543,7 @@ fn cmm_neheb_adds_red_for_all_opponents_life_lost_including_afflict_when_blocked
  {
     let ping = |n| {
         free_instant(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::Literal(n),

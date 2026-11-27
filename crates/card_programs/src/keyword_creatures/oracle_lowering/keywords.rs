@@ -162,19 +162,22 @@ pub(super) fn lower_keyword(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
-                        Instruction::Sacrifice {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: ValueExpr::literal(1),
-                            filter: PermanentTypeFilter {
-                                any_types: BTreeSet::new(),
-                                required_types: BTreeSet::from([CardType::Creature]),
-                                forbidden_types: BTreeSet::new(),
-                                object_filter: None,
-                            },
-                        },
+                        Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                                AffectedPlayers::One(ResolvingPlayer::Controller),
+                                ValueExpr::literal(1),
+                                PermanentTypeFilter {
+                                    any_types: BTreeSet::new(),
+                                    required_types: BTreeSet::from([CardType::Creature]),
+                                    forbidden_types: BTreeSet::new(),
+                                    object_filter: None,
+                                },
+                            ),
+                        )),
                     ],
                 ),
             });
@@ -632,7 +635,7 @@ pub(super) fn lower_keyword(
                     from_graveyard: true,
                 },
                 body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                         CounterKind::PlusOne,
                         ValueExpr::Literal(power),
@@ -652,12 +655,16 @@ pub(super) fn lower_keyword(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::BranchIfFalse {
-                            condition: ResolutionCondition {
-                                left: ValueExpr::EventValue(EventValueKind::EnteredKickerX),
-                                comparison: Comparison::GreaterOrEqual,
-                                right: ValueExpr::literal(5),
-                            },
+                        Instruction::BranchCondition {
+                            condition: Box::new(
+                                spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(
+                                    ResolutionCondition {
+                                        left: ValueExpr::EventValue(EventValueKind::EnteredKickerX),
+                                        comparison: Comparison::GreaterOrEqual,
+                                        right: ValueExpr::literal(5),
+                                    },
+                                )),
+                            ),
                             destination: 2,
                         },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
@@ -677,8 +684,12 @@ pub(super) fn lower_keyword(
                 mana_cost: cost.clone(),
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::Attach(AttachAbility::Reconfigure)],
+                    BodyTarget::SINGLE_CREATURE,
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                            AttachAbility::Reconfigure,
+                        ),
+                    ))],
                 ),
             });
             program.activated.push(ActivatedAbility {
@@ -705,8 +716,12 @@ pub(super) fn lower_keyword(
                 mana_cost: cost,
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
-                    BodyTarget::SinglePermanent,
-                    vec![Instruction::Attach(AttachAbility::Fortify)],
+                    BodyTarget::SINGLE_PERMANENT,
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                            AttachAbility::Fortify,
+                        ),
+                    ))],
                 ),
             });
             Ok(())
@@ -930,16 +945,13 @@ pub(super) fn lower_keyword(
                 ),
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
-                    BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
+                    BodyTarget::filtered_permanent(ObjectFilter::creature().opposing()),
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
-                        Instruction::AffectPermanentTargets {
-                            minimum: 1,
-                            maximum: 1,
-                            action: PermanentTargetAction::Untap,
-                        },
+                        super::toolbox_emit::set_targets_tapped(false),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
@@ -970,13 +982,15 @@ pub(super) fn lower_keyword(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::OfferDynamicManaPayment {
-                            payer: ResolvingPlayer::Controller,
-                            fixed: mana,
-                            extra_generic: ValueExpr::Literal(0.into()),
-                            paid_destination: 1,
-                            declined_destination: 3,
-                        },
+                        Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                ResolvingPlayer::Controller,
+                                mana,
+                                ValueExpr::Literal(0.into()),
+                                1,
+                                3,
+                            ),
+                        )),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_hand(),
                         Instruction::Jump { destination: 4 },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
@@ -1011,7 +1025,7 @@ pub(super) fn lower_keyword(
                 mana_cost,
                 source_cost: SourceCost::HandDiscardSelf(HandDiscardKeyword::Reinforce),
                 body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                         CounterKind::PlusOne,
                         ValueExpr::Literal(n.into()),
@@ -1704,10 +1718,11 @@ pub(super) fn lower_keyword(
                 condition: TriggerSpec::self_enters(),
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::TargetPlayer,
+                            instructions: 1,
                         },
                         Instruction::SearchLibrary {
                             filter: Box::new(search),
@@ -2306,14 +2321,14 @@ pub(super) fn lower_keyword(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::LookTopChooseExt {
-                        library_owner: ResolvingPlayer::Controller,
-                        chooser: ResolvingPlayer::Controller,
-                        count: ValueExpr::literal(n),
-                        filter: None,
-                        max_picks: 1,
-                        take_all_matching: false,
-                        keep_dest: spellwake_engine::program::LookTopKeepDest::ExileLinked {
+                    spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                        ResolvingPlayer::Controller,
+                        ResolvingPlayer::Controller,
+                        ValueExpr::literal(n),
+                        None,
+                        1,
+                        false,
+                        spellwake_engine::program::LookTopKeepDest::ExileLinked {
                             face_down: true,
                             playable: false,
                             free: false,
@@ -2321,12 +2336,12 @@ pub(super) fn lower_keyword(
                             any_color: false,
                             duration: ResolvedDuration::NoStatedDuration,
                         },
-                        rest_dest: spellwake_engine::program::LookTopRestDest::BottomRandom,
-                        reveal_kept: false,
-                        reveal_all: false,
-                        reveal_only: false,
-                        secondary: None,
-                    }],
+                        spellwake_engine::program::LookTopRestDest::BottomRandom,
+                        false,
+                        false,
+                        false,
+                        None,
+                    ),
                 ),
             });
             let has_look_at_exiled =
@@ -3204,7 +3219,7 @@ fn lower_equip_keyword(
             program,
             ids,
             (mana_cost, SourceCost::None, hybrids, extra),
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             restriction,
         );
         return Ok(());
@@ -3213,12 +3228,12 @@ fn lower_equip_keyword(
     let compiler_vocab = cached_compiler_vocab(vocabulary);
     let (target, cost_branches) =
         if let Some(branches) = parse_equip_cost_branches(core, &compiler_vocab, vocabulary) {
-            (BodyTarget::SingleCreature, branches)
+            (BodyTarget::SINGLE_CREATURE, branches)
         } else if let Some((quality_raw, cost_raw)) = split_equip_quality_and_cost(core)
             && let Some(obj) = parse_equip_quality_filter(quality_raw, &compiler_vocab, vocabulary)
             && let Some(branches) = parse_equip_cost_branches(cost_raw, &compiler_vocab, vocabulary)
         {
-            (BodyTarget::FilteredPermanent(obj), branches)
+            (BodyTarget::filtered_permanent(obj), branches)
         } else {
             return Err("oracle:equip-non-mana");
         };
@@ -3251,7 +3266,12 @@ fn emit_equip_ability(
         id,
         mana_cost,
         source_cost,
-        body: ExecutableBody::new(target, vec![Instruction::Attach(AttachAbility::Equip)]),
+        body: ExecutableBody::new(
+            target,
+            vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::attach_ability(AttachAbility::Equip),
+            ))],
+        ),
     });
 }
 
@@ -3772,12 +3792,14 @@ fn lower_champion_keyword(
                     },
                     false,
                 ),
-                Instruction::BranchIfFalse {
-                    condition: ResolutionCondition {
-                        left: ValueExpr::EventValue(EventValueKind::LastActionSucceeded),
-                        comparison: Comparison::Equal,
-                        right: ValueExpr::literal(0),
-                    },
+                Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                        Box::new(ResolutionCondition {
+                            left: ValueExpr::EventValue(EventValueKind::LastActionSucceeded),
+                            comparison: Comparison::Equal,
+                            right: ValueExpr::literal(0),
+                        }),
+                    )),
                     destination: 3,
                 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(
@@ -3902,23 +3924,27 @@ fn lower_non_mana_cumulative_upkeep(
             "sacrifice an enchantment" => BTreeSet::from([CardType::Enchantment]),
             _ => BTreeSet::new(),
         };
-        vec![Instruction::Sacrifice {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: age_count,
-            filter: PermanentTypeFilter {
-                any_types: BTreeSet::new(),
-                required_types,
-                forbidden_types: BTreeSet::new(),
-                object_filter: None,
-            },
-        }]
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                age_count,
+                PermanentTypeFilter {
+                    any_types: BTreeSet::new(),
+                    required_types,
+                    forbidden_types: BTreeSet::new(),
+                    object_filter: None,
+                },
+            ),
+        ))]
     } else if low == "draw a card" {
         vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(age_count)]
     } else if low == "discard a card" {
-        vec![Instruction::Discard {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: age_count,
-        }]
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                age_count,
+            ),
+        ))]
     } else if low == "flip a coin" {
         vec![Instruction::MutatePlayer(Box::new(
             spellwake_engine::toolbox::MutatePlayerSpec::flip_coins(
@@ -3954,12 +3980,12 @@ fn lower_non_mana_cumulative_upkeep(
         let loop_body = ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::ChooseValue {
-                    chooser: ResolvingPlayer::Controller,
-                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
-                        opponents_only: true,
-                    },
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::toolbox::PromptDomain::player(true),
+                    ),
+                )),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::ChosenPlayer,
@@ -3989,12 +4015,12 @@ fn lower_non_mana_cumulative_upkeep(
         let loop_body = ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::ChooseValue {
-                    chooser: ResolvingPlayer::Controller,
-                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
-                        opponents_only: true,
-                    },
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::toolbox::PromptDomain::player(true),
+                    ),
+                )),
                 Instruction::CreateTokens {
                     creations: vec![TokenCreation {
                         enters_tapped: false,
@@ -4018,26 +4044,24 @@ fn lower_non_mana_cumulative_upkeep(
             comparison: Comparison::GreaterOrEqual,
             right: ValueExpr::literal(1),
         });
-        let loop_body = ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::ChooseObjects {
-                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    source_zone: SourceZoneFilter::AnyBattlefield,
-                    filter: Box::new(opp_creature),
-                    min: ValueExpr::literal(1),
-                    max: ValueExpr::literal(1),
-                    distinct_powers: false,
-                    max_total_power: None,
-                    unchosen_action: None,
-                },
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(
-                    EffectSubject::LastMoved,
-                    CounterKind::PlusOne,
-                    ValueExpr::literal(1),
-                ),
-            ],
+        let mut ops = spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+            AffectedPlayers::One(ResolvingPlayer::Controller),
+            SourceZoneFilter::AnyBattlefield,
+            opp_creature,
+            ValueExpr::literal(1),
+            ValueExpr::literal(1),
+            false,
+            None,
+            None,
         );
+        ops.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(
+                EffectSubject::LastMoved,
+                CounterKind::PlusOne,
+                ValueExpr::literal(1),
+            ),
+        );
+        let loop_body = ExecutableBody::new(BodyTarget::None, ops);
         vec![Instruction::RepeatLoop {
             count: age_count,
             body: Box::new(loop_body),
@@ -4049,28 +4073,24 @@ fn lower_non_mana_cumulative_upkeep(
             comparison: Comparison::GreaterOrEqual,
             right: age_count.clone(),
         });
-        let loop_body = ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::ChooseObjects {
-                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    source_zone: SourceZoneFilter::AnyBattlefield,
-                    filter: Box::new(other_land),
-                    min: ValueExpr::literal(1),
-                    max: ValueExpr::literal(1),
-                    distinct_powers: false,
-                    max_total_power: None,
-                    unchosen_action: None,
-                },
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_control_of_subject(
-                    EffectSubject::LastMoved,
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        ResolvingPlayer::Controller,
-                    ),
-                    ResolvedDuration::NoStatedDuration,
-                ),
-            ],
+        let mut ops = spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+            AffectedPlayers::One(ResolvingPlayer::Controller),
+            SourceZoneFilter::AnyBattlefield,
+            other_land,
+            ValueExpr::literal(1),
+            ValueExpr::literal(1),
+            false,
+            None,
+            None,
         );
+        ops.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_control_of_subject(
+                EffectSubject::LastMoved,
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                ResolvedDuration::NoStatedDuration,
+            ),
+        );
+        let loop_body = ExecutableBody::new(BodyTarget::None, ops);
         vec![Instruction::RepeatLoop {
             count: age_count,
             body: Box::new(loop_body),
@@ -4088,8 +4108,10 @@ fn lower_non_mana_cumulative_upkeep(
     );
     let sac_idx = 1 + usize::from(pre_guard.is_some()) + 1 + cost_ops.len() + 1;
     if let Some(cond) = pre_guard {
-        instructions.push(Instruction::BranchIfFalse {
-            condition: cond,
+        instructions.push(Instruction::BranchCondition {
+            condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                Box::new(cond),
+            )),
             destination: sac_idx,
         });
     }

@@ -9,8 +9,9 @@ use crate::{
     stack_window::StackEntry,
     targets::TargetRef,
     toolbox::{
-        DrawCardsSpec, ExecValue, MutateObjectSpec, ObjectMutation, PromptChoiceFrame,
-        PromptChoiceReply, ResolvedPromptDomain, ZoneSelection,
+        AttachOp, ControlOp, CounterOp, DrawCardsSpec, ExecValue, MutateObjectSpec, ObjectCombatOp,
+        ObjectMutation, ObjectStateMarkerOp, OrientationOp, PromptChoiceFrame, PromptChoiceReply,
+        ResolvedPromptDomain, TapStateOp, ZoneSelection,
     },
 };
 use std::collections::BTreeSet;
@@ -87,7 +88,7 @@ impl EffectWindow {
         let controller = entry.controller();
         let source_id = self.entry_source_object(Some(entry));
         match &spec.op {
-            ObjectMutation::SolveCase => {
+            ObjectMutation::StateMarker(ObjectStateMarkerOp::SolveCase) => {
                 let src = match entry.kind() {
                     StackKind::ActivatedAbility { source }
                     | StackKind::TriggeredAbility { source } => Some(source.id()),
@@ -117,7 +118,7 @@ impl EffectWindow {
                 self.advance_instruction()?;
                 return Ok(StepOutcome::Continue);
             }
-            ObjectMutation::SetPrepared => {
+            ObjectMutation::StateMarker(ObjectStateMarkerOp::SetPrepared) => {
                 let src = match entry.kind() {
                     StackKind::ActivatedAbility { source }
                     | StackKind::TriggeredAbility { source } => Some(source.id()),
@@ -135,7 +136,7 @@ impl EffectWindow {
                 self.advance_instruction()?;
                 return Ok(StepOutcome::Continue);
             }
-            ObjectMutation::AdvanceClassLevel(level) => {
+            ObjectMutation::StateMarker(ObjectStateMarkerOp::AdvanceClassLevel(level)) => {
                 if let StackKind::ActivatedAbility { source } = entry.kind() {
                     let id = source.id();
                     if self
@@ -166,7 +167,7 @@ impl EffectWindow {
                 self.advance_instruction()?;
                 return Ok(StepOutcome::Continue);
             }
-            ObjectMutation::ReselectAttackDefender => {
+            ObjectMutation::Combat(ObjectCombatOp::ReselectAttackDefender) => {
                 if let Some(domain) = self.attack_defender_frame()? {
                     return Ok(StepOutcome::Pending(
                         EffectDecision::ReselectAttackDefender(domain),
@@ -175,7 +176,7 @@ impl EffectWindow {
                 self.advance_instruction()?;
                 return Ok(StepOutcome::Continue);
             }
-            ObjectMutation::SoulbondPair { entrant_only } => {
+            ObjectMutation::Combat(ObjectCombatOp::SoulbondPair { entrant_only }) => {
                 if let Some(frame) = self.soulbond_selection(*entrant_only)? {
                     return Ok(StepOutcome::Pending(EffectDecision::ResolutionSelect(
                         frame,
@@ -184,7 +185,7 @@ impl EffectWindow {
                 self.advance_instruction()?;
                 return Ok(StepOutcome::Continue);
             }
-            ObjectMutation::DistributeCounters { kind, total } => {
+            ObjectMutation::Counters(CounterOp::Distribute { kind, total }) => {
                 let assessment = self
                     .window
                     .target_assessment()
@@ -349,9 +350,41 @@ impl EffectWindow {
                 self.advance_instruction()?;
                 return Ok(StepOutcome::Continue);
             }
-            ObjectMutation::BecomeMonstrous { .. }
-            | ObjectMutation::UnlockDoor { .. }
-            | ObjectMutation::Enlist
+            ObjectMutation::Attach(AttachOp::ToObject {
+                ability: Some(_), ..
+            }) => {
+                let (StackKind::ActivatedAbility { source }
+                | StackKind::TriggeredAbility { source }) = entry.kind()
+                else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                let bound = self.instruction_target(entry)?;
+                let target = self
+                    .resolution_cursor()
+                    .and_then(|c| c.results.returned_target_permanent)
+                    .map(TargetRef::Object)
+                    .unwrap_or(bound.choice().target);
+                let before = self.rules_snapshot(None)?;
+                if let Some(occurrence) = self.attach_if_legal(entry.id(), source.id(), target)? {
+                    self.emit_from(
+                        EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before,
+                        None,
+                        ctx.append,
+                        |_, _, _| Ok(vec![occurrence]),
+                    )?;
+                }
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            ObjectMutation::StateMarker(
+                ObjectStateMarkerOp::BecomeMonstrous { .. }
+                | ObjectStateMarkerOp::UnlockDoor { .. },
+            )
+            | ObjectMutation::Combat(ObjectCombatOp::Enlist)
             | ObjectMutation::Explore => {
                 return Err(EffectError::InconsistentProgram);
             }
@@ -474,7 +507,7 @@ impl EffectWindow {
         let mut succeeded = false;
 
         match &spec.op {
-            ObjectMutation::SetTapped(tap) => {
+            ObjectMutation::TapState(TapStateOp::Set(tap)) => {
                 let changing: Vec<ObjectId> = selected
                     .into_iter()
                     .filter(|id| {
@@ -496,7 +529,7 @@ impl EffectWindow {
                     succeeded = true;
                 }
             }
-            ObjectMutation::ToggleTapped => {
+            ObjectMutation::TapState(TapStateOp::Toggle) => {
                 let to_tap: Vec<ObjectId> = selected
                     .iter()
                     .copied()
@@ -527,7 +560,7 @@ impl EffectWindow {
                 }
                 succeeded = !mutated.is_empty();
             }
-            ObjectMutation::PhaseOut => {
+            ObjectMutation::Orientation(OrientationOp::PhaseOut) => {
                 if !selected.is_empty() {
                     let before = self.rules_snapshot(None)?;
                     let changed = self
@@ -550,14 +583,14 @@ impl EffectWindow {
                     }
                 }
             }
-            ObjectMutation::Transform => {
+            ObjectMutation::Orientation(OrientationOp::Transform) => {
                 if !selected.is_empty() {
                     self.transform_objects(entry, index, selected.clone(), ctx.append)?;
                     mutated = selected;
                     succeeded = true;
                 }
             }
-            ObjectMutation::TurnFaceUp => {
+            ObjectMutation::Orientation(OrientationOp::TurnFaceUp) => {
                 for id in selected {
                     let Some(card) = self.window.cards().get(id).cloned() else {
                         continue;
@@ -589,7 +622,7 @@ impl EffectWindow {
                 }
                 succeeded = !mutated.is_empty();
             }
-            ObjectMutation::TurnFaceDown => {
+            ObjectMutation::Orientation(OrientationOp::TurnFaceDown) => {
                 for id in selected {
                     let Some(card) = self.window.cards().get(id).cloned() else {
                         continue;
@@ -625,8 +658,7 @@ impl EffectWindow {
                     succeeded = true;
                 }
             }
-            ObjectMutation::Goad { by } | ObjectMutation::GoadPermanent { by } => {
-                let permanent = matches!(spec.op, ObjectMutation::GoadPermanent { .. });
+            ObjectMutation::Goad { by, permanent } => {
                 let goader = self
                     .eval_player_selector_at(controller, Some(entry), by, self.resolution_cursor())?
                     .into_iter()
@@ -640,7 +672,7 @@ impl EffectWindow {
                         .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
                     {
                         self.goaded.entry(id).or_default().insert(goader);
-                        if permanent {
+                        if *permanent {
                             self.permanent_goaded.entry(id).or_default().insert(goader);
                         }
                         mutated.push(id);
@@ -648,7 +680,7 @@ impl EffectWindow {
                 }
                 succeeded = !mutated.is_empty();
             }
-            ObjectMutation::Exert => {
+            ObjectMutation::TapState(TapStateOp::Exert) => {
                 for id in selected {
                     if self
                         .window
@@ -670,7 +702,10 @@ impl EffectWindow {
                 }
                 succeeded = !mutated.is_empty();
             }
-            ObjectMutation::Attach { host } => {
+            ObjectMutation::Attach(AttachOp::ToObject {
+                host,
+                ability: None,
+            }) => {
                 let host_opt = self
                     .eval_object_query_at(controller, Some(entry), host, self.resolution_cursor())?
                     .into_iter()
@@ -692,7 +727,84 @@ impl EffectWindow {
                     }
                 }
             }
-            ObjectMutation::AttachToPlayer { player } => {
+            ObjectMutation::Control(ControlOp::Exchange { other }) => {
+                let a_opt = if matches!(spec.source, crate::toolbox::ObjectQuery::Targets)
+                    && self.window.target_assessment().is_some()
+                {
+                    self.legal_permanent_targets()?.into_iter().next()
+                } else {
+                    selected.first().copied()
+                };
+                let b_opt = if matches!(other.as_ref(), crate::toolbox::ObjectQuery::Targets)
+                    && self.window.target_assessment().is_some()
+                {
+                    self.legal_permanent_targets()?.into_iter().next()
+                } else {
+                    self.eval_object_query_at(
+                        controller,
+                        Some(entry),
+                        other,
+                        self.resolution_cursor(),
+                    )?
+                    .into_iter()
+                    .next()
+                };
+                if let (Some(a), Some(b)) = (a_opt, b_opt)
+                    && a != b
+                {
+                    let before = self.rules_snapshot(None)?;
+                    let current = &before.view().evaluated;
+                    let ctrl_a = current
+                        .get(a)
+                        .filter(|o| o.zone == ObjectZone::Battlefield)
+                        .and_then(|o| o.controller);
+                    let ctrl_b = current
+                        .get(b)
+                        .filter(|o| o.zone == ObjectZone::Battlefield)
+                        .and_then(|o| o.controller);
+                    if let (Some(ca), Some(cb)) = (ctrl_a, ctrl_b)
+                        && ca != cb
+                    {
+                        let eff_a = self.characteristics.add_effect(
+                            entry.id(),
+                            a,
+                            ResolvedParts(vec![ResolvedPart::Control(cb)]),
+                            crate::characteristics::ResolvedDuration::NoStatedDuration,
+                        )?;
+                        let eff_b = self.characteristics.add_effect(
+                            entry.id(),
+                            b,
+                            ResolvedParts(vec![ResolvedPart::Control(ca)]),
+                            crate::characteristics::ResolvedDuration::NoStatedDuration,
+                        )?;
+                        self.emit_from(cause, &before, None, ctx.append, |old, new, _| {
+                            let app_a = characteristic_appearance_changes(
+                                old,
+                                new,
+                                eff_a.affected.iter().copied(),
+                            )?;
+                            let app_b = characteristic_appearance_changes(
+                                old,
+                                new,
+                                eff_b.affected.iter().copied(),
+                            )?;
+                            Ok(vec![
+                                RulesOccurrence::ContinuousEffectCreated {
+                                    effect: eff_a,
+                                    appearances: app_a,
+                                },
+                                RulesOccurrence::ContinuousEffectCreated {
+                                    effect: eff_b,
+                                    appearances: app_b,
+                                },
+                            ])
+                        })?;
+                        mutated = vec![a, b];
+                        succeeded = true;
+                    }
+                }
+            }
+            ObjectMutation::Attach(AttachOp::ToPlayer { player }) => {
                 let seat_opt = self
                     .eval_player_selector_at(
                         controller,
@@ -719,7 +831,7 @@ impl EffectWindow {
                     }
                 }
             }
-            ObjectMutation::Unattach => {
+            ObjectMutation::Attach(AttachOp::Unattach) => {
                 if !selected.is_empty() {
                     let before = self.rules_snapshot(None)?;
                     let mut changes = Vec::new();
@@ -741,7 +853,7 @@ impl EffectWindow {
                     }
                 }
             }
-            ObjectMutation::AddCounters { kind, amount } => {
+            ObjectMutation::Counters(CounterOp::Add { kind, amount }) => {
                 let n = self.resolve_value_expr_with_source(
                     controller,
                     amount,
@@ -756,7 +868,7 @@ impl EffectWindow {
                     succeeded = true;
                 }
             }
-            ObjectMutation::RemoveCounters { kind, amount } => {
+            ObjectMutation::Counters(CounterOp::Remove { kind, amount }) => {
                 let total = self.remove_counters_from_objects(
                     entry,
                     index,
@@ -774,7 +886,7 @@ impl EffectWindow {
                     cur.results.last_action_succeeded = succeeded;
                 }
             }
-            ObjectMutation::ClearCounters { kind } => {
+            ObjectMutation::Counters(CounterOp::Clear { kind }) => {
                 let total = self.remove_counters_from_objects(
                     entry, index, &selected, *kind, None, ctx.append,
                 )?;
@@ -783,7 +895,7 @@ impl EffectWindow {
                     succeeded = true;
                 }
             }
-            ObjectMutation::DoubleCounters { kind } => {
+            ObjectMutation::Counters(CounterOp::Double { kind }) => {
                 for id in selected {
                     let pt_c = self.characteristics.counters(id);
                     let kinds: Vec<CounterKind> = match kind {
@@ -819,7 +931,7 @@ impl EffectWindow {
                     mutated.push(id);
                 }
             }
-            ObjectMutation::MoveCounters { to, kind, amount } => {
+            ObjectMutation::Counters(CounterOp::Move { to, kind, amount }) => {
                 let to_opt = self
                     .eval_object_query_at(controller, Some(entry), to, self.resolution_cursor())?
                     .into_iter()
@@ -876,7 +988,7 @@ impl EffectWindow {
                     }
                 }
             }
-            ObjectMutation::AddOneOfEachCounterKind => {
+            ObjectMutation::Counters(CounterOp::AddOneOfEach) => {
                 for id in selected {
                     let kinds: Vec<CounterKind> = self
                         .characteristics
@@ -895,7 +1007,7 @@ impl EffectWindow {
                     mutated.push(id);
                 }
             }
-            ObjectMutation::TransferCountersFromTriggeringLki => {
+            ObjectMutation::Counters(CounterOp::TransferFromTriggeringLki) => {
                 let lki_counters: std::collections::BTreeMap<CounterKind, RulesInteger> = self
                     .execution_bindings(entry.id())
                     .and_then(|b| b.trigger.as_ref())
@@ -935,7 +1047,7 @@ impl EffectWindow {
                     }
                 }
             }
-            ObjectMutation::GrantFlashback => {
+            ObjectMutation::StateMarker(ObjectStateMarkerOp::GrantFlashback) => {
                 let evaluated = self.evaluated_characteristics()?;
                 for id in selected {
                     if evaluated.get(id).is_some_and(|card| {
@@ -949,10 +1061,10 @@ impl EffectWindow {
                     }
                 }
             }
-            ObjectMutation::GainControl {
+            ObjectMutation::Control(ControlOp::Gain {
                 controller: new_ctrl,
                 duration,
-            } => {
+            }) => {
                 if let Some(resolved_dur) = self.resolve_duration(entry, *duration)? {
                     let seat = self
                         .eval_player_selector_at(
@@ -979,7 +1091,7 @@ impl EffectWindow {
                     }
                 }
             }
-            ObjectMutation::SkipNextUntap => {
+            ObjectMutation::TapState(TapStateOp::SkipNextUntap) => {
                 if !selected.is_empty() {
                     self.skip_next_controller_untap
                         .extend(selected.iter().copied());
@@ -987,7 +1099,7 @@ impl EffectWindow {
                     succeeded = true;
                 }
             }
-            ObjectMutation::RemoveFromCombat => {
+            ObjectMutation::Combat(ObjectCombatOp::RemoveFromCombat) => {
                 if !selected.is_empty() {
                     let affected: BTreeSet<ObjectId> = selected.iter().copied().collect();
                     if let Some(combat) = &mut self.combat {
@@ -997,16 +1109,23 @@ impl EffectWindow {
                     succeeded = true;
                 }
             }
-            ObjectMutation::SolveCase
-            | ObjectMutation::SetPrepared
-            | ObjectMutation::BecomeMonstrous { .. }
-            | ObjectMutation::UnlockDoor { .. }
+            ObjectMutation::StateMarker(
+                ObjectStateMarkerOp::SolveCase
+                | ObjectStateMarkerOp::SetPrepared
+                | ObjectStateMarkerOp::BecomeMonstrous { .. }
+                | ObjectStateMarkerOp::UnlockDoor { .. }
+                | ObjectStateMarkerOp::AdvanceClassLevel(_),
+            )
             | ObjectMutation::Earthbend { .. }
-            | ObjectMutation::DistributeCounters { .. }
-            | ObjectMutation::Enlist
-            | ObjectMutation::AdvanceClassLevel(_)
-            | ObjectMutation::ReselectAttackDefender
-            | ObjectMutation::SoulbondPair { .. }
+            | ObjectMutation::Counters(CounterOp::Distribute { .. })
+            | ObjectMutation::Combat(
+                ObjectCombatOp::Enlist
+                | ObjectCombatOp::ReselectAttackDefender
+                | ObjectCombatOp::SoulbondPair { .. },
+            )
+            | ObjectMutation::Attach(AttachOp::ToObject {
+                ability: Some(_), ..
+            })
             | ObjectMutation::Explore => unreachable!("handled before candidate selection"),
             _ => return Err(EffectError::InconsistentProgram),
         }
@@ -1018,7 +1137,7 @@ impl EffectWindow {
             if let Some(bind) = spec.bind_succeeded {
                 cur.env.bind(bind, ExecValue::Bool(succeeded));
             }
-            if !matches!(spec.op, ObjectMutation::RemoveCounters { .. }) {
+            if !matches!(spec.op, ObjectMutation::Counters(CounterOp::Remove { .. })) {
                 cur.results.last_action_succeeded = succeeded;
                 cur.results.last_action_count = Some(RulesInteger::from_usize(mutated.len()));
             }

@@ -104,7 +104,7 @@ fn spell_body(
     {
         let minimum = u8::try_from(super::ordinary_text::amount(minimum)?).ok()?;
         return Some(ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 Instruction::BranchCondition {
                     condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Compare {
@@ -139,7 +139,7 @@ fn spell_body(
     let (target, instruction) = match text.trim() {
         "Cast this spell only during combat on an opponent's turn.\nReturn X target creature cards from your graveyard to the battlefield. Sacrifice those creatures at the beginning of the next end step." => {
             (
-                BodyTarget::FilteredOwnGraveyardCard(
+                BodyTarget::filtered_own_graveyard(
                     spellwake_engine::program::ObjectFilter::creature(),
                 ),
                 Instruction::ZoneOp(Box::new(
@@ -179,7 +179,7 @@ fn spell_body(
             ),
         ),
         "Target player draws X cards." => (
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
                 ValueExpr::chosen_x(),
             ),
@@ -191,10 +191,10 @@ fn spell_body(
                 .and_then(|s| s.strip_suffix('.'))
             {
                 let target = match recipient {
-                    "any target" => BodyTarget::SingleAnyTarget,
-                    "target creature" => BodyTarget::SingleCreature,
-                    "target player" => BodyTarget::SinglePlayer,
-                    "target player or planeswalker" => BodyTarget::SinglePlayerOrPlaneswalker,
+                    "any target" => BodyTarget::SINGLE_ANY_TARGET,
+                    "target creature" => BodyTarget::SINGLE_CREATURE,
+                    "target player" => BodyTarget::SINGLE_PLAYER,
+                    "target player or planeswalker" => BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER,
                     _ => return None,
                 };
                 (

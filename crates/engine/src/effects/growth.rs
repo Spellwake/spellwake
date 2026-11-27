@@ -119,7 +119,7 @@ impl EffectWindow {
             .chain(self.window.checking_targets())
             .filter(|entry| {
                 self.stack_body(entry.id()).is_some_and(|body| {
-                    body.target == BodyTarget::OpponentOrPlaneswalkerThenCreature
+                    body.target == BodyTarget::OPPONENT_OR_PLANESWALKER_THEN_CREATURE
                 })
             })
             .filter_map(
@@ -177,15 +177,6 @@ impl EffectWindow {
         source: Option<&SupportedAppearance>,
         world: &EvaluatedCharacteristics,
     ) -> bool {
-        if matches!(
-            body.instructions.as_slice(),
-            [Instruction::AffectPermanentTargets {
-                action: crate::program::PermanentTargetAction::PutPlusOneCounterOnOthers,
-                ..
-            }]
-        ) {
-            return source.is_some_and(|source| target != TargetRef::Object(source.object.id()));
-        }
         if !matches!(
             body.instructions.as_slice(),
             [Instruction::MutateObject(spec)]

@@ -187,20 +187,21 @@ fn stage_a_and_b_fidelity_regressions() {
     prepend_instruction_at(
         &mut jump_ops,
         0,
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
     );
-    assert!(matches!(jump_ops[0], Instruction::OptionalEffect { .. }));
+    assert!(matches!(jump_ops[0], Instruction::OptionalSequence { .. }));
     assert!(matches!(
         &jump_ops[1],
         Instruction::MutatePlayer(spec)
             if matches!(
                 spec.op,
-                spellwake_engine::toolbox::PlayerMutation::FlipCoins {
+                spellwake_engine::toolbox::PlayerMutation::RandomEvent(spellwake_engine::toolbox::RandomEventOp::FlipCoins {
                     lose_destination: Some(3),
                     ..
-                }
+                })
             )
     ));
     assert!(matches!(jump_ops[3], Instruction::Jump { destination: 4 }));
@@ -220,17 +221,20 @@ fn stage_a_and_b_fidelity_regressions() {
     let ops = &p.triggered[0].body.instructions;
     for (idx, op) in ops.iter().enumerate() {
         match op {
-            Instruction::Jump { destination } | Instruction::BranchIfFalse { destination, .. } => {
+            Instruction::Jump { destination }
+            | Instruction::BranchCondition { destination, .. } => {
                 assert!(
                     *destination > idx && *destination <= ops.len(),
                     "corrupted jump destination {destination} at pc {idx} in {ops:?}"
                 );
             }
             Instruction::MutatePlayer(spec) => {
-                if let spellwake_engine::toolbox::PlayerMutation::FlipCoins {
-                    lose_destination: Some(destination),
-                    ..
-                } = &spec.op
+                if let spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                    spellwake_engine::toolbox::RandomEventOp::FlipCoins {
+                        lose_destination: Some(destination),
+                        ..
+                    },
+                ) = &spec.op
                 {
                     assert!(
                         *destination > idx && *destination <= ops.len(),
@@ -309,7 +313,7 @@ fn stage_a_and_b_fidelity_regressions() {
                     Instruction::MutateObject(spec)
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::ObjectMutation::AddCounters { .. }
+                            spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { .. })
                         ) && (matches!(
                             &spec.source,
                             spellwake_engine::toolbox::ObjectQuery::EffectSubject(subject)
@@ -427,7 +431,10 @@ fn stage_a_and_b_fidelity_regressions() {
     assert!(
         matches!(
             sp.body.instructions.as_slice(),
-            [Instruction::Sacrifice { amount, .. }] if *amount == ValueExpr::literal(2)
+            [Instruction::ZoneOp(spec)]
+                if spec
+                    .as_group_sacrifice()
+                    .is_some_and(|(_, amount, _, _)| *amount == ValueExpr::literal(2))
         ),
         "expected Sacrifice amount=2, got {:?}",
         sp.body.instructions
@@ -2137,7 +2144,11 @@ fn pass_e12_filter_and_chooser_fidelity() {
     let ProgramKind::Spell(or_spell) = or_prog.kind else {
         panic!("expected spell");
     };
-    let BodyTarget::FilteredPermanent(filter) = or_spell.body.target else {
+    let BodyTarget::Object {
+        zone: TargetZone::Battlefield,
+        filter,
+    } = or_spell.body.target
+    else {
         panic!("expected filtered permanent target");
     };
     let (c1, c2) = filter.clauses();

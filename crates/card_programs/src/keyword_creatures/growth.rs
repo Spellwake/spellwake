@@ -378,7 +378,7 @@ mod tests {
                 program: Program::instant(
                     spellwake_engine::mana::ManaCost::free(),
                     ExecutableBody::new(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         vec![
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                                 spellwake_engine::toolbox::ZoneOpSpec::move_all(

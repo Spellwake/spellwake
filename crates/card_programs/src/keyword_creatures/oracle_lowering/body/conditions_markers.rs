@@ -665,20 +665,26 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
         MatchObjectRef::LastMovedToHand | MatchObjectRef::LastMovedToBattlefield
             if matches!(
                 builder.instructions.last(),
-                Some(
-                    Instruction::LookTopChooseExt { .. }
-                        | Instruction::CreateTokens { .. }
-                )
+                Some(Instruction::CreateTokens { .. })
+            ) || matches!(
+                builder.instructions.last(),
+                Some(Instruction::ZoneOp(spec))
+                    if matches!(
+                        spec.source,
+                        spellwake_engine::toolbox::ObjectQuery::Bound(_)
+                            | spellwake_engine::toolbox::ObjectQuery::Difference(_, _)
+                    ) && !matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Hand
+                            | spellwake_engine::toolbox::ZoneDest::Battlefield { .. }
+                    )
             ) =>
         {
             false
         }
         MatchObjectRef::LastMovedToExile
             if builder.instructions.iter().rev().take(2).any(|op| {
-                matches!(
-                    op,
-                    Instruction::ExileTopPlay { .. }
-                ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
                     matches!(
                         &spec.source,
                         spellwake_engine::toolbox::ObjectQuery::ZoneScan {
@@ -4368,12 +4374,9 @@ pub(super) fn lower_marker_or_action_condition(
                 ZoneFilter::YourLibrary => ResolvingPlayer::Controller,
                 ZoneFilter::TargetPlayerLibrary => {
                     if builder.target == BodyTarget::None {
-                        builder.bind_target(BodyTarget::SinglePlayer)?;
+                        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     }
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) {
+                    if matches!(builder.target, BodyTarget::Player { .. }) {
                         ResolvingPlayer::TargetPlayer
                     } else {
                         return Err("oracle:unsupported-if-condition");
@@ -4381,12 +4384,9 @@ pub(super) fn lower_marker_or_action_condition(
                 }
                 ZoneFilter::TargetOpponentLibrary => {
                     if builder.target == BodyTarget::None {
-                        builder.bind_target(BodyTarget::SingleOpponent)?;
+                        builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     }
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) {
+                    if matches!(builder.target, BodyTarget::Player { .. }) {
                         ResolvingPlayer::TargetPlayer
                     } else {
                         return Err("oracle:unsupported-if-condition");
@@ -5553,10 +5553,10 @@ pub(super) fn lower_marker_or_action_condition(
                 "another permanent with the same name is on the battlefield" => {
                     if !matches!(
                         builder.target,
-                        BodyTarget::SingleCreature
-                            | BodyTarget::SinglePermanent
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_)
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            ..
+                        }
                     ) {
                         return Err("oracle:unsupported-if-condition");
                     }

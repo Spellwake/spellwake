@@ -9,7 +9,7 @@ pub(crate) enum QualificationResolutionParentFault {
 
 impl EffectWindow {
     pub(crate) fn creature_type_choice(&self) -> Result<CreatureTypeChoice, EffectError> {
-        self.creature_type_frame()
+        Err(EffectError::WrongCreatureTypeFrame)
     }
 
     pub(crate) fn qualification_corrupt_resolution_parent(

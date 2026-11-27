@@ -34,13 +34,14 @@ use spellwake_engine::{
     },
     targets::TargetRef,
     toolbox::{
-        AdjustLifeSpec, ApplyContinuousSpec, BindingId, ChoiceCategory, ConditionExpr,
-        ContinuousPayload, DamageSourceQuery, DamageTargetQuery, DealDamageSpec, DrawCardsSpec,
-        GraveyardSemantics, LifeOp, MutateObjectSpec, MutatePlayerSpec, ObjectMutation,
-        ObjectQuery, PlayerSelector, PromptChoiceReply, PromptChoiceSpec, PromptDomain, QuerySlice,
-        QueryZone, ResolvedPromptDomain, SideDeck, SideDeckKind, SideDeckOpKind, SideDeckOpSpec,
+        AdjustLifeSpec, ApplyContinuousSpec, AttachOp, BindingId, ChoiceCategory, ConditionExpr,
+        ContinuousPayload, ControlOp, CounterOp, DamageSourceQuery, DamageTargetQuery,
+        DealDamageSpec, DrawCardsSpec, GraveyardSemantics, LifeOp, MutateObjectSpec,
+        MutatePlayerSpec, ObjectMutation, ObjectQuery, OrientationOp, PlayerSelector,
+        PromptChoiceReply, PromptChoiceSpec, PromptDomain, QuerySlice, QueryZone,
+        ResolvedPromptDomain, SideDeck, SideDeckKind, SideDeckOpKind, SideDeckOpSpec,
         StateTrackKey, StateTrackKeySpec, StateTrackOp, StateTrackScope, TagKey, TagValue,
-        ZoneController, ZoneDest, ZoneOpSpec, ZoneSelection,
+        TapStateOp, ZoneController, ZoneDest, ZoneOpSpec, ZoneSelection,
     },
     turn::Step,
 };
@@ -525,6 +526,7 @@ fn instant_custom_card_partition_sectors_dilemma_trigger_and_atomic_rejection() 
                 bind_unchosen: None,
                 tag_partition: Some(TagKey::Partition(7)),
                 auto_resolve_trivial: false,
+                option_branches: Vec::new(),
             })),
             Instruction::ZoneOp(Box::new(ZoneOpSpec {
                 source: ObjectQuery::Tagged {
@@ -746,6 +748,7 @@ fn for_each_suspends_and_resumes_prompt_choice_per_item() {
                         bind_unchosen: None,
                         tag_partition: None,
                         auto_resolve_trivial: false,
+                        option_branches: Vec::new(),
                     })),
                     Instruction::UpdateStateTrack {
                         key: Box::new(StateTrackKeySpec {
@@ -940,7 +943,7 @@ fn pinger_creature(vocab: &CreatureTypeVocabulary) -> Program {
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![Instruction::DealDamage(Box::new(DealDamageSpec {
                 source: DamageSourceQuery::EntrySource,
                 recipients: DamageTargetQuery::Targets,
@@ -1015,21 +1018,21 @@ fn mutate_object_tap_untap_toggle_and_skip_next_untap() {
                 QueryZone::Battlefield,
                 ObjectFilter::creature().controlled(),
             ),
-            ObjectMutation::SetTapped(true),
+            ObjectMutation::TapState(TapStateOp::Set(true)),
         )))],
         &vocab,
     );
     let toggle_all = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::creature()),
-            ObjectMutation::ToggleTapped,
+            ObjectMutation::TapState(TapStateOp::Toggle),
         )))],
         &vocab,
     );
     let untap_opposing = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::creature().opposing()),
-            ObjectMutation::SetTapped(false),
+            ObjectMutation::TapState(TapStateOp::Set(false)),
         )))],
         &vocab,
     );
@@ -1037,7 +1040,7 @@ fn mutate_object_tap_untap_toggle_and_skip_next_untap() {
         vec![
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::creature().opposing()),
-                ObjectMutation::SetTapped(true),
+                ObjectMutation::TapState(TapStateOp::Set(true)),
             ))),
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 ObjectQuery::zone(
@@ -1046,7 +1049,7 @@ fn mutate_object_tap_untap_toggle_and_skip_next_untap() {
                         .opposing()
                         .with_keyword(KeywordAbility::Flying),
                 ),
-                ObjectMutation::SkipNextUntap,
+                ObjectMutation::TapState(TapStateOp::SkipNextUntap),
             ))),
         ],
         &vocab,
@@ -1180,7 +1183,7 @@ fn mutate_object_phase_out_regenerate_goad_and_exert() {
                     .opposing()
                     .with_keyword(KeywordAbility::Flying),
             ),
-            ObjectMutation::PhaseOut,
+            ObjectMutation::Orientation(OrientationOp::PhaseOut),
         )))],
         &vocab,
     );
@@ -1193,7 +1196,7 @@ fn mutate_object_phase_out_regenerate_goad_and_exert() {
                         .controlled()
                         .with_keyword(KeywordAbility::Vigilance),
                 ),
-                ObjectMutation::SetTapped(true),
+                ObjectMutation::TapState(TapStateOp::Set(true)),
             ))),
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 ObjectQuery::zone(
@@ -1202,7 +1205,7 @@ fn mutate_object_phase_out_regenerate_goad_and_exert() {
                         .controlled()
                         .with_keyword(KeywordAbility::Vigilance),
                 ),
-                ObjectMutation::Exert,
+                ObjectMutation::TapState(TapStateOp::Exert),
             ))),
         ],
         &vocab,
@@ -1217,6 +1220,7 @@ fn mutate_object_phase_out_regenerate_goad_and_exert() {
             ),
             ObjectMutation::Goad {
                 by: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                permanent: false,
             },
         )))],
         &vocab,
@@ -1363,21 +1367,21 @@ fn mutate_object_counters_add_remove_clear_double_move_and_add_one_of_each() {
         vec![
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 flyer_query(),
-                ObjectMutation::AddCounters {
+                ObjectMutation::Counters(CounterOp::Add {
                     kind: CounterKind::PlusOne,
                     amount: ValueExpr::literal(2),
-                },
+                }),
             ))),
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 flyer_query(),
-                ObjectMutation::AddCounters {
+                ObjectMutation::Counters(CounterOp::Add {
                     kind: CounterKind::Charge,
                     amount: ValueExpr::literal(1),
-                },
+                }),
             ))),
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 flyer_query(),
-                ObjectMutation::AddOneOfEachCounterKind,
+                ObjectMutation::Counters(CounterOp::AddOneOfEach),
             ))),
         ],
         &vocab,
@@ -1385,9 +1389,9 @@ fn mutate_object_counters_add_remove_clear_double_move_and_add_one_of_each() {
     let double_plus_one = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             flyer_query(),
-            ObjectMutation::DoubleCounters {
+            ObjectMutation::Counters(CounterOp::Double {
                 kind: Some(CounterKind::PlusOne),
-            },
+            }),
         )))],
         &vocab,
     );
@@ -1395,18 +1399,18 @@ fn mutate_object_counters_add_remove_clear_double_move_and_add_one_of_each() {
         vec![
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 flyer_query(),
-                ObjectMutation::RemoveCounters {
+                ObjectMutation::Counters(CounterOp::Remove {
                     kind: Some(CounterKind::PlusOne),
                     amount: ValueExpr::literal(2),
-                },
+                }),
             ))),
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 flyer_query(),
-                ObjectMutation::MoveCounters {
+                ObjectMutation::Counters(CounterOp::Move {
                     to: vanilla_query(),
                     kind: Some(CounterKind::PlusOne),
                     amount: Some(ValueExpr::literal(3)),
-                },
+                }),
             ))),
         ],
         &vocab,
@@ -1414,7 +1418,7 @@ fn mutate_object_counters_add_remove_clear_double_move_and_add_one_of_each() {
     let clear_all = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             flyer_query(),
-            ObjectMutation::ClearCounters { kind: None },
+            ObjectMutation::Counters(CounterOp::Clear { kind: None }),
         )))],
         &vocab,
     );
@@ -1500,29 +1504,30 @@ fn mutate_object_attach_unattach_and_gain_control() {
     let attach_spell = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::artifact()),
-            ObjectMutation::Attach {
-                host: ObjectQuery::zone(
+            ObjectMutation::Attach(AttachOp::ToObject {
+                host: Box::new(ObjectQuery::zone(
                     QueryZone::Battlefield,
                     ObjectFilter::creature().controlled(),
-                ),
-            },
+                )),
+                ability: None,
+            }),
         )))],
         &vocab,
     );
     let unattach_spell = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::artifact()),
-            ObjectMutation::Unattach,
+            ObjectMutation::Attach(AttachOp::Unattach),
         )))],
         &vocab,
     );
     let steal_spell = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::creature().opposing()),
-            ObjectMutation::GainControl {
+            ObjectMutation::Control(ControlOp::Gain {
                 controller: PlayerSelector::Resolving(ResolvingPlayer::Controller),
                 duration: ResolvedDuration::UntilEndOfTurn,
-            },
+            }),
         )))],
         &vocab,
     );
@@ -1580,7 +1585,7 @@ fn mutate_object_interactive_prompt_selection() {
                     category: ChoiceCategory::Generic,
                     hidden: false,
                 },
-                ObjectMutation::SetTapped(true),
+                ObjectMutation::TapState(TapStateOp::Set(true)),
             ),
         ))],
         &vocab,
@@ -1762,6 +1767,7 @@ fn apply_continuous_temporary_rule_and_combat_action() {
             ApplyContinuousSpec::temporary_rule(
                 TemporaryRuleKind::CantCastSpells {
                     players: AffectedPlayers::EachOpponent,
+                    zone: None,
                     filter: None,
                 },
                 ResolvedDuration::UntilEndOfTurn,
@@ -2063,7 +2069,7 @@ fn deal_damage_sources_targets_and_exile_if_dies() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(DealDamageSpec {
                     source: DamageSourceQuery::EntrySource,
                     recipients: DamageTargetQuery::Targets,
@@ -2172,7 +2178,7 @@ fn phase5_custom_player_counters_and_exile_with_counters() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     Instruction::MutatePlayer(Box::new(MutatePlayerSpec::add_counter(
                         PlayerSelector::Resolving(ResolvingPlayer::Controller),
@@ -2182,10 +2188,10 @@ fn phase5_custom_player_counters_and_exile_with_counters() {
                     Instruction::ZoneOp(Box::new(exile_spec)),
                     Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                         ObjectQuery::Bound(BindingId(1)),
-                        ObjectMutation::AddCounters {
+                        ObjectMutation::Counters(CounterOp::Add {
                             kind: void_counter,
                             amount: ValueExpr::literal(2),
-                        },
+                        }),
                     ))),
                 ],
             ),
@@ -2256,7 +2262,7 @@ fn phase5_prevent_damage_forbidden_subtypes_and_sticker_tag() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::DealDamage(Box::new(DealDamageSpec {
                     source: DamageSourceQuery::Objects(ObjectQuery::Targets),
                     recipients: DamageTargetQuery::Players(PlayerSelector::Group(
@@ -2363,7 +2369,7 @@ fn stack_op_counter_targeted_graveyard_and_exile() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -2377,7 +2383,7 @@ fn stack_op_counter_targeted_graveyard_and_exile() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Exile,
@@ -2583,7 +2589,7 @@ fn stack_op_retarget_and_copy_spell() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![Instruction::DealDamage(Box::new(DealDamageSpec {
                     source: DamageSourceQuery::EntrySource,
                     recipients: DamageTargetQuery::Targets,
@@ -2600,7 +2606,7 @@ fn stack_op_retarget_and_copy_spell() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::retarget(false),
                 ))],
@@ -2612,7 +2618,7 @@ fn stack_op_retarget_and_copy_spell() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],
@@ -2858,7 +2864,7 @@ fn phase9_apply_continuous_damage_multiplier_doubles_from_power_damage() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ApplyContinuous(Box::new(
                     ApplyContinuousSpec::damage_multiplier(2.into()),
                 ))],
@@ -2872,7 +2878,7 @@ fn phase9_apply_continuous_damage_multiplier_doubles_from_power_damage() {
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![Instruction::DealDamage(Box::new(
                 DealDamageSpec::from_power(
                     spellwake_engine::program::PowerDamageSource::AbilitySource,
@@ -3019,7 +3025,7 @@ fn phase10_mutate_object_create_token_copy_clones_target_creature() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::MutateObject(Box::new(
                     MutateObjectSpec::create_token_copy(
                         ObjectQuery::Targets,
@@ -3103,7 +3109,7 @@ fn phase10_mutate_object_remember_target_and_destroy_gives_controller_token() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     Instruction::MutateObject(Box::new(
                         MutateObjectSpec::remember_permanent_target(),
@@ -3571,7 +3577,7 @@ fn phase14_mutate_object_goad_permanent_persists_across_turns() {
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::MutateObject(Box::new(
                     MutateObjectSpec::goad_permanently(
                         ObjectQuery::Targets,
@@ -3647,29 +3653,26 @@ fn phase14_mutate_object_goad_permanent_persists_across_turns() {
     );
     assert!(
         state.execution().is_goaded_by(target_id, P0),
-        "ObjectMutation::GoadPermanent must persist past the goader's next turn start"
+        "ObjectMutation::Goad {{ permanent: true }} must persist past the goader's next turn start"
     );
 }
 
 #[test]
 fn phase15_per_extra_target_cost_strive_charges_for_second_target() {
-    use spellwake_engine::{
-        mana::{CastingPayment, ManaType},
-        program::PermanentTargetAction,
-    };
+    use spellwake_engine::mana::{CastingPayment, ManaType};
     use std::collections::BTreeMap;
 
     let vocab = vocabulary();
     let mut strive_spell = Program::sorcery(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::FilteredPermanent(ObjectFilter::creature()),
-            vec![Instruction::AffectPermanentTargets {
-                minimum: 1,
-                maximum: u16::MAX,
-                action: PermanentTargetAction::Tap,
-            }],
-        ),
+            BodyTarget::filtered_permanent(ObjectFilter::creature()),
+            vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
+                ObjectQuery::Targets,
+                ObjectMutation::TapState(TapStateOp::Set(true)),
+            )))],
+        )
+        .with_permanent_target_bounds(1, u16::MAX),
     );
     strive_spell.per_extra_target_cost = Some(ManaCost {
         generic: 1.into(),
@@ -3792,9 +3795,13 @@ fn phase15_next_spell_cast_keyword_storm_copies_next_spell() {
                 BodyTarget::None,
                 vec![Instruction::ApplyContinuous(Box::new(
                     ApplyContinuousSpec::temporary_rule(
-                        TemporaryRuleKind::NextSpellCastKeyword {
-                            filter: ObjectFilter::any(),
-                            keyword: NextSpellCastKeyword::Storm,
+                        TemporaryRuleKind::NextSpellModifier {
+                            player: ResolvingPlayer::Controller,
+                            filter: Some(ObjectFilter::any()),
+                            free: false,
+                            keyword: None,
+                            cast_keyword: Some(NextSpellCastKeyword::Storm),
+                            affinity_filter: None,
                         },
                         ResolvedDuration::UntilEndOfTurn,
                     ),
@@ -3948,7 +3955,7 @@ fn phase16_fuse_split_card_casts_both_halves_from_hand_and_rejects_non_hand() {
     let left = Program::sorcery(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![Instruction::DealDamage(Box::new(DealDamageSpec::new(
                 DamageSourceQuery::EntrySource,
                 DamageTargetQuery::Targets,
@@ -4104,5 +4111,460 @@ fn phase16_surveil_populates_last_moved_objects_when_milled_to_graveyard() {
         moved.zone(),
         ObjectZone::Hand(P0),
         "Surveil into graveyard must populate last_moved_objects for follow-up LastMoved move"
+    );
+}
+
+#[test]
+fn prompt_choice_choose_option_splices_selected_branch_body() {
+    let vocab = vocabulary();
+    let modal = sorcery(
+        vec![
+            Instruction::PromptChoice(Box::new(PromptChoiceSpec::choose_option(
+                ResolvingPlayer::Controller,
+                vec![
+                    (
+                        "Gain 4 life".into(),
+                        ExecutableBody::new(
+                            BodyTarget::None,
+                            vec![Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                                ValueExpr::literal(4),
+                            )))],
+                        ),
+                    ),
+                    (
+                        "Draw 2 cards".into(),
+                        ExecutableBody::new(
+                            BodyTarget::None,
+                            vec![Instruction::DrawCards(Box::new(DrawCardsSpec::simple(
+                                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                                ValueExpr::literal(2),
+                            )))],
+                        ),
+                    ),
+                ],
+            ))),
+            Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                ValueExpr::literal(1),
+            ))),
+        ],
+        &vocab,
+    );
+
+    let game = init_world(
+        vocab.clone(),
+        vec![
+            in_hand(1, P0, modal),
+            in_library(2, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+            in_library(3, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+        ],
+    );
+
+    let paused = cast_untargeted(&game, 1);
+    let decision = paused
+        .state()
+        .pending_decision()
+        .expect("choose_option prompt pending");
+    assert_eq!(decision.chooser(), P0);
+    match decision.frame() {
+        RuleFrame::PromptChoice(frame) => match &frame.domain {
+            ResolvedPromptDomain::Options {
+                labels,
+                min,
+                max,
+                allow_repeat,
+            } => {
+                assert_eq!(labels, &["Gain 4 life", "Draw 2 cards"]);
+                assert_eq!(*min, 1);
+                assert_eq!(*max, 1);
+                assert!(!allow_repeat);
+            }
+            other => panic!("expected Options prompt domain, got {other:?}"),
+        },
+        other => panic!("expected PromptChoice frame, got {other:?}"),
+    }
+
+    // Branch 0: gain 4 life, then trailing +1 life = 25; library cards stay untouched.
+    let branch0 = submit(
+        paused.state(),
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Options(vec![0])),
+        },
+    )
+    .into_state();
+    assert!(branch0.pending_decision().is_none());
+    assert_eq!(branch0.execution().life_total(P0), Some(&25.into()));
+    assert_eq!(
+        branch0
+            .execution()
+            .window()
+            .cards()
+            .get(object(&branch0, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Library(P0)
+    );
+
+    // Branch 1: draw 2 cards, then trailing +1 life = 21.
+    let branch1 = submit(
+        paused.state(),
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Options(vec![1])),
+        },
+    )
+    .into_state();
+    assert!(branch1.pending_decision().is_none());
+    assert_eq!(branch1.execution().life_total(P0), Some(&21.into()));
+    assert_eq!(
+        branch1
+            .execution()
+            .window()
+            .cards()
+            .get(object(&branch1, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Hand(P0)
+    );
+    assert_eq!(
+        branch1
+            .execution()
+            .window()
+            .cards()
+            .get(object(&branch1, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Hand(P0)
+    );
+}
+
+#[test]
+fn prompt_choice_choose_objects_enforces_max_total_power_and_binds_unchosen() {
+    let vocab = vocabulary();
+    let unchosen = PromptChoiceSpec::unchosen_binding();
+    let spell = sorcery(
+        vec![
+            Instruction::PromptChoice(Box::new(PromptChoiceSpec::choose_objects(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::creature()),
+                ValueExpr::literal(0),
+                ValueExpr::literal(99),
+                false,
+                Some(ValueExpr::literal(4)),
+                Some(unchosen),
+            ))),
+            Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                ObjectQuery::Bound(unchosen),
+                ZoneDest::Graveyard {
+                    semantics: GraveyardSemantics::Destroy {
+                        allow_regenerate: true,
+                    },
+                },
+            ))),
+        ],
+        &vocab,
+    );
+
+    let game = init_world(
+        vocab.clone(),
+        vec![
+            in_hand(1, P0, spell),
+            bf(2, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+            bf(3, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+            bf(4, P1, bear(3, 3, BTreeSet::new(), &vocab)),
+        ],
+    );
+    let b2 = object(&game, 2);
+    let b3 = object(&game, 3);
+    let b4 = object(&game, 4);
+
+    let paused = cast_untargeted(&game, 1);
+    let decision = paused
+        .state()
+        .pending_decision()
+        .expect("choose_objects prompt pending");
+    assert_eq!(decision.chooser(), P0);
+    match decision.frame() {
+        RuleFrame::PromptChoice(frame) => match &frame.domain {
+            ResolvedPromptDomain::Objects {
+                candidates,
+                min,
+                max,
+                hidden,
+            } => {
+                assert_eq!(candidates.len(), 3);
+                assert_eq!(*min, 0);
+                assert_eq!(*max, 3);
+                assert!(!hidden);
+            }
+            other => panic!("expected Objects prompt domain, got {other:?}"),
+        },
+        other => panic!("expected PromptChoice frame, got {other:?}"),
+    }
+
+    // Total power 2 + 3 = 5 exceeds max_total_power = 4; must reject atomically.
+    let rejected = attempt(
+        paused.state(),
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Objects(vec![b2, b4])),
+        },
+    );
+    assert!(
+        rejected.is_err(),
+        "selection exceeding max_total_power must be rejected"
+    );
+
+    // Legal reply: choose b2 and b3 (total power 4 <= 4); unchosen b4 is destroyed.
+    let done = submit(
+        paused.state(),
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Objects(vec![b2, b3])),
+        },
+    )
+    .into_state();
+    assert!(done.pending_decision().is_none());
+    assert_eq!(
+        done.execution()
+            .window()
+            .cards()
+            .get(object(&done, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Battlefield
+    );
+    assert_eq!(
+        done.execution()
+            .window()
+            .cards()
+            .get(object(&done, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Battlefield
+    );
+    assert_eq!(
+        done.execution()
+            .window()
+            .cards()
+            .get(object(&done, 4))
+            .unwrap()
+            .zone(),
+        ObjectZone::Graveyard(P1)
+    );
+}
+
+#[test]
+fn object_query_difference_and_look_top_and_reveal_until_match_pipelines() {
+    use spellwake_engine::program::{LookTopKeepDest, LookTopRestDest};
+
+    let vocab = vocabulary();
+    let forest = || {
+        validated(
+            Program::land(BTreeSet::from([LandType::Forest]), vec![]),
+            &vocab,
+        )
+    };
+
+    // 1. ObjectQuery::Difference: exile all creatures except those controlled by P0.
+    let diff_spell = sorcery(
+        vec![Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+            ObjectQuery::Difference(
+                Box::new(ObjectQuery::zone(
+                    QueryZone::Battlefield,
+                    ObjectFilter::creature(),
+                )),
+                Box::new(ObjectQuery::zone(
+                    QueryZone::Battlefield,
+                    ObjectFilter::creature().controlled(),
+                )),
+            ),
+            ZoneDest::exile(),
+        )))],
+        &vocab,
+    );
+    let game_diff = init_world(
+        vocab.clone(),
+        vec![
+            in_hand(1, P0, diff_spell),
+            bf(2, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+            bf(3, P1, bear(3, 3, BTreeSet::new(), &vocab)),
+            bf(4, P1, bear(4, 4, BTreeSet::new(), &vocab)),
+        ],
+    );
+    let after_diff = cast_untargeted(&game_diff, 1).into_state();
+    assert_eq!(
+        after_diff
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_diff, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Battlefield
+    );
+    assert_eq!(
+        after_diff
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_diff, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Exile
+    );
+    assert_eq!(
+        after_diff
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_diff, 4))
+            .unwrap()
+            .zone(),
+        ObjectZone::Exile
+    );
+
+    // 2. ZoneOpSpec::look_top_choose_instructions: look at top 3, pick 1 to hand, rest to bottom.
+    let look_spell = sorcery(
+        ZoneOpSpec::look_top_choose_instructions(
+            ResolvingPlayer::Controller,
+            ResolvingPlayer::Controller,
+            ValueExpr::literal(3),
+            None,
+            1,
+            false,
+            LookTopKeepDest::Hand,
+            LookTopRestDest::BottomOrder,
+            false,
+            false,
+            false,
+            None,
+        ),
+        &vocab,
+    );
+    // Pushed bottom-to-top so initial library top-to-bottom is [10, 11, 12, 13].
+    let game_look = init_world(
+        vocab.clone(),
+        vec![
+            in_hand(1, P0, look_spell),
+            in_library(13, P0, bear(5, 5, BTreeSet::new(), &vocab)),
+            in_library(12, P0, forest()),
+            in_library(11, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+            in_library(10, P0, forest()),
+        ],
+    );
+    let c10 = object(&game_look, 10);
+    let c11 = object(&game_look, 11);
+    let c12 = object(&game_look, 12);
+    let c13 = object(&game_look, 13);
+
+    let paused = cast_untargeted(&game_look, 1);
+    let decision = paused
+        .state()
+        .pending_decision()
+        .expect("look-top choose prompt must be pending");
+    assert_eq!(decision.chooser(), P0);
+    match decision.frame() {
+        RuleFrame::PromptChoice(frame) => match &frame.domain {
+            ResolvedPromptDomain::Objects {
+                candidates,
+                min,
+                max,
+                hidden,
+            } => {
+                assert_eq!(candidates.len(), 3);
+                assert_eq!(*min, 1);
+                assert_eq!(*max, 1);
+                assert!(!hidden);
+                assert!(candidates.contains(&c10));
+                assert!(candidates.contains(&c11));
+                assert!(candidates.contains(&c12));
+                assert!(!candidates.contains(&c13));
+            }
+            other => panic!("expected Objects prompt domain, got {other:?}"),
+        },
+        other => panic!("expected PromptChoice frame, got {other:?}"),
+    }
+
+    let after_look = submit(
+        paused.state(),
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Objects(vec![c11])),
+        },
+    )
+    .into_state();
+    assert!(after_look.pending_decision().is_none());
+    assert_eq!(
+        after_look
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_look, 11))
+            .unwrap()
+            .zone(),
+        ObjectZone::Hand(P0)
+    );
+    let lib_after_look = after_look.execution().window().cards().library(P0);
+    assert_eq!(lib_after_look.len(), 3);
+    assert_eq!(lib_after_look[0], object(&after_look, 13));
+    let bottom_set: BTreeSet<_> = lib_after_look[1..].iter().copied().collect();
+    assert_eq!(
+        bottom_set,
+        BTreeSet::from([object(&after_look, 10), object(&after_look, 12)])
+    );
+
+    // 3. ZoneOpSpec::reveal_until_match_instructions: reveal until 1 creature -> hand, rest bottom.
+    let reveal_spell = sorcery(
+        ZoneOpSpec::reveal_until_match_instructions(
+            ResolvingPlayer::Controller,
+            ResolvingPlayer::Controller,
+            ObjectFilter::creature(),
+            ValueExpr::literal(1),
+            LookTopKeepDest::Hand,
+            LookTopRestDest::BottomOrder,
+            false,
+            false,
+            false,
+        ),
+        &vocab,
+    );
+    // Pushed bottom-to-top so initial library top-to-bottom is [20, 21, 22 (creature), 23].
+    let game_reveal = init_world(
+        vocab.clone(),
+        vec![
+            in_hand(1, P0, reveal_spell),
+            in_library(23, P0, forest()),
+            in_library(22, P0, bear(3, 3, BTreeSet::new(), &vocab)),
+            in_library(21, P0, forest()),
+            in_library(20, P0, forest()),
+        ],
+    );
+    let after_reveal = cast_untargeted(&game_reveal, 1).into_state();
+    assert!(after_reveal.pending_decision().is_none());
+    assert_eq!(
+        after_reveal
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_reveal, 22))
+            .unwrap()
+            .zone(),
+        ObjectZone::Hand(P0)
+    );
+    let lib_after_reveal = after_reveal.execution().window().cards().library(P0);
+    assert_eq!(lib_after_reveal.len(), 3);
+    assert_eq!(lib_after_reveal[0], object(&after_reveal, 23));
+    let reveal_bottom_set: BTreeSet<_> = lib_after_reveal[1..].iter().copied().collect();
+    assert_eq!(
+        reveal_bottom_set,
+        BTreeSet::from([object(&after_reveal, 20), object(&after_reveal, 21)])
     );
 }

@@ -41,10 +41,10 @@ use spellwake_engine::{
     program::{
         AffectedPlayers, BodyTarget, CardType, DamageAmountSpec, DamageRecipientsRef,
         DamageSourceRef, EffectSubject, ExecutableBody, Instruction, LookTopKeepDest,
-        LookTopRestDest, ObjectFilter, PermanentDefinition, PermanentTargetAction,
-        PlaneswalkerSubtype, PlayerRelation, PlayerTriggerAction, Program, ProgramKind,
-        ResolvingPlayer, SourceZoneFilter, SpellFilter, TemporaryRuleKind, TriggerEvent,
-        TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr, ValueZone,
+        LookTopRestDest, ObjectFilter, PermanentDefinition, PlaneswalkerSubtype, PlayerRelation,
+        PlayerTriggerAction, Program, ProgramKind, ResolvingPlayer, SourceZoneFilter, SpellFilter,
+        TemporaryRuleKind, TriggerEvent, TriggerGrouping, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId, ValueExpr, ValueZone,
     },
     targets::TargetRef,
 };
@@ -110,7 +110,7 @@ fn divide_damage_expr_and_up_to_x_target_count_enforce_bounds() {
     let mut divide_x = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![Instruction::DealDamage(Box::new(
                 spellwake_engine::toolbox::DealDamageSpec::divided(ValueExpr::chosen_x(), Some(2)),
             ))],
@@ -122,13 +122,20 @@ fn divide_damage_expr_and_up_to_x_target_count_enforce_bounds() {
     let mut up_to_x = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
-            vec![Instruction::AffectPermanentTargets {
-                action: PermanentTargetAction::PutPlusOneCounter,
-                minimum: 0,
-                maximum: u16::MAX,
-            }],
+            BodyTarget::SINGLE_CREATURE,
+            vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Add {
+                            kind: spellwake_engine::effects::CounterKind::PlusOne,
+                            amount: ValueExpr::literal(1),
+                        },
+                    ),
+                ),
+            ))],
         )
+        .with_permanent_target_bounds(0, u16::MAX)
         .with_up_to_x_target_count(),
     );
     up_to_x.x_mana_symbols = 1;
@@ -302,26 +309,26 @@ fn look_top_exile_free_and_ability_activated_counter_trigger_validate() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::LookTopChooseExt {
-                    library_owner: ResolvingPlayer::Controller,
-                    chooser: ResolvingPlayer::Controller,
-                    count: ValueExpr::literal(1),
-                    filter: Some(Box::new(ObjectFilter::creature())),
-                    max_picks: 1,
-                    take_all_matching: true,
-                    keep_dest: LookTopKeepDest::Exile {
+                spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                    ResolvingPlayer::Controller,
+                    ResolvingPlayer::Controller,
+                    ValueExpr::literal(1),
+                    Some(ObjectFilter::creature()),
+                    1,
+                    true,
+                    LookTopKeepDest::Exile {
                         playable: true,
                         free: true,
                         cast_only: true,
                         any_color: false,
                         duration: ResolvedDuration::UntilEndOfTurn,
                     },
-                    rest_dest: LookTopRestDest::BottomRandom,
-                    reveal_kept: true,
-                    reveal_all: false,
-                    reveal_only: false,
-                    secondary: None,
-                }],
+                    LookTopRestDest::BottomRandom,
+                    true,
+                    false,
+                    false,
+                    None,
+                ),
             ),
         ),
         &v,

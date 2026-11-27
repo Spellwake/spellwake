@@ -46,10 +46,12 @@ pub(super) fn compile(
             })
         {
             let op = match body {
-                "that player discards two cards." => vec![Instruction::Discard {
-                    players: AffectedPlayers::One(ResolvingPlayer::UniqueRelatedPlayer),
-                    amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                }],
+                "that player discards two cards." => vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::UniqueRelatedPlayer),
+                        spellwake_engine::program::ValueExpr::Literal(2.into()),
+                    ),
+                ))],
                 "you draw a card and lose 1 life." => vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::Literal(1.into()),

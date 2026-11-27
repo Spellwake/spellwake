@@ -37,34 +37,8 @@ impl EffectWindow {
             instruction: index,
         };
         let receipt = match instruction {
-            Instruction::Attach(_) => {
-                let (StackKind::ActivatedAbility { source }
-                | StackKind::TriggeredAbility { source }) = entry.kind()
-                else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let Some(occurrence) = self.attach_if_legal(entry.id(), source.id(), target)?
-                else {
-                    return Ok(());
-                };
-                InstructionCut::Ready(occurrence)
-            }
-            Instruction::AffectPermanentTargets { .. }
-            | Instruction::Sacrifice { .. }
-            | Instruction::Discard { .. } => {
-                return Err(EffectError::InconsistentProgram);
-            }
             Instruction::OptionalSequence { .. }
-            | Instruction::OptionalEffect { .. }
-            | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
-            | Instruction::ExileTopPlay { .. }
-            | Instruction::ChooseObjects { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::BecomeCopy { .. }
-            | Instruction::ChooseValue { .. }
-            | Instruction::Fight { .. }
-            | Instruction::Exchange(_)
             | Instruction::ZoneOp(_)
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
@@ -82,15 +56,11 @@ impl EffectWindow {
             | Instruction::SideDeckOp(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::FixedTargetClause(_)
-            | Instruction::SearchLibrary { .. }
-            | Instruction::ChooseCreatureType { .. } => {
+            | Instruction::SearchLibrary { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
             Instruction::StackOp(spec) if !spec.requires_stack_target() => {
@@ -182,8 +152,9 @@ impl EffectWindow {
                             .results
                             .countered_spell_controller = Some((countered, controller));
                         let temp_exile_countered = self.temporary_rules.iter().any(|active| {
-                            let crate::program::TemporaryRuleKind::ExileSpellOnResolve {
+                            let crate::program::TemporaryRuleKind::ExileReplacement {
                                 filter,
+                                trigger: crate::program::TemporaryExileTrigger::SpellResolves,
                                 ..
                             } = &active.rule
                             else {

@@ -144,7 +144,7 @@ fn reject(game: &GameState, n: u64) {
 fn effect(n: u64, parts: Vec<ResolvedPartSpec>, duration: ResolvedDuration) -> SeedCard {
     tr::spell(
         n,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![tr::effect(parts, duration)],
     )
 }

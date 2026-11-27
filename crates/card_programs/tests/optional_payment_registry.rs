@@ -167,8 +167,9 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
             ValueExpr::Literal(1.into()),
         ),
     ));
-    let optional = Instruction::OptionalEffect {
+    let optional = Instruction::OptionalSequence {
         chooser: ResolvingPlayer::Controller,
+        instructions: 1,
     };
     let trigger = |condition, instructions| TriggeredAbility {
         id: TriggeredAbilityId(1),
@@ -250,15 +251,17 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
         "Mana Leak" => Program::instant(
             blue_cost(1.into()),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::TargetSpellController,
-                        fixed: ManaCost::generic(3.into()),
-                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 2,
-                        declined_destination: 1,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::TargetSpellController,
+                            ManaCost::generic(3.into()),
+                            spellwake_engine::program::ValueExpr::Literal(0.into()),
+                            2,
+                            1,
+                        ),
+                    )),
                     Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                             spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -275,13 +278,15 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
                     spellwake_engine::program::SpellFilter::any(),
                 ),
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::UniqueRelatedPlayer,
-                        fixed: ManaCost::generic(1.into()),
-                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 3,
-                        declined_destination: 1,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::UniqueRelatedPlayer,
+                            ManaCost::generic(1.into()),
+                            spellwake_engine::program::ValueExpr::Literal(0.into()),
+                            3,
+                            1,
+                        ),
+                    )),
                     optional,
                     draw,
                 ],
@@ -308,7 +313,7 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
         "Twincast" => Program::instant(
             ManaCost::specific(ManaType::Blue, 2.into()),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(
+                BodyTarget::single_spell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
                 vec![Instruction::StackOp(Box::new(

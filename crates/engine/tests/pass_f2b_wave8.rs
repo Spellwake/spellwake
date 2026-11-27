@@ -19,7 +19,7 @@
 //!   `ActivationRestriction::OnlyOpponents` and `ActivationRestriction::AnyPlayer`
 //! - Newly admitted `OptionalEffect` / `OptionalSequence` primitives (`UntapUpTo`,
 //!   `DoubleCountersOnTargets`, `RegenerateSource`, and internal `OptionalSequence` jump bounds)
-//! - `TriggerZone::Any` on spell programs and `Instruction::AffectPermanentTargets` companion
+//! - `TriggerZone::Any` on spell programs and bounded multi-target companion
 //!   follow-up validation and execution.
 #[path = "../test_support/creature_vocabulary.rs"]
 mod creature_vocabulary;
@@ -56,9 +56,9 @@ use spellwake_engine::{
         AffectedPlayers, BodyTarget, CardType, Comparison, DamageAmountSpec, DamageRecipientsRef,
         DamageSourceRef, DefinitionError, EffectSubject, EntryCounterAbility, ExecutableBody,
         GraveyardSelfCast, Instruction, LibrarySearch, ModalUniqueness, ObjectFilter,
-        PermanentTargetAction, PlayerRelation, PlayerStatExpr, PlayerTriggerAction, Program,
-        ResolutionCondition, ResolvingPlayer, SearchCardMatcher, SourceStateExpr, SpellFilter,
-        Supertype, TriggerGrouping, TriggerSpec, TriggerZone, TriggeredAbility, TriggeredAbilityId,
+        PlayerRelation, PlayerStatExpr, PlayerTriggerAction, Program, ResolutionCondition,
+        ResolvingPlayer, SearchCardMatcher, SourceStateExpr, SpellFilter, Supertype,
+        TriggerGrouping, TriggerSpec, TriggerZone, TriggeredAbility, TriggeredAbilityId,
         TriggeredModes, ValueExpr,
     },
     targets::TargetRef,
@@ -196,7 +196,7 @@ fn destroy_permanent_instant() -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -277,21 +277,27 @@ fn triggered_fixed_target_clause_fight_resolves_and_handles_removed_target() {
             BodyTarget::None,
             vec![
                 Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
-                    BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()),
+                    BodyTarget::filtered_permanent(ObjectFilter::creature().controlled()),
                     vec![Instruction::MutateObject(Box::new(
                         spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
                     ))],
                 ))),
                 Instruction::FixedTargetClause(Box::new(ExecutableBody::new(
-                    BodyTarget::FilteredPermanent(ObjectFilter::creature().not_controlled()),
+                    BodyTarget::filtered_permanent(ObjectFilter::creature().not_controlled()),
                     vec![Instruction::MutateObject(Box::new(
                         spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
                     ))],
                 ))),
-                Instruction::Fight {
-                    first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst),
-                    second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond),
-                },
+                Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::fight(
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            spellwake_engine::program::MoveSubjectRef::RememberedFirst,
+                        ),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            spellwake_engine::program::MoveSubjectRef::RememberedSecond,
+                        ),
+                    ),
+                )),
             ],
         ),
     });
@@ -453,5 +459,5 @@ fn triggered_fixed_target_clause_fight_resolves_and_handles_removed_target() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 11. TriggerZone::Any on a spell program & AffectPermanentTargets follow-ups
+// 11. TriggerZone::Any on a spell program & bounded multi-target follow-ups
 // ---------------------------------------------------------------------------

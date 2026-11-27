@@ -6817,7 +6817,7 @@ fn lower_inline_replacement_instructions(
                     || sub.instructions.iter().any(|inst| {
                         matches!(
                             inst,
-                            Instruction::Jump { .. } | Instruction::BranchIfFalse { .. }
+                            Instruction::Jump { .. } | Instruction::BranchCondition { .. }
                         )
                     })
                 {
@@ -9623,14 +9623,20 @@ fn rewrite_remove_counters_subject_prior_result(
     for op in &mut body.instructions {
         if let Instruction::MutateObject(spec) = op {
             match &mut spec.op {
-                spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. }
-                | spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. } => {
+                spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Remove { amount, .. },
+                )
+                | spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Add { amount, .. },
+                ) => {
                     rewrite_value_expr_prior_result(amount, replacement);
                 }
-                spellwake_engine::toolbox::ObjectMutation::MoveCounters {
-                    amount: Some(amount),
-                    ..
-                } => {
+                spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Move {
+                        amount: Some(amount),
+                        ..
+                    },
+                ) => {
                     rewrite_value_expr_prior_result(amount, replacement);
                 }
                 _ => {}

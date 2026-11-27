@@ -226,7 +226,15 @@ fn cmm_mirrorpool_enters_tapped_produces_colorless_and_sacrifices_to_copy_an_own
         .program
         .activated
         .iter()
-        .find(|ab| matches!(ab.body.target, BodyTarget::SingleSpell(_)))
+        .find(|ab| {
+            matches!(
+                ab.body.target,
+                BodyTarget::Spell {
+                    include_abilities: false,
+                    ..
+                }
+            )
+        })
         .unwrap()
         .id;
     let creature_ability = land
@@ -245,7 +253,7 @@ fn cmm_mirrorpool_enters_tapped_produces_colorless_and_sacrifices_to_copy_an_own
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(2),
@@ -258,7 +266,7 @@ fn cmm_mirrorpool_enters_tapped_produces_colorless_and_sacrifices_to_copy_an_own
             B,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(1),

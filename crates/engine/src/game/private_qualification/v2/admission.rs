@@ -67,7 +67,7 @@ mod tests {
         let input = selected(Program::instant(
             crate::mana::ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::program::Instruction::ApplyContinuous(Box::new(
                         crate::toolbox::ApplyContinuousSpec {

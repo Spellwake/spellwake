@@ -20,12 +20,9 @@ fn strip_each_mode_different_player(ops: &[InstructionAst]) -> (Vec<InstructionA
 
 fn all_modes_target_single_player(modes: &[ExecutableBody]) -> bool {
     !modes.is_empty()
-        && modes.iter().all(|b| {
-            matches!(
-                b.target,
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            )
-        })
+        && modes
+            .iter()
+            .all(|b| matches!(b.target, BodyTarget::Player { .. }))
 }
 
 fn modal_choice_requests_distinct(choice: &str) -> bool {
@@ -1435,9 +1432,6 @@ fn rewrite_instructions_unique_related_player(
                     }
                 }
             }
-            Instruction::Discard { players, .. } | Instruction::Sacrifice { players, .. } => {
-                rewrite_affected_players_if_unique(players, replacement);
-            }
             Instruction::AdjustLife(spec) => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                     &mut spec.players,
@@ -1501,19 +1495,7 @@ fn rewrite_instructions_unique_related_player(
                             rewrite_affected_players_if_unique(ap, replacement);
                         }
                     }
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets
-                    | spellwake_engine::toolbox::DamageTargetQuery::AnnouncedTargets { .. }
-                    | spellwake_engine::toolbox::DamageTargetQuery::FromPower(_)
-                    | spellwake_engine::toolbox::DamageTargetQuery::CreaturePowerToOther {
-                        ..
-                    }
-                    | spellwake_engine::toolbox::DamageTargetQuery::TargetControllersCreatures {
-                        ..
-                    }
-                    | spellwake_engine::toolbox::DamageTargetQuery::OrderedTargets { .. }
-                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree
-                    | spellwake_engine::toolbox::DamageTargetQuery::FromGrantingPermanent
-                    | spellwake_engine::toolbox::DamageTargetQuery::Divided { .. } => {}
+                    _ => {}
                 }
             }
             Instruction::MutatePlayer(spec) => {
@@ -1544,11 +1526,13 @@ fn rewrite_instructions_unique_related_player(
                             );
                         }
                     }
-                    spellwake_engine::toolbox::PlayerMutation::FlipCoins {
-                        win_body,
-                        lose_body,
-                        ..
-                    } => {
+                    spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                        spellwake_engine::toolbox::RandomEventOp::FlipCoins {
+                            win_body,
+                            lose_body,
+                            ..
+                        },
+                    ) => {
                         if let Some(wb) = win_body {
                             rewrite_instructions_unique_related_player(
                                 &mut wb.instructions,
@@ -1562,7 +1546,9 @@ fn rewrite_instructions_unique_related_player(
                             );
                         }
                     }
-                    spellwake_engine::toolbox::PlayerMutation::RollDie { bands, .. } => {
+                    spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                        spellwake_engine::toolbox::RandomEventOp::RollDie { bands, .. },
+                    ) => {
                         for band in bands {
                             rewrite_instructions_unique_related_player(
                                 &mut band.body.instructions,
@@ -1609,7 +1595,7 @@ fn rewrite_instructions_unique_related_player(
                     spellwake_engine::toolbox::ZoneSelection::All => {}
                 }
                 match &mut spec.op {
-                    spellwake_engine::toolbox::ObjectMutation::Goad { by } => {
+                    spellwake_engine::toolbox::ObjectMutation::Goad { by, .. } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                             by,
                             &|p| rewrite_resolving_player_if_unique(p, replacement),
@@ -1617,7 +1603,9 @@ fn rewrite_instructions_unique_related_player(
                             &|_| {},
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::Attach { host } => {
+                    spellwake_engine::toolbox::ObjectMutation::Attach(
+                        spellwake_engine::toolbox::AttachOp::ToObject { host, .. },
+                    ) => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
                             host,
                             &|p| rewrite_resolving_player_if_unique(p, replacement),
@@ -1625,7 +1613,9 @@ fn rewrite_instructions_unique_related_player(
                             &|_| {},
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::AttachToPlayer { player } => {
+                    spellwake_engine::toolbox::ObjectMutation::Attach(
+                        spellwake_engine::toolbox::AttachOp::ToPlayer { player },
+                    ) => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                             player,
                             &|p| rewrite_resolving_player_if_unique(p, replacement),
@@ -1633,9 +1623,9 @@ fn rewrite_instructions_unique_related_player(
                             &|_| {},
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::GainControl {
-                        controller, ..
-                    } => {
+                    spellwake_engine::toolbox::ObjectMutation::Control(
+                        spellwake_engine::toolbox::ControlOp::Gain { controller, .. },
+                    ) => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                             controller,
                             &|p| rewrite_resolving_player_if_unique(p, replacement),
@@ -1716,6 +1706,12 @@ fn rewrite_instructions_unique_related_player(
                     }
                     _ => {}
                 }
+                for branch in &mut spec.option_branches {
+                    rewrite_instructions_unique_related_player(
+                        &mut branch.instructions,
+                        replacement,
+                    );
+                }
             }
             Instruction::SetObjectTag { query, .. } => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
@@ -1725,19 +1721,7 @@ fn rewrite_instructions_unique_related_player(
                     &|_| {},
                 );
             }
-            Instruction::LookTopChooseExt {
-                library_owner,
-                chooser,
-                ..
-            } => {
-                rewrite_resolving_player_if_unique(library_owner, replacement);
-                rewrite_resolving_player_if_unique(chooser, replacement);
-            }
-            Instruction::OfferDynamicManaPayment { payer, .. } => {
-                rewrite_resolving_player_if_unique(payer, replacement);
-            }
-            Instruction::OptionalEffect { chooser }
-            | Instruction::OptionalSequence { chooser, .. } => {
+            Instruction::OptionalSequence { chooser, .. } => {
                 rewrite_resolving_player_if_unique(chooser, replacement);
             }
             Instruction::EmitReflexiveTrigger { body } => {

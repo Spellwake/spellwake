@@ -17,7 +17,7 @@ fn cmm_zones_murder_of_crows_loots_for_other_deaths_but_never_for_its_own_death(
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -382,10 +382,10 @@ fn cmm_zones_ghost_of_ramirez_depietro_evades_large_blockers_and_returns_recentl
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    Instruction::Discard {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::Controller),
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ))),
                 ),
             ),
             seed(
@@ -393,7 +393,7 @@ fn cmm_zones_ghost_of_ramirez_depietro_evades_large_blockers_and_returns_recentl
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     Instruction::MutatePlayer(Box::new(
                         spellwake_engine::toolbox::MutatePlayerSpec::mill(
                             ResolvingPlayer::TargetPlayer,
@@ -613,7 +613,7 @@ fn cmm_zones_padeem_protects_only_own_artifacts_and_rechecks_its_upkeep_lead_or_
                 owner,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -906,7 +906,7 @@ fn cmm_zones_losheel_prevents_damage_only_to_controlled_attackers_that_are_artif
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(1),

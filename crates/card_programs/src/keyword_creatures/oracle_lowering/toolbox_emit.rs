@@ -662,6 +662,7 @@ pub(crate) fn rewrite_zone_op(
             _ => {}
         },
         ZoneDest::LookOnly { viewer } => rewrite_player_selector(viewer, map_rp, map_ap, map_ve),
+        ZoneDest::SwapZones { other } => rewrite_query_zone(other, map_rp, map_ap, map_ve),
         ZoneDest::Delayed(
             spellwake_engine::toolbox::DelayedZoneAction::PutHandPermanentsOntoBattlefield {
                 player,
@@ -676,37 +677,6 @@ pub(crate) fn rewrite_zone_op(
     }
     if let Some(shuf) = &mut spec.shuffle_library {
         rewrite_player_selector(shuf, map_rp, map_ap, map_ve);
-    }
-}
-
-#[must_use]
-fn permanent_type_filter_query(zone: QueryZone, filter: PermanentTypeFilter) -> ObjectQuery {
-    let mut clause = ObjectClause::any();
-    if !filter.any_types.is_empty() {
-        let mut mask = CardTypeMask::EMPTY;
-        for ct in &filter.any_types {
-            mask = mask.with(*ct);
-        }
-        clause = clause.any_types(mask);
-    }
-    if !filter.required_types.is_empty() {
-        let mut mask = CardTypeMask::EMPTY;
-        for ct in &filter.required_types {
-            mask = mask.with(*ct);
-        }
-        clause = clause.required_types(mask);
-    }
-    if !filter.forbidden_types.is_empty() {
-        let mut mask = CardTypeMask::EMPTY;
-        for ct in &filter.forbidden_types {
-            mask = mask.with(*ct);
-        }
-        clause = clause.forbid_types(mask);
-    }
-    let base = ObjectQuery::zone(zone, ObjectFilter::from_clause(clause));
-    match filter.object_filter {
-        Some(obj) => ObjectQuery::filtered(base, obj),
-        None => base,
     }
 }
 
@@ -887,7 +857,7 @@ pub(crate) fn exile_chosen_permanents(
 ) -> Instruction {
     const SEAT_BIND: BindingId = BindingId(902);
     let inner = zone_op(ZoneOpSpec::simple(
-        permanent_type_filter_query(
+        ZoneOpSpec::permanent_type_filter_query(
             QueryZone::BattlefieldControlledBy(Box::new(PlayerSelector::Bound(SEAT_BIND))),
             filter,
         ),
@@ -916,7 +886,7 @@ pub(crate) fn return_controlled_permanents(
 ) -> Instruction {
     const SEAT_BIND: BindingId = BindingId(903);
     let inner = zone_op(ZoneOpSpec::simple(
-        permanent_type_filter_query(
+        ZoneOpSpec::permanent_type_filter_query(
             QueryZone::BattlefieldControlledBy(Box::new(PlayerSelector::Bound(SEAT_BIND))),
             filter,
         ),
@@ -1053,7 +1023,7 @@ pub(crate) fn sacrifice_up_to(
 ) -> Instruction {
     const SEAT_BIND: BindingId = BindingId(905);
     let inner = zone_op(ZoneOpSpec::simple(
-        permanent_type_filter_query(
+        ZoneOpSpec::permanent_type_filter_query(
             QueryZone::BattlefieldControlledBy(Box::new(PlayerSelector::Bound(SEAT_BIND))),
             filter,
         ),
@@ -1264,7 +1234,9 @@ pub(crate) fn mutate_subject(
 pub(crate) fn set_subject_tapped(subject: EffectSubject, tapped: bool) -> Instruction {
     mutate_subject(
         subject,
-        spellwake_engine::toolbox::ObjectMutation::SetTapped(tapped),
+        spellwake_engine::toolbox::ObjectMutation::TapState(
+            spellwake_engine::toolbox::TapStateOp::Set(tapped),
+        ),
     )
 }
 
@@ -1272,7 +1244,9 @@ pub(crate) fn set_subject_tapped(subject: EffectSubject, tapped: bool) -> Instru
 pub(crate) fn set_group_tapped(filter: ObjectFilter, tapped: bool) -> Instruction {
     mutate_all(
         ObjectQuery::zone(QueryZone::Battlefield, filter),
-        spellwake_engine::toolbox::ObjectMutation::SetTapped(tapped),
+        spellwake_engine::toolbox::ObjectMutation::TapState(
+            spellwake_engine::toolbox::TapStateOp::Set(tapped),
+        ),
     )
 }
 
@@ -1280,7 +1254,9 @@ pub(crate) fn set_group_tapped(filter: ObjectFilter, tapped: bool) -> Instructio
 pub(crate) fn tap_ability_source() -> Instruction {
     mutate_all(
         ObjectQuery::Source,
-        spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+        spellwake_engine::toolbox::ObjectMutation::TapState(
+            spellwake_engine::toolbox::TapStateOp::Set(true),
+        ),
     )
 }
 
@@ -1288,20 +1264,29 @@ pub(crate) fn tap_ability_source() -> Instruction {
 pub(crate) fn untap_ability_source() -> Instruction {
     mutate_all(
         ObjectQuery::Source,
-        spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+        spellwake_engine::toolbox::ObjectMutation::TapState(
+            spellwake_engine::toolbox::TapStateOp::Set(false),
+        ),
     )
 }
 
 #[must_use]
 pub(crate) fn phase_out_query(source: ObjectQuery) -> Instruction {
-    mutate_all(source, spellwake_engine::toolbox::ObjectMutation::PhaseOut)
+    mutate_all(
+        source,
+        spellwake_engine::toolbox::ObjectMutation::Orientation(
+            spellwake_engine::toolbox::OrientationOp::PhaseOut,
+        ),
+    )
 }
 
 #[must_use]
 pub(crate) fn transform_source() -> Instruction {
     mutate_all(
         ObjectQuery::Source,
-        spellwake_engine::toolbox::ObjectMutation::Transform,
+        spellwake_engine::toolbox::ObjectMutation::Orientation(
+            spellwake_engine::toolbox::OrientationOp::Transform,
+        ),
     )
 }
 
@@ -1309,7 +1294,9 @@ pub(crate) fn transform_source() -> Instruction {
 pub(crate) fn transform_subject(subject: EffectSubject) -> Instruction {
     mutate_subject(
         subject,
-        spellwake_engine::toolbox::ObjectMutation::Transform,
+        spellwake_engine::toolbox::ObjectMutation::Orientation(
+            spellwake_engine::toolbox::OrientationOp::Transform,
+        ),
     )
 }
 
@@ -1317,7 +1304,9 @@ pub(crate) fn transform_subject(subject: EffectSubject) -> Instruction {
 pub(crate) fn turn_face_up_subject(subject: EffectSubject) -> Instruction {
     mutate_subject(
         subject,
-        spellwake_engine::toolbox::ObjectMutation::TurnFaceUp,
+        spellwake_engine::toolbox::ObjectMutation::Orientation(
+            spellwake_engine::toolbox::OrientationOp::TurnFaceUp,
+        ),
     )
 }
 
@@ -1325,7 +1314,9 @@ pub(crate) fn turn_face_up_subject(subject: EffectSubject) -> Instruction {
 pub(crate) fn turn_face_down_subject(subject: EffectSubject) -> Instruction {
     mutate_subject(
         subject,
-        spellwake_engine::toolbox::ObjectMutation::TurnFaceDown,
+        spellwake_engine::toolbox::ObjectMutation::Orientation(
+            spellwake_engine::toolbox::OrientationOp::TurnFaceDown,
+        ),
     )
 }
 
@@ -1359,6 +1350,7 @@ pub(crate) fn goad_target() -> Instruction {
         ObjectQuery::Targets,
         spellwake_engine::toolbox::ObjectMutation::Goad {
             by: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            permanent: false,
         },
     )
 }
@@ -1372,6 +1364,7 @@ pub(crate) fn goad_other_players_creatures() -> Instruction {
         ),
         spellwake_engine::toolbox::ObjectMutation::Goad {
             by: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            permanent: false,
         },
     )
 }
@@ -1380,7 +1373,9 @@ pub(crate) fn goad_other_players_creatures() -> Instruction {
 pub(crate) fn exert_source() -> Instruction {
     mutate_all(
         ObjectQuery::Source,
-        spellwake_engine::toolbox::ObjectMutation::Exert,
+        spellwake_engine::toolbox::ObjectMutation::TapState(
+            spellwake_engine::toolbox::TapStateOp::Exert,
+        ),
     )
 }
 
@@ -1388,7 +1383,9 @@ pub(crate) fn exert_source() -> Instruction {
 pub(crate) fn skip_next_untap(subject: EffectSubject) -> Instruction {
     mutate_subject(
         subject,
-        spellwake_engine::toolbox::ObjectMutation::SkipNextUntap,
+        spellwake_engine::toolbox::ObjectMutation::TapState(
+            spellwake_engine::toolbox::TapStateOp::SkipNextUntap,
+        ),
     )
 }
 
@@ -1396,7 +1393,12 @@ pub(crate) fn skip_next_untap(subject: EffectSubject) -> Instruction {
 pub(crate) fn attach_query(attachment: ObjectQuery, host: ObjectQuery) -> Instruction {
     mutate_all(
         attachment,
-        spellwake_engine::toolbox::ObjectMutation::Attach { host },
+        spellwake_engine::toolbox::ObjectMutation::Attach(
+            spellwake_engine::toolbox::AttachOp::ToObject {
+                host: Box::new(host),
+                ability: None,
+            },
+        ),
     )
 }
 
@@ -1404,7 +1406,9 @@ pub(crate) fn attach_query(attachment: ObjectQuery, host: ObjectQuery) -> Instru
 pub(crate) fn attach_to_player(attachment: ObjectQuery, player: PlayerSelector) -> Instruction {
     mutate_all(
         attachment,
-        spellwake_engine::toolbox::ObjectMutation::AttachToPlayer { player },
+        spellwake_engine::toolbox::ObjectMutation::Attach(
+            spellwake_engine::toolbox::AttachOp::ToPlayer { player },
+        ),
     )
 }
 
@@ -1412,7 +1416,9 @@ pub(crate) fn attach_to_player(attachment: ObjectQuery, player: PlayerSelector) 
 pub(crate) fn unattach_query(attachment: ObjectQuery) -> Instruction {
     mutate_all(
         attachment,
-        spellwake_engine::toolbox::ObjectMutation::Unattach,
+        spellwake_engine::toolbox::ObjectMutation::Attach(
+            spellwake_engine::toolbox::AttachOp::Unattach,
+        ),
     )
 }
 
@@ -1424,7 +1430,9 @@ pub(crate) fn put_counters_on_query(
 ) -> Instruction {
     mutate_all(
         source,
-        spellwake_engine::toolbox::ObjectMutation::AddCounters { kind, amount },
+        spellwake_engine::toolbox::ObjectMutation::Counters(
+            spellwake_engine::toolbox::CounterOp::Add { kind, amount },
+        ),
     )
 }
 
@@ -1455,7 +1463,9 @@ pub(crate) fn remove_counters_from_subject(
 ) -> Instruction {
     mutate_subject(
         subject,
-        spellwake_engine::toolbox::ObjectMutation::RemoveCounters { kind, amount },
+        spellwake_engine::toolbox::ObjectMutation::Counters(
+            spellwake_engine::toolbox::CounterOp::Remove { kind, amount },
+        ),
     )
 }
 
@@ -1463,7 +1473,9 @@ pub(crate) fn remove_counters_from_subject(
 pub(crate) fn clear_source_counters(kind: Option<CounterKind>) -> Instruction {
     mutate_all(
         ObjectQuery::Source,
-        spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind },
+        spellwake_engine::toolbox::ObjectMutation::Counters(
+            spellwake_engine::toolbox::CounterOp::Clear { kind },
+        ),
     )
 }
 
@@ -1474,7 +1486,9 @@ pub(crate) fn double_counters_on_query(
 ) -> Instruction {
     mutate_all(
         source,
-        spellwake_engine::toolbox::ObjectMutation::DoubleCounters { kind },
+        spellwake_engine::toolbox::ObjectMutation::Counters(
+            spellwake_engine::toolbox::CounterOp::Double { kind },
+        ),
     )
 }
 
@@ -1482,7 +1496,9 @@ pub(crate) fn double_counters_on_query(
 pub(crate) fn add_one_of_each_counter(subject: EffectSubject) -> Instruction {
     mutate_subject(
         subject,
-        spellwake_engine::toolbox::ObjectMutation::AddOneOfEachCounterKind,
+        spellwake_engine::toolbox::ObjectMutation::Counters(
+            spellwake_engine::toolbox::CounterOp::AddOneOfEach,
+        ),
     )
 }
 
@@ -1494,10 +1510,12 @@ pub(crate) fn gain_control_of_subject(
 ) -> Instruction {
     mutate_subject(
         subject,
-        spellwake_engine::toolbox::ObjectMutation::GainControl {
-            controller,
-            duration,
-        },
+        spellwake_engine::toolbox::ObjectMutation::Control(
+            spellwake_engine::toolbox::ControlOp::Gain {
+                controller,
+                duration,
+            },
+        ),
     )
 }
 
@@ -1890,9 +1908,10 @@ pub(crate) fn set_day_night(clock: spellwake_engine::day_night::DayNight) -> Ins
 
 #[must_use]
 pub(crate) fn disallow_damage_prevention() -> Instruction {
-    Instruction::MutatePlayer(Box::new(
-        spellwake_engine::toolbox::MutatePlayerSpec::disallow_damage_prevention(),
-    ))
+    apply_temporary_rule(
+        spellwake_engine::program::TemporaryRuleKind::DamageCantBePrevented,
+        spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+    )
 }
 
 #[must_use]
@@ -1909,7 +1928,9 @@ pub(crate) fn create_emblem(
 pub(crate) fn remove_from_combat(source: ObjectQuery) -> Instruction {
     Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
         source,
-        spellwake_engine::toolbox::ObjectMutation::RemoveFromCombat,
+        spellwake_engine::toolbox::ObjectMutation::Combat(
+            spellwake_engine::toolbox::ObjectCombatOp::RemoveFromCombat,
+        ),
     )))
 }
 
@@ -1921,7 +1942,9 @@ pub(crate) fn remove_counters(
 ) -> Instruction {
     Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
         source,
-        spellwake_engine::toolbox::ObjectMutation::RemoveCounters { kind, amount },
+        spellwake_engine::toolbox::ObjectMutation::Counters(
+            spellwake_engine::toolbox::CounterOp::Remove { kind, amount },
+        ),
     )))
 }
 
@@ -1934,7 +1957,9 @@ pub(crate) fn move_counters(
 ) -> Instruction {
     Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
         source,
-        spellwake_engine::toolbox::ObjectMutation::MoveCounters { to, kind, amount },
+        spellwake_engine::toolbox::ObjectMutation::Counters(
+            spellwake_engine::toolbox::CounterOp::Move { to, kind, amount },
+        ),
     )))
 }
 
@@ -1942,7 +1967,9 @@ pub(crate) fn move_counters(
 pub(crate) fn unattach(source: ObjectQuery) -> Instruction {
     Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
         source,
-        spellwake_engine::toolbox::ObjectMutation::Unattach,
+        spellwake_engine::toolbox::ObjectMutation::Attach(
+            spellwake_engine::toolbox::AttachOp::Unattach,
+        ),
     )))
 }
 
@@ -1951,7 +1978,9 @@ pub(crate) fn unattach(source: ObjectQuery) -> Instruction {
 pub(crate) fn phase_out(source: ObjectQuery) -> Instruction {
     Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
         source,
-        spellwake_engine::toolbox::ObjectMutation::PhaseOut,
+        spellwake_engine::toolbox::ObjectMutation::Orientation(
+            spellwake_engine::toolbox::OrientationOp::PhaseOut,
+        ),
     )))
 }
 
@@ -1960,7 +1989,9 @@ pub(crate) fn phase_out(source: ObjectQuery) -> Instruction {
 pub(crate) fn transform_objects(source: ObjectQuery) -> Instruction {
     Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
         source,
-        spellwake_engine::toolbox::ObjectMutation::Transform,
+        spellwake_engine::toolbox::ObjectMutation::Orientation(
+            spellwake_engine::toolbox::OrientationOp::Transform,
+        ),
     )))
 }
 
@@ -1972,9 +2003,157 @@ pub(crate) fn gain_control(
 ) -> Instruction {
     Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
         source,
-        spellwake_engine::toolbox::ObjectMutation::GainControl {
-            controller,
-            duration,
-        },
+        spellwake_engine::toolbox::ObjectMutation::Control(
+            spellwake_engine::toolbox::ControlOp::Gain {
+                controller,
+                duration,
+            },
+        ),
     )))
+}
+
+#[must_use]
+pub(crate) fn destroy_targets() -> Instruction {
+    zone_op(ZoneOpSpec::move_all(
+        ObjectQuery::Targets,
+        ZoneDest::Graveyard {
+            semantics: GraveyardSemantics::Destroy {
+                allow_regenerate: true,
+            },
+        },
+    ))
+}
+
+#[must_use]
+pub(crate) fn move_targets_to(destination: SubjectDestination) -> Instruction {
+    zone_op(ZoneOpSpec::move_all(
+        ObjectQuery::Targets,
+        ZoneDest::from_subject_dest(destination),
+    ))
+}
+
+#[must_use]
+pub(crate) fn set_targets_tapped(tapped: bool) -> Instruction {
+    mutate_all(
+        ObjectQuery::Targets,
+        spellwake_engine::toolbox::ObjectMutation::TapState(
+            spellwake_engine::toolbox::TapStateOp::Set(tapped),
+        ),
+    )
+}
+
+#[must_use]
+pub(crate) fn toggle_targets_tapped() -> Instruction {
+    mutate_all(
+        ObjectQuery::Targets,
+        spellwake_engine::toolbox::ObjectMutation::TapState(
+            spellwake_engine::toolbox::TapStateOp::Toggle,
+        ),
+    )
+}
+
+#[must_use]
+pub(crate) fn skip_next_untap_targets() -> Instruction {
+    mutate_all(
+        ObjectQuery::Targets,
+        spellwake_engine::toolbox::ObjectMutation::TapState(
+            spellwake_engine::toolbox::TapStateOp::SkipNextUntap,
+        ),
+    )
+}
+
+#[must_use]
+pub(crate) fn remove_counters_from_targets(
+    kind: Option<CounterKind>,
+    amount: Option<ValueExpr>,
+) -> Instruction {
+    match amount {
+        Some(amt) => remove_counters(ObjectQuery::Targets, kind, amt),
+        None => mutate_all(
+            ObjectQuery::Targets,
+            spellwake_engine::toolbox::ObjectMutation::Counters(
+                spellwake_engine::toolbox::CounterOp::Clear { kind },
+            ),
+        ),
+    }
+}
+
+#[must_use]
+pub(crate) fn require_combat_action_targets(
+    kind: spellwake_engine::program::CombatActionKind,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::combat_action(ObjectQuery::Targets, kind),
+    ))
+}
+
+#[must_use]
+pub(crate) fn prevent_targets_damage_this_turn(
+    combat_only: bool,
+    both_directions: bool,
+) -> Instruction {
+    prevent_damage_spec(spellwake_engine::damage::TurnPreventionSpec {
+        combat_only,
+        source: spellwake_engine::damage::PreventionSourceSpec::AllPermanentTargets,
+        recipient: spellwake_engine::damage::PreventionRecipientSpec::Any,
+        both_directions,
+    })
+}
+
+#[must_use]
+pub(crate) fn exile_top_library_group(
+    owners: AffectedPlayers,
+    count: ValueExpr,
+    face_down: bool,
+) -> Instruction {
+    zone_op(ZoneOpSpec::exile_top_library(
+        PlayerSelector::Group(owners),
+        count,
+        face_down,
+    ))
+}
+
+#[must_use]
+pub(crate) fn impulse_play_last_moved(
+    duration: spellwake_engine::program::ImpulsePlayDuration,
+    cast_only: bool,
+    free: bool,
+    any_color: bool,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::impulse_play_permission(
+            ObjectQuery::from_move_subject(MoveSubjectRef::LastMoved),
+            PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            duration,
+            cast_only,
+            free,
+            any_color,
+        ),
+    ))
+}
+
+#[must_use]
+pub(crate) fn choose_creature_type(
+    into: spellwake_engine::program::CreatureTypeSlot,
+    excluding: std::collections::BTreeSet<spellwake_contracts::creature_types::CreatureTypeId>,
+) -> Instruction {
+    Instruction::PromptChoice(Box::new(
+        spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(into, excluding),
+    ))
+}
+
+#[must_use]
+pub(crate) fn put_counters_on_targets_by_current_type() -> [Instruction; 2] {
+    [
+        put_counters_on_query(
+            ObjectQuery::filtered(ObjectQuery::Targets, ObjectFilter::creature()),
+            CounterKind::PlusOne,
+            ValueExpr::literal(1),
+        ),
+        put_counters_on_query(
+            ObjectQuery::filtered(ObjectQuery::Targets, ObjectFilter::planeswalker()),
+            CounterKind::Loyalty,
+            ValueExpr::literal(1),
+        ),
+    ]
 }

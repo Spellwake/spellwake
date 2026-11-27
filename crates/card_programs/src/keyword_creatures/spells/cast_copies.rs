@@ -8,7 +8,7 @@ pub(super) fn body(
 ) -> Option<ExecutableBody> {
     let (target, instructions) = match text {
         "Target player mills three cards." => (
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![Instruction::MutatePlayer(Box::new(
                 spellwake_engine::toolbox::MutatePlayerSpec::mill(
                     ResolvingPlayer::TargetPlayer,
@@ -28,7 +28,7 @@ pub(super) fn body(
             ],
         ),
         "Target player loses 2 life and you gain 2 life." => (
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -45,7 +45,7 @@ pub(super) fn body(
             ],
         ),
         "Target creature gets +1/+2 until end of turn." => {
-            (BodyTarget::SingleCreature, vec![pump(1, 2, None)])
+            (BodyTarget::SINGLE_CREATURE, vec![pump(1, 2, None)])
         }
         "Create a 4/4 green Beast creature token." => (
             BodyTarget::None,
@@ -76,7 +76,7 @@ pub(super) fn body(
             (BodyTarget::None, vec![create])
         }
         source if source.strip_prefix(name) == Some(" deals 1 damage to target creature.") => (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,

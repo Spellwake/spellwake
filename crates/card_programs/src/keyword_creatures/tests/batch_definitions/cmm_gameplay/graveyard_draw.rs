@@ -27,7 +27,7 @@ fn cmm_zones_squee_and_reassembling_skeleton_return_from_their_own_graveyards() 
                     A,
                     ObjectDestination::Hand,
                     free_instant(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -130,7 +130,7 @@ fn cmm_zones_hanna_and_living_lightning_recover_only_their_printed_graveyard_car
                     A,
                     ObjectDestination::Hand,
                     free_instant(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -230,7 +230,12 @@ fn cmm_zones_distant_melody_counts_only_controlled_permanents_of_the_chosen_type
     );
     let choose = cast_named(&initial, &price);
     for (kind, n) in [(elf, 2), (goblin, 0)] {
-        let drawn = reply(&choose, DecisionReply::CreatureType(kind));
+        let drawn = reply(
+            &choose,
+            DecisionReply::PromptChoice(
+                spellwake_engine::toolbox::PromptChoiceReply::CreatureType(kind),
+            ),
+        );
         assert_eq!(drawn.draw_journal().events.len(), n);
         for id in [5, 6] {
             assert_eq!(

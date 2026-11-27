@@ -4,16 +4,21 @@ use crate::life::LifeChangeKind;
 use crate::{mana::ManaType, test_support::creature_types};
 
 fn optional(chooser: ResolvingPlayer) -> Instruction {
-    Instruction::OptionalEffect { chooser }
+    Instruction::OptionalSequence {
+        chooser,
+        instructions: 1,
+    }
 }
 fn offer(payer: ResolvingPlayer, paid: usize, declined: usize) -> Instruction {
-    Instruction::OfferDynamicManaPayment {
-        payer,
-        fixed: ManaCost::generic(3.into()),
-        extra_generic: crate::program::ValueExpr::Literal(0.into()),
-        paid_destination: paid,
-        declined_destination: declined,
-    }
+    Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+            payer,
+            ManaCost::generic(3.into()),
+            crate::program::ValueExpr::Literal(0.into()),
+            paid,
+            declined,
+        ),
+    ))
 }
 fn gain() -> Instruction {
     crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
@@ -22,10 +27,12 @@ fn gain() -> Instruction {
     )))
 }
 fn choose(slot: u16) -> Instruction {
-    Instruction::ChooseCreatureType {
-        into: CreatureTypeSlot::new(slot),
-        excluding: BTreeSet::new(),
-    }
+    Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec::choose_creature_type(
+            CreatureTypeSlot::new(slot),
+            BTreeSet::new(),
+        ),
+    ))
 }
 fn read(slot: u16) -> Instruction {
     crate::program::Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec::simple(
@@ -65,14 +72,16 @@ fn optional_rejects_missing_effect_and_each_control_wrapper() {
         ),
         Err(DefinitionError::MissingOptionalEffect)
     );
-    let branch = Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: crate::program::ValueExpr::PlayerStat(
-                crate::program::PlayerStatExpr::ControllerLife,
-            ),
-            comparison: Comparison::Equal,
-            right: crate::program::ValueExpr::Literal(20.into()),
-        },
+    let branch = Instruction::BranchCondition {
+        condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+            ResolutionCondition {
+                left: crate::program::ValueExpr::PlayerStat(
+                    crate::program::PlayerStatExpr::ControllerLife,
+                ),
+                comparison: Comparison::Equal,
+                right: crate::program::ValueExpr::Literal(20.into()),
+            },
+        ))),
         destination: 3,
     };
     for wrapper in [
@@ -145,13 +154,15 @@ fn payment_uses_existing_cost_validity_including_explicit_zero() {
         assert_eq!(
             check(
                 BodyTarget::None,
-                vec![Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::Controller,
-                    fixed: cost,
-                    extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 1,
-                    declined_destination: 1,
-                }]
+                vec![Instruction::PromptChoice(Box::new(
+                    crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::Controller,
+                        cost,
+                        crate::program::ValueExpr::Literal(0.into()),
+                        1,
+                        1,
+                    ),
+                ))]
             ),
             Ok(())
         );
@@ -163,13 +174,15 @@ fn payment_uses_existing_cost_validity_including_explicit_zero() {
         assert_eq!(
             check(
                 BodyTarget::None,
-                vec![Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::Controller,
-                    fixed: cost,
-                    extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 1,
-                    declined_destination: 1,
-                }]
+                vec![Instruction::PromptChoice(Box::new(
+                    crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::Controller,
+                        cost,
+                        crate::program::ValueExpr::Literal(0.into()),
+                        1,
+                        1,
+                    ),
+                ))]
             ),
             Err(DefinitionError::InvalidResolutionPaymentCost)
         );
@@ -243,8 +256,8 @@ fn each_current_condition_proves_related_participant_only_with_singular_grouping
 #[test]
 fn spell_controller_requires_single_spell_and_consumes_the_target() {
     for target in [
-        BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-        BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+        BodyTarget::single_spell(crate::program::SpellFilter::any()),
+        BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
     ] {
         assert_eq!(
             check(
@@ -267,10 +280,10 @@ fn spell_controller_requires_single_spell_and_consumes_the_target() {
     }
     for target in [
         BodyTarget::None,
-        BodyTarget::SinglePermanent,
-        BodyTarget::SingleCreature,
-        BodyTarget::SinglePlayer,
-        BodyTarget::SingleCreatureOrPlayer,
+        BodyTarget::SINGLE_PERMANENT,
+        BodyTarget::SINGLE_CREATURE,
+        BodyTarget::SINGLE_PLAYER,
+        BodyTarget::SINGLE_CREATURE_OR_PLAYER,
     ] {
         for instructions in [
             vec![optional(ResolvingPlayer::TargetSpellController), gain()],
@@ -304,13 +317,15 @@ fn unreachable_new_instructions_still_validate_context_syntax_and_cost() {
             DefinitionError::InvalidControlFlow,
         ),
         (
-            Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::Controller,
-                fixed: ManaCost::generic((-1).into()),
-                extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                paid_destination: 2,
-                declined_destination: 2,
-            },
+            Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::Controller,
+                    ManaCost::generic((-1).into()),
+                    crate::program::ValueExpr::Literal(0.into()),
+                    2,
+                    2,
+                ),
+            )),
             DefinitionError::InvalidResolutionPaymentCost,
         ),
     ] {
@@ -346,7 +361,7 @@ fn unreachable_new_instructions_still_validate_context_syntax_and_cost() {
     );
     assert_eq!(
         check(
-            BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+            BodyTarget::single_spell(crate::program::SpellFilter::any()),
             vec![
                 Instruction::Jump { destination: 2 },
                 offer(ResolvingPlayer::TargetSpellController, 2, 2)
@@ -451,18 +466,20 @@ fn either_payment_successor_can_skip_assignment_but_same_slot_branch_merge_is_va
 
 #[test]
 fn optional_and_either_payment_path_preserve_possible_moved_donor() {
-    let copy = || Instruction::BecomeCopy {
-        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-        donor: crate::program::MoveSubjectRef::TargetObject,
-        duration: ResolvedDuration::UntilEndOfTurn,
-        exceptions: Box::new(crate::program::CopyExceptions {
-            override_pt: None,
-            ..Default::default()
-        }),
+    let copy = || {
+        Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec::become_copy(
+            crate::toolbox::ObjectQuery::Source,
+            crate::toolbox::ObjectQuery::Targets,
+            ResolvedDuration::UntilEndOfTurn,
+            crate::program::CopyExceptions {
+                override_pt: None,
+                ..Default::default()
+            },
+        )))
     };
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 optional(ResolvingPlayer::Controller),
                 crate::program::Instruction::ZoneOp(Box::new(
@@ -479,7 +496,7 @@ fn optional_and_either_payment_path_preserve_possible_moved_donor() {
     for (paid, declined) in [(1, 2), (2, 1)] {
         assert_eq!(
             check(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     offer(ResolvingPlayer::Controller, paid, declined),
                     crate::program::Instruction::ZoneOp(Box::new(
@@ -496,7 +513,7 @@ fn optional_and_either_payment_path_preserve_possible_moved_donor() {
     }
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 offer(ResolvingPlayer::Controller, 1, 3),
                 crate::program::Instruction::ZoneOp(Box::new(

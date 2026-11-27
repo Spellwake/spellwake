@@ -46,9 +46,9 @@ use spellwake_engine::{
         ManaSideEffect, ManaType, SpecialColorYield, TriggeredManaRule,
     },
     program::{
-        AdditionalCastCost, AffectedPlayers, ArtifactSubtype, AttackRequirement, AttackTriggerMode,
-        BlockTriggerKind, BodyTarget, CardType, CardTypeMask, CastCopyKeyword, CastCostCount,
-        CastEntryKind, CastReduction, CastTimingRestriction, ChooseOptionBranch, ChosenHandAction,
+        AdditionalCastCost, AffectedPlayers, AnyTargetKind, ArtifactSubtype, AttackRequirement,
+        AttackTriggerMode, BlockTriggerKind, BodyTarget, CardType, CardTypeMask, CastCopyKeyword,
+        CastCostCount, CastEntryKind, CastReduction, CastTimingRestriction, ChosenHandAction,
         ColorMask, CombatActionKind, CombatFilter, CombatTriggerKeyword, CombatUntapGroup,
         Comparison, ConditionalCastCost, ControllerFilter, CopyExceptions, CounterKeyword,
         CounterTriggerKind, DamageAmountSpec, DamageGroup, DamageRecipientsRef, DamageSourceRef,
@@ -58,19 +58,20 @@ use spellwake_engine::{
         Instruction, InterveningCondition, LibraryPlacement, LibrarySearch, ManaValueFilter,
         MatchObjectRef, MiracleCost, ModalUniqueness, MoveSubjectRef, ObjectClause,
         ObjectColorFilter, ObjectFilter, ObjectFilterFlags, ObjectStatKind, PermanentDefinition,
-        PermanentTargetAction, PermanentTypeFilter, PlanarTriggerEvent, PlaneswalkerSubtype,
-        PlayerRelation, PlayerStatExpr, PlayerTriggerAction, PowerFilter, Program, ProgramKind,
+        PermanentTypeFilter, PlanarTriggerEvent, PlaneswalkerSubtype, PlayerRelation,
+        PlayerStatExpr, PlayerTriggerAction, PowerFilter, Program, ProgramKind,
         ProtectionRecipients, PublicZoneDestination, ResolutionCondition, ResolvingPlayer,
         SearchCardMatcher, SearchCount, SearchDestination, SearchExileLink, SearchManaValue,
         SearchSource, SelfFlashPermission, SourceRelation, SourceStateExpr, SourceZoneFilter,
         SpellDefinition, SpellFilter, SpellModes, SpellSubtype, SpliceAbility, SpliceQuality,
-        SplitCard, StatAggregate, StateThresholdKind, StatusTriggerKind, SubjectDestination,
-        SubtypeFilter, Supertype, SupertypeMask, TemporaryRuleKind, ToughnessFilter,
-        TransferKeyword, TriggerCondition, TriggerEvent, TriggerFromZone, TriggerGrouping,
-        TriggerKeywordEvent, TriggerPlayerScope, TriggerSpec, TriggeredAbility, TriggeredAbilityId,
-        TriggeredModes, UpkeepKeyword, ValueExpr, ValueObjectRef, ValueZone, ZoneActionKind,
-        ZoneActionPredicate, ZoneObjectKind, ZoneReplacementAbility, ZoneReplacementAbilityId,
-        ZoneReplacementChoice, ZoneReplacementExtra, ZoneReplacementSubject,
+        SplitCard, StackTargetKind, StatAggregate, StateThresholdKind, StatusTriggerKind,
+        SubjectDestination, SubtypeFilter, Supertype, SupertypeMask, TargetZone, TemporaryRuleKind,
+        ToughnessFilter, TransferKeyword, TriggerCondition, TriggerEvent, TriggerFromZone,
+        TriggerGrouping, TriggerKeywordEvent, TriggerPlayerScope, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId, TriggeredModes, UpkeepKeyword, ValueExpr, ValueObjectRef, ValueZone,
+        ZoneActionKind, ZoneActionPredicate, ZoneObjectKind, ZoneReplacementAbility,
+        ZoneReplacementAbilityId, ZoneReplacementChoice, ZoneReplacementExtra,
+        ZoneReplacementSubject,
     },
     token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients, TokenSize, TokenSubtype},
     turn::Step,
@@ -2637,7 +2638,7 @@ fn body_has_empty_die_roll(body: &ExecutableBody) -> bool {
             Instruction::MutatePlayer(spec)
                 if matches!(
                     &spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::RollDie { bands, .. }
+                    spellwake_engine::toolbox::PlayerMutation::RandomEvent(spellwake_engine::toolbox::RandomEventOp::RollDie { bands, .. })
                         if bands.is_empty()
                 )
         )
@@ -2687,10 +2688,12 @@ fn attach_die_roll_bands_in_body(
     let mut attached = false;
     for op in &mut body.instructions {
         if let Instruction::MutatePlayer(spec) = op
-            && let spellwake_engine::toolbox::PlayerMutation::RollDie {
-                bands: target_bands,
-                ..
-            } = &mut spec.op
+            && let spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                spellwake_engine::toolbox::RandomEventOp::RollDie {
+                    bands: target_bands,
+                    ..
+                },
+            ) = &mut spec.op
             && target_bands.is_empty()
         {
             *target_bands = bands.to_vec();

@@ -460,12 +460,14 @@ fn is_shuffle_target_graveyard_zone_op(op: &Instruction) -> bool {
 }
 
 fn body_has_dependent_targets(body: &ExecutableBody) -> bool {
-    matches!(body.target, BodyTarget::OpponentOrPlaneswalkerThenCreature)
-        || (body.target == BodyTarget::SinglePlayer
-            && body
-                .instructions
-                .first()
-                .is_some_and(is_shuffle_target_graveyard_zone_op))
+    matches!(
+        body.target,
+        BodyTarget::AnyTarget(AnyTargetKind::OpponentOrPlaneswalkerThenCreature)
+    ) || (body.target == BodyTarget::SINGLE_PLAYER
+        && body
+            .instructions
+            .first()
+            .is_some_and(is_shuffle_target_graveyard_zone_op))
 }
 
 fn body_safe_for_synthesized_mode(body: &ExecutableBody) -> bool {
@@ -516,6 +518,10 @@ fn rewrite_condition_expr_ve(
             }
         }
         ConditionExpr::Not(c) => rewrite_condition_expr_ve(c, map_ve),
+        ConditionExpr::Resolution(rc) => {
+            map_ve(&mut rc.left);
+            map_ve(&mut rc.right);
+        }
     }
 }
 
@@ -674,17 +680,15 @@ fn try_lower_exact_plus_upto_modes_core(
         }
         if !in_trigger {
             let saw_sacrifice = lowered.instructions.iter().any(|op| {
-                matches!(op, Instruction::Sacrifice { .. })
-                    || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                        .is_some_and(|spec| {
-                            matches!(
-                                spec.destination,
-                                spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                    semantics:
-                                        spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
-                                }
-                            )
-                        })
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                    .is_some_and(|spec| {
+                        matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                            }
+                        )
+                    })
             });
             if saw_sacrifice {
                 rewrite_body_anaphora_stats(&mut lowered, ValueObjectRef::LastSacrificedCreature);
@@ -862,17 +866,15 @@ fn try_lower_independent_multi_clause_modes_core(
         }
         if !in_trigger {
             let saw_sacrifice = body.instructions.iter().any(|op| {
-                matches!(op, Instruction::Sacrifice { .. })
-                    || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                        .is_some_and(|spec| {
-                            matches!(
-                                spec.destination,
-                                spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                    semantics:
-                                        spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
-                                }
-                            )
-                        })
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                    .is_some_and(|spec| {
+                        matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                            }
+                        )
+                    })
             });
             if saw_sacrifice {
                 rewrite_body_anaphora_stats(&mut body, ValueObjectRef::LastSacrificedCreature);
@@ -1438,20 +1440,7 @@ pub(in super::super) fn rewrite_instruction_anaphora(
     replacement: ValueObjectRef,
 ) {
     match op {
-        Instruction::Discard { amount, .. }
-        | Instruction::Sacrifice { amount, .. }
-        | Instruction::ExileTopPlay { count: amount, .. }
-        | Instruction::LookTopChooseExt { count: amount, .. }
-        | Instruction::RevealUntilMatchExt { count: amount, .. }
-        | Instruction::OfferDynamicManaPayment {
-            extra_generic: amount,
-            ..
-        }
-        | Instruction::RepeatLoop { count: amount, .. }
-        | Instruction::AffectPermanentTargets {
-            action: PermanentTargetAction::PutCounters { amount, .. },
-            ..
-        } => {
+        Instruction::RepeatLoop { count: amount, .. } => {
             rewrite_value_expr_anaphora(amount, replacement);
         }
         Instruction::AdjustLife(spec) => match &mut spec.op {
@@ -1462,7 +1451,7 @@ pub(in super::super) fn rewrite_instruction_anaphora(
             | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
                 rewrite_value_expr_anaphora(amount, replacement);
             }
-            spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+            _ => {}
         },
         Instruction::DealDamage(spec) => {
             if let spellwake_engine::program::DamageAmountSpec::Expr(expr) = &mut spec.amount {
@@ -1475,17 +1464,32 @@ pub(in super::super) fn rewrite_instruction_anaphora(
             }
         }
         Instruction::MutatePlayer(spec) => match &mut spec.op {
-            spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-            | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
-            | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
-            | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
-            | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
-            | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
-            | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
-            | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
-            | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount }
+            spellwake_engine::toolbox::PlayerMutation::Counter { amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Mill(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Scry(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Surveil(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::ManifestTop(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::Incubate { count: amount },
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::Blight { amount },
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::CollectEvidence { minimum: amount },
+            )
             | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(amount)
-            | spellwake_engine::toolbox::PlayerMutation::RollDie { count: amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                spellwake_engine::toolbox::RandomEventOp::RollDie { count: amount, .. },
+            )
             | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles {
                 count: amount, ..
             } => {
@@ -1516,14 +1520,35 @@ pub(in super::super) fn rewrite_instruction_anaphora(
                 rewrite_instruction_anaphora(inner, replacement);
             }
         }
-        Instruction::PromptChoice(spec) => match &mut spec.domain {
-            spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
-            | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
-                rewrite_value_expr_anaphora(min, replacement);
-                rewrite_value_expr_anaphora(max, replacement);
+        Instruction::PromptChoice(spec) => {
+            match &mut spec.domain {
+                spellwake_engine::toolbox::PromptDomain::Objects {
+                    min,
+                    max,
+                    max_total_power,
+                    ..
+                } => {
+                    rewrite_value_expr_anaphora(min, replacement);
+                    rewrite_value_expr_anaphora(max, replacement);
+                    if let Some(mtp) = max_total_power {
+                        rewrite_value_expr_anaphora(mtp, replacement);
+                    }
+                }
+                spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                    rewrite_value_expr_anaphora(min, replacement);
+                    rewrite_value_expr_anaphora(max, replacement);
+                }
+                spellwake_engine::toolbox::PromptDomain::ManaPayment { extra_generic, .. } => {
+                    rewrite_value_expr_anaphora(extra_generic, replacement);
+                }
+                _ => {}
             }
-            _ => {}
-        },
+            for branch in &mut spec.option_branches {
+                for inner in &mut branch.instructions {
+                    rewrite_instruction_anaphora(inner, replacement);
+                }
+            }
+        }
         Instruction::StackOp(spec) => {
             if let spellwake_engine::toolbox::StackOpKind::Discover { value: amount } = &mut spec.op
             {
@@ -1545,20 +1570,32 @@ pub(in super::super) fn rewrite_instruction_anaphora(
                 spellwake_engine::toolbox::ZoneSelection::All => {}
             }
             match &mut spec.op {
-                spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
-                | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. }
-                | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+                spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Add { amount, .. },
+                )
+                | spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Remove { amount, .. },
+                )
+                | spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                    spellwake_engine::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+                )
                 | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount }
-                | spellwake_engine::toolbox::ObjectMutation::Connive { count: amount } => {
+                | spellwake_engine::toolbox::ObjectMutation::Connive {
+                    count: Some(amount),
+                } => {
                     rewrite_value_expr_anaphora(amount, replacement);
                 }
-                spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
+                spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                    spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy),
+                ) => {
                     rewrite_value_expr_anaphora(&mut copy.count, replacement);
                 }
-                spellwake_engine::toolbox::ObjectMutation::MoveCounters {
-                    amount: Some(amount),
-                    ..
-                } => {
+                spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Move {
+                        amount: Some(amount),
+                        ..
+                    },
+                ) => {
                     rewrite_value_expr_anaphora(amount, replacement);
                 }
                 _ => {}
@@ -1597,10 +1634,6 @@ pub(in super::super) fn rewrite_instruction_anaphora(
                 }
             }
         }
-        Instruction::BranchIfFalse { condition, .. } => {
-            rewrite_value_expr_anaphora(&mut condition.left, replacement);
-            rewrite_value_expr_anaphora(&mut condition.right, replacement);
-        }
         Instruction::BranchCondition { condition, .. } => {
             rewrite_condition_expr_ve(condition, &|v| rewrite_value_expr_anaphora(v, replacement));
         }
@@ -1619,13 +1652,17 @@ pub(in super::super) fn rewrite_body_anaphora_stats(
     let allow_rewrite = matches!(
         body.target,
         BodyTarget::None
-            | BodyTarget::SinglePlayer
-            | BodyTarget::SingleOpponent
-            | BodyTarget::SingleSpell(_)
-            | BodyTarget::SingleAnyTarget
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
+            | BodyTarget::Player { .. }
+            | BodyTarget::Spell {
+                include_abilities: false,
+                ..
+            }
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                    | AnyTargetKind::CreatureOrPlayer
+                    | AnyTargetKind::PlayerOrPlaneswalker
+                    | AnyTargetKind::OpponentOrPlaneswalker
+            )
     );
     if !allow_rewrite {
         return;
@@ -1674,13 +1711,6 @@ pub(in super::super) fn rewrite_body_prior_result(
     for op in &mut body.instructions {
         if !saw_count_action {
             match op {
-                Instruction::Discard { amount, .. }
-                | Instruction::Sacrifice { amount, .. }
-                | Instruction::ExileTopPlay { count: amount, .. }
-                | Instruction::LookTopChooseExt { count: amount, .. }
-                | Instruction::RevealUntilMatchExt { count: amount, .. } => {
-                    rewrite_value_expr_prior_result(amount, replacement);
-                }
                 Instruction::AdjustLife(spec) => match &mut spec.op {
                     spellwake_engine::toolbox::LifeOp::Gain(amount)
                     | spellwake_engine::toolbox::LifeOp::Lose(amount)
@@ -1689,7 +1719,7 @@ pub(in super::super) fn rewrite_body_prior_result(
                     | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
                         rewrite_value_expr_prior_result(amount, replacement);
                     }
-                    spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+                    _ => {}
                 },
                 Instruction::DealDamage(spec) => {
                     if let spellwake_engine::program::DamageAmountSpec::Expr(expr) =
@@ -1704,17 +1734,30 @@ pub(in super::super) fn rewrite_body_prior_result(
                     }
                 }
                 Instruction::MutatePlayer(spec) => match &mut spec.op {
-                    spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-                    | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
-                    | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
-                    | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
-                    | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
-                    | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
-                    | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
-                    | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
-                    | spellwake_engine::toolbox::PlayerMutation::CollectEvidence {
-                        minimum: amount,
-                    }
+                    spellwake_engine::toolbox::PlayerMutation::Counter { amount, .. }
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Mill(amount),
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Scry(amount),
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Surveil(amount),
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::ManifestTop(amount),
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                        spellwake_engine::toolbox::PlayerKeywordAction::Incubate { count: amount },
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                        spellwake_engine::toolbox::PlayerKeywordAction::Blight { amount },
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                        spellwake_engine::toolbox::PlayerKeywordAction::CollectEvidence {
+                            minimum: amount,
+                        },
+                    )
                     | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(amount) => {
                         rewrite_value_expr_prior_result(amount, replacement);
                     }
@@ -1738,10 +1781,6 @@ pub(in super::super) fn rewrite_body_prior_result(
                         }
                     }
                 }
-                Instruction::BranchIfFalse { condition, .. } => {
-                    rewrite_value_expr_prior_result(&mut condition.left, replacement);
-                    rewrite_value_expr_prior_result(&mut condition.right, replacement);
-                }
                 Instruction::BranchCondition { condition, .. } => {
                     rewrite_condition_expr_ve(condition, &|v| {
                         rewrite_value_expr_prior_result(v, replacement);
@@ -1755,14 +1794,36 @@ pub(in super::super) fn rewrite_body_prior_result(
                         &|v| rewrite_value_expr_prior_result(v, replacement),
                     );
                 }
-                Instruction::PromptChoice(spec) => match &mut spec.domain {
-                    spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
-                    | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
-                        rewrite_value_expr_prior_result(min, replacement);
-                        rewrite_value_expr_prior_result(max, replacement);
+                Instruction::PromptChoice(spec) => {
+                    match &mut spec.domain {
+                        spellwake_engine::toolbox::PromptDomain::Objects {
+                            min,
+                            max,
+                            max_total_power,
+                            ..
+                        } => {
+                            rewrite_value_expr_prior_result(min, replacement);
+                            rewrite_value_expr_prior_result(max, replacement);
+                            if let Some(mtp) = max_total_power {
+                                rewrite_value_expr_prior_result(mtp, replacement);
+                            }
+                        }
+                        spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                            rewrite_value_expr_prior_result(min, replacement);
+                            rewrite_value_expr_prior_result(max, replacement);
+                        }
+                        spellwake_engine::toolbox::PromptDomain::ManaPayment {
+                            extra_generic,
+                            ..
+                        } => {
+                            rewrite_value_expr_prior_result(extra_generic, replacement);
+                        }
+                        _ => {}
                     }
-                    _ => {}
-                },
+                    for branch in &mut spec.option_branches {
+                        rewrite_body_prior_result(branch, replacement);
+                    }
+                }
                 Instruction::DrawCards(spec) => {
                     rewrite_value_expr_prior_result(&mut spec.amount, replacement);
                 }
@@ -1778,21 +1839,26 @@ pub(in super::super) fn rewrite_body_prior_result(
                         spellwake_engine::toolbox::ZoneSelection::All => {}
                     }
                     match &mut spec.op {
-                        spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                            amount, ..
-                        }
-                        | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
-                            amount,
-                            ..
-                        }
-                        | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+                        spellwake_engine::toolbox::ObjectMutation::Counters(
+                            spellwake_engine::toolbox::CounterOp::Add { amount, .. },
+                        )
+                        | spellwake_engine::toolbox::ObjectMutation::Counters(
+                            spellwake_engine::toolbox::CounterOp::Remove { amount, .. },
+                        )
+                        | spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                            spellwake_engine::toolbox::ObjectStateMarkerOp::BecomeMonstrous {
+                                amount,
+                            },
+                        )
                         | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount } => {
                             rewrite_value_expr_prior_result(amount, replacement);
                         }
-                        spellwake_engine::toolbox::ObjectMutation::MoveCounters {
-                            amount: Some(amount),
-                            ..
-                        } => {
+                        spellwake_engine::toolbox::ObjectMutation::Counters(
+                            spellwake_engine::toolbox::CounterOp::Move {
+                                amount: Some(amount),
+                                ..
+                            },
+                        ) => {
                             rewrite_value_expr_prior_result(amount, replacement);
                         }
                         _ => {}
@@ -1836,14 +1902,11 @@ pub(in super::super) fn rewrite_body_prior_result(
         }
         if matches!(
             op,
-            Instruction::ZoneOp(_)
-                | Instruction::ForEachPlayerQuery { .. }
-                | Instruction::Discard { .. }
-                | Instruction::Sacrifice { .. }
+            Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
         ) || matches!(
             op,
             Instruction::MutatePlayer(spec)
-                if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_))
+                if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::Mill(_)))
         ) {
             saw_count_action = true;
         }
@@ -2810,19 +2873,7 @@ pub(super) fn rewrite_body_trigger_subject_stats(
 ) {
     for op in &mut body.instructions {
         match op {
-            Instruction::Discard { amount, .. }
-            | Instruction::Sacrifice { amount, .. }
-            | Instruction::ExileTopPlay { count: amount, .. }
-            | Instruction::LookTopChooseExt { count: amount, .. }
-            | Instruction::OfferDynamicManaPayment {
-                extra_generic: amount,
-                ..
-            }
-            | Instruction::RepeatLoop { count: amount, .. }
-            | Instruction::AffectPermanentTargets {
-                action: PermanentTargetAction::PutCounters { amount, .. },
-                ..
-            } => {
+            Instruction::RepeatLoop { count: amount, .. } => {
                 rewrite_value_expr_trigger_subject(amount, replacement);
             }
             Instruction::AdjustLife(spec) => match &mut spec.op {
@@ -2833,7 +2884,7 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                 | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
                     rewrite_value_expr_trigger_subject(amount, replacement);
                 }
-                spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+                _ => {}
             },
             Instruction::DealDamage(spec) => {
                 if let spellwake_engine::program::DamageAmountSpec::Expr(expr) = &mut spec.amount {
@@ -2846,17 +2897,34 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                 }
             }
             Instruction::MutatePlayer(spec) => match &mut spec.op {
-                spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-                | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
-                | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
-                | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
-                | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
-                | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
-                | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
-                | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
-                | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount }
+                spellwake_engine::toolbox::PlayerMutation::Counter { amount, .. }
+                | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::Mill(amount),
+                )
+                | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::Scry(amount),
+                )
+                | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::Surveil(amount),
+                )
+                | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::ManifestTop(amount),
+                )
+                | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                    spellwake_engine::toolbox::PlayerKeywordAction::Incubate { count: amount },
+                )
+                | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                    spellwake_engine::toolbox::PlayerKeywordAction::Blight { amount },
+                )
+                | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                    spellwake_engine::toolbox::PlayerKeywordAction::CollectEvidence {
+                        minimum: amount,
+                    },
+                )
                 | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(amount)
-                | spellwake_engine::toolbox::PlayerMutation::RollDie { count: amount, .. }
+                | spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                    spellwake_engine::toolbox::RandomEventOp::RollDie { count: amount, .. },
+                )
                 | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles {
                     count: amount,
                     ..
@@ -2886,14 +2954,35 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             Instruction::ForEachPlayerQuery { body, .. } | Instruction::ForEach { body, .. } => {
                 rewrite_body_trigger_subject_stats(body, replacement);
             }
-            Instruction::PromptChoice(spec) => match &mut spec.domain {
-                spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
-                | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
-                    rewrite_value_expr_trigger_subject(min, replacement);
-                    rewrite_value_expr_trigger_subject(max, replacement);
+            Instruction::PromptChoice(spec) => {
+                match &mut spec.domain {
+                    spellwake_engine::toolbox::PromptDomain::Objects {
+                        min,
+                        max,
+                        max_total_power,
+                        ..
+                    } => {
+                        rewrite_value_expr_trigger_subject(min, replacement);
+                        rewrite_value_expr_trigger_subject(max, replacement);
+                        if let Some(mtp) = max_total_power {
+                            rewrite_value_expr_trigger_subject(mtp, replacement);
+                        }
+                    }
+                    spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                        rewrite_value_expr_trigger_subject(min, replacement);
+                        rewrite_value_expr_trigger_subject(max, replacement);
+                    }
+                    spellwake_engine::toolbox::PromptDomain::ManaPayment {
+                        extra_generic, ..
+                    } => {
+                        rewrite_value_expr_trigger_subject(extra_generic, replacement);
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+                for branch in &mut spec.option_branches {
+                    rewrite_body_trigger_subject_stats(branch, replacement);
+                }
+            }
             Instruction::StackOp(spec) => {
                 if let spellwake_engine::toolbox::StackOpKind::Discover { value: amount } =
                     &mut spec.op
@@ -2916,22 +3005,32 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                     spellwake_engine::toolbox::ZoneSelection::All => {}
                 }
                 match &mut spec.op {
-                    spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
-                    | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
-                        amount, ..
-                    }
-                    | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Add { amount, .. },
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Remove { amount, .. },
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                        spellwake_engine::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+                    )
                     | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount }
-                    | spellwake_engine::toolbox::ObjectMutation::Connive { count: amount } => {
+                    | spellwake_engine::toolbox::ObjectMutation::Connive {
+                        count: Some(amount),
+                    } => {
                         rewrite_value_expr_trigger_subject(amount, replacement);
                     }
-                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
+                    spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                        spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy),
+                    ) => {
                         rewrite_value_expr_trigger_subject(&mut copy.count, replacement);
                     }
-                    spellwake_engine::toolbox::ObjectMutation::MoveCounters {
-                        amount: Some(amount),
-                        ..
-                    } => {
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Move {
+                            amount: Some(amount),
+                            ..
+                        },
+                    ) => {
                         rewrite_value_expr_trigger_subject(amount, replacement);
                     }
                     _ => {}
@@ -2971,10 +3070,6 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                         rewrite_value_expr_trigger_subject(expr, replacement);
                     }
                 }
-            }
-            Instruction::BranchIfFalse { condition, .. } => {
-                rewrite_value_expr_trigger_subject(&mut condition.left, replacement);
-                rewrite_value_expr_trigger_subject(&mut condition.right, replacement);
             }
             Instruction::BranchCondition { condition, .. } => {
                 rewrite_condition_expr_ve(condition, &|v| {

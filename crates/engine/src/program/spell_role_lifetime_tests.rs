@@ -3,7 +3,7 @@ use super::*;
 use crate::test_support::creature_types;
 
 fn spell_target() -> BodyTarget {
-    BodyTarget::SingleSpell(crate::program::SpellFilter::any())
+    BodyTarget::single_spell(crate::program::SpellFilter::any())
 }
 
 fn gain() -> Instruction {
@@ -14,48 +14,55 @@ fn gain() -> Instruction {
 }
 
 fn discard(player: ResolvingPlayer, amount: i64) -> Instruction {
-    Instruction::Discard {
-        players: AffectedPlayers::One(player),
-        amount: crate::program::ValueExpr::Literal(amount.into()),
-    }
+    Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+        AffectedPlayers::One(player),
+        crate::program::ValueExpr::Literal(amount.into()),
+    )))
 }
 
 fn sacrifice(player: ResolvingPlayer, amount: i64) -> Instruction {
-    Instruction::Sacrifice {
-        players: AffectedPlayers::One(player),
-        amount: crate::program::ValueExpr::Literal(amount.into()),
-        filter: PermanentTypeFilter {
+    Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+        AffectedPlayers::One(player),
+        crate::program::ValueExpr::Literal(amount.into()),
+        PermanentTypeFilter {
             any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Creature]),
             forbidden_types: BTreeSet::new(),
             object_filter: None,
         },
-    }
+    )))
 }
 
 fn optional(player: ResolvingPlayer) -> Instruction {
-    Instruction::OptionalEffect { chooser: player }
-}
-
-fn payment(player: ResolvingPlayer, destination: usize) -> Instruction {
-    Instruction::OfferDynamicManaPayment {
-        payer: player,
-        fixed: ManaCost::free(),
-        extra_generic: crate::program::ValueExpr::Literal(0.into()),
-        paid_destination: destination,
-        declined_destination: destination,
+    Instruction::OptionalSequence {
+        chooser: player,
+        instructions: 1,
     }
 }
 
+fn payment(player: ResolvingPlayer, destination: usize) -> Instruction {
+    Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+            player,
+            ManaCost::free(),
+            crate::program::ValueExpr::Literal(0.into()),
+            destination,
+            destination,
+        ),
+    ))
+}
+
 fn branch(destination: usize) -> Instruction {
-    Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: crate::program::ValueExpr::PlayerStat(
-                crate::program::PlayerStatExpr::ControllerLife,
-            ),
-            comparison: Comparison::Greater,
-            right: crate::program::ValueExpr::Literal(0.into()),
-        },
+    Instruction::BranchCondition {
+        condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+            ResolutionCondition {
+                left: crate::program::ValueExpr::PlayerStat(
+                    crate::program::PlayerStatExpr::ControllerLife,
+                ),
+                comparison: Comparison::Greater,
+                right: crate::program::ValueExpr::Literal(0.into()),
+            },
+        ))),
         destination,
     }
 }
@@ -208,13 +215,15 @@ fn live_and_retained_controller_paths_join() {
             discard(ResolvingPlayer::TargetSpellController, 1),
         ],
         vec![
-            Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::Controller,
-                fixed: ManaCost::free(),
-                extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                paid_destination: 1,
-                declined_destination: 2,
-            },
+            Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::Controller,
+                    ManaCost::free(),
+                    crate::program::ValueExpr::Literal(0.into()),
+                    1,
+                    2,
+                ),
+            )),
             Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
                 crate::toolbox::CounterDestination::Graveyard,
             ))),
@@ -353,7 +362,7 @@ fn exact_target_capability_and_unreachable_context_errors_remain_precise() {
 fn independent_departed_permanent_donor_guard_still_rejects_copy_lki() {
     assert_eq!(
         check(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 crate::program::Instruction::ZoneOp(Box::new(
                     crate::toolbox::ZoneOpSpec::move_all(
@@ -361,15 +370,21 @@ fn independent_departed_permanent_donor_guard_still_rejects_copy_lki() {
                         crate::toolbox::ZoneDest::Hand
                     )
                 )),
-                Instruction::BecomeCopy {
-                    receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-                    donor: crate::program::MoveSubjectRef::TargetObject,
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                    exceptions: Box::new(crate::program::CopyExceptions {
-                        override_pt: None,
-                        ..Default::default()
-                    }),
-                },
+                Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec::become_copy(
+                        crate::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            crate::program::EffectSubject::AbilitySource,
+                        )),
+                        crate::toolbox::ObjectQuery::from_move_subject(
+                            crate::program::MoveSubjectRef::TargetObject,
+                        ),
+                        ResolvedDuration::UntilEndOfTurn,
+                        crate::program::CopyExceptions {
+                            override_pt: None,
+                            ..Default::default()
+                        },
+                    ),
+                )),
             ],
         ),
         Err(DefinitionError::InvalidInstruction)

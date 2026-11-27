@@ -1,5 +1,5 @@
 //! Execution handlers for Pass C orthogonal Comprehensive Rules instructions:
-//! RollDie, FlipCoins, ChooseValue, Vote, Incubate,
+//! RollDie, FlipCoins, Vote, Incubate,
 //! Connive / ConniveFinalize, Discover, Clash, RingTemptsYou,
 //! VentureIntoDungeon, TakeInitiative, UnlockDoor, Behold, and ManifestDread.
 use super::progress_rules::{RuleStepContext, StepOutcome};
@@ -7,7 +7,7 @@ use super::*;
 use crate::occurrence::{EventCause, RulesOccurrence, ZoneReason};
 use crate::program::{
     AffectedPlayers, DieRollMode, LibraryPlacement, MoveSubjectRef, PlayerTriggerAction,
-    ResolutionChoiceDomain, ResolvingPlayer, SplitHalf, SubjectDestination,
+    ResolvingPlayer, SplitHalf, SubjectDestination,
 };
 
 impl EffectWindow {
@@ -62,33 +62,6 @@ impl EffectWindow {
             MoveSubjectRef::RememberedFirst => self.legal_linked_targets()?.map(|(a, _)| a),
             MoveSubjectRef::RememberedSecond => self.legal_linked_targets()?.map(|(_, b)| b),
         })
-    }
-
-    fn resolve_pass_c_move_subjects(
-        &self,
-        entry: &crate::stack_window::StackEntry,
-        subject: MoveSubjectRef,
-    ) -> Result<Vec<ObjectId>, EffectError> {
-        match subject {
-            MoveSubjectRef::CreatedTokens => Ok(self
-                .resolution_cursor()
-                .map(|c| c.last_created_tokens.clone())
-                .unwrap_or_default()),
-            MoveSubjectRef::LastMoved => Ok(self
-                .resolution_cursor()
-                .map(|c| {
-                    if !c.results.last_moved_objects.is_empty() {
-                        c.results.last_moved_objects.clone()
-                    } else {
-                        c.results.returned_target_permanent.into_iter().collect()
-                    }
-                })
-                .unwrap_or_default()),
-            other => Ok(self
-                .resolve_pass_c_move_subject(entry, other)?
-                .into_iter()
-                .collect()),
-        }
     }
 
     pub(super) fn splice_replacing_current(
@@ -150,7 +123,10 @@ impl EffectWindow {
         Ok(())
     }
 
-    fn suspend_for_random_resolution(&mut self, chooser: SeatId) -> Result<(), EffectError> {
+    pub(super) fn suspend_for_random_resolution(
+        &mut self,
+        chooser: SeatId,
+    ) -> Result<(), EffectError> {
         let Some(PendingWork::Resolution(cursor)) = self.pending_work.take() else {
             return Err(EffectError::WrongResolutionFrame);
         };
@@ -225,7 +201,9 @@ impl EffectWindow {
     ) -> Result<StepOutcome, EffectError> {
         match instruction {
             Instruction::MutateObject(spec) => match &spec.op {
-                crate::toolbox::ObjectMutation::BecomeMonstrous { amount } => {
+                crate::toolbox::ObjectMutation::StateMarker(
+                    crate::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+                ) => {
                     let source_id = match entry.kind() {
                         StackKind::ActivatedAbility { source }
                         | StackKind::TriggeredAbility { source } => Some(source.id()),
@@ -273,7 +251,9 @@ impl EffectWindow {
                     self.advance_instruction()?;
                     Ok(StepOutcome::Continue)
                 }
-                crate::toolbox::ObjectMutation::UnlockDoor { door, allow_lock } => {
+                crate::toolbox::ObjectMutation::StateMarker(
+                    crate::toolbox::ObjectStateMarkerOp::UnlockDoor { door, allow_lock },
+                ) => {
                     let resolved = self
                         .eval_object_query_at(
                             entry.controller(),
@@ -292,7 +272,7 @@ impl EffectWindow {
                         *allow_lock,
                     )
                 }
-                crate::toolbox::ObjectMutation::Enlist => {
+                crate::toolbox::ObjectMutation::Combat(crate::toolbox::ObjectCombatOp::Enlist) => {
                     let source_id = match entry.kind() {
                         StackKind::ActivatedAbility { source }
                         | StackKind::TriggeredAbility { source } => Some(source.id()),
@@ -400,7 +380,7 @@ impl EffectWindow {
                     self.advance_instruction()?;
                     Ok(StepOutcome::Continue)
                 }
-                crate::toolbox::ObjectMutation::Connive { count } => {
+                crate::toolbox::ObjectMutation::Connive { count: Some(count) } => {
                     let amount = self.resolve_value_expr(entry.controller(), count)?;
                     let subject = spec
                         .source
@@ -456,10 +436,10 @@ impl EffectWindow {
                     };
                     let ops = vec![
                         draw_op,
-                        Instruction::Discard {
-                            players: AffectedPlayers::One(discard_role),
-                            amount: ValueExpr::Literal(amount),
-                        },
+                        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+                            AffectedPlayers::One(discard_role),
+                            ValueExpr::Literal(amount),
+                        ))),
                         Instruction::MutateObject(Box::new(
                             crate::toolbox::MutateObjectSpec::connive_finalize(spec.source.clone()),
                         )),
@@ -467,7 +447,7 @@ impl EffectWindow {
                     self.splice_replacing_current(entry.id(), index, &ops)?;
                     Ok(StepOutcome::Continue)
                 }
-                crate::toolbox::ObjectMutation::ConniveFinalize => {
+                crate::toolbox::ObjectMutation::Connive { count: None } => {
                     let subject = spec
                         .source
                         .to_move_subject()
@@ -592,7 +572,9 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::Incubate { count } => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Incubate { count },
+                    ) => {
                         let amount = self.resolve_value_expr(entry.controller(), count)?;
                         let creation = crate::dungeon::incubator_token_creation(
                             self.creature_vocabulary(),
@@ -602,7 +584,9 @@ impl EffectWindow {
                         self.begin_token_entries(&[creation], None, false)?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::Clash => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Clash,
+                    ) => {
                         let chooser = player;
                         let cursor_snap = self
                             .resolution_cursor()
@@ -799,7 +783,9 @@ impl EffectWindow {
                             }
                         }
                     }
-                    crate::toolbox::PlayerMutation::RingTemptsYou => {
+                    crate::toolbox::PlayerMutation::Designation(
+                        crate::toolbox::PlayerDesignationOp::RingTemptsYou,
+                    ) => {
                         let controller = entry.controller();
                         let evaluated = self.evaluated_characteristics()?;
                         let creatures: Vec<ObjectId> = evaluated
@@ -988,7 +974,9 @@ impl EffectWindow {
                         }
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::TakeInitiative => {
+                    crate::toolbox::PlayerMutation::Designation(
+                        crate::toolbox::PlayerDesignationOp::TakeInitiative,
+                    ) => {
                         let cursor_snap = self
                             .resolution_cursor()
                             .ok_or(EffectError::WrongResolutionFrame)?
@@ -1115,7 +1103,9 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::ManifestDread => {
+                    crate::toolbox::PlayerMutation::LibraryTop(
+                        crate::toolbox::LibraryTopAction::ManifestDread,
+                    ) => {
                         let controller = entry.controller();
                         let top_two: Vec<ObjectId> = self
                             .window
@@ -1186,7 +1176,6 @@ impl EffectWindow {
                                 instruction: index,
                             },
                             objects: vec![manifest_id],
-                            library_bottom: None,
                             wake_entry: None,
                             orders: BTreeMap::new(),
                             graveyard_orders: BTreeMap::new(),
@@ -1201,7 +1190,9 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::Ripple(n) => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Ripple(n),
+                    ) => {
                         let n = *n;
                         let controller = entry.controller();
                         let top_n: Vec<ObjectId> = self
@@ -1292,7 +1283,9 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::Demonstrate => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Demonstrate,
+                    ) => {
                         let target_id = self
                             .window
                             .entries()
@@ -1333,12 +1326,14 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::RollDie {
-                        sides: _,
-                        count,
-                        mode,
-                        bands,
-                    } => {
+                    crate::toolbox::PlayerMutation::RandomEvent(
+                        crate::toolbox::RandomEventOp::RollDie {
+                            sides: _,
+                            count,
+                            mode,
+                            bands,
+                        },
+                    ) => {
                         let cursor_snap = self
                             .resolution_cursor()
                             .ok_or(EffectError::WrongResolutionFrame)?
@@ -1405,12 +1400,14 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::FlipCoins {
-                        mode: _,
-                        win_body,
-                        lose_body,
-                        lose_destination,
-                    } => {
+                    crate::toolbox::PlayerMutation::RandomEvent(
+                        crate::toolbox::RandomEventOp::FlipCoins {
+                            mode: _,
+                            win_body,
+                            lose_body,
+                            lose_destination,
+                        },
+                    ) => {
                         let cursor_snap = self
                             .resolution_cursor()
                             .ok_or(EffectError::WrongResolutionFrame)?
@@ -1445,241 +1442,6 @@ impl EffectWindow {
                     }
                     _ => Ok(StepOutcome::Next(Instruction::MutatePlayer(spec))),
                 }
-            }
-            Instruction::ChooseValue { chooser, domain } => {
-                let cursor_snap = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let actor = self.resolving_player_identity_at(chooser, Some(&cursor_snap))?;
-                match domain {
-                    ResolutionChoiceDomain::Color => {
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            let labels = ["White", "Blue", "Black", "Red", "Green"]
-                                .into_iter()
-                                .map(str::to_owned)
-                                .collect();
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        let mana = match idx {
-                            0 => ManaType::White,
-                            1 => ManaType::Blue,
-                            2 => ManaType::Black,
-                            3 => ManaType::Red,
-                            _ => ManaType::Green,
-                        };
-                        if let Some(cur) = self.resolution_cursor_mut() {
-                            cur.chosen_effect_color = Some(mana);
-                        }
-                    }
-                    ResolutionChoiceDomain::Player { opponents_only } => {
-                        let seats: Vec<SeatId> = if opponents_only {
-                            self.combat_rules
-                                .opponents(self.window.participants(), actor)?
-                        } else {
-                            self.window.participants().to_vec()
-                        };
-                        match seats.as_slice() {
-                            [] => {}
-                            [only] => {
-                                if let Some(cur) = self.resolution_cursor_mut() {
-                                    cur.chosen_opponent = Some(*only);
-                                }
-                            }
-                            _ => {
-                                let chosen = self
-                                    .resolution_cursor_mut()
-                                    .and_then(|c| c.chosen_option_index.take());
-                                let Some(idx) = chosen else {
-                                    let labels = (0..seats.len())
-                                        .map(|i| format!("Player {}", i + 1))
-                                        .collect();
-                                    return Ok(StepOutcome::Pending(self.option_frame(
-                                        entry.id(),
-                                        index,
-                                        actor,
-                                        labels,
-                                    )?));
-                                };
-                                if let Some(&seat) = seats.get(usize::from(idx))
-                                    && let Some(cur) = self.resolution_cursor_mut()
-                                {
-                                    cur.chosen_opponent = Some(seat);
-                                }
-                            }
-                        }
-                    }
-                    ResolutionChoiceDomain::RandomPlayer { opponents_only } => {
-                        let seats: Vec<SeatId> = if opponents_only {
-                            self.combat_rules
-                                .opponents(self.window.participants(), actor)?
-                        } else {
-                            self.window.participants().to_vec()
-                        };
-                        match seats.as_slice() {
-                            [] => {}
-                            [only] => {
-                                if let Some(cur) = self.resolution_cursor_mut() {
-                                    cur.chosen_opponent = Some(*only);
-                                }
-                            }
-                            _ => {
-                                if !cursor_snap.results.random_player_ready {
-                                    self.suspend_for_random_resolution(actor)?;
-                                    return Ok(StepOutcome::Continue);
-                                }
-                                if let Some(cur) = self.resolution_cursor_mut() {
-                                    cur.results.random_player_ready = false;
-                                }
-                            }
-                        }
-                    }
-                    ResolutionChoiceDomain::CardType(allowed) => {
-                        let types = if allowed.is_empty() {
-                            vec![
-                                CardType::Artifact,
-                                CardType::Creature,
-                                CardType::Enchantment,
-                                CardType::Instant,
-                                CardType::Land,
-                                CardType::Planeswalker,
-                                CardType::Sorcery,
-                            ]
-                        } else {
-                            allowed
-                        };
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            let labels = types.iter().map(|t| format!("{t:?}")).collect();
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        if let Some(&ct) = types.get(usize::from(idx))
-                            && let Some(cur) = self.resolution_cursor_mut()
-                        {
-                            cur.results.chosen_card_type = Some(ct);
-                        }
-                    }
-                    ResolutionChoiceDomain::BasicLandType => {
-                        let types = [
-                            crate::land::LandType::Plains,
-                            crate::land::LandType::Island,
-                            crate::land::LandType::Swamp,
-                            crate::land::LandType::Mountain,
-                            crate::land::LandType::Forest,
-                        ];
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            let labels = ["Plains", "Island", "Swamp", "Mountain", "Forest"]
-                                .into_iter()
-                                .map(str::to_owned)
-                                .collect();
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        if let Some(&lt) = types.get(usize::from(idx))
-                            && let Some(cur) = self.resolution_cursor_mut()
-                        {
-                            cur.results.chosen_basic_land_type = Some(lt);
-                        }
-                    }
-                    ResolutionChoiceDomain::Number { min, max } => {
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            let labels = (min..=max).map(|n| n.to_string()).collect();
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        let value = min.saturating_add(u16::from(idx)).min(max);
-                        if let Some(cur) = self.resolution_cursor_mut() {
-                            cur.results.chosen_number = Some(i64::from(value).into());
-                        }
-                    }
-                    ResolutionChoiceDomain::LabeledOption(labels) => {
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        if let Some(cur) = self.resolution_cursor_mut() {
-                            cur.results.chosen_option_index = Some(idx);
-                        }
-                    }
-                    ResolutionChoiceDomain::CardName { nonland_only } => {
-                        let mut names = BTreeSet::new();
-                        for obj in self.window.cards().iter() {
-                            if let Some(card_id) = obj.card_id()
-                                && let Some(program) = self.programs.get(&card_id)
-                            {
-                                if nonland_only && program.has_type(CardType::Land) {
-                                    continue;
-                                }
-                                for name in program.names.iter() {
-                                    names.insert(name.as_str().to_owned());
-                                }
-                            }
-                        }
-                        let mut labels: Vec<String> = names.into_iter().take(254).collect();
-                        labels.push("Other card name".to_owned());
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        if let Some(selected_name) = labels.get(usize::from(idx)).cloned() {
-                            if let Some(cur) = self.resolution_cursor_mut() {
-                                cur.results.chosen_card_name = Some(selected_name.clone());
-                            }
-                            if let StackKind::ActivatedAbility { source }
-                            | StackKind::TriggeredAbility { source } = entry.kind()
-                            {
-                                self.characteristics
-                                    .named_cards
-                                    .insert(source.id(), selected_name);
-                            }
-                        }
-                    }
-                }
-                self.advance_instruction()?;
-                Ok(StepOutcome::Continue)
             }
             Instruction::StackOp(spec) => match &spec.op {
                 crate::toolbox::StackOpKind::Discover { value } => {
@@ -1870,278 +1632,6 @@ impl EffectWindow {
                 }
                 _ => Ok(StepOutcome::Next(Instruction::StackOp(spec))),
             },
-            Instruction::Fight { first, second } => {
-                let first_objs = self.resolve_pass_c_move_subjects(entry, *first)?;
-                let second_objs = self.resolve_pass_c_move_subjects(entry, *second)?;
-                let mut pairs = Vec::new();
-                for &a in &first_objs {
-                    for &b in &second_objs {
-                        if a != b {
-                            pairs.push((a, b));
-                        }
-                    }
-                }
-                self.emit_fight_occurrences(entry.id(), index, &pairs, ctx.append)?;
-                let inputs = self.fight_damage_inputs(&pairs)?;
-                if inputs.is_empty() {
-                    self.advance_instruction()?;
-                } else {
-                    self.install_damage_batch(
-                        DamageOrigin::Resolution {
-                            entry: entry.id(),
-                            instruction: index,
-                        },
-                        DamageKind::Noncombat,
-                        inputs,
-                        ctx.journal,
-                    )?;
-                }
-                Ok(StepOutcome::Continue)
-            }
-            Instruction::Exchange(spec) => {
-                let cursor_snap = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                match spec {
-                    crate::program::ExchangeSpec::Control { first, second } => {
-                        let a_opt = self.resolve_pass_c_move_subject(entry, *first)?;
-                        let b_opt = self.resolve_pass_c_move_subject(entry, *second)?;
-                        if let (Some(a), Some(b)) = (a_opt, b_opt)
-                            && a != b
-                        {
-                            let before = self.rules_snapshot(None)?;
-                            let current = &before.view().evaluated;
-                            let ctrl_a = current
-                                .get(a)
-                                .filter(|o| o.zone == ObjectZone::Battlefield)
-                                .and_then(|o| o.controller);
-                            let ctrl_b = current
-                                .get(b)
-                                .filter(|o| o.zone == ObjectZone::Battlefield)
-                                .and_then(|o| o.controller);
-                            if let (Some(ca), Some(cb)) = (ctrl_a, ctrl_b)
-                                && ca != cb
-                            {
-                                let eff_a = self.characteristics.add_effect(
-                                    entry.id(),
-                                    a,
-                                    crate::characteristics::ResolvedParts(vec![
-                                        crate::characteristics::ResolvedPart::Control(cb),
-                                    ]),
-                                    crate::characteristics::ResolvedDuration::NoStatedDuration,
-                                )?;
-                                let eff_b = self.characteristics.add_effect(
-                                    entry.id(),
-                                    b,
-                                    crate::characteristics::ResolvedParts(vec![
-                                        crate::characteristics::ResolvedPart::Control(ca),
-                                    ]),
-                                    crate::characteristics::ResolvedDuration::NoStatedDuration,
-                                )?;
-                                self.emit_from(
-                                    EventCause::Instruction {
-                                        entry: entry.id(),
-                                        instruction: index,
-                                    },
-                                    &before,
-                                    None,
-                                    ctx.append,
-                                    |old, new, _| {
-                                        let app_a = characteristic_appearance_changes(
-                                            old,
-                                            new,
-                                            eff_a.affected.iter().copied(),
-                                        )?;
-                                        let app_b = characteristic_appearance_changes(
-                                            old,
-                                            new,
-                                            eff_b.affected.iter().copied(),
-                                        )?;
-                                        Ok(vec![
-                                            RulesOccurrence::ContinuousEffectCreated {
-                                                effect: eff_a,
-                                                appearances: app_a,
-                                            },
-                                            RulesOccurrence::ContinuousEffectCreated {
-                                                effect: eff_b,
-                                                appearances: app_b,
-                                            },
-                                        ])
-                                    },
-                                )?;
-                            }
-                        }
-                    }
-                    crate::program::ExchangeSpec::LifeTotals { first, second } => {
-                        let p1 = self.resolving_player_identity_at(first, Some(&cursor_snap))?;
-                        let p2 = self.resolving_player_identity_at(second, Some(&cursor_snap))?;
-                        if p1 != p2
-                            && let (Some(l1), Some(l2)) =
-                                (self.life.get(p1).cloned(), self.life.get(p2).cloned())
-                        {
-                            let evaluated = self.evaluated_characteristics()?;
-                            let prohibited = self.life_gain_prohibitions(&evaluated)?;
-                            let blocked = (l2 > l1 && prohibited.contains(&p1))
-                                || (l1 > l2 && prohibited.contains(&p2));
-                            if !blocked {
-                                self.adjust_players_at_cut(
-                                    entry.id(),
-                                    index,
-                                    BTreeMap::from([
-                                        (p1, crate::life::LifeAdjustment::Set(l2)),
-                                        (p2, crate::life::LifeAdjustment::Set(l1)),
-                                    ]),
-                                    ctx.append,
-                                )?;
-                            }
-                        }
-                    }
-                    crate::program::ExchangeSpec::LifeWithStat {
-                        player,
-                        object,
-                        stat,
-                    } => {
-                        let seat = self.resolving_player_identity_at(player, Some(&cursor_snap))?;
-                        if let Some(obj_id) = self.resolve_pass_c_move_subject(entry, *object)? {
-                            let before = self.rules_snapshot(None)?;
-                            let current = &before.view().evaluated;
-                            let stats_opt = current
-                                .get(obj_id)
-                                .filter(|o| o.zone == ObjectZone::Battlefield && o.is_creature())
-                                .and_then(|o| o.power_toughness.as_ref())
-                                .map(|pt| (pt.derived.power.clone(), pt.derived.toughness.clone()));
-                            if let (Some((pwr, tgh)), Some(life)) =
-                                (stats_opt, self.life.get(seat).cloned())
-                            {
-                                let use_power = stat == crate::program::ObjectStatKind::Power;
-                                let stat_val = if use_power { pwr } else { tgh.clone() };
-                                let blocked = stat_val > life
-                                    && self.life_gain_prohibitions(current)?.contains(&seat);
-                                if !blocked {
-                                    let part = if use_power {
-                                        crate::characteristics::ResolvedPart::SetPT(
-                                            crate::characteristics::PowerToughness {
-                                                power: life,
-                                                toughness: tgh,
-                                            },
-                                        )
-                                    } else {
-                                        crate::characteristics::ResolvedPart::SetToughness(life)
-                                    };
-                                    let effect = self.characteristics.add_effect(
-                                        entry.id(),
-                                        obj_id,
-                                        crate::characteristics::ResolvedParts(vec![part]),
-                                        crate::characteristics::ResolvedDuration::NoStatedDuration,
-                                    )?;
-                                    let life_changes = self
-                                        .life
-                                        .apply_adjustments(
-                                            &[(seat, crate::life::LifeAdjustment::Set(stat_val))]
-                                                .into(),
-                                        )
-                                        .map_err(|_| EffectError::InconsistentProgram)?;
-                                    self.emit_from(
-                                        EventCause::Instruction {
-                                            entry: entry.id(),
-                                            instruction: index,
-                                        },
-                                        &before,
-                                        None,
-                                        ctx.append,
-                                        |old, new, _| {
-                                            let appearances = characteristic_appearance_changes(
-                                                old,
-                                                new,
-                                                effect.affected.iter().copied(),
-                                            )?;
-                                            let mut occs = life_changes
-                                                .into_iter()
-                                                .map(RulesOccurrence::LifeChanged)
-                                                .collect::<Vec<_>>();
-                                            occs.push(RulesOccurrence::ContinuousEffectCreated {
-                                                effect,
-                                                appearances,
-                                            });
-                                            Ok(occs)
-                                        },
-                                    )?;
-                                }
-                            }
-                        }
-                    }
-                    crate::program::ExchangeSpec::Zones { player, from, to } => {
-                        let seat = self.resolving_player_identity_at(player, Some(&cursor_snap))?;
-                        let collect_zone = |z: crate::program::ExchangeZone| -> Vec<ObjectId> {
-                            match z {
-                                crate::program::ExchangeZone::Hand => self
-                                    .window
-                                    .cards()
-                                    .iter()
-                                    .filter(|c| c.zone() == ObjectZone::Hand(seat))
-                                    .map(GameObject::id)
-                                    .collect(),
-                                crate::program::ExchangeZone::Graveyard => self
-                                    .window
-                                    .cards()
-                                    .iter()
-                                    .filter(|c| c.zone() == ObjectZone::Graveyard(seat))
-                                    .map(GameObject::id)
-                                    .collect(),
-                                crate::program::ExchangeZone::Library => {
-                                    self.window.cards().library(seat).to_vec()
-                                }
-                                crate::program::ExchangeZone::Exile => self
-                                    .window
-                                    .cards()
-                                    .iter()
-                                    .filter(|c| c.zone() == ObjectZone::Exile && c.owner() == seat)
-                                    .map(GameObject::id)
-                                    .collect(),
-                            }
-                        };
-                        let to_dest = |z: crate::program::ExchangeZone| -> SubjectDestination {
-                            match z {
-                                crate::program::ExchangeZone::Hand => SubjectDestination::Hand,
-                                crate::program::ExchangeZone::Graveyard => {
-                                    SubjectDestination::Graveyard
-                                }
-                                crate::program::ExchangeZone::Library => {
-                                    SubjectDestination::Library(LibraryPlacement::Top)
-                                }
-                                crate::program::ExchangeZone::Exile => SubjectDestination::Exile {
-                                    delayed_return: None,
-                                },
-                            }
-                        };
-                        let from_cards = collect_zone(from);
-                        let to_cards = collect_zone(to);
-                        if !from_cards.is_empty() {
-                            let _ = self.move_objects_to_subject_destination(
-                                entry,
-                                index,
-                                seat,
-                                &from_cards,
-                                to_dest(to),
-                                ctx.append,
-                            )?;
-                        }
-                        if !to_cards.is_empty() {
-                            let _ = self.move_objects_to_subject_destination(
-                                entry,
-                                index,
-                                seat,
-                                &to_cards,
-                                to_dest(from),
-                                ctx.append,
-                            )?;
-                        }
-                    }
-                }
-                self.advance_instruction()?;
-                Ok(StepOutcome::Continue)
-            }
             other => Ok(StepOutcome::Next(other)),
         }
     }

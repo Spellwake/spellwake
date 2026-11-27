@@ -30,13 +30,15 @@ fn gain(amount: i64) -> Instruction {
 }
 fn offer(cost: i64) -> Vec<Instruction> {
     vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(cost.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 2,
-            declined_destination: 1,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(cost.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                2,
+                1,
+            ),
+        )),
         gain(2),
     ]
 }
@@ -265,8 +267,9 @@ fn optional_outcome_executes_or_skips_one_primitive_before_the_same_tail() {
         (OptionalEffectChoice::Decline, 22),
     ] {
         let state = pending(vec![
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             gain(1),
             gain(2),
@@ -431,13 +434,26 @@ fn zero_count_production_refreshes_payment_authority_without_mana_produced() {
 #[test]
 fn taking_optional_type_choice_preserves_the_actual_child_and_tail() {
     let state = pending(vec![
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
-        Instruction::ChooseCreatureType {
-            into: CreatureTypeSlot::new(0),
-            excluding: BTreeSet::new(),
-        },
+        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+            chooser: crate::toolbox::PlayerSelector::Resolving(
+                crate::program::ResolvingPlayer::Controller,
+            ),
+            domain: crate::toolbox::PromptDomain::Subtype {
+                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                excluding: BTreeSet::new(),
+                legacy_slot: Some(CreatureTypeSlot::new(0)),
+            },
+            category: crate::toolbox::ChoiceCategory::Generic,
+            bind_to: crate::toolbox::BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+            option_branches: Vec::new(),
+        })),
         gain(1),
     ]);
     let taken = reply(
@@ -447,7 +463,7 @@ fn taking_optional_type_choice_preserves_the_actual_child_and_tail() {
     .into_state();
     assert!(matches!(
         taken.pending_decision().unwrap().frame(),
-        RuleFrame::CreatureType(_)
+        RuleFrame::PromptChoice(_)
     ));
     assert_eq!(taken.execution().instruction_index(), Some(1));
     let human = taken
@@ -455,7 +471,10 @@ fn taking_optional_type_choice_preserves_the_actual_child_and_tail() {
         .creature_vocabulary()
         .resolve_label("Human")
         .unwrap();
-    let result = reply(&taken, DecisionReply::CreatureType(human));
+    let result = reply(
+        &taken,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+    );
     assert_eq!(result.state().execution().life_total(A), Some(&21.into()));
     assert!(
         !result

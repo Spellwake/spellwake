@@ -7294,13 +7294,13 @@ fn try_bind_target_object_filter(filter: &ObjectFilterAst) -> Option<BodyTarget>
         },
     ) {
         if filter.any_types == AstCardTypeMask::CREATURE {
-            return Some(BodyTarget::SingleCreature);
+            return Some(BodyTarget::SINGLE_CREATURE);
         }
         if filter.any_types == AstCardTypeMask::PLANESWALKER {
-            return Some(BodyTarget::SinglePlaneswalker);
+            return Some(BodyTarget::SINGLE_PLANESWALKER);
         }
         if filter.any_types.is_empty() && filter.any_permanent {
-            return Some(BodyTarget::SinglePermanent);
+            return Some(BodyTarget::SINGLE_PERMANENT);
         }
     }
     if (filter.flags.0 & !(AstFilterFlags::LKI_PAST_TENSE.0 | AstFilterFlags::EXCLUDE_SELF.0)) != 0
@@ -7386,7 +7386,7 @@ fn try_bind_target_object_filter(filter: &ObjectFilterAst) -> Option<BodyTarget>
     {
         return None;
     }
-    Some(BodyTarget::FilteredPermanent(ObjectFilter::Clause(clause)))
+    Some(BodyTarget::filtered_permanent(ObjectFilter::Clause(clause)))
 }
 
 fn target_filter_matches_body_target(
@@ -7395,7 +7395,7 @@ fn target_filter_matches_body_target(
     vocabulary: &CreatureTypeVocabulary,
 ) -> bool {
     match target {
-        BodyTarget::SingleCreature => {
+        BodyTarget::SINGLE_CREATURE => {
             matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
                 && !filter.any_spell
                 && filter.any_types == AstCardTypeMask::CREATURE
@@ -7408,7 +7408,7 @@ fn target_filter_matches_body_target(
                     },
                 )
         }
-        BodyTarget::SinglePlaneswalker => {
+        BodyTarget::SINGLE_PLANESWALKER => {
             matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
                 && !filter.any_spell
                 && filter.any_types == AstCardTypeMask::PLANESWALKER
@@ -7421,7 +7421,7 @@ fn target_filter_matches_body_target(
                     },
                 )
         }
-        BodyTarget::SinglePermanent => {
+        BodyTarget::SINGLE_PERMANENT => {
             matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
                 && !filter.any_spell
                 && filter.any_permanent
@@ -7433,14 +7433,18 @@ fn target_filter_matches_body_target(
                     },
                 )
         }
-        BodyTarget::FilteredPermanent(expected) => {
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            filter: expected,
+        } => {
             matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
                 && !filter.any_spell
                 && lower_object_filter(filter, vocabulary).ok() == Some(expected)
         }
-        BodyTarget::SingleSpell(expected) => {
-            filter.any_spell && lower_spell_filter(filter, vocabulary).ok() == Some(expected)
-        }
+        BodyTarget::Spell {
+            filter: expected,
+            include_abilities: false,
+        } => filter.any_spell && lower_spell_filter(filter, vocabulary).ok() == Some(expected),
         _ => false,
     }
 }
@@ -7463,8 +7467,8 @@ fn bind_condition_value_expr_targets(
         | ConditionAst::HandCount { player, .. }
         | ConditionAst::GraveyardCount { player, .. }
         | ConditionAst::ControlsCount { player, .. } => match player {
-            PlayerRefAst::TargetPlayer => builder.bind_target(BodyTarget::SinglePlayer),
-            PlayerRefAst::TargetOpponent => builder.bind_target(BodyTarget::SingleOpponent),
+            PlayerRefAst::TargetPlayer => builder.bind_target(BodyTarget::SINGLE_PLAYER),
+            PlayerRefAst::TargetOpponent => builder.bind_target(BodyTarget::SINGLE_OPPONENT),
             _ => Ok(()),
         },
         _ => Ok(()),
@@ -7494,23 +7498,23 @@ pub(super) fn bind_value_expr_targets(
                     | ZoneFilter::TargetPlayerHand
                     | ZoneFilter::TargetPlayerLibrary,
                 ) => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 }
                 Some(
                     ZoneFilter::TargetOpponentGraveyard
                     | ZoneFilter::TargetOpponentHand
                     | ZoneFilter::TargetOpponentLibrary,
                 ) => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 }
                 _ => {}
             }
             match f.controller {
                 Some(ControllerRelation::TargetPlayer) => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 }
                 Some(ControllerRelation::TargetOpponent) => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 }
                 _ => {}
             }
@@ -7521,10 +7525,10 @@ pub(super) fn bind_value_expr_targets(
         | ValueExprAst::ColorsAmong(filter) => {
             match filter.controller {
                 Some(ControllerRelation::TargetPlayer) => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 }
                 Some(ControllerRelation::TargetOpponent) => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 }
                 _ => {}
             }
@@ -7533,19 +7537,19 @@ pub(super) fn bind_value_expr_targets(
         ValueExprAst::DistinctCountAmong { filter, .. } => {
             match filter.zone {
                 Some(ZoneFilter::TargetPlayerGraveyard) => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 }
                 Some(ZoneFilter::TargetOpponentGraveyard) => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 }
                 _ => {}
             }
             match filter.controller {
                 Some(ControllerRelation::TargetPlayer) => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 }
                 Some(ControllerRelation::TargetOpponent) => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 }
                 _ => {}
             }
@@ -7553,25 +7557,25 @@ pub(super) fn bind_value_expr_targets(
         }
         ValueExprAst::PlayerStat { player, .. }
         | ValueExprAst::PlayerCounterCount { player, .. } => match player {
-            PlayerRefAst::TargetPlayer => builder.bind_target(BodyTarget::SinglePlayer),
-            PlayerRefAst::TargetOpponent => builder.bind_target(BodyTarget::SingleOpponent),
+            PlayerRefAst::TargetPlayer => builder.bind_target(BodyTarget::SINGLE_PLAYER),
+            PlayerRefAst::TargetOpponent => builder.bind_target(BodyTarget::SINGLE_OPPONENT),
             _ => Ok(()),
         },
         ValueExprAst::EventCountThisTurn { event, player } => {
             match player {
                 Some(PlayerRefAst::TargetPlayer) => {
-                    return builder.bind_target(BodyTarget::SinglePlayer);
+                    return builder.bind_target(BodyTarget::SINGLE_PLAYER);
                 }
                 Some(PlayerRefAst::TargetOpponent) => {
-                    return builder.bind_target(BodyTarget::SingleOpponent);
+                    return builder.bind_target(BodyTarget::SINGLE_OPPONENT);
                 }
                 _ => {}
             }
             let low = event.trim().to_ascii_lowercase();
             if low.contains("target opponent") {
-                builder.bind_target(BodyTarget::SingleOpponent)
+                builder.bind_target(BodyTarget::SINGLE_OPPONENT)
             } else if low.contains("target player") {
-                builder.bind_target(BodyTarget::SinglePlayer)
+                builder.bind_target(BodyTarget::SINGLE_PLAYER)
             } else {
                 Ok(())
             }
@@ -7646,16 +7650,15 @@ fn is_self_object_anaphora(low: &str) -> bool {
 }
 
 fn body_has_object_or_spell_target(target: BodyTarget) -> bool {
-    !matches!(
-        target,
-        BodyTarget::None | BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-    )
+    !matches!(target, BodyTarget::None | BodyTarget::Player { .. })
 }
 
 fn body_target_guarantees_creature(target: BodyTarget) -> bool {
     match target {
-        BodyTarget::SingleCreature => true,
-        BodyTarget::FilteredPermanent(filter) => {
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            filter,
+        } => {
             let is_creature_clause = |c: ObjectClause| {
                 c.any_types == CardTypeMask::CREATURE
                     || (c.required_types.bits() & CardTypeMask::CREATURE.bits()) != 0
@@ -7697,20 +7700,28 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
     instructions.iter().rev().find_map(|op| match op {
         Instruction::DrawCards(spec) => find_value_expr_cost_object_ref(&spec.amount),
         Instruction::MutateObject(spec) => match &spec.op {
-            spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
-            | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. }
-            | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+            spellwake_engine::toolbox::ObjectMutation::Counters(
+                spellwake_engine::toolbox::CounterOp::Add { amount, .. },
+            )
+            | spellwake_engine::toolbox::ObjectMutation::Counters(
+                spellwake_engine::toolbox::CounterOp::Remove { amount, .. },
+            )
+            | spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                spellwake_engine::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+            )
             | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount }
-            | spellwake_engine::toolbox::ObjectMutation::Connive { count: amount } => {
-                find_value_expr_cost_object_ref(amount)
-            }
-            spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
-                find_value_expr_cost_object_ref(&copy.count)
-            }
-            spellwake_engine::toolbox::ObjectMutation::MoveCounters {
-                amount: Some(amount),
-                ..
+            | spellwake_engine::toolbox::ObjectMutation::Connive {
+                count: Some(amount),
             } => find_value_expr_cost_object_ref(amount),
+            spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy),
+            ) => find_value_expr_cost_object_ref(&copy.count),
+            spellwake_engine::toolbox::ObjectMutation::Counters(
+                spellwake_engine::toolbox::CounterOp::Move {
+                    amount: Some(amount),
+                    ..
+                },
+            ) => find_value_expr_cost_object_ref(amount),
             _ => None,
         },
         Instruction::ApplyContinuous(spec) => match &spec.payload {
@@ -7731,7 +7742,7 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
             | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
                 find_value_expr_cost_object_ref(amount)
             }
-            spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => None,
+            _ => None,
         },
         Instruction::DealDamage(spec) => match &spec.amount {
             spellwake_engine::program::DamageAmountSpec::Expr(amount) => {
@@ -7746,17 +7757,32 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
             _ => None,
         }),
         Instruction::MutatePlayer(spec) => match &spec.op {
-            spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-            | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
-            | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
-            | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
-            | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
-            | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
-            | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
-            | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
-            | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount }
+            spellwake_engine::toolbox::PlayerMutation::Counter { amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Mill(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Scry(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Surveil(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::ManifestTop(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::Incubate { count: amount },
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::Blight { amount },
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::CollectEvidence { minimum: amount },
+            )
             | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(amount)
-            | spellwake_engine::toolbox::PlayerMutation::RollDie { count: amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                spellwake_engine::toolbox::RandomEventOp::RollDie { count: amount, .. },
+            )
             | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles {
                 count: amount, ..
             } => find_value_expr_cost_object_ref(amount),
@@ -7774,16 +7800,25 @@ fn has_prior_reveal_top(context: Option<(&BodyBuilder, bool)>) -> bool {
         b.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::LookTopChooseExt {
-                    reveal_only: true,
-                    ..
-                }
+                Instruction::ZoneOp(spec)
+                    if matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::RevealOnly
+                            | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                    ) && matches!(
+                        &spec.source,
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                            slice: spellwake_engine::toolbox::QuerySlice::Top(_),
+                            ..
+                        }
+                    )
             ) || matches!(
                 op,
                 Instruction::MutatePlayer(spec)
                     if matches!(
                         spec.op,
-                        spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                        spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::MayRevealTop)
                     )
             )
         })
@@ -7795,14 +7830,18 @@ fn has_prior_reveal_other(context: Option<(&BodyBuilder, bool)>) -> bool {
         b.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::LookTopChooseExt {
-                    reveal_only: false,
-                    ..
-                }
-            ) || matches!(
-                op,
                 Instruction::ZoneOp(spec)
                     if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::RevealOnly)
+                        || (matches!(
+                            &spec.source,
+                            spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                                ..
+                            }
+                        ) && !matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                        ))
             )
         })
     })
@@ -7811,14 +7850,14 @@ fn has_prior_reveal_other(context: Option<(&BodyBuilder, bool)>) -> bool {
 fn has_prior_exile_non_target(context: Option<(&BodyBuilder, bool)>) -> bool {
     context.is_some_and(|(b, _)| {
         b.instructions.iter().any(|op| {
-            matches!(op, Instruction::ExileTopPlay { .. })
-                || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                    .is_some_and(|spec| {
-                        matches!(
-                            spec.destination,
-                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                        ) && !matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
-                    })
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op).is_some_and(
+                |spec| {
+                    matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    ) && !matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                },
+            )
         })
     })
 }
@@ -7826,22 +7865,21 @@ fn has_prior_exile_non_target(context: Option<(&BodyBuilder, bool)>) -> bool {
 fn has_prior_single_sacrifice(context: Option<(&BodyBuilder, bool)>) -> bool {
     context.is_some_and(|(b, _)| {
         b.instructions.iter().any(|op| {
-            matches!(
-                op,
-                Instruction::Sacrifice {
-                    players: AffectedPlayers::One(_),
-                    amount,
-                    ..
-                } if *amount == ValueExpr::literal(1)
-            ) || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                .is_some_and(|spec| {
-                    matches!(
-                        spec.destination,
-                        spellwake_engine::toolbox::ZoneDest::Graveyard {
-                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
-                        }
-                    )
-                })
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op).is_some_and(
+                |spec| {
+                    if let Some((players, amount, _, _)) = spec.as_group_sacrifice() {
+                        matches!(players, AffectedPlayers::One(_))
+                            && *amount == ValueExpr::literal(1)
+                    } else {
+                        matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                            }
+                        )
+                    }
+                },
+            )
         })
     })
 }
@@ -7854,40 +7892,34 @@ fn resolve_that_player_for_value_expr(
         return Ok(ResolvingPlayer::UniqueRelatedPlayer);
     };
     match builder.target {
-        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => Ok(ResolvingPlayer::TargetPlayer),
-        BodyTarget::SinglePermanent
-        | BodyTarget::SingleCreature
-        | BodyTarget::SinglePlaneswalker
-        | BodyTarget::FilteredPermanent(_)
-        | BodyTarget::SingleAnyTarget
-        | BodyTarget::SingleCreatureOrPlayer
-        | BodyTarget::SinglePlayerOrPlaneswalker
-        | BodyTarget::SingleOpponentOrPlaneswalker => Ok(ResolvingPlayer::TargetController),
-        BodyTarget::SingleSpell(_)
-        | BodyTarget::SingleStackObject(_)
-        | BodyTarget::SingleStackEntry
-        | BodyTarget::ControlledAbility { .. }
-        | BodyTarget::StackEntryTargetingControlledPermanent
-            if allow_spell_controller =>
-        {
+        BodyTarget::Player { .. } => Ok(ResolvingPlayer::TargetPlayer),
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        }
+        | BodyTarget::AnyTarget(
+            AnyTargetKind::Any
+            | AnyTargetKind::CreatureOrPlayer
+            | AnyTargetKind::PlayerOrPlaneswalker
+            | AnyTargetKind::OpponentOrPlaneswalker,
+        ) => Ok(ResolvingPlayer::TargetController),
+        BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) if allow_spell_controller => {
             Ok(ResolvingPlayer::TargetSpellController)
         }
-        BodyTarget::SingleOwnGraveyardCard | BodyTarget::FilteredOwnGraveyardCard(_) => {
-            Ok(ResolvingPlayer::Controller)
-        }
-        BodyTarget::FilteredAnyGraveyardCard { .. }
-        | BodyTarget::FilteredExiledCard(_)
-        | BodyTarget::AnyGraveyardCard
-        | BodyTarget::AnyGraveyardCreature
-        | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => Ok(ResolvingPlayer::TargetOwner),
+        BodyTarget::Object {
+            zone: TargetZone::OwnGraveyard,
+            ..
+        } => Ok(ResolvingPlayer::Controller),
+        BodyTarget::Object {
+            zone:
+                TargetZone::AnyGraveyard { .. }
+                | TargetZone::Exile {
+                    owned_flashback_only: false,
+                },
+            ..
+        } => Ok(ResolvingPlayer::TargetOwner),
         _ if builder.instructions.iter().any(|op| {
             matches!(
-                op,
-                Instruction::ChooseValue {
-                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
-                    ..
-                }
-            ) || matches!(
                 op,
                 Instruction::MutatePlayer(spec)
                     if matches!(
@@ -7905,8 +7937,7 @@ fn resolve_that_player_for_value_expr(
         }
         _ => {
             if let Some(prior_p) = builder.instructions.iter().rev().find_map(|op| match op {
-                Instruction::OptionalEffect { chooser }
-                | Instruction::OptionalSequence { chooser, .. }
+                Instruction::OptionalSequence { chooser, .. }
                     if *chooser != ResolvingPlayer::Controller
                         && (*chooser != ResolvingPlayer::UniqueRelatedPlayer || in_trigger) =>
                 {
@@ -7923,34 +7954,26 @@ fn resolve_that_player_for_value_expr(
                     _ => None,
                 },
                 Instruction::FixedTargetClause(body) => match body.target {
-                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                        Some(ResolvingPlayer::TargetPlayer)
+                    BodyTarget::Player { .. } => Some(ResolvingPlayer::TargetPlayer),
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
                     }
-                    BodyTarget::SinglePermanent
-                    | BodyTarget::SingleCreature
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_)
-                    | BodyTarget::SingleAnyTarget
-                    | BodyTarget::SingleCreatureOrPlayer
-                    | BodyTarget::SinglePlayerOrPlaneswalker
-                    | BodyTarget::SingleOpponentOrPlaneswalker => {
-                        Some(ResolvingPlayer::TargetController)
-                    }
-                    BodyTarget::SingleSpell(_)
-                    | BodyTarget::SingleStackObject(_)
-                    | BodyTarget::SingleStackEntry
-                    | BodyTarget::ControlledAbility { .. }
-                    | BodyTarget::StackEntryTargetingControlledPermanent
+                    | BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                        | AnyTargetKind::CreatureOrPlayer
+                        | AnyTargetKind::PlayerOrPlaneswalker
+                        | AnyTargetKind::OpponentOrPlaneswalker,
+                    ) => Some(ResolvingPlayer::TargetController),
+                    BodyTarget::Spell { .. } | BodyTarget::StackEntry(_)
                         if allow_spell_controller =>
                     {
                         Some(ResolvingPlayer::TargetSpellController)
                     }
-                    BodyTarget::FilteredAnyGraveyardCard { .. }
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => {
-                        Some(ResolvingPlayer::TargetOwner)
-                    }
+                    BodyTarget::Object {
+                        zone: TargetZone::AnyGraveyard { .. },
+                        ..
+                    } => Some(ResolvingPlayer::TargetOwner),
                     _ => None,
                 },
                 _ => None,
@@ -8873,16 +8896,10 @@ fn lower_value_expr_inner(
                 };
                 let action_matches = matches!(
                     (kind, last_ins),
-                    (
-                        PriorActionRefKind::SacrificedThisWay,
-                        Instruction::Sacrifice { .. },
-                    )
-                ) || matches!(
-                    (kind, last_ins),
                     (PriorActionRefKind::TappedThisWay, Instruction::MutateObject(spec))
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(true)
+                            spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(true))
                         )
                 ) || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(last_ins)
                     .is_some_and(|spec| match kind {
@@ -9389,23 +9406,25 @@ fn lower_value_expr_inner(
                                 Instruction::MutatePlayer(spec)
                                     if matches!(
                                         spec.op,
-                                        spellwake_engine::toolbox::PlayerMutation::Mill(_)
+                                        spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::Mill(_))
                                     )
                             )
                         })
                     });
                     let prior_discard = context.is_some_and(|(b, _)| {
                         b.instructions.iter().any(|op| {
-                            matches!(op, Instruction::Discard { .. })
-                                || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                                    .is_some_and(|spec| {
-                                        matches!(
-                                            spec.destination,
-                                            spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard
-                                            }
-                                        )
-                                    })
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(
+                                op,
+                            )
+                            .is_some_and(|spec| {
+                                matches!(
+                                    spec.destination,
+                                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                        semantics:
+                                            spellwake_engine::toolbox::GraveyardSemantics::Discard
+                                    }
+                                )
+                            })
                         })
                     });
                     let no_target = context.is_none_or(|(b, _)| b.target == BodyTarget::None);
@@ -9655,7 +9674,7 @@ fn lower_value_expr_inner(
                                 Instruction::MutateObject(spec)
                                     if matches!(
                                         spec.op,
-                                        spellwake_engine::toolbox::ObjectMutation::AddCounters { .. }
+                                        spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { .. })
                                     ) && (matches!(
                                         spec.source,
                                         spellwake_engine::toolbox::ObjectQuery::Source

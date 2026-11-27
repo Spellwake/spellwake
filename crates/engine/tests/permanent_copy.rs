@@ -27,15 +27,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use trajectories::*;
 
 fn copy_op(duration: ResolvedDuration, power_toughness: Option<PowerToughness>) -> Instruction {
-    Instruction::BecomeCopy {
-        receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-        donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-        duration,
-        exceptions: Box::new(spellwake_engine::program::CopyExceptions {
-            override_pt: power_toughness,
-            ..Default::default()
-        }),
-    }
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                spellwake_engine::program::EffectSubject::AbilitySource,
+            )),
+            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                spellwake_engine::program::MoveSubjectRef::TargetObject,
+            ),
+            duration,
+            spellwake_engine::program::CopyExceptions {
+                override_pt: power_toughness,
+                ..Default::default()
+            },
+        ),
+    ))
 }
 fn copier(
     cost: SourceCost,
@@ -49,7 +55,7 @@ fn copier(
             mana_cost: ManaCost::free(),
             source_cost: cost,
             body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![copy_op(duration, exception)],
             ),
         }],
@@ -97,11 +103,11 @@ fn snapshot_excludes_donor_animation_and_retains_receiver_effect_and_physical_st
     donor.color_indicator = Some(BTreeSet::from([Color::Green]));
     let game = world(v.clone(), vec![
         card(1, copier(SourceCost::Tap, no_duration(), None), true), card(2, donor.clone(), true),
-        spell(3, BodyTarget::SinglePermanent, vec![effect(vec![
+        spell(3, BodyTarget::SINGLE_PERMANENT, vec![effect(vec![
             type_part(TypeOperation::Keep, SubtypeOperation::Set(spellwake_engine::characteristics::InstructionSubtypeOperand::Literal(subtypes(&v, &["Vampire"])))),
             ResolvedPartSpec::SetPT(pt(9, 9)), ResolvedPartSpec::Color(ColorOperation::Set(BTreeSet::from([Color::Blue]))),
         ], no_duration())]),
-        spell(4, BodyTarget::SinglePermanent, vec![effect(vec![ResolvedPartSpec::ModifyPT(pt(1, 2))], no_duration())]),
+        spell(4, BodyTarget::SINGLE_PERMANENT, vec![effect(vec![ResolvedPartSpec::ModifyPT(pt(1, 2))], no_duration())]),
     ], vec![CardId(1), CardId(2)]);
     let (animated, _) = resolve(&game, 3, object(&game, 2));
     let (modified, _) = resolve(animated.state(), 4, object(&game, 1));
@@ -331,7 +337,7 @@ fn no_box_noncreature_copy_exception_is_latent_then_copiable_into_another_object
             card(3, copier(SourceCost::None, no_duration(), None), true),
             spell(
                 4,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![type_part(
                         TypeOperation::Add(BTreeSet::from([CardType::Creature])),
@@ -392,12 +398,12 @@ fn donor_type_word_changes_are_not_copied_but_receiver_text_effects_still_apply(
             card(2, donor.clone(), true),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![change("Elf", "Vampire")],
             ),
             spell(
                 4,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![change("Elf", "Goblin")],
             ),
         ],
@@ -426,7 +432,7 @@ fn donor_type_word_changes_are_not_copied_but_receiver_text_effects_still_apply(
 #[test]
 fn losing_creature_during_a_body_does_not_recheck_the_donor_target_restriction() {
     let mut source = copier(SourceCost::None, no_duration(), None);
-    source.activated[0].body.target = BodyTarget::SingleCreature;
+    source.activated[0].body.target = BodyTarget::SINGLE_CREATURE;
     source.activated[0].body.instructions.insert(
         0,
         effect(

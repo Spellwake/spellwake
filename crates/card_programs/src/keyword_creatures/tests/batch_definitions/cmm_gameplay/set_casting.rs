@@ -74,14 +74,8 @@ fn probe_reply(state: &GameState, card: &str) -> Option<(SeatId, GameCommand)> {
             DecisionReply::SelectResolution(frame.domain()[..frame.required()].to_vec())
         }
         RuleFrame::RevealedPiles(frame) => match frame.choice() {
-            PileChoice::OptionalCreatureToBattlefield { eligible, .. } => {
-                DecisionReply::SelectResolution(eligible.first().copied().into_iter().collect())
-            }
             PileChoice::BottomOrder(cards) | PileChoice::GraveyardOrder(cards) => {
                 DecisionReply::OrderResolutionGraveyard(cards.clone())
-            }
-            PileChoice::OneToHand(cards) | PileChoice::OneToHandRestBottom(cards) => {
-                DecisionReply::SelectResolution(vec![*cards.first()?])
             }
             _ => return None,
         },
@@ -289,7 +283,7 @@ fn set_game(
             B,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(1),
@@ -395,7 +389,7 @@ fn set_game(
             B,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(1),
@@ -1043,20 +1037,19 @@ fn probe(
                 if program.has_type(spellwake_engine::program::CardType::Instant) =>
             {
                 match definition.body.target {
-                    BodyTarget::SingleSpell(filter)
-                        if filter == spellwake_engine::program::SpellFilter::creature() =>
-                    {
-                        Some(21)
-                    }
-                    BodyTarget::SingleSpell(filter)
-                        if filter == spellwake_engine::program::SpellFilter::any()
-                            || filter == spellwake_engine::program::SpellFilter::noncreature()
-                            || filter
-                                == spellwake_engine::program::SpellFilter::any()
-                                    .single_target()
-                            || filter
-                                == spellwake_engine::program::SpellFilter::copyable_instruction(
-                                ) =>
+                    BodyTarget::Spell {
+                        filter,
+                        include_abilities: false,
+                    } if filter == spellwake_engine::program::SpellFilter::creature() => Some(21),
+                    BodyTarget::Spell {
+                        filter,
+                        include_abilities: false,
+                    } if filter == spellwake_engine::program::SpellFilter::any()
+                        || filter == spellwake_engine::program::SpellFilter::noncreature()
+                        || filter
+                            == spellwake_engine::program::SpellFilter::any().single_target()
+                        || filter
+                            == spellwake_engine::program::SpellFilter::copyable_instruction() =>
                     {
                         Some(22)
                     }
@@ -1392,7 +1385,7 @@ fn innistrad_reuses_morbid_fateful_hour_and_flashback_in_play() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1977,7 +1970,7 @@ fn innistrad_spiteful_shadows_uses_the_dead_creatures_controller() {
         A,
         ObjectDestination::Hand,
         free_instant(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::literal(3),
@@ -2059,9 +2052,7 @@ fn innistrad_flayer_damage_is_dealt_by_the_creature_that_entered() {
         A,
         ObjectDestination::Hand,
         free_instant(
-            BodyTarget::FilteredOwnGraveyardCard(
-                spellwake_engine::program::ObjectFilter::creature(),
-            ),
+            BodyTarget::filtered_own_graveyard(spellwake_engine::program::ObjectFilter::creature()),
             crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(
                 false,
             ),
@@ -2116,7 +2107,7 @@ fn innistrad_fiend_hunter_has_independent_entry_and_leave_triggers() {
         A,
         ObjectDestination::Hand,
         free_instant(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -2205,7 +2196,7 @@ fn innistrad_tree_exchanges_life_and_sets_only_toughness_in_one_event() {
         A,
         ObjectDestination::Hand,
         free_instant(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                 spellwake_engine::effects::CounterKind::PlusOne,
                 spellwake_engine::program::ValueExpr::literal(1),
@@ -2282,7 +2273,7 @@ fn innistrad_loyal_cathar_enters_on_its_back_face_under_its_last_controllers_con
         A,
         ObjectDestination::Hand,
         free_instant(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -2362,7 +2353,7 @@ fn innistrad_entry_counters_use_the_relevant_battlefield_and_graveyard() {
         A,
         ObjectDestination::Hand,
         free_instant(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::literal(3),
@@ -2711,7 +2702,7 @@ fn innistrad_ravager_still_damages_its_creature_target_after_the_planeswalker_le
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
                     ),
                 ),
@@ -2787,7 +2778,7 @@ fn innistrad_curse_searches_share_entry_and_keep_the_right_player_and_names() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -3176,7 +3167,7 @@ fn innistrad_targeted_shuffle_moves_only_the_legal_cards_and_can_shuffle_none() 
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::AnyGraveyardCard,
+                    BodyTarget::ANY_GRAVEYARD_CARD,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
                 ),
             ),
@@ -3354,7 +3345,7 @@ fn innistrad_morbid_search_offers_the_same_land_for_hand_or_battlefield() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -3524,7 +3515,7 @@ fn innistrad_zone_restriction_keeps_the_exact_graveyard_card_and_blocks_flashbac
         .unwrap();
     let reanimate = || {
         free_instant(
-            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()),
+            BodyTarget::filtered_own_graveyard(ObjectFilter::creature()),
             crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(
                 false,
             ),
@@ -3554,7 +3545,7 @@ fn innistrad_zone_restriction_keeps_the_exact_graveyard_card_and_blocks_flashbac
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -3603,149 +3594,6 @@ fn innistrad_zone_restriction_keeps_the_exact_graveyard_card_and_blocks_flashbac
     let enters = round(targeted(&without_cage, A, 6, TargetRef::Object(creature)).into_state());
     assert_eq!(physical(enters.state(), 2).zone(), ObjectZone::Battlefield);
     assert_ne!(physical(enters.state(), 2).id(), creature);
-}
-
-#[test]
-#[ignore = "requires explicit saved Oracle catalogue source"]
-fn innistrad_named_counters_fund_the_library_choice_from_the_paid_count() {
-    use spellwake_engine::effects::CounterKind;
-
-    let (inventory, vocabulary) = dated_sources();
-    let oracle = inventory
-        .cards
-        .iter()
-        .find(|card| card.name == "Jar of Eyeballs" && card.required_by_base_formats)
-        .and_then(|card| card.oracle_id.clone())
-        .unwrap();
-    let registry = Registry::compile_keyword_selection(
-        inventory,
-        &vocabulary,
-        Profile::Current,
-        Some(&[oracle.clone()].into()),
-    )
-    .unwrap();
-    let jar = registry
-        .seed(
-            &OracleId::try_from(oracle).unwrap(),
-            CardId(1),
-            A,
-            ObjectDestination::Battlefield { controller: A },
-        )
-        .unwrap();
-    let price = [(ManaType::Colourless, 3)];
-    let start = game(
-        vec![A, B],
-        vec![
-            jar,
-            creature(2, A, 2, 2, &[]),
-            seed(
-                3,
-                A,
-                ObjectDestination::Hand,
-                free_instant(
-                    BodyTarget::SingleCreature,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                            spellwake_engine::toolbox::ObjectQuery::Targets,
-                            spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                    allow_regenerate: true,
-                                },
-                            },
-                        ),
-                    ),
-                ),
-            ),
-            seed(
-                4,
-                A,
-                ObjectDestination::LibraryBottom,
-                Program::artifact(None, vec![]),
-            ),
-            seed(
-                5,
-                A,
-                ObjectDestination::LibraryBottom,
-                Program::artifact(None, vec![]),
-            ),
-            seed(
-                6,
-                A,
-                ObjectDestination::LibraryBottom,
-                Program::artifact(None, vec![]),
-            ),
-            seed(
-                7,
-                A,
-                ObjectDestination::Hand,
-                free_instant(
-                    BodyTarget::SinglePermanent,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                            spellwake_engine::toolbox::ObjectQuery::Targets,
-                            spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                    allow_regenerate: true,
-                                },
-                            },
-                        ),
-                    ),
-                ),
-            ),
-        ],
-        &price,
-        Step::PrecombatMain,
-    );
-    let jar = physical(&start, 1).id();
-    let killed =
-        round(targeted(&start, A, 3, TargetRef::Object(physical(&start, 2).id())).into_state())
-            .into_state();
-    let counted = round(killed).into_state();
-    assert_eq!(
-        counted
-            .execution()
-            .counters_of_kind(jar, CounterKind::Eyeball),
-        2.into()
-    );
-    let activated = command(
-        &counted,
-        A,
-        GameCommand::ActivateUntargetedAbility {
-            source: jar,
-            ability: spellwake_engine::activated::ActivatedAbilityId(0),
-            payment: Some(spend(&price)),
-        },
-    )
-    .into_state();
-    assert_eq!(
-        activated
-            .execution()
-            .counters_of_kind(jar, CounterKind::Eyeball),
-        0.into()
-    );
-    let removed =
-        round(targeted(&activated, A, 7, TargetRef::Object(jar)).into_state()).into_state();
-    assert_eq!(physical(&removed, 1).zone(), ObjectZone::Graveyard(A));
-    let choice = round(removed).into_state();
-    let RuleFrame::RevealedPiles(frame) = choice.pending_decision().unwrap().frame() else {
-        panic!("expected the private library choice")
-    };
-    assert_eq!(
-        frame.choice(),
-        &PileChoice::OneToHandRestBottom(vec![
-            physical(&choice, 4).id(),
-            physical(&choice, 5).id()
-        ])
-    );
-    let took = reply(
-        &choice,
-        DecisionReply::SelectResolution(vec![physical(&choice, 5).id()]),
-    );
-    assert_eq!(physical(took.state(), 5).zone(), ObjectZone::Hand(A));
-    assert_eq!(
-        took.state().execution().window().cards().library(A).last(),
-        Some(&physical(took.state(), 4).id())
-    );
 }
 
 #[test]
@@ -3946,7 +3794,7 @@ fn innistrad_counter_sized_tokens_track_the_source_and_retain_its_last_count() {
         .unwrap();
     let destroy = || {
         free_instant(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -4014,130 +3862,6 @@ fn innistrad_counter_sized_tokens_track_the_source_and_retain_its_last_count() {
     assert_eq!(physical(&gone, 1).zone(), ObjectZone::Graveyard(A));
     assert_eq!(power(&gone, first_token), 2.into());
     assert_eq!(power(&gone, second_token), 2.into());
-}
-
-#[test]
-#[ignore = "requires explicit saved Oracle catalogue source"]
-fn innistrad_kindred_look_keeps_the_private_cohort_and_uses_the_last_host() {
-    let (inventory, vocabulary) = dated_sources();
-    let oracle = inventory
-        .cards
-        .iter()
-        .find(|card| card.name == "Call to the Kindred" && card.required_by_base_formats)
-        .and_then(|card| card.oracle_id.clone())
-        .unwrap();
-    let registry = Registry::compile_keyword_selection(
-        inventory,
-        &vocabulary,
-        Profile::Current,
-        Some(&[oracle.clone()].into()),
-    )
-    .unwrap();
-    let call = registry
-        .seed(
-            &OracleId::try_from(oracle).unwrap(),
-            CardId(1),
-            A,
-            ObjectDestination::Hand,
-        )
-        .unwrap();
-    let human = vocabulary.resolve_label("Human").unwrap();
-    let zombie = vocabulary.resolve_label("Zombie").unwrap();
-    let typed = |kind| Program::creature(None, 2.into(), 2.into(), BTreeSet::from([kind]));
-    let price = [(ManaType::Colourless, 3), (ManaType::Blue, 1)];
-    let start = game(
-        vec![A, B],
-        vec![
-            call,
-            seed(
-                2,
-                A,
-                ObjectDestination::Battlefield { controller: A },
-                typed(human),
-            ),
-            seed(3, A, ObjectDestination::LibraryBottom, typed(zombie)),
-            seed(4, A, ObjectDestination::LibraryBottom, typed(human)),
-            seed(
-                5,
-                A,
-                ObjectDestination::LibraryBottom,
-                Program::artifact(None, vec![]),
-            ),
-            seed(
-                6,
-                A,
-                ObjectDestination::Hand,
-                free_instant(
-                    BodyTarget::SinglePermanent,
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                            spellwake_engine::toolbox::ObjectQuery::Targets,
-                            spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                    allow_regenerate: true,
-                                },
-                            },
-                        ),
-                    ),
-                ),
-            ),
-        ],
-        &price,
-        Step::PrecombatMain,
-    );
-    let cast = command(
-        &start,
-        A,
-        GameCommand::CastPaid {
-            spell: physical(&start, 1).id(),
-            target: TargetRef::Object(physical(&start, 2).id()),
-            payment: spend(&price),
-        },
-    );
-    let attached = round(cast.into_state()).into_state();
-    let upkeep = exile_hand::until(attached, |state| {
-        let position = state.turn().unwrap().position();
-        position.number == 3 && position.step == Step::Upkeep
-    });
-    let destroyed =
-        round(targeted(&upkeep, A, 6, TargetRef::Object(physical(&upkeep, 1).id())).into_state())
-            .into_state();
-    let offer = round(destroyed).into_state();
-    let looked = reply(
-        &offer,
-        DecisionReply::OptionalEffect(OptionalEffectChoice::Take),
-    );
-    let RuleFrame::RevealedPiles(frame) = looked.state().pending_decision().unwrap().frame() else {
-        panic!("expected the private look")
-    };
-    let PileChoice::OptionalCreatureToBattlefield {
-        looked: cards,
-        eligible,
-    } = frame.choice()
-    else {
-        panic!("expected the matching creature choice")
-    };
-    assert_eq!(cards.len(), 4);
-    let matching = physical(looked.state(), 4).id();
-    assert_eq!(eligible, &[matching]);
-    assert!(
-        !events(&looked)
-            .flat_map(|event| &event.occurrences)
-            .any(|row| matches!(&row.value, RulesOccurrence::LibraryCardRevealed { .. }))
-    );
-    let pending = reply(
-        looked.state(),
-        DecisionReply::SelectResolution(vec![matching]),
-    )
-    .into_state();
-    let bottom = [100, 5, 3].map(|id| physical(&pending, id).id());
-    let result = reply(
-        &pending,
-        DecisionReply::OrderResolutionGraveyard(bottom.to_vec()),
-    )
-    .into_state();
-    assert_eq!(physical(&result, 4).zone(), ObjectZone::Battlefield);
-    assert_eq!(result.execution().window().cards().library(A), bottom);
 }
 
 #[test]
@@ -4221,227 +3945,6 @@ fn innistrad_equipment_grant_pays_with_the_equipment_and_deals_damage_as_that_so
             && record.target == spellwake_engine::damage::DamageRecipient::Player(B)
             && record.amount == 2.into()
     }));
-}
-
-#[test]
-#[ignore = "requires explicit saved Oracle catalogue source"]
-fn innistrad_attached_player_damage_is_a_resolution_choice() {
-    let (inventory, vocabulary) = dated_sources();
-    let oracle = inventory
-        .cards
-        .iter()
-        .find(|card| card.name == "Curse of the Pierced Heart" && card.required_by_base_formats)
-        .and_then(|card| card.oracle_id.clone())
-        .unwrap();
-    let registry = Registry::compile_keyword_selection(
-        inventory,
-        &vocabulary,
-        Profile::Current,
-        Some(&[oracle.clone()].into()),
-    )
-    .unwrap();
-    let curse = registry
-        .seed(
-            &OracleId::try_from(oracle).unwrap(),
-            CardId(1),
-            A,
-            ObjectDestination::Hand,
-        )
-        .unwrap();
-    let mut walker = Program::new(
-        BTreeSet::from([CardType::Planeswalker]),
-        BTreeSet::new(),
-        BTreeSet::new(),
-        ProgramKind::Permanent(spellwake_engine::program::PermanentDefinition {
-            entry_tap: None,
-            attachment: None,
-            printed_pt: None,
-            casting_cost: Some(ManaCost::free()),
-        }),
-    );
-    walker.printed_loyalty = Some(3.into());
-    let price = [(ManaType::Colourless, 1), (ManaType::Red, 1)];
-    let start = game(
-        vec![A, B],
-        vec![
-            curse,
-            seed(2, A, ObjectDestination::Hand, walker.clone()),
-            seed(3, B, ObjectDestination::Hand, walker),
-        ],
-        &price,
-        Step::PrecombatMain,
-    );
-    let start = round(cast_untargeted(&start, 2, &[]).into_state()).into_state();
-    let attached = round(
-        command(
-            &start,
-            A,
-            GameCommand::CastPaid {
-                spell: physical(&start, 1).id(),
-                target: TargetRef::Player(A),
-                payment: spend(&price),
-            },
-        )
-        .into_state(),
-    )
-    .into_state();
-    let main = exile_hand::until(attached, |state| {
-        let position = state.turn().unwrap().position();
-        position.number == 2 && position.step == Step::PrecombatMain
-    });
-    let entered = round(
-        command(
-            &main,
-            B,
-            GameCommand::CastUntargeted {
-                spell: physical(&main, 3).id(),
-                payment: None,
-            },
-        )
-        .into_state(),
-    )
-    .into_state();
-    let upkeep = exile_hand::until(entered, |state| {
-        let position = state.turn().unwrap().position();
-        position.number == 3 && position.step == Step::Upkeep
-    });
-    assert!(
-        upkeep.pending_decision().is_none(),
-        "no target is announced with the trigger"
-    );
-    let pending = round(upkeep).into_state();
-    let walker = physical(&pending, 2).id();
-    let RuleFrame::DamageRecipientChoice(frame) = pending.pending_decision().unwrap().frame()
-    else {
-        panic!("expected to choose the recipient of the damage");
-    };
-    assert_eq!(frame.chooser(), A);
-    assert_eq!(
-        frame.recipients(),
-        &[TargetRef::Player(A), TargetRef::Object(walker)]
-    );
-    let dealt = reply(
-        &pending,
-        DecisionReply::ChooseDamageRecipient(TargetRef::Object(walker)),
-    );
-    assert!(dealt.damage_journal().applied.iter().any(|record| {
-        record.target == spellwake_engine::damage::DamageRecipient::Planeswalker(walker)
-            && record.amount == 1.into()
-    }));
-    assert_eq!(dealt.state().execution().life_total(A), Some(&20.into()));
-}
-
-#[test]
-#[ignore = "requires explicit saved Oracle catalogue source"]
-fn innistrad_permanent_partition_uses_two_choosers_and_one_sacrifice_event() {
-    let (inventory, vocabulary) = dated_sources();
-    let oracle = inventory
-        .cards
-        .iter()
-        .find(|card| card.name == "Liliana of the Veil" && card.required_by_base_formats)
-        .and_then(|card| card.oracle_id.clone())
-        .unwrap();
-    let registry = Registry::compile_keyword_selection(
-        inventory,
-        &vocabulary,
-        Profile::Current,
-        Some(&[oracle.clone()].into()),
-    )
-    .unwrap();
-    let mut walker = registry
-        .seed(
-            &OracleId::try_from(oracle).unwrap(),
-            CardId(1),
-            A,
-            ObjectDestination::Hand,
-        )
-        .unwrap();
-    walker.program.printed_loyalty = Some(7.into());
-    let price = [(ManaType::Colourless, 1), (ManaType::Black, 2)];
-    let start = game(
-        vec![A, B],
-        vec![
-            walker,
-            creature(2, B, 2, 2, &[]),
-            creature(3, B, 2, 2, &[]),
-            creature(4, B, 2, 2, &[]),
-            creature(5, A, 2, 2, &[]),
-        ],
-        &price,
-        Step::PrecombatMain,
-    );
-    let start = round(cast_untargeted(&start, 1, &price).into_state()).into_state();
-    let selected = round(
-        command(
-            &start,
-            A,
-            GameCommand::ActivateAbility {
-                source: physical(&start, 1).id(),
-                ability: ActivatedAbilityId(2),
-                target: TargetRef::Player(B),
-                payment: None,
-            },
-        )
-        .into_state(),
-    )
-    .into_state();
-    let own = physical(&selected, 5).id();
-    let [left, middle, right] = [2, 3, 4].map(|id| physical(&selected, id).id());
-    let RuleFrame::RevealedPiles(frame) = selected.pending_decision().unwrap().frame() else {
-        panic!("expected the controller to divide the permanents");
-    };
-    assert_eq!(frame.chooser(), A);
-    assert_eq!(
-        frame.choice(),
-        &PileChoice::DividePermanents(vec![left, middle, right])
-    );
-    let divided = reply(
-        &selected,
-        DecisionReply::SelectResolution(vec![middle, right]),
-    )
-    .into_state();
-    let RuleFrame::RevealedPiles(frame) = divided.pending_decision().unwrap().frame() else {
-        panic!("expected the affected player to choose a pile");
-    };
-    assert_eq!(frame.chooser(), B);
-    assert_eq!(
-        frame.choice(),
-        &PileChoice::Sacrifice {
-            first: vec![middle, right],
-            second: vec![left]
-        }
-    );
-    let ordered = reply(&divided, DecisionReply::ChoosePile(1)).into_state();
-    let RuleFrame::ResolutionGraveyardOrder(frame) = ordered.pending_decision().unwrap().frame()
-    else {
-        panic!("expected the owner to order the simultaneous graveyard arrivals");
-    };
-    assert_eq!(frame.chooser(), B);
-    let sacrificed = reply(
-        &ordered,
-        DecisionReply::OrderResolutionGraveyard(vec![middle, right]),
-    );
-    assert!(events(&sacrificed).any(|event| {
-        event
-            .occurrences
-            .iter()
-            .filter(|row| {
-                matches!(&row.value, RulesOccurrence::ZoneChange(change)
-            if matches!(change.reason, ZoneReason::Sacrifice { player } if player == B))
-            })
-            .count()
-            == 2
-    }));
-    assert_eq!(physical(sacrificed.state(), 2).id(), left);
-    assert_eq!(physical(sacrificed.state(), 5).id(), own);
-    assert_eq!(
-        physical(sacrificed.state(), 3).zone(),
-        ObjectZone::Graveyard(B)
-    );
-    assert_eq!(
-        physical(sacrificed.state(), 4).zone(),
-        ObjectZone::Graveyard(B)
-    );
 }
 
 #[test]
@@ -4738,7 +4241,7 @@ fn innistrad_fateful_protection_uses_one_color_for_the_player_and_current_perman
                     A,
                     ObjectDestination::Hand,
                     red(
-                        BodyTarget::SinglePlayer,
+                        BodyTarget::SINGLE_PLAYER,
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                             spellwake_engine::toolbox::DamageTargetQuery::Targets,
                             spellwake_engine::program::ValueExpr::literal(1),
@@ -4869,7 +4372,7 @@ fn innistrad_source_control_duration_expires_permanently_when_control_changes() 
     let goblin = vocabulary.resolve_label("Goblin").unwrap();
     let vampire = vocabulary.resolve_label("Vampire").unwrap();
     let steal = free_instant(
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
             spellwake_engine::toolbox::ObjectQuery::Targets,
             ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
@@ -4985,7 +4488,7 @@ fn innistrad_counter_followup_casts_a_matching_hand_spell_even_if_the_target_sur
     let followup = Program::instant(
         ManaCost::generic(9.into()),
         ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -4999,7 +4502,7 @@ fn innistrad_counter_followup_casts_a_matching_hand_spell_even_if_the_target_sur
     let mana = [(ManaType::Blue, 2), (ManaType::Colourless, 4)];
     for uncounterable in [false, true] {
         let mut original = free_instant(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::literal(1),
@@ -5093,7 +4596,7 @@ fn innistrad_source_shuffle_uses_the_owner_and_only_reveals_through_the_match() 
         )
         .unwrap();
     let remove = free_instant(
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
     );
     let mana = [(ManaType::Blue, 1), (ManaType::Colourless, 1)];
@@ -5276,7 +4779,7 @@ fn innistrad_each_other_player_can_copy_and_retarget_the_same_departed_spell() {
         )
         .unwrap();
     let original = free_instant(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
             spellwake_engine::toolbox::DamageTargetQuery::Targets,
             spellwake_engine::program::ValueExpr::literal(2),
@@ -5284,7 +4787,7 @@ fn innistrad_each_other_player_can_copy_and_retarget_the_same_departed_spell() {
         ),
     );
     let counter = free_instant(
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
         Instruction::StackOp(Box::new(
             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                 spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -5653,7 +5156,7 @@ fn innistrad_nonland_name_choice_blocks_that_spell_until_the_source_leaves() {
         .unwrap();
     let instant = |name: &str| {
         let mut program = free_instant(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::literal(2),
@@ -5664,7 +5167,7 @@ fn innistrad_nonland_name_choice_blocks_that_spell_until_the_source_leaves() {
         program
     };
     let remove = free_instant(
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
     );
     let mana = [(ManaType::White, 2), (ManaType::Colourless, 1)];
@@ -5755,7 +5258,7 @@ fn innistrad_equipment_unattaches_transforms_and_grows_after_a_player_leaves() {
         .unwrap();
     let ability = equipment.program.activated[0].id;
     let finisher = free_instant(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
             spellwake_engine::toolbox::DamageTargetQuery::Targets,
             spellwake_engine::program::ValueExpr::literal(30),

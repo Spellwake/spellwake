@@ -129,7 +129,7 @@ fn cmm_heroic_intervention_protects_only_current_controlled_permanents_against_o
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

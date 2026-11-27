@@ -221,7 +221,7 @@ fn nonbasic(face: &CatalogFace, types: &str, subtype: &str) -> Option<Program> {
                 id: ActivatedAbilityId(land.activated.len().try_into().ok()?),
                 mana_cost: fixed_cost(cost)?,
                 source_cost: spellwake_engine::activated::SourceCost::Tap,
-                body: ExecutableBody::new(BodyTarget::SingleCreature, vec![super::static_grants::unblockable_effect()]),
+                body: ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![super::static_grants::unblockable_effect()]),
             });
         } else if let Some(effect) = line.strip_prefix("When this land enters, ") {
             land.triggered.push(TriggeredAbility {
@@ -231,14 +231,27 @@ fn nonbasic(face: &CatalogFace, types: &str, subtype: &str) -> Option<Program> {
                 body: ExecutableBody::new(BodyTarget::None, vec![land_instruction(effect)?]),
             });
         } else if line == "{T}: Put a +1/+1 counter on target colorless creature that entered this turn." || line == "{T}: Choose target commander that entered this turn. Put a +1/+1 counter on it if it's a creature and a loyalty counter on it if it's a planeswalker." {
-            use spellwake_engine::program::{ObjectColorFilter, ObjectFilter, PermanentTargetAction};
-            let (filter, op) = if line.starts_with("{T}: Choose") {
-                (ObjectFilter::any().commander().entered_this_turn(), Instruction::AffectPermanentTargets { minimum: 1, maximum: 1, action: PermanentTargetAction::PutCountersByCurrentType })
+            use spellwake_engine::program::{ObjectColorFilter, ObjectFilter};
+            let (filter, ops) = if line.starts_with("{T}: Choose") {
+                (
+                    ObjectFilter::any().commander().entered_this_turn(),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_targets_by_current_type().to_vec(),
+                )
             } else {
-                (ObjectFilter::creature().with_color(ObjectColorFilter::Colorless).entered_this_turn(), crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(spellwake_engine::effects::CounterKind::PlusOne, spellwake_engine::program::ValueExpr::literal(1)))
+                (
+                    ObjectFilter::creature().with_color(ObjectColorFilter::Colorless).entered_this_turn(),
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                        spellwake_engine::effects::CounterKind::PlusOne,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    )],
+                )
             };
-            land.activated.push(ActivatedAbility {id:ActivatedAbilityId(land.activated.len().try_into().ok()?),mana_cost:ManaCost::free(),
-                source_cost:spellwake_engine::activated::SourceCost::Tap,body:ExecutableBody::new(BodyTarget::FilteredPermanent(filter),vec![op])});
+            land.activated.push(ActivatedAbility {
+                id: ActivatedAbilityId(land.activated.len().try_into().ok()?),
+                mana_cost: ManaCost::free(),
+                source_cost: spellwake_engine::activated::SourceCost::Tap,
+                body: ExecutableBody::new(BodyTarget::filtered_permanent(filter), ops),
+            });
         } else if let Some(price) = line.strip_suffix(", {T}, Pay life equal to the number of colors in your commanders' color identity: Draw a card.") {
             land.activated.push(ActivatedAbility {
                 id: ActivatedAbilityId(land.activated.len().try_into().ok()?),

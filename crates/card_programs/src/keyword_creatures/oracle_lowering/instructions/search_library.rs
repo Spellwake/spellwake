@@ -22,13 +22,25 @@ pub(super) fn lower_search_library_group(
                 let draw_op =
                     super::super::toolbox_emit::draw_resolving_player(rp, ValueExpr::literal(1));
                 if n == 1 {
-                    vec![Instruction::OptionalEffect { chooser: rp }, draw_op]
+                    vec![
+                        Instruction::OptionalSequence {
+                            chooser: rp,
+                            instructions: 1,
+                        },
+                        draw_op,
+                    ]
                 } else {
                     vec![Instruction::RepeatLoop {
                         count: ValueExpr::literal(i64::from(n)),
                         body: Box::new(ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::OptionalEffect { chooser: rp }, draw_op],
+                            vec![
+                                Instruction::OptionalSequence {
+                                    chooser: rp,
+                                    instructions: 1,
+                                },
+                                draw_op,
+                            ],
                         )),
                     }]
                 }
@@ -69,14 +81,14 @@ pub(super) fn lower_search_library_group(
                     Ok(())
                 }
                 PlayerRefAst::TargetPlayer => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     builder
                         .instructions
                         .push(super::super::toolbox_emit::draw_target_player(amount));
                     Ok(())
                 }
                 PlayerRefAst::TargetOpponent => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     builder
                         .instructions
                         .push(super::super::toolbox_emit::draw_target_player(amount));
@@ -101,10 +113,7 @@ pub(super) fn lower_search_library_group(
                     Ok(())
                 }
                 PlayerRefAst::ThatPlayer => {
-                    if matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) {
+                    if matches!(builder.target, BodyTarget::Player { .. }) {
                         builder
                             .instructions
                             .push(super::super::toolbox_emit::draw_target_player(amount));
@@ -385,13 +394,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -427,7 +434,9 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(true),
+                            ),
                         ),
                     )));
                 Ok(())
@@ -466,7 +475,9 @@ pub(super) fn lower_search_library_group(
                     .instructions
                     .push(super::super::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::AttachedHost,
-                        spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Set(true),
+                        ),
                     ));
                 Ok(())
             }
@@ -478,13 +489,11 @@ pub(super) fn lower_search_library_group(
                     filter, builder, in_trigger, vocabulary,
                 )?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: *n,
-                        maximum: *n,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    *n,
+                    *n,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -495,13 +504,11 @@ pub(super) fn lower_search_library_group(
                     filter, builder, in_trigger, vocabulary,
                 )?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: *n,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    *n,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetOneOf {
@@ -517,13 +524,11 @@ pub(super) fn lower_search_library_group(
                 } else {
                     1
                 };
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum,
-                        maximum: 1,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    minimum,
+                    1,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -535,13 +540,11 @@ pub(super) fn lower_search_library_group(
                 )?;
                 builder.bind_target(bt)?;
                 builder.x_target_count = true;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::Group(f)
@@ -579,7 +582,9 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(true),
+                            ),
                         ),
                     )));
                 Ok(())
@@ -615,36 +620,25 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(true),
+                            ),
                         ),
                     )));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_)
                 if builder.target != BodyTarget::None
-                    && !matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    && !matches!(builder.target, BodyTarget::Player { .. }) =>
             {
-                let (minimum, maximum) = builder
-                    .instructions
-                    .iter()
-                    .rev()
-                    .find_map(|op| match op {
-                        Instruction::AffectPermanentTargets {
-                            minimum, maximum, ..
-                        } => Some((*minimum, *maximum)),
-                        _ => None,
-                    })
-                    .unwrap_or((1, 1));
+                if builder.permanent_target_bounds.is_none()
+                    && is_permanent_body_target(builder.target)
+                {
+                    builder.permanent_target_bounds = Some((1, 1));
+                }
                 builder
                     .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum,
-                        maximum,
-                        action: PermanentTargetAction::Tap,
-                    });
+                    .push(super::super::toolbox_emit::set_targets_tapped(true));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_) if builder.last_group_filter.is_some() => {
@@ -704,13 +698,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::All(f) | SubjectRefAst::Each(f) if f.zone.is_none() => {
@@ -798,7 +790,9 @@ pub(super) fn lower_search_library_group(
                             category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                             hidden: false,
                         },
-                        spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Set(false),
+                        ),
                     ),
                 )));
             Ok(())
@@ -826,13 +820,11 @@ pub(super) fn lower_search_library_group(
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
                 builder.x_target_count = true;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Untap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::set_targets_tapped(false),
+                );
                 Ok(())
             }
             SubjectRefAst::Group(f)
@@ -870,7 +862,9 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(false),
+                            ),
                         ),
                     )));
                 Ok(())
@@ -906,36 +900,25 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(false),
+                            ),
                         ),
                     )));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_)
                 if builder.target != BodyTarget::None
-                    && !matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    && !matches!(builder.target, BodyTarget::Player { .. }) =>
             {
-                let (minimum, maximum) = builder
-                    .instructions
-                    .iter()
-                    .rev()
-                    .find_map(|op| match op {
-                        Instruction::AffectPermanentTargets {
-                            minimum, maximum, ..
-                        } => Some((*minimum, *maximum)),
-                        _ => None,
-                    })
-                    .unwrap_or((1, 1));
+                if builder.permanent_target_bounds.is_none()
+                    && is_permanent_body_target(builder.target)
+                {
+                    builder.permanent_target_bounds = Some((1, 1));
+                }
                 builder
                     .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum,
-                        maximum,
-                        action: PermanentTargetAction::Untap,
-                    });
+                    .push(super::super::toolbox_emit::set_targets_tapped(false));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_) if builder.last_group_filter.is_some() => {
@@ -995,13 +978,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() && *n > 0 => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: *n,
-                        maximum: *n,
-                        action: PermanentTargetAction::Untap,
-                    });
+                builder.push_bounded_target_op(
+                    *n,
+                    *n,
+                    super::super::toolbox_emit::set_targets_tapped(false),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -1010,13 +991,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() && *n > 0 => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: *n,
-                        action: PermanentTargetAction::Untap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    *n,
+                    super::super::toolbox_emit::set_targets_tapped(false),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetOneOf {
@@ -1032,13 +1011,11 @@ pub(super) fn lower_search_library_group(
                 } else {
                     1
                 };
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum,
-                        maximum: 1,
-                        action: PermanentTargetAction::Untap,
-                    });
+                builder.push_bounded_target_op(
+                    minimum,
+                    1,
+                    super::super::toolbox_emit::set_targets_tapped(false),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -1047,13 +1024,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Untap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::set_targets_tapped(false),
+                );
                 Ok(())
             }
             SubjectRefAst::Anaphora(raw)
@@ -1080,7 +1055,9 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(false),
+                            ),
                         ),
                     )));
                 Ok(())
@@ -1160,7 +1137,9 @@ pub(super) fn lower_search_library_group(
                     .instructions
                     .push(super::super::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::Source,
-                        spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Toggle,
+                        ),
                     ));
                 Ok(())
             }
@@ -1169,7 +1148,9 @@ pub(super) fn lower_search_library_group(
                     .instructions
                     .push(super::super::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::AttachedHost,
-                        spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Toggle,
+                        ),
                     ));
                 Ok(())
             }
@@ -1179,13 +1160,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 1,
-                        maximum: 1,
-                        action: PermanentTargetAction::ToggleTap,
-                    });
+                builder.push_bounded_target_op(
+                    1,
+                    1,
+                    super::super::toolbox_emit::toggle_targets_tapped(),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -1194,13 +1173,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() && *n >= 2 => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: *n,
-                        maximum: *n,
-                        action: PermanentTargetAction::ToggleTap,
-                    });
+                builder.push_bounded_target_op(
+                    *n,
+                    *n,
+                    super::super::toolbox_emit::toggle_targets_tapped(),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -1209,13 +1186,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() && *n > 0 => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: *n,
-                        action: PermanentTargetAction::ToggleTap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    *n,
+                    super::super::toolbox_emit::toggle_targets_tapped(),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -1224,13 +1199,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::ToggleTap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::toggle_targets_tapped(),
+                );
                 Ok(())
             }
             SubjectRefAst::All(f) | SubjectRefAst::Each(f) if f.zone.is_none() => {
@@ -1243,22 +1216,23 @@ pub(super) fn lower_search_library_group(
                             spellwake_engine::toolbox::QueryZone::Battlefield,
                             obj,
                         ),
-                        spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Toggle,
+                        ),
                     ));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_)
                 if builder.target != BodyTarget::None
-                    && !matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    && !matches!(builder.target, BodyTarget::Player { .. }) =>
             {
                 builder
                     .instructions
                     .push(super::super::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
-                        spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Toggle,
+                        ),
                     ));
                 Ok(())
             }
@@ -1267,7 +1241,9 @@ pub(super) fn lower_search_library_group(
                     .instructions
                     .push(super::super::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
-                        spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Toggle,
+                        ),
                     ));
                 Ok(())
             }
@@ -1281,20 +1257,12 @@ pub(super) fn lower_search_library_group(
                 return Ok(());
             }
             if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) {
-                if let Some(Instruction::AffectPermanentTargets {
-                    action: action @ PermanentTargetAction::Tap,
-                    ..
-                }) = builder.instructions.last_mut()
-                {
-                    *action = PermanentTargetAction::TapAndSkipNextUntap;
-                    return Ok(());
-                }
                 if matches!(
                     builder.target,
-                    BodyTarget::SingleCreature
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::FilteredPermanent(_)
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    }
                 ) {
                     builder
                         .instructions
@@ -1322,13 +1290,11 @@ pub(super) fn lower_search_library_group(
                         _ => return Err("oracle:unsupported-skip-untap"),
                     };
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: min,
-                            maximum: max,
-                            action: PermanentTargetAction::SkipNextUntap,
-                        });
+                    builder.push_bounded_target_op(
+                        min,
+                        max,
+                        super::super::toolbox_emit::skip_next_untap_targets(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetOneOf {
@@ -1344,13 +1310,11 @@ pub(super) fn lower_search_library_group(
                     } else {
                         1
                     };
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: min,
-                            maximum: 1,
-                            action: PermanentTargetAction::SkipNextUntap,
-                        });
+                    builder.push_bounded_target_op(
+                        min,
+                        1,
+                        super::super::toolbox_emit::skip_next_untap_targets(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -1400,15 +1364,12 @@ pub(super) fn lower_search_library_group(
                         CostAtomAst::PayMana(raw) => {
                             let idx = builder.instructions.len();
                             if let Some(cost) = parse_fixed_mana_cost(raw) {
-                                builder
-                                    .instructions
-                                    .push(Instruction::OfferDynamicManaPayment {
-                                        payer: ResolvingPlayer::TriggerSubjectController,
-                                        fixed: cost,
-                                        extra_generic: ValueExpr::Literal(0.into()),
-                                        paid_destination: idx + 2,
-                                        declined_destination: idx + 1,
-                                    });
+                                builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                        ResolvingPlayer::TriggerSubjectController,
+                                        cost, ValueExpr::Literal(0.into()), idx + 2, idx + 1,
+                                    ),
+                                )));
                             } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
                                 && x_cnt > 0
                             {
@@ -1419,15 +1380,12 @@ pub(super) fn lower_search_library_group(
                                     None => ValueExpr::chosen_x(),
                                 };
                                 let extra_generic = scale_value_expr(x_val, i64::from(x_cnt));
-                                builder
-                                    .instructions
-                                    .push(Instruction::OfferDynamicManaPayment {
-                                        payer: ResolvingPlayer::TriggerSubjectController,
-                                        fixed,
-                                        extra_generic,
-                                        paid_destination: idx + 2,
-                                        declined_destination: idx + 1,
-                                    });
+                                builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                        ResolvingPlayer::TriggerSubjectController,
+                                        fixed, extra_generic, idx + 2, idx + 1,
+                                    ),
+                                )));
                             } else {
                                 return Err("oracle:counter-unless-x");
                             }
@@ -1441,15 +1399,12 @@ pub(super) fn lower_search_library_group(
                                 cost_atom, builder, in_trigger, vocabulary, bound_x,
                             )?;
                             let idx = builder.instructions.len();
-                            builder
-                                .instructions
-                                .push(Instruction::OfferDynamicManaPayment {
-                                    payer: ResolvingPlayer::TriggerSubjectController,
-                                    fixed,
-                                    extra_generic,
-                                    paid_destination: idx + 2,
-                                    declined_destination: idx + 1,
-                                });
+                            builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                    ResolvingPlayer::TriggerSubjectController,
+                                    fixed, extra_generic, idx + 2, idx + 1,
+                                ),
+                            )));
                             builder.instructions.push(Instruction::StackOp(Box::new(
                                 spellwake_engine::toolbox::StackOpSpec::counter_triggering(),
                             )));
@@ -1465,9 +1420,7 @@ pub(super) fn lower_search_library_group(
             }
             let reuse_bound_spell = matches!(
                 builder.target,
-                BodyTarget::SingleSpell(_)
-                    | BodyTarget::SingleStackObject(_)
-                    | BodyTarget::SingleStackEntry
+                BodyTarget::Spell { .. } | BodyTarget::StackEntry(StackTargetKind::AnyEntry)
             ) && matches!(
                 target.as_ref(),
                 SubjectRefAst::Anaphora(raw) if matches!(
@@ -1490,15 +1443,12 @@ pub(super) fn lower_search_library_group(
                     CostAtomAst::PayMana(raw) => {
                         let idx = builder.instructions.len();
                         if let Some(cost) = parse_fixed_mana_cost(raw) {
-                            builder
-                                .instructions
-                                .push(Instruction::OfferDynamicManaPayment {
-                                    payer: ResolvingPlayer::TargetSpellController,
-                                    fixed: cost,
-                                    extra_generic: ValueExpr::Literal(0.into()),
-                                    paid_destination: idx + 2,
-                                    declined_destination: idx + 1,
-                                });
+                            builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                    ResolvingPlayer::TargetSpellController,
+                                    cost, ValueExpr::Literal(0.into()), idx + 2, idx + 1,
+                                ),
+                            )));
                         } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
                             && x_cnt > 0
                         {
@@ -1509,15 +1459,12 @@ pub(super) fn lower_search_library_group(
                                 None => ValueExpr::chosen_x(),
                             };
                             let extra_generic = scale_value_expr(x_val, i64::from(x_cnt));
-                            builder
-                                .instructions
-                                .push(Instruction::OfferDynamicManaPayment {
-                                    payer: ResolvingPlayer::TargetSpellController,
-                                    fixed,
-                                    extra_generic,
-                                    paid_destination: idx + 2,
-                                    declined_destination: idx + 1,
-                                });
+                            builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                    ResolvingPlayer::TargetSpellController,
+                                    fixed, extra_generic, idx + 2, idx + 1,
+                                ),
+                            )));
                         } else {
                             return Err("oracle:counter-unless-x");
                         }
@@ -1535,13 +1482,15 @@ pub(super) fn lower_search_library_group(
                         let idx = builder.instructions.len();
                         builder
                             .instructions
-                            .push(Instruction::OfferDynamicManaPayment {
-                                payer: ResolvingPlayer::TargetSpellController,
+                            .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                ResolvingPlayer::TargetSpellController,
                                 fixed,
                                 extra_generic,
-                                paid_destination: idx + 2,
-                                declined_destination: idx + 1,
-                            });
+                                idx + 2,
+                                idx + 1,
+                            ),
+                        )));
                         builder.instructions.push(Instruction::StackOp(Box::new(
                             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                                 spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -1557,24 +1506,22 @@ pub(super) fn lower_search_library_group(
                             bound_x,
                         )
                         .map_err(|_| "oracle:counter-unless-non-mana")?;
-                        if pay_ops.len() == 1 {
-                            builder.instructions.push(Instruction::OptionalEffect {
-                                chooser: ResolvingPlayer::TargetSpellController,
-                            });
-                        } else {
-                            builder.instructions.push(Instruction::OptionalSequence {
-                                chooser: ResolvingPlayer::TargetSpellController,
-                                instructions: pay_ops.len(),
-                            });
-                        }
+                        builder.instructions.push(Instruction::OptionalSequence {
+                            chooser: ResolvingPlayer::TargetSpellController,
+                            instructions: pay_ops.len(),
+                        });
                         builder.instructions.extend(pay_ops);
                         let branch_idx = builder.instructions.len();
-                        builder.instructions.push(Instruction::BranchIfFalse {
-                            condition: ResolutionCondition {
-                                left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                                comparison: Comparison::Less,
-                                right: ValueExpr::literal(1),
-                            },
+                        builder.instructions.push(Instruction::BranchCondition {
+                            condition: Box::new(
+                                spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(
+                                    ResolutionCondition {
+                                        left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                                        comparison: Comparison::Less,
+                                        right: ValueExpr::literal(1),
+                                    },
+                                )),
+                            ),
                             destination: branch_idx + 2,
                         });
                         builder.instructions.push(Instruction::StackOp(Box::new(
@@ -1632,6 +1579,7 @@ pub(super) fn lower_search_library_group(
             if act_builder.target != builder.target
                 || act_builder.instructions.is_empty()
                 || act_builder.graveyard_target_bounds.is_some()
+                || act_builder.permanent_target_bounds.is_some()
                 || act_builder.x_target_count
                 || !act_builder
                     .instructions
@@ -1640,24 +1588,20 @@ pub(super) fn lower_search_library_group(
             {
                 return Err("oracle:counter-unless-action");
             }
-            if act_builder.instructions.len() == 1 {
-                builder
-                    .instructions
-                    .push(Instruction::OptionalEffect { chooser });
-            } else {
-                builder.instructions.push(Instruction::OptionalSequence {
-                    chooser,
-                    instructions: act_builder.instructions.len(),
-                });
-            }
+            builder.instructions.push(Instruction::OptionalSequence {
+                chooser,
+                instructions: act_builder.instructions.len(),
+            });
             builder.instructions.extend(act_builder.instructions);
             let branch_idx = builder.instructions.len();
-            builder.instructions.push(Instruction::BranchIfFalse {
-                condition: ResolutionCondition {
-                    left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-                    comparison: Comparison::Less,
-                    right: ValueExpr::literal(1),
-                },
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(ResolutionCondition {
+                        left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                        comparison: Comparison::Less,
+                        right: ValueExpr::literal(1),
+                    }),
+                )),
                 destination: branch_idx + 2,
             });
             builder.instructions.push(if is_trigger_target {
@@ -2007,33 +1951,13 @@ pub(super) fn lower_search_library_group(
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
-                    if let Some((minimum, maximum)) =
-                        builder.instructions.iter().rev().find_map(|op| match op {
-                            Instruction::AffectPermanentTargets {
-                                minimum, maximum, ..
-                            } => Some((*minimum, *maximum)),
-                            _ => None,
-                        })
-                    {
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum,
-                                maximum,
-                                action: PermanentTargetAction::Modify {
-                                    parts,
-                                    duration: dur,
-                                },
-                            });
-                    } else {
-                        builder.instructions.push(
-                            super::super::toolbox_emit::apply_continuous_parts(
-                                spellwake_engine::toolbox::ObjectQuery::Targets,
-                                parts,
-                                dur,
-                            ),
-                        );
-                    }
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            parts,
+                            dur,
+                        ));
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_)
@@ -2147,30 +2071,28 @@ pub(super) fn lower_search_library_group(
                         }
                         TargetCountAst::Exact(n) if *n >= 2 => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: *n,
-                                    maximum: *n,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                *n,
+                                *n,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::UpTo(n) if *n > 0 => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: *n,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                *n,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::ChosenX | TargetCountAst::UpToX if !in_trigger => {
@@ -2180,30 +2102,28 @@ pub(super) fn lower_search_library_group(
                             } else {
                                 builder.x_target_count = true;
                             }
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: u16::MAX,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                u16::MAX,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::AnyNumber => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: u16::MAX,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                u16::MAX,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         _ => Err("oracle:unsupported-target-subject"),
@@ -2227,30 +2147,28 @@ pub(super) fn lower_search_library_group(
                         }
                         TargetCountAst::Exact(n) if *n >= 2 => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: *n,
-                                    maximum: *n,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                *n,
+                                *n,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::UpTo(n) if *n > 0 => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: *n,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                *n,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::ChosenX | TargetCountAst::UpToX if !in_trigger => {
@@ -2260,30 +2178,28 @@ pub(super) fn lower_search_library_group(
                             } else {
                                 builder.x_target_count = true;
                             }
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: u16::MAX,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                u16::MAX,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::AnyNumber => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: u16::MAX,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                u16::MAX,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         _ => Err("oracle:unsupported-target-subject"),
@@ -2329,9 +2245,9 @@ pub(super) fn lower_search_library_group(
             duration: DurationAst::Permanent,
         } if is_self_pronoun(subject, builder, self_pronoun_valid) => {
             let bt = if matches!(ctrl, PlayerRefAst::TargetOpponent) {
-                BodyTarget::SingleOpponent
+                BodyTarget::SINGLE_OPPONENT
             } else {
-                BodyTarget::SinglePlayer
+                BodyTarget::SINGLE_PLAYER
             };
             builder.bind_target(bt)?;
             builder
@@ -2361,9 +2277,9 @@ pub(super) fn lower_search_library_group(
         {
             let dur = lower_duration(duration)?;
             let player_bt = if matches!(ctrl, PlayerRefAst::TargetOpponent) {
-                BodyTarget::SingleOpponent
+                BodyTarget::SINGLE_OPPONENT
             } else {
-                BodyTarget::SinglePlayer
+                BodyTarget::SINGLE_PLAYER
             };
             let SubjectRefAst::TargetObject { filter, .. } = subject.as_ref() else {
                 return Err("oracle:unsupported-gain-control");
@@ -2471,10 +2387,10 @@ pub(super) fn lower_search_library_group(
                 SubjectRefAst::Anaphora(_)
                     if matches!(
                         builder.target,
-                        BodyTarget::SinglePermanent
-                            | BodyTarget::SingleCreature
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_)
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            ..
+                        }
                     ) =>
                 {
                     EffectSubject::TargetObject
@@ -2697,10 +2613,12 @@ pub(super) fn lower_search_library_group(
                 )?;
                 builder
                     .instructions
-                    .push(Instruction::Exchange(ExchangeSpec::Control {
-                        first: Box::new(first),
-                        second: Box::new(second),
-                    }));
+                    .push(Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::exchange_control(
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(first),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(second),
+                        ),
+                    )));
                 Ok(())
             }
             ExchangeKind::LifeTotals => {
@@ -2713,12 +2631,12 @@ pub(super) fn lower_search_library_group(
                 };
                 let first = extract_resolving_player_from_subject(a, builder, in_trigger)?;
                 let second = extract_resolving_player_from_subject(b, builder, in_trigger)?;
-                builder
-                    .instructions
-                    .push(Instruction::Exchange(ExchangeSpec::LifeTotals {
-                        first,
-                        second,
-                    }));
+                builder.instructions.push(Instruction::AdjustLife(Box::new(
+                    spellwake_engine::toolbox::AdjustLifeSpec::exchange_totals(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(first),
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(second),
+                    ),
+                )));
                 Ok(())
             }
             ExchangeKind::LifeWithStat(stat_kind) => {
@@ -2732,10 +2650,11 @@ pub(super) fn lower_search_library_group(
                 };
                 let had_perm_target = matches!(
                     builder.target,
-                    BodyTarget::SingleCreature
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::FilteredPermanent(_)
-                );
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    }
+                ) && builder.target != BodyTarget::SINGLE_PLANESWALKER;
                 let is_player_subj = |s: &SubjectRefAst| {
                     matches!(
                         s,
@@ -2764,13 +2683,13 @@ pub(super) fn lower_search_library_group(
                     false,
                     had_perm_target,
                 )?;
-                builder
-                    .instructions
-                    .push(Instruction::Exchange(ExchangeSpec::LifeWithStat {
-                        player,
-                        object: Box::new(object),
+                builder.instructions.push(Instruction::AdjustLife(Box::new(
+                    spellwake_engine::toolbox::AdjustLifeSpec::exchange_with_stat(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(player),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(object),
                         stat,
-                    }));
+                    ),
+                )));
                 Ok(())
             }
             ExchangeKind::Zones => {
@@ -2778,21 +2697,17 @@ pub(super) fn lower_search_library_group(
                     return Err("oracle:unsupported-exchange-zones");
                 };
                 let (Some(from), Some(to)) = (
-                    parse_exchange_zone_from_subject(left.as_ref()),
-                    parse_exchange_zone_from_subject(r),
+                    parse_exchange_zone_from_subject(left.as_ref(), ResolvingPlayer::Controller),
+                    parse_exchange_zone_from_subject(r, ResolvingPlayer::Controller),
                 ) else {
                     return Err("oracle:unsupported-exchange-zones");
                 };
                 if from == to {
                     return Err("oracle:unsupported-exchange-zones");
                 }
-                builder
-                    .instructions
-                    .push(Instruction::Exchange(ExchangeSpec::Zones {
-                        player: ResolvingPlayer::Controller,
-                        from,
-                        to,
-                    }));
+                builder.instructions.push(Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::swap_zones(from, to),
+                )));
                 Ok(())
             }
         },
@@ -2892,7 +2807,7 @@ pub(super) fn lower_search_library_group(
                     {
                         let bt = lower_battlefield_body_target(filter, vocabulary)?;
                         if bt
-                            == BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled())
+                            == BodyTarget::filtered_permanent(ObjectFilter::creature().controlled())
                         {
                             builder.bind_target(bt)?;
                             builder
@@ -2913,7 +2828,7 @@ pub(super) fn lower_search_library_group(
                     && filter.zone.is_none()
                 {
                     let bt = lower_battlefield_body_target(filter, vocabulary)?;
-                    if bt == BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()) {
+                    if bt == BodyTarget::filtered_permanent(ObjectFilter::creature().controlled()) {
                         builder.bind_target(bt)?;
                         builder.instructions.push(
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::attach_query(
@@ -2947,10 +2862,10 @@ pub(super) fn lower_search_library_group(
                         is_permanent_body_target(bt).then_some(bt)
                     }
                     SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-                        Some(BodyTarget::SinglePlayer)
+                        Some(BodyTarget::SINGLE_PLAYER)
                     }
                     SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                        Some(BodyTarget::SingleOpponent)
+                        Some(BodyTarget::SINGLE_OPPONENT)
                     }
                     _ => None,
                 };
@@ -2959,10 +2874,7 @@ pub(super) fn lower_search_library_group(
                         att_f, &trial, in_trigger, vocabulary,
                     )?;
                     if is_permanent_body_target(att_bt) {
-                        if matches!(
-                            host_bt,
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                        ) {
+                        if matches!(host_bt, BodyTarget::Player { .. }) {
                             const ATT_BIND: spellwake_engine::toolbox::BindingId =
                                 spellwake_engine::toolbox::BindingId(940);
                             const HOST_PLAYER_BIND: spellwake_engine::toolbox::BindingId =
@@ -3293,6 +3205,7 @@ pub(super) fn lower_search_library_group(
                                     min: Box::new(ValueExpr::literal(1)),
                                     max: Box::new(ValueExpr::literal(1)),
                                     constraint: None,
+                                    max_total_power: None,
                                     hidden: false,
                                 },
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
@@ -3300,6 +3213,7 @@ pub(super) fn lower_search_library_group(
                                 bind_unchosen: None,
                                 tag_partition: None,
                                 auto_resolve_trivial: true,
+                                option_branches: Vec::new(),
                             },
                         )));
                         trial
@@ -3361,9 +3275,14 @@ pub(super) fn lower_search_library_group(
                                 obj,
                             ),
                             selection,
-                            spellwake_engine::toolbox::ObjectMutation::Attach {
-                                host: super::super::toolbox_emit::move_subject_to_query(host_ref),
-                            },
+                            spellwake_engine::toolbox::ObjectMutation::Attach(
+                                spellwake_engine::toolbox::AttachOp::ToObject {
+                                    host: Box::new(
+                                        super::super::toolbox_emit::move_subject_to_query(host_ref),
+                                    ),
+                                    ability: None,
+                                },
+                            ),
                         ),
                     )));
                     *builder = trial;
@@ -3396,13 +3315,12 @@ pub(super) fn lower_search_library_group(
             let lib_low = library.trim().to_ascii_lowercase();
             let has_prior_moved = has_prior_moved_object(&builder.instructions);
             let has_prior_exile = builder.instructions.iter().rev().any(|op| {
-                matches!(op, Instruction::ExileTopPlay { .. })
-                    || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
-                        matches!(
-                            spec.destination,
-                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                        )
-                    })
+                super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                    matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    )
+                })
             });
             if (lib_low == "ref" || (lib_low == "exiled" && !*reveal)) && has_prior_moved {
                 let dest = if *reveal {
@@ -3520,20 +3438,20 @@ pub(super) fn lower_search_library_group(
                 )?;
                 push_for_each_player(
                     players,
-                    vec![Instruction::LookTopChooseExt {
-                        library_owner: ResolvingPlayer::LoopPlayer,
-                        chooser: ResolvingPlayer::Controller,
-                        count: cnt,
-                        filter: None,
-                        max_picks: 0,
-                        take_all_matching: false,
-                        keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                        rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                        reveal_kept: false,
-                        reveal_all: *reveal,
-                        reveal_only: true,
-                        secondary: None,
-                    }],
+                    spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                        ResolvingPlayer::LoopPlayer,
+                        ResolvingPlayer::Controller,
+                        cnt,
+                        None,
+                        0,
+                        false,
+                        spellwake_engine::program::LookTopKeepDest::Hand,
+                        spellwake_engine::program::LookTopRestDest::BottomOrder,
+                        false,
+                        *reveal,
+                        true,
+                        None,
+                    ),
                     builder,
                 );
                 return Ok(());
@@ -3547,11 +3465,11 @@ pub(super) fn lower_search_library_group(
                     Some((None, ResolvingPlayer::Controller))
                 }
                 "target player" | "target player's" | "targetplayer" => Some((
-                    Some(BodyTarget::SinglePlayer),
+                    Some(BodyTarget::SINGLE_PLAYER),
                     ResolvingPlayer::TargetPlayer,
                 )),
                 "target opponent" | "target opponent's" | "targetopponent" => Some((
-                    Some(BodyTarget::SingleOpponent),
+                    Some(BodyTarget::SINGLE_OPPONENT),
                     ResolvingPlayer::TargetPlayer,
                 )),
                 "that player" | "that player's" | "thatplayer" | "that opponent"
@@ -3653,20 +3571,22 @@ pub(super) fn lower_search_library_group(
                 in_trigger,
                 vocabulary,
             )?;
-            builder.instructions.push(Instruction::LookTopChooseExt {
-                library_owner,
-                chooser: ResolvingPlayer::Controller,
-                count: cnt,
-                filter: None,
-                max_picks: 0,
-                take_all_matching: false,
-                keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                reveal_kept: false,
-                reveal_all: *reveal,
-                reveal_only: true,
-                secondary: None,
-            });
+            builder.instructions.extend(
+                spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                    library_owner,
+                    ResolvingPlayer::Controller,
+                    cnt,
+                    None,
+                    0,
+                    false,
+                    spellwake_engine::program::LookTopKeepDest::Hand,
+                    spellwake_engine::program::LookTopRestDest::BottomOrder,
+                    false,
+                    *reveal,
+                    true,
+                    None,
+                ),
+            );
             Ok(())
         }
         InstructionAst::GrantCastPermission {
@@ -3716,55 +3636,25 @@ pub(super) fn lower_search_library_group(
                 && count_limit.is_none()
                 && is_exile_top_anaphora
                 && dur_core != "now"
+                && let Some(Instruction::ZoneOp(spec)) = builder.instructions.last()
+                && let spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                    zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                    slice: spellwake_engine::toolbox::QuerySlice::Top(amount),
+                    ..
+                } = &spec.source
+                && let spellwake_engine::toolbox::ZoneDest::Exile { link_group, .. } =
+                    &spec.destination
+                && (link_group.is_none() || **amount != ValueExpr::literal(1))
             {
-                match builder.instructions.last_mut() {
-                    Some(Instruction::ExileTopPlay {
-                        duration: slot_dur,
-                        cast_only: slot_cast_only,
-                        free: slot_free,
-                        any_color: slot_any_color,
-                        grant_play: slot_grant_play,
-                        ..
-                    }) if !*slot_grant_play => {
-                        *slot_dur = impulse_dur;
-                        *slot_cast_only = *cast_only;
-                        *slot_free = *free;
-                        *slot_any_color = any_color;
-                        *slot_grant_play = true;
-                        return Ok(());
-                    }
-                    Some(last @ Instruction::ZoneOp(_)) => {
-                        if let Instruction::ZoneOp(spec) = last
-                            && let spellwake_engine::toolbox::ObjectQuery::ZoneScan {
-                                zone: spellwake_engine::toolbox::QueryZone::Library(p_sel),
-                                slice: spellwake_engine::toolbox::QuerySlice::Top(amount),
-                                ..
-                            } = &spec.source
-                            && let spellwake_engine::toolbox::PlayerSelector::Resolving(lib_p) =
-                                p_sel.as_ref()
-                            && let spellwake_engine::toolbox::ZoneDest::Exile {
-                                face_down,
-                                link_group,
-                                ..
-                            } = &spec.destination
-                            && (link_group.is_none() || **amount != ValueExpr::literal(1))
-                        {
-                            let face_down = *face_down;
-                            *last = Instruction::ExileTopPlay {
-                                count: (**amount).clone(),
-                                library_owner: AffectedPlayers::One(*lib_p),
-                                duration: impulse_dur,
-                                cast_only: *cast_only,
-                                free: *free,
-                                any_color,
-                                face_down,
-                                grant_play: true,
-                            };
-                            return Ok(());
-                        }
-                    }
-                    _ => {}
-                }
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::impulse_play_last_moved(
+                        impulse_dur,
+                        *cast_only,
+                        *free,
+                        any_color,
+                    ));
+                return Ok(());
             }
             let play_dur = resolved_dur.unwrap_or(match impulse_dur {
                 spellwake_engine::program::ImpulsePlayDuration::ThisTurn => {
@@ -3822,10 +3712,7 @@ pub(super) fn lower_search_library_group(
                 SubjectRefAst::Anaphora(_)
                     if count_limit.is_none()
                         && builder.target != BodyTarget::None
-                        && !matches!(
-                            builder.target,
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                        ) =>
+                        && !matches!(builder.target, BodyTarget::Player { .. }) =>
                 {
                     super::super::toolbox_emit::grant_play_permission(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -3918,34 +3805,28 @@ pub(super) fn lower_search_library_group(
                         {
                             match f.zone {
                                 Some(ZoneFilter::TargetPlayerHand) => Some((
-                                    Some(BodyTarget::SinglePlayer),
+                                    Some(BodyTarget::SINGLE_PLAYER),
                                     SourceZoneFilter::TargetPlayerHand,
                                 )),
                                 Some(ZoneFilter::TargetOpponentHand) => Some((
-                                    Some(BodyTarget::SingleOpponent),
+                                    Some(BodyTarget::SINGLE_OPPONENT),
                                     SourceZoneFilter::TargetPlayerHand,
                                 )),
                                 Some(ZoneFilter::ThatPlayerHand)
-                                    if matches!(
-                                        builder.target,
-                                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                                    ) =>
+                                    if matches!(builder.target, BodyTarget::Player { .. }) =>
                                 {
                                     Some((None, SourceZoneFilter::TargetPlayerHand))
                                 }
                                 Some(ZoneFilter::TargetPlayerGraveyard) => Some((
-                                    Some(BodyTarget::SinglePlayer),
+                                    Some(BodyTarget::SINGLE_PLAYER),
                                     SourceZoneFilter::TargetPlayerGraveyard,
                                 )),
                                 Some(ZoneFilter::TargetOpponentGraveyard) => Some((
-                                    Some(BodyTarget::SingleOpponent),
+                                    Some(BodyTarget::SINGLE_OPPONENT),
                                     SourceZoneFilter::TargetPlayerGraveyard,
                                 )),
                                 Some(ZoneFilter::ThatPlayerGraveyard)
-                                    if matches!(
-                                        builder.target,
-                                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                                    ) =>
+                                    if matches!(builder.target, BodyTarget::Player { .. }) =>
                                 {
                                     Some((None, SourceZoneFilter::TargetPlayerGraveyard))
                                 }
@@ -3964,16 +3845,18 @@ pub(super) fn lower_search_library_group(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        builder.instructions.push(Instruction::ChooseObjects {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            source_zone: src_zone,
-                            filter: Box::new(obj_filter),
-                            min: ValueExpr::literal(0),
-                            max: ValueExpr::literal(1),
-                            distinct_powers: false,
-                            max_total_power: None,
-                            unchosen_action: None,
-                        });
+                        builder.instructions.extend(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                                AffectedPlayers::One(ResolvingPlayer::Controller),
+                                src_zone,
+                                obj_filter,
+                                ValueExpr::literal(0),
+                                ValueExpr::literal(1),
+                                false,
+                                None,
+                                None,
+                            ),
+                        );
                         builder.instructions.push(
                             super::super::toolbox_emit::grant_play_permission(
                                 spellwake_engine::toolbox::ObjectQuery::LastMoved,
@@ -4099,12 +3982,10 @@ pub(super) fn lower_search_library_group(
                 builder
                     .instructions
                     .push(super::super::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Modifier {
-                                id: ids.static_id(),
-                                rule: StaticModifierRule::RetainMana(mt),
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Modifier {
+                            id: ids.static_id(),
+                            rule: StaticModifierRule::RetainMana(mt),
+                        }),
                         ResolvedDuration::UntilEndOfTurn,
                     ));
             }
@@ -4315,15 +4196,16 @@ pub(super) fn lower_search_library_group(
                         .iter()
                         .any(|spec| matches!(spec, ManaSpecAst::ChosenColor))
                 {
-                    let mut options: Vec<ChooseOptionBranch> = Vec::with_capacity(qm.choices.len());
+                    let mut options: Vec<(String, ExecutableBody)> =
+                        Vec::with_capacity(qm.choices.len());
                     for spec in &qm.choices {
                         match spec {
                             ManaSpecAst::Fixed(raw) => {
                                 let bundle = parse_mana_bundle(raw)
                                     .ok_or("oracle:unsupported-qualified-mana")?;
-                                options.push(ChooseOptionBranch {
-                                    label: format!("Add {raw}"),
-                                    body: ExecutableBody::new(
+                                options.push((
+                                    format!("Add {raw}"),
+                                    ExecutableBody::new(
                                         BodyTarget::None,
                                         vec![Instruction::MutatePlayer(Box::new(
                                             spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
@@ -4332,12 +4214,12 @@ pub(super) fn lower_search_library_group(
                                             ),
                                         ))],
                                     ),
-                                });
+                                ));
                             }
                             ManaSpecAst::ChosenColor => {
-                                options.push(ChooseOptionBranch {
-                                    label: "Add one mana of the chosen color".to_owned(),
-                                    body: ExecutableBody::new(
+                                options.push((
+                                    "Add one mana of the chosen color".to_owned(),
+                                    ExecutableBody::new(
                                         BodyTarget::None,
                                         vec![Instruction::MutatePlayer(Box::new(
                                             spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
@@ -4348,15 +4230,19 @@ pub(super) fn lower_search_library_group(
                                             ),
                                         ))],
                                     ),
-                                });
+                                ));
                             }
                             _ => return Err("oracle:unsupported-qualified-mana"),
                         }
                     }
-                    builder.instructions.push(Instruction::ChooseOption {
-                        chooser: ResolvingPlayer::Controller,
-                        options,
-                    });
+                    builder
+                        .instructions
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                                ResolvingPlayer::Controller,
+                                options,
+                            ),
+                        )));
                     return Ok(());
                 }
                 return Err("oracle:unsupported-qualified-mana");
@@ -4413,13 +4299,15 @@ pub(super) fn lower_search_library_group(
             let idx = builder.instructions.len();
             builder
                 .instructions
-                .push(Instruction::OfferDynamicManaPayment {
-                    payer,
-                    fixed: ManaCost::free(),
-                    extra_generic: ValueExpr::chosen_x(),
-                    paid_destination: idx + 1,
-                    declined_destination: idx + 1,
-                });
+                .push(Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        payer,
+                        ManaCost::free(),
+                        ValueExpr::chosen_x(),
+                        idx + 1,
+                        idx + 1,
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::PlayerLookTopLibrary {
@@ -4491,11 +4379,11 @@ pub(super) fn lower_search_library_group(
                 let hand_owner = match lib_low.as_str() {
                     "your hand" => ResolvingPlayer::Controller,
                     "target player's hand" => {
-                        trial.bind_target(BodyTarget::SinglePlayer)?;
+                        trial.bind_target(BodyTarget::SINGLE_PLAYER)?;
                         ResolvingPlayer::TargetPlayer
                     }
                     "target opponent's hand" => {
-                        trial.bind_target(BodyTarget::SingleOpponent)?;
+                        trial.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                         ResolvingPlayer::TargetPlayer
                     }
                     "their hand" | "hand" => actor,
@@ -4550,11 +4438,11 @@ pub(super) fn lower_search_library_group(
                     | "each other player"
                     | "each other player's" => (None, ResolvingPlayer::LoopPlayer),
                     "target player" | "target player's" | "targetplayer" => (
-                        Some(BodyTarget::SinglePlayer),
+                        Some(BodyTarget::SINGLE_PLAYER),
                         ResolvingPlayer::TargetPlayer,
                     ),
                     "target opponent" | "target opponent's" | "targetopponent" => (
-                        Some(BodyTarget::SingleOpponent),
+                        Some(BodyTarget::SINGLE_OPPONENT),
                         ResolvingPlayer::TargetPlayer,
                     ),
                     "defending player" | "defending player's" | "defendingplayer" => {
@@ -4584,20 +4472,20 @@ pub(super) fn lower_search_library_group(
                 if *reveal {
                     push_for_each_player(
                         group_players,
-                        vec![Instruction::LookTopChooseExt {
+                        spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
                             library_owner,
-                            chooser: ResolvingPlayer::Controller,
-                            count: cnt,
-                            filter: None,
-                            max_picks: 0,
-                            take_all_matching: false,
-                            keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                            rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                            reveal_kept: false,
-                            reveal_all: true,
-                            reveal_only: true,
-                            secondary: None,
-                        }],
+                            ResolvingPlayer::Controller,
+                            cnt,
+                            None,
+                            0,
+                            false,
+                            spellwake_engine::program::LookTopKeepDest::Hand,
+                            spellwake_engine::program::LookTopRestDest::BottomOrder,
+                            false,
+                            true,
+                            true,
+                            None,
+                        ),
                         &mut trial,
                     );
                 } else {
@@ -4708,11 +4596,11 @@ pub(super) fn lower_search_library_group(
                     )?,
                 ),
                 "target player" | "target player's" | "targetplayer" => (
-                    Some(BodyTarget::SinglePlayer),
+                    Some(BodyTarget::SINGLE_PLAYER),
                     ResolvingPlayer::TargetPlayer,
                 ),
                 "target opponent" | "target opponent's" | "targetopponent" => (
-                    Some(BodyTarget::SingleOpponent),
+                    Some(BodyTarget::SINGLE_OPPONENT),
                     ResolvingPlayer::TargetPlayer,
                 ),
                 "defending player"
@@ -4765,20 +4653,22 @@ pub(super) fn lower_search_library_group(
                     ),
                 ));
             } else {
-                trial.instructions.push(Instruction::LookTopChooseExt {
-                    library_owner,
-                    chooser: ResolvingPlayer::Controller,
-                    count: cnt,
-                    filter: None,
-                    max_picks: 0,
-                    take_all_matching: false,
-                    keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                    rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                    reveal_kept: false,
-                    reveal_all: *reveal,
-                    reveal_only: true,
-                    secondary: None,
-                });
+                trial.instructions.extend(
+                    spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                        library_owner,
+                        ResolvingPlayer::Controller,
+                        cnt,
+                        None,
+                        0,
+                        false,
+                        spellwake_engine::program::LookTopKeepDest::Hand,
+                        spellwake_engine::program::LookTopRestDest::BottomOrder,
+                        false,
+                        *reveal,
+                        true,
+                        None,
+                    ),
+                );
             }
             *builder = trial;
             Ok(())
@@ -4913,7 +4803,6 @@ fn try_lower_counter_matching_stack_objects(
 
 fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool) -> bool {
     match op {
-        Instruction::ExileTopPlay { .. } => true,
         Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
             if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
                 .is_some() =>
@@ -4926,27 +4815,26 @@ fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool
                     spellwake_engine::toolbox::ZoneDest::Exile { .. }
                 )
         }
-        Instruction::LookTopChooseExt { keep_dest, .. }
-        | Instruction::RevealUntilMatchExt {
-            match_dest: keep_dest,
-            ..
-        } => {
+        Instruction::PromptChoice(spec)
+            if matches!(
+                spec.domain,
+                spellwake_engine::toolbox::PromptDomain::Objects { .. }
+            ) =>
+        {
             !expected_exile_only
-                || matches!(
-                    keep_dest,
-                    spellwake_engine::program::LookTopKeepDest::Exile { .. }
-                        | spellwake_engine::program::LookTopKeepDest::ExileLinked { .. }
-                )
         }
-        Instruction::ChooseObjects { .. } => !expected_exile_only,
         Instruction::ForEachPlayerQuery { body, .. } => body
             .instructions
             .iter()
             .rev()
             .any(|inner| is_grant_play_last_moved_producer(inner, expected_exile_only)),
-        Instruction::Discard { .. } => !expected_exile_only,
         Instruction::MutatePlayer(spec)
-            if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_)) =>
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::Mill(_)
+                )
+            ) =>
         {
             !expected_exile_only
         }
@@ -5039,17 +4927,18 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
         }
         match op {
             Instruction::DrawCards(_)
-            | Instruction::OptionalEffect { .. }
             | Instruction::OptionalSequence { .. }
-            | Instruction::BranchIfFalse { .. }
+            | Instruction::BranchCondition { .. }
             | Instruction::Jump { .. }
             | Instruction::AdjustLife(_) => continue,
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::Scry(_)
-                        | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
-                        | spellwake_engine::toolbox::PlayerMutation::AddMana(_)
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Scry(_)
+                    ) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Surveil(_)
+                    ) | spellwake_engine::toolbox::PlayerMutation::AddMana(_)
                         | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_)
                 ) =>
             {
@@ -5138,9 +5027,11 @@ fn last_moved_producer_is_single_or_bulk_play(ops: &[Instruction]) -> bool {
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::Scry(_)
-                        | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
-                        | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_)
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Scry(_)
+                    ) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Surveil(_)
+                    ) | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_)
                 ) =>
             {
                 continue;
@@ -5594,12 +5485,6 @@ fn lower_toolbox_search_filter(
 
     let has_prior_card_name_choice = trial.instructions.iter().any(|op| {
         matches!(
-            op,
-            Instruction::ChooseValue {
-                domain: ResolutionChoiceDomain::CardName { .. },
-                ..
-            }
-        ) || matches!(
             op,
             Instruction::PromptChoice(spec)
                 if matches!(
@@ -6283,14 +6168,14 @@ fn try_lower_search_library_toolbox<'a>(
             lib_owner: PlayerSelector::Resolving(ResolvingPlayer::Controller),
         },
         "target player" | "target player's" => {
-            trial.bind_target(BodyTarget::SinglePlayer)?;
+            trial.bind_target(BodyTarget::SINGLE_PLAYER)?;
             SearchScope::Single {
                 chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
                 lib_owner: PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
             }
         }
         "target opponent" | "target opponent's" => {
-            trial.bind_target(BodyTarget::SingleOpponent)?;
+            trial.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             SearchScope::Single {
                 chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
                 lib_owner: PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),

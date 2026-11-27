@@ -1,6 +1,5 @@
 //! Forward control instructions use the existing payload/cursor/journal owners.
 use super::*;
-use crate::program::ResolutionCondition;
 
 impl EffectWindow {
     /// Exact installed trigger-count context, shared by amounts and conditions.
@@ -68,68 +67,13 @@ impl EffectWindow {
             .ok_or(EffectError::WrongResolutionFrame)?;
         if matches!(
             instruction,
-            Instruction::BranchIfFalse { .. }
-                | Instruction::Jump { .. }
-                | Instruction::RepeatLoop { .. }
+            Instruction::Jump { .. } | Instruction::RepeatLoop { .. }
         ) && (self.window.resolving() != Some(entry)
             || self.resolution_cursor().map(|cursor| cursor.entry) != Some(entry.id()))
         {
             return Err(EffectError::InconsistentProgram);
         }
         match instruction {
-            Instruction::BranchIfFalse {
-                condition,
-                destination,
-            } => {
-                let ResolutionCondition {
-                    left,
-                    comparison,
-                    right,
-                } = condition;
-                let zero_target_skip = entry.targets().targets().is_empty()
-                    && self
-                        .payloads
-                        .get(&entry.id())
-                        .and_then(StackPayload::body)
-                        .is_some_and(ExecutableBody::is_up_to_one_target)
-                    && (left.uses_target() || right.uses_target());
-                if zero_target_skip {
-                    self.set_instruction(*destination)?;
-                    append
-                        .records
-                        .push(crate::occurrence::RulesRecord::InstructionBranch {
-                            entry: entry.id(),
-                            instruction: from,
-                            condition: condition.clone(),
-                            left: 0.into(),
-                            right: 0.into(),
-                            result: false,
-                            next: *destination,
-                        });
-                    return Ok(true);
-                }
-                let left = self.resolve_value_expr(entry.controller(), left)?;
-                let right = self.resolve_value_expr(entry.controller(), right)?;
-                let result = comparison.evaluate(&left, &right);
-                let next = if result {
-                    from.checked_add(1)
-                        .ok_or(EffectError::InconsistentProgram)?
-                } else {
-                    *destination
-                };
-                self.set_instruction(next)?;
-                append
-                    .records
-                    .push(crate::occurrence::RulesRecord::InstructionBranch {
-                        entry: entry.id(),
-                        instruction: from,
-                        condition: condition.clone(),
-                        left,
-                        right,
-                        result,
-                        next,
-                    });
-            }
             Instruction::Jump { destination } => {
                 self.set_instruction(*destination)?;
                 append
@@ -174,14 +118,6 @@ impl EffectWindow {
                 }
             }
             Instruction::OptionalSequence { .. }
-            | Instruction::OptionalEffect { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::ChooseObjects { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::BecomeCopy { .. }
-            | Instruction::ChooseValue { .. }
-            | Instruction::Fight { .. }
-            | Instruction::Exchange(_)
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -194,19 +130,11 @@ impl EffectWindow {
             | Instruction::SideDeckOp(_)
             | Instruction::StackOp(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::AffectPermanentTargets { .. }
-            | Instruction::Sacrifice { .. }
-            | Instruction::Discard { .. }
-            | Instruction::ExileTopPlay { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::ChooseCreatureType { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Attach(_)
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
             | Instruction::AdjustLife(_)
@@ -259,18 +187,32 @@ mod tests {
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::ChooseCreatureType {
-                        into: CreatureTypeSlot::new(0),
-                        excluding: BTreeSet::new(),
-                    },
-                    Instruction::BranchIfFalse {
-                        condition: ResolutionCondition {
-                            left: crate::program::ValueExpr::event(
-                                crate::program::EventValueKind::MatchedOccurrences,
-                            ),
-                            comparison: Comparison::Equal,
-                            right: crate::program::ValueExpr::Literal(1.into()),
+                    Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                        chooser: crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        domain: crate::toolbox::PromptDomain::Subtype {
+                            kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                            excluding: BTreeSet::new(),
+                            legacy_slot: Some(CreatureTypeSlot::new(0)),
                         },
+                        category: crate::toolbox::ChoiceCategory::Generic,
+                        bind_to: crate::toolbox::BindingId(0),
+                        bind_unchosen: None,
+                        tag_partition: None,
+                        auto_resolve_trivial: false,
+                        option_branches: Vec::new(),
+                    })),
+                    Instruction::BranchCondition {
+                        condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+                            crate::program::ResolutionCondition {
+                                left: crate::program::ValueExpr::event(
+                                    crate::program::EventValueKind::MatchedOccurrences,
+                                ),
+                                comparison: Comparison::Equal,
+                                right: crate::program::ValueExpr::Literal(1.into()),
+                            },
+                        ))),
                         destination: 2,
                     },
                 ],
@@ -444,13 +386,20 @@ mod tests {
             }],
         }));
         let human = v.resolve_label("Human").unwrap();
-        let frame = EffectDecision::CreatureType(healthy.creature_type_frame().unwrap());
+        let frame = EffectDecision::PromptChoice(
+            healthy
+                .resolution_cursor()
+                .unwrap()
+                .pending_prompt_frame
+                .clone()
+                .unwrap(),
+        );
         let accepted = healthy
             .resume_rule(
                 healthy.revision(),
                 &frame,
                 A,
-                DecisionReply::CreatureType(human),
+                DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
                 None,
             )
             .unwrap();
@@ -466,12 +415,19 @@ mod tests {
         let mut exhausted = healthy;
         exhausted.window.set_test_next_object_identity(u64::MAX);
         let saved = exhausted.clone();
-        let frame = EffectDecision::CreatureType(exhausted.creature_type_frame().unwrap());
+        let frame = EffectDecision::PromptChoice(
+            exhausted
+                .resolution_cursor()
+                .unwrap()
+                .pending_prompt_frame
+                .clone()
+                .unwrap(),
+        );
         let result = exhausted.resume_rule(
             exhausted.revision(),
             &frame,
             A,
-            DecisionReply::CreatureType(human),
+            DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
             None,
         );
         assert!(result.is_err());

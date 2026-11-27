@@ -270,7 +270,10 @@ fn run_scenario(
             destination: ObjectDestination::Hand,
             program: Program::instant(
                 ManaCost::one(ManaType::Red),
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![source.instruction.clone()]),
+                ExecutableBody::new(
+                    BodyTarget::SINGLE_CREATURE,
+                    vec![source.instruction.clone()],
+                ),
             ),
         });
     }
@@ -393,10 +396,12 @@ fn run(
                     Instruction::MutateObject(Box::new(
                         spellwake_engine::toolbox::MutateObjectSpec::all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
-                            spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                                kind: spellwake_engine::effects::CounterKind::PlusOne,
-                                amount: spellwake_engine::program::ValueExpr::literal(1),
-                            },
+                            spellwake_engine::toolbox::ObjectMutation::Counters(
+                                spellwake_engine::toolbox::CounterOp::Add {
+                                    kind: spellwake_engine::effects::CounterKind::PlusOne,
+                                    amount: spellwake_engine::program::ValueExpr::literal(1),
+                                },
+                            ),
                         ),
                     )),
                 ),

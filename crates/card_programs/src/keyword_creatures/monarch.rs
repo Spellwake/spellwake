@@ -35,7 +35,9 @@ pub(super) fn fall_from_favor(card: &InventoryCard, profile: Profile) -> Option<
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
                     spellwake_engine::toolbox::ObjectQuery::AttachedHost,
-                    spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                    spellwake_engine::toolbox::ObjectMutation::TapState(
+                        spellwake_engine::toolbox::TapStateOp::Set(true),
+                    ),
                 ),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -302,14 +304,16 @@ pub(super) fn regal_sliver(
     let body = ExecutableBody::new(
         BodyTarget::None,
         vec![
-            Instruction::BranchIfFalse {
-                condition: ResolutionCondition {
-                    left: spellwake_engine::program::ValueExpr::PlayerStat(
-                        spellwake_engine::program::PlayerStatExpr::ControllerIsMonarch,
-                    ),
-                    comparison: Comparison::Equal,
-                    right: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+            Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                    Box::new(ResolutionCondition {
+                        left: spellwake_engine::program::ValueExpr::PlayerStat(
+                            spellwake_engine::program::PlayerStatExpr::ControllerIsMonarch,
+                        ),
+                        comparison: Comparison::Equal,
+                        right: spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    }),
+                )),
                 destination: 3,
             },
             crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(

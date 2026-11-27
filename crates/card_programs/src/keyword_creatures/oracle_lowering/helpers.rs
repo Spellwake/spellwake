@@ -1257,16 +1257,11 @@ fn bind_filter_player_target_local(
         }
     }
     if needs_opponent {
-        if builder.target != BodyTarget::SingleOpponent {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+        if builder.target != BodyTarget::SINGLE_OPPONENT {
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
         }
-    } else if needs_player
-        && !matches!(
-            builder.target,
-            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-        )
-    {
-        builder.bind_target(BodyTarget::SinglePlayer)?;
+    } else if needs_player && !matches!(builder.target, BodyTarget::Player { .. }) {
+        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
     }
     Ok(())
 }
@@ -1274,10 +1269,10 @@ fn bind_filter_player_target_local(
 fn is_permanent_body_target(target: BodyTarget) -> bool {
     matches!(
         target,
-        BodyTarget::SingleCreature
-            | BodyTarget::SinglePermanent
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        }
     )
 }
 
@@ -1301,9 +1296,9 @@ fn last_instruction_created_tokens_local(ops: &[Instruction]) -> bool {
             Some(Instruction::MutateObject(spec))
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
-                        | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
-                        | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                    spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(_))
+                        | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAndAttach { .. })
+                        | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAuraAttached { .. })
                 ) || matches!(
                     spec.source,
                     spellwake_engine::toolbox::ObjectQuery::CreatedTokens
@@ -1325,19 +1320,6 @@ fn last_instruction_created_tokens_local(ops: &[Instruction]) -> bool {
                         if matches!(s.as_ref(), EffectSubject::CreatedTokens)
                 )
         )
-}
-
-fn existing_affect_permanent_targets_bounds(ops: &[Instruction]) -> Option<(u16, u16)> {
-    ops.iter().rev().find_map(|op| {
-        if let Instruction::AffectPermanentTargets {
-            minimum, maximum, ..
-        } = op
-        {
-            Some((*minimum, *maximum))
-        } else {
-            None
-        }
-    })
 }
 
 fn rewrite_object_filter_controller_local(
@@ -1437,7 +1419,10 @@ fn lower_battlefield_body_target_in_context_local(
         && builder.target == BodyTarget::None
         && builder.instructions.is_empty()
         && f.controller == Some(ControllerRelation::ThatPlayer)
-        && let BodyTarget::FilteredPermanent(ref mut obj) = bt
+        && let BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            filter: ref mut obj,
+        } = bt
     {
         rewrite_object_filter_controller_local(
             obj,
@@ -1525,13 +1510,13 @@ fn lower_target_one_of_permanent_body_target_local(
     let filter =
         lower_target_one_of_permanent_filter_local(options, builder, in_trigger, vocabulary)?;
     if filter == ObjectFilter::creature() {
-        Ok(BodyTarget::SingleCreature)
+        Ok(BodyTarget::SINGLE_CREATURE)
     } else if filter == ObjectFilter::planeswalker() {
-        Ok(BodyTarget::SinglePlaneswalker)
+        Ok(BodyTarget::SINGLE_PLANESWALKER)
     } else if filter == ObjectFilter::any() {
-        Ok(BodyTarget::SinglePermanent)
+        Ok(BodyTarget::SINGLE_PERMANENT)
     } else {
-        Ok(BodyTarget::FilteredPermanent(filter))
+        Ok(BodyTarget::filtered_permanent(filter))
     }
 }
 
@@ -1821,16 +1806,15 @@ pub(super) fn lower_modify_pt_part(
                 filter, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: *n,
-                    maximum: *n,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                *n,
+                *n,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -1841,16 +1825,15 @@ pub(super) fn lower_modify_pt_part(
                 filter, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: 0,
-                    maximum: *max,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                0,
+                *max,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -1866,16 +1849,15 @@ pub(super) fn lower_modify_pt_part(
             } else {
                 builder.x_target_count = true;
             }
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: 0,
-                    maximum: u16::MAX,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                0,
+                u16::MAX,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -1884,7 +1866,7 @@ pub(super) fn lower_modify_pt_part(
         } if filter.zone.is_none() => {
             let obj =
                 lower_object_filter_in_context_local(filter, builder, in_trigger, vocabulary)?;
-            builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
+            builder.bind_target(BodyTarget::filtered_permanent(obj))?;
             builder
                 .instructions
                 .push(Instruction::ApplyContinuous(Box::new(
@@ -1920,16 +1902,15 @@ pub(super) fn lower_modify_pt_part(
                 options, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: *n,
-                    maximum: *n,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                *n,
+                *n,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetOneOf {
@@ -1940,16 +1921,15 @@ pub(super) fn lower_modify_pt_part(
                 options, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: 0,
-                    maximum: *max,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                0,
+                *max,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetOneOf {
@@ -1965,16 +1945,15 @@ pub(super) fn lower_modify_pt_part(
             } else {
                 builder.x_target_count = true;
             }
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: 0,
-                    maximum: u16::MAX,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                0,
+                u16::MAX,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetOneOf {
@@ -1984,7 +1963,7 @@ pub(super) fn lower_modify_pt_part(
             let obj = lower_target_one_of_permanent_filter_local(
                 options, builder, in_trigger, vocabulary,
             )?;
-            builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
+            builder.bind_target(BodyTarget::filtered_permanent(obj))?;
             builder
                 .instructions
                 .push(Instruction::ApplyContinuous(Box::new(
@@ -2012,19 +1991,14 @@ pub(super) fn lower_modify_pt_part(
             Ok(())
         }
         SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
-            if let Some((minimum, maximum)) =
-                existing_affect_permanent_targets_bounds(&builder.instructions)
-            {
+            if builder.permanent_target_bounds.is_some() {
                 builder
                     .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum,
-                        maximum,
-                        action: PermanentTargetAction::Modify {
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        },
-                    });
+                    .push(super::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        ResolvedPartsSpec(vec![part]),
+                        dur,
+                    ));
             } else if builder.instructions.iter().any(|op| {
                 matches!(
                     op,
@@ -2329,8 +2303,7 @@ pub(super) fn lower_modify_pt_target(
 pub(super) fn lower_sacrifice_selection(
     f: &ObjectFilterAst,
     vocabulary: &CreatureTypeVocabulary,
-) -> Option<spellwake_engine::program::SacrificeSelection> {
-    use spellwake_engine::program::SacrificeSelection;
+) -> Option<()> {
     if !f.forbidden_types.is_empty()
         || !f.required_supertypes.is_empty()
         || !f.forbidden_supertypes.is_empty()
@@ -2363,8 +2336,8 @@ pub(super) fn lower_sacrifice_selection(
         {
             return None;
         }
-        let ct = vocabulary.resolve_label(&f.subtypes[0])?;
-        return Some(SacrificeSelection::Subtype(ct));
+        vocabulary.resolve_label(&f.subtypes[0])?;
+        return Some(());
     }
     if !f.subtypes.is_empty() {
         return None;
@@ -2376,39 +2349,16 @@ pub(super) fn lower_sacrifice_selection(
     };
     let art_or_cre = AstCardTypeMask::ARTIFACT.union(AstCardTypeMask::CREATURE);
     if nontoken {
-        if !exclude_self && f.any_types == AstCardTypeMask::CREATURE {
-            return Some(SacrificeSelection::NontokenCreature);
-        }
-        return None;
+        return (!exclude_self && f.any_types == AstCardTypeMask::CREATURE).then_some(());
     }
-    if f.any_types == AstCardTypeMask::CREATURE {
-        Some(if exclude_self {
-            SacrificeSelection::OtherCreature
-        } else {
-            SacrificeSelection::Creature
-        })
-    } else if f.any_types == AstCardTypeMask::ARTIFACT {
-        Some(if exclude_self {
-            SacrificeSelection::OtherArtifact
-        } else {
-            SacrificeSelection::Artifact
-        })
-    } else if f.any_types == AstCardTypeMask::ENCHANTMENT && !exclude_self {
-        Some(SacrificeSelection::Enchantment)
-    } else if f.any_types == AstCardTypeMask::LAND && !exclude_self {
-        Some(SacrificeSelection::Land)
-    } else if f.any_types == art_or_cre {
-        Some(if exclude_self {
-            SacrificeSelection::OtherArtifactOrCreature
-        } else {
-            SacrificeSelection::ArtifactOrCreature
-        })
-    } else if f.any_types.is_empty() && f.any_permanent {
-        Some(if exclude_self {
-            SacrificeSelection::OtherPermanent
-        } else {
-            SacrificeSelection::Permanent
-        })
+    if f.any_types == AstCardTypeMask::CREATURE
+        || f.any_types == AstCardTypeMask::ARTIFACT
+        || (f.any_types == AstCardTypeMask::ENCHANTMENT && !exclude_self)
+        || (f.any_types == AstCardTypeMask::LAND && !exclude_self)
+        || f.any_types == art_or_cre
+        || (f.any_types.is_empty() && f.any_permanent)
+    {
+        Some(())
     } else {
         None
     }
@@ -2423,13 +2373,15 @@ pub(super) fn try_build_offer_mana(
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<Instruction> {
     if let Some(cost) = parse_fixed_mana_cost(raw) {
-        return Some(Instruction::OfferDynamicManaPayment {
-            payer,
-            fixed: cost,
-            extra_generic: ValueExpr::Literal(0.into()),
-            paid_destination,
-            declined_destination,
-        });
+        return Some(Instruction::PromptChoice(Box::new(
+            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                payer,
+                cost,
+                ValueExpr::Literal(0.into()),
+                paid_destination,
+                declined_destination,
+            ),
+        )));
     }
     if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
         && x_cnt > 0
@@ -2439,23 +2391,26 @@ pub(super) fn try_build_offer_mana(
             None => ValueExpr::chosen_x(),
         };
         let extra_generic = scale_value_expr(x_val, i64::from(x_cnt));
-        return Some(Instruction::OfferDynamicManaPayment {
-            payer,
-            fixed,
-            extra_generic,
-            paid_destination,
-            declined_destination,
-        });
+        return Some(Instruction::PromptChoice(Box::new(
+            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                payer,
+                fixed,
+                extra_generic,
+                paid_destination,
+                declined_destination,
+            ),
+        )));
     }
     None
 }
 
 pub(super) fn with_offer_dests(mut op: Instruction, paid: usize, declined: usize) -> Instruction {
-    if let Instruction::OfferDynamicManaPayment {
-        paid_destination,
-        declined_destination,
-        ..
-    } = &mut op
+    if let Instruction::PromptChoice(spec) = &mut op
+        && let spellwake_engine::toolbox::PromptDomain::ManaPayment {
+            paid_destination,
+            declined_destination,
+            ..
+        } = &mut spec.domain
     {
         *paid_destination = paid;
         *declined_destination = declined;
@@ -2464,19 +2419,21 @@ pub(super) fn with_offer_dests(mut op: Instruction, paid: usize, declined: usize
 }
 
 pub(super) fn set_offer_paid(op: Option<&mut Instruction>, paid: usize) {
-    if let Some(Instruction::OfferDynamicManaPayment {
-        paid_destination, ..
-    }) = op
+    if let Some(Instruction::PromptChoice(spec)) = op
+        && let spellwake_engine::toolbox::PromptDomain::ManaPayment {
+            paid_destination, ..
+        } = &mut spec.domain
     {
         *paid_destination = paid;
     }
 }
 
 pub(super) fn set_offer_declined(op: Option<&mut Instruction>, declined: usize) {
-    if let Some(Instruction::OfferDynamicManaPayment {
-        declined_destination,
-        ..
-    }) = op
+    if let Some(Instruction::PromptChoice(spec)) = op
+        && let spellwake_engine::toolbox::PromptDomain::ManaPayment {
+            declined_destination,
+            ..
+        } = &mut spec.domain
     {
         *declined_destination = declined;
     }
@@ -2553,10 +2510,12 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 ),
             ))])
         }
-        CostAtomAst::DiscardHand => Ok(vec![Instruction::Discard {
-            players: AffectedPlayers::One(player),
-            amount: ValueExpr::count_hand(player),
-        }]),
+        CostAtomAst::DiscardHand => Ok(vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(player),
+                ValueExpr::count_hand(player),
+            ),
+        ))]),
         CostAtomAst::Discard {
             count,
             filter,
@@ -2574,10 +2533,12 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 return Err("oracle:unsupported-pay-cost");
             }
             if plain_any {
-                Ok(vec![Instruction::Discard {
-                    players: AffectedPlayers::One(player),
-                    amount: amt,
-                }])
+                Ok(vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(player),
+                        amt,
+                    ),
+                ))])
             } else {
                 let obj = lower_object_filter(filter, vocabulary)?;
                 Ok(vec![
@@ -2597,11 +2558,13 @@ pub(super) fn lower_resolution_pay_cost_ops(
         } => {
             let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
             let ptf = lower_permanent_type_filter(filter, vocabulary)?;
-            Ok(vec![Instruction::Sacrifice {
-                players: AffectedPlayers::One(player),
-                amount: amt,
-                filter: ptf,
-            }])
+            Ok(vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                    AffectedPlayers::One(player),
+                    amt,
+                    ptf,
+                ),
+            ))])
         }
         CostAtomAst::SacrificeAll(filter) => {
             if !matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
@@ -2762,7 +2725,9 @@ pub(super) fn lower_resolution_pay_cost_ops(
                         category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                         hidden: false,
                     },
-                    spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                    spellwake_engine::toolbox::ObjectMutation::TapState(
+                        spellwake_engine::toolbox::TapStateOp::Set(true),
+                    ),
                 ),
             ))])
         }
@@ -2801,7 +2766,9 @@ pub(super) fn lower_resolution_pay_cost_ops(
                         category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                         hidden: false,
                     },
-                    spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                    spellwake_engine::toolbox::ObjectMutation::TapState(
+                        spellwake_engine::toolbox::TapStateOp::Set(false),
+                    ),
                 ),
             ))])
         }
@@ -2830,13 +2797,15 @@ pub(super) fn lower_ward_cost_body(
             let extra_generic = scale_value_expr(ValueExpr::chosen_x(), i64::from(x_cnt));
             return Ok(ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::OfferDynamicManaPayment {
-                    payer,
-                    fixed,
-                    extra_generic,
-                    paid_destination: 2,
-                    declined_destination: 1,
-                }],
+                vec![Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        payer,
+                        fixed,
+                        extra_generic,
+                        2,
+                        1,
+                    ),
+                ))],
             ));
         }
         return Err("oracle:ward-non-mana");
@@ -2861,45 +2830,46 @@ pub(super) fn lower_ward_cost_body(
     let mut instructions = Vec::new();
     if let Some(mc) = mana_cost {
         if non_mana_ops.is_empty() {
-            instructions.push(Instruction::OfferDynamicManaPayment {
-                payer,
-                fixed: mc,
-                extra_generic: ValueExpr::Literal(0.into()),
-                paid_destination: 2,
-                declined_destination: 1,
-            });
+            instructions.push(Instruction::PromptChoice(Box::new(
+                spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    payer,
+                    mc,
+                    ValueExpr::Literal(0.into()),
+                    2,
+                    1,
+                ),
+            )));
             return Ok(ExecutableBody::new(BodyTarget::None, instructions));
         }
         // Offer mana first; if declined jump directly to the ward counter op (the instruction after this body).
         let counter_idx = 1 + 1 + non_mana_ops.len() + 1;
-        instructions.push(Instruction::OfferDynamicManaPayment {
-            payer,
-            fixed: mc,
-            extra_generic: ValueExpr::Literal(0.into()),
-            paid_destination: 1,
-            declined_destination: counter_idx,
-        });
+        instructions.push(Instruction::PromptChoice(Box::new(
+            spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                payer,
+                mc,
+                ValueExpr::Literal(0.into()),
+                1,
+                counter_idx,
+            ),
+        )));
     }
     if non_mana_ops.is_empty() {
         return Err("oracle:ward-non-mana");
     }
-    if non_mana_ops.len() == 1 {
-        instructions.push(Instruction::OptionalEffect { chooser: payer });
-    } else {
-        instructions.push(Instruction::OptionalSequence {
-            chooser: payer,
-            instructions: non_mana_ops.len(),
-        });
-    }
+    instructions.push(Instruction::OptionalSequence {
+        chooser: payer,
+        instructions: non_mana_ops.len(),
+    });
     instructions.extend(non_mana_ops);
     let branch_idx = instructions.len();
-    instructions.push(Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
-            comparison: Comparison::Less,
-            right: ValueExpr::literal(1),
-        },
-        // Skip CounterWardSource (which caller appends at branch_idx + 1) when paid.
+    instructions.push(Instruction::BranchCondition {
+        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+            Box::new(ResolutionCondition {
+                left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                comparison: Comparison::Less,
+                right: ValueExpr::literal(1),
+            }),
+        )), // Skip CounterWardSource (which caller appends at branch_idx + 1) when paid.
         destination: branch_idx + 2,
     });
     Ok(ExecutableBody::new(BodyTarget::None, instructions))
@@ -2954,12 +2924,12 @@ pub(super) fn bind_search_target(
     search: &LibrarySearch,
 ) -> Result<(), &'static str> {
     if search.source == SearchSource::TargetOpponentLibrary {
-        builder.bind_target(BodyTarget::SingleOpponent)?;
+        builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
     } else if search.source == SearchSource::TargetPlayerLibrary
         || search.searcher == ResolvingPlayer::TargetPlayer
         || search.curse_host() == Some(spellwake_engine::program::AuraSearchHost::TargetPlayer)
     {
-        builder.bind_target(BodyTarget::SinglePlayer)?;
+        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
     }
     Ok(())
 }
@@ -5108,7 +5078,7 @@ pub(super) fn predefined_token_def(
                     mana_cost: ManaCost::generic(1.into()),
                     source_cost: SourceCost::TapSacrifice,
                     body: ExecutableBody::new(
-                        BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()),
+                        BodyTarget::filtered_permanent(ObjectFilter::creature().controlled()),
                         vec![Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::explore(
                                 spellwake_engine::toolbox::ObjectQuery::from_move_subject(
@@ -5141,15 +5111,11 @@ pub(super) fn predefined_token_def(
                     mana_cost: ManaCost::generic(1.into()),
                     source_cost: SourceCost::TapSacrifice,
                     body: ExecutableBody::new(
-                        BodyTarget::SingleCreature,
-                        vec![Instruction::AffectPermanentTargets {
-                            minimum: 1,
-                            maximum: 1,
-                            action: PermanentTargetAction::PutCounters {
-                                kind: CounterKind::PlusOne,
-                                amount: ValueExpr::literal(1),
-                            },
-                        }],
+                        BodyTarget::SINGLE_CREATURE,
+                        vec![super::toolbox_emit::put_counters_on_target(
+                            CounterKind::PlusOne,
+                            ValueExpr::literal(1),
+                        )],
                     ),
                 }],
             );

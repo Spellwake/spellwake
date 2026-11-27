@@ -120,7 +120,7 @@ fn seed(program: Program) -> Result<EffectWindow, EffectError> {
 fn historical_da_n20_has_a_current_targeted_trigger_admission_successor() {
     // The historical input remains a negative in its sealed source epoch.
     let mut value = tap_self();
-    value.triggered[0].body = body(BodyTarget::SingleCreature, vec![damage(1)]);
+    value.triggered[0].body = body(BodyTarget::SINGLE_CREATURE, vec![damage(1)]);
     assert!(seed(value).is_ok());
 }
 
@@ -282,7 +282,7 @@ fn spell_support_filter_is_explicit_and_independent_of_counter_copy_order() {
                     B,
                     Program::instant(
                         ManaCost::free(),
-                        body(BodyTarget::SingleSpell(filter), instructions.clone()),
+                        body(BodyTarget::single_spell(filter), instructions.clone()),
                     ),
                     ObjectDestination::Hand,
                 ),
@@ -344,7 +344,7 @@ fn targetless_spell_rejects_supplied_target_but_is_copyable_and_counterable() {
             Program::instant(
                 ManaCost::free(),
                 body(
-                    BodyTarget::SingleSpell(
+                    BodyTarget::single_spell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
                     vec![Instruction::StackOp(Box::new(
@@ -360,7 +360,7 @@ fn targetless_spell_rejects_supplied_target_but_is_copyable_and_counterable() {
             Program::instant(
                 ManaCost::free(),
                 body(
-                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                    BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                             spellwake_engine::toolbox::CounterDestination::Graveyard,

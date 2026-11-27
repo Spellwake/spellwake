@@ -433,33 +433,12 @@ pub enum StackWindowError {
 /// Type predicates stay in the characteristic executor, not this registry owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ResolutionSelectionMove {
-    PutInLibrary {
-        player: SeatId,
-        object: ObjectId,
-        destination: crate::program::PublicZoneDestination,
-        placement: crate::program::LibraryPlacement,
-    },
-    LibraryEffect {
-        player: SeatId,
-        object: ObjectId,
-        destination: crate::program::PublicZoneDestination,
-    },
-    CommanderReturn {
-        player: SeatId,
-        object: ObjectId,
-        destination: crate::program::PublicZoneDestination,
-    },
     GraveyardReturn {
         player: SeatId,
         object: ObjectId,
         destination: crate::program::PublicZoneDestination,
     },
     BattlefieldEffect {
-        player: SeatId,
-        object: ObjectId,
-        destination: crate::program::PublicZoneDestination,
-    },
-    ReturnToHand {
         player: SeatId,
         object: ObjectId,
         destination: crate::program::PublicZoneDestination,
@@ -3271,33 +3250,12 @@ impl StackWindow {
                     object,
                     destination,
                 }
-                | ResolutionSelectionMove::CommanderReturn {
-                    player,
-                    object,
-                    destination,
-                }
                 | ResolutionSelectionMove::GraveyardReturn {
                     player,
                     object,
                     destination,
                 }
-                | ResolutionSelectionMove::PutInLibrary {
-                    player,
-                    object,
-                    destination,
-                    ..
-                }
-                | ResolutionSelectionMove::LibraryEffect {
-                    player,
-                    object,
-                    destination,
-                }
                 | ResolutionSelectionMove::BattlefieldEffect {
-                    player,
-                    object,
-                    destination,
-                }
-                | ResolutionSelectionMove::ReturnToHand {
                     player,
                     object,
                     destination,
@@ -3314,33 +3272,12 @@ impl StackWindow {
                 .get(id)
                 .ok_or(StackWindowError::InvalidResolutionMove)?;
             let eligible = match selection {
-                ResolutionSelectionMove::PutInLibrary { .. } => {
-                    (object.zone() == ObjectZone::Battlefield
-                        && object.controller() == Some(player))
-                        || (object.card_id().is_some()
-                            && matches!(
-                                object.zone(),
-                                ObjectZone::Graveyard(seat) | ObjectZone::Hand(seat) if seat == player
-                            ))
-                        || (matches!(object.zone(), ObjectZone::Exile | ObjectZone::Stack)
-                            && object.owner() == player)
-                }
                 ResolutionSelectionMove::BattlefieldEffect { .. }
-                | ResolutionSelectionMove::ReturnToHand { .. }
                 | ResolutionSelectionMove::Sacrifice { .. } => {
                     object.zone() == ObjectZone::Battlefield && object.controller() == Some(player)
                 }
-                ResolutionSelectionMove::CommanderReturn { .. } => {
-                    object.card_id().is_some()
-                        && object.owner() == player
-                        && (object.zone() == ObjectZone::Command
-                            || object.zone() == ObjectZone::Graveyard(player))
-                }
                 ResolutionSelectionMove::GraveyardReturn { .. } => {
                     object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
-                }
-                ResolutionSelectionMove::LibraryEffect { .. } => {
-                    object.card_id().is_some() && object.zone() == ObjectZone::Library(player)
                 }
                 ResolutionSelectionMove::FromHand { .. } => {
                     object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
@@ -3349,31 +3286,11 @@ impl StackWindow {
             if !eligible || !unique.insert(id) {
                 return Err(StackWindowError::InvalidResolutionMove);
             }
-            let physical = if let ResolutionSelectionMove::PutInLibrary { placement, .. } =
-                selection
-                && destination == crate::program::PublicZoneDestination::Library
-            {
-                match placement {
-                    crate::program::LibraryPlacement::Top => ObjectDestination::LibraryTop,
-                    crate::program::LibraryPlacement::Bottom
-                    | crate::program::LibraryPlacement::BottomRandom => {
-                        ObjectDestination::LibraryBottom
-                    }
-                    crate::program::LibraryPlacement::FromTop(offset) => {
-                        ObjectDestination::LibraryFromTop(offset)
-                    }
-                    crate::program::LibraryPlacement::ChoiceTopOrBottom { .. } => {
-                        return Err(StackWindowError::InvalidResolutionMove);
-                    }
-                }
-            } else {
-                let controller = (destination
-                    == crate::program::PublicZoneDestination::Battlefield)
-                    .then_some(object.owner());
-                destination
-                    .physical(controller)
-                    .ok_or(StackWindowError::InvalidResolutionMove)?
-            };
+            let controller = (destination == crate::program::PublicZoneDestination::Battlefield)
+                .then_some(object.owner());
+            let physical = destination
+                .physical(controller)
+                .ok_or(StackWindowError::InvalidResolutionMove)?;
             moves.push((id, physical));
         }
         self.apply_recorded_zone_moves(revision, &moves)

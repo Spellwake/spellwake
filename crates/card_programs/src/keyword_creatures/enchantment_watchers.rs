@@ -37,10 +37,11 @@ pub(super) fn compile(
             ),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
-                BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::enchantment()),
+                BodyTarget::filtered_own_graveyard(ObjectFilter::enchantment()),
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
                 ],
@@ -136,8 +137,9 @@ pub(super) fn compile(
     };
     let mut instructions = Vec::new();
     if optional {
-        instructions.push(Instruction::OptionalEffect {
+        instructions.push(Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         });
     }
     if gain_life {

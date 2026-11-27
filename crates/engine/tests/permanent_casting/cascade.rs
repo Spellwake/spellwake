@@ -32,7 +32,7 @@ fn scenario(hit: bool, copies: u64) -> GameState {
             ),
         )),
         ManaCost::free(),
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
     );
     answer.destination = ObjectDestination::Hand;
     initialize(

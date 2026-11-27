@@ -83,7 +83,7 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
     if !three {
         let (target, mut body) = if case == "TR4" {
             (
-                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                BodyTarget::single_spell(crate::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::counter_targeted(
                         crate::toolbox::CounterDestination::Graveyard,
@@ -92,7 +92,7 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
             )
         } else {
             (
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![crate::program::Instruction::ZoneOp(Box::new(
                     crate::toolbox::ZoneOpSpec::move_all(
                         crate::toolbox::ObjectQuery::Targets,
@@ -135,7 +135,7 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
             program: Program::instant(
                 ManaCost::one(ManaType::Blue),
                 ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![crate::program::Instruction::ZoneOp(Box::new(
                         crate::toolbox::ZoneOpSpec::move_all(
                             crate::toolbox::ObjectQuery::Targets,
@@ -152,7 +152,7 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
         watcher.triggered.push(ability(
             1,
             watcher_condition(),
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![target_gain(2), gain(1)],
         ));
         cards.push(SeedCard {
@@ -176,7 +176,7 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
             watcher.triggered.push(ability(
                 2,
                 watcher_condition(),
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![target_gain(2)],
             ));
             cards.push(SeedCard {

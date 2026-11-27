@@ -147,7 +147,7 @@ fn cmm_repeated_reverberation_copies_the_next_instant_sorcery_or_loyalty_twice_w
     use ManaType::*;
     use spellwake_engine::effects::CopyTargetChoice;
     let bolt = ExecutableBody::new(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -646,11 +646,21 @@ fn cmm_leori_copies_matching_planeswalker_abilities_for_the_turn_and_can_change_
     let choice = exile_hand::until(hit, |s| {
         matches!(
             s.pending_decision().map(|p| p.frame()),
-            Some(RuleFrame::PlaneswalkerType(_))
+            Some(RuleFrame::PromptChoice(frame))
+                if matches!(
+                    frame.domain,
+                    spellwake_engine::toolbox::ResolvedPromptDomain::PlaneswalkerType { .. }
+                )
         )
     });
     let copied = |kind| {
-        let chosen = reply(&choice, DecisionReply::PlaneswalkerType(kind)).into_state();
+        let chosen = reply(
+            &choice,
+            DecisionReply::PromptChoice(
+                spellwake_engine::toolbox::PromptChoiceReply::PlaneswalkerType(kind),
+            ),
+        )
+        .into_state();
         let main = exile_hand::until(chosen, |s| {
             s.turn().unwrap().position().step == Step::PostcombatMain
         });

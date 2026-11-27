@@ -82,7 +82,7 @@ fn chapter_body(
     match text {
         "For each player, exile up to one target non-Saga, nonland permanent that player controls until this Saga leaves the battlefield." => {
             Some(ExecutableBody::new(
-                BodyTarget::FilteredPermanent(ObjectFilter::nonland().non_saga()),
+                BodyTarget::filtered_permanent(ObjectFilter::nonland().non_saga()),
                 vec![Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::exile_one_per_player_until_source_leaves(),
                 ))],
@@ -92,7 +92,7 @@ fn chapter_body(
             Some(graveyard_return::eldest_reborn_third_chapter())
         }
         "Destroy target nonland permanent an opponent controls." => Some(ExecutableBody::new(
-            BodyTarget::FilteredPermanent(ObjectFilter::nonland().opposing()),
+            BodyTarget::filtered_permanent(ObjectFilter::nonland().opposing()),
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(

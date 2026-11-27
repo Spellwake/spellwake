@@ -188,7 +188,7 @@ pub(crate) struct CharacteristicState {
     pub(crate) put_into_gy_this_turn: BTreeSet<ObjectId>,
     /// Graveyard object incarnations put into a graveyard from a library this turn.
     pub(crate) put_into_gy_from_library_this_turn: BTreeSet<ObjectId>,
-    /// Card names chosen via `ResolutionChoiceDomain::CardName` linked to a source permanent.
+    /// Card names chosen via `PromptDomain::CardName` linked to a source permanent.
     pub(crate) named_cards: BTreeMap<ObjectId, String>,
     pub(crate) activated_sources_this_turn: BTreeMap<ObjectId, u16>,
     pub(crate) ability_resolutions_by_source_this_turn: BTreeMap<ObjectId, u16>,

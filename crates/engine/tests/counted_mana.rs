@@ -143,12 +143,14 @@ fn a_chosen_word_updates_boost_and_mana_count_without_changing_the_mana_symbol()
             controlled(5, P1, P1, simple(&v, "Vampire")),
             spell(
                 6,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
-                    Instruction::ChooseCreatureType {
-                        into: slot,
-                        excluding: subtypes(&v, &["Vampire"]),
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                            slot,
+                            subtypes(&v, &["Vampire"]),
+                        ),
+                    )),
                     effect(
                         vec![
                             ResolvedPartSpec::Control(ControlRecipient::ResolvingController),
@@ -177,7 +179,9 @@ fn a_chosen_word_updates_boost_and_mana_count_without_changing_the_mana_symbol()
     let changed = reply(
         pending.state(),
         P0,
-        DecisionReply::CreatureType(v.resolve_label("Elf").unwrap()),
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+            v.resolve_label("Elf").unwrap(),
+        )),
     );
     assert_eq!(
         current(changed.state(), object(changed.state(), 2))
@@ -230,7 +234,7 @@ fn the_captured_ability_controller_gets_its_count_and_mana_after_a_control_chang
             card(4, simple(&v, "Elf"), true),
             spell(
                 5,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![effect(
                     vec![
                         ResolvedPartSpec::Control(ControlRecipient::ResolvingController),
@@ -274,7 +278,7 @@ fn removed_counted_mana_rejects_before_cost_without_mutating_the_board() {
             card(1, archdruid(&v), true),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
                         AbilityRemoval::All,

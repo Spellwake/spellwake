@@ -28,7 +28,7 @@ fn resolving_copy_retains_its_complete_payload_after_original_entry_departure() 
             hand(
                 2,
                 B,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+                BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
                 vec![Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],
@@ -36,7 +36,7 @@ fn resolving_copy_retains_its_complete_payload_after_original_entry_departure() 
             hand(
                 3,
                 A,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                BodyTarget::single_spell(crate::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::counter_targeted(
                         crate::toolbox::CounterDestination::Graveyard,

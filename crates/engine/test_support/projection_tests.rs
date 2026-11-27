@@ -242,10 +242,12 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::ChooseCreatureType {
-                        into: CreatureTypeSlot::new(0),
-                        excluding: Default::default(),
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                            CreatureTypeSlot::new(0),
+                            Default::default(),
+                        ),
+                    )),
                     spellwake_engine::program::Instruction::DrawCards(Box::new(
                         spellwake_engine::toolbox::DrawCardsSpec::simple(
                             spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -254,10 +256,12 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
                             ValueExpr::Literal(0.into()),
                         ),
                     )),
-                    Instruction::ChooseCreatureType {
-                        into: CreatureTypeSlot::new(1),
-                        excluding: Default::default(),
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                            CreatureTypeSlot::new(1),
+                            Default::default(),
+                        ),
+                    )),
                     spellwake_engine::program::Instruction::DrawCards(Box::new(
                         spellwake_engine::toolbox::DrawCardsSpec::simple(
                             spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -340,15 +344,15 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
     let aliases = AliasContext::default();
     let decision = root.pending_decision().unwrap();
     let first_frame = frame(decision.frame(), &root).unwrap();
-    assert_eq!(first_frame["tag"], "CreatureType");
-    assert_eq!(first_frame["slot"], "0");
-    assert_eq!(first_frame["vocabulary"], vocabulary.id().to_string());
+    assert_eq!(first_frame["tag"], "PromptChoice");
     let first_result = advance(
         &root,
         A,
         GameCommand::Reply {
             decision: decision.id(),
-            choice: DecisionReply::CreatureType(first),
+            choice: DecisionReply::PromptChoice(
+                spellwake_engine::toolbox::PromptChoiceReply::CreatureType(first),
+            ),
         },
     );
     root = first_result.state().clone();
@@ -362,7 +366,7 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
         projected["resolution_state"]["locals"],
         json!([{"slot":"0","value":creature_type_id(first)}])
     );
-    assert_eq!(projected["decision"]["frame"]["slot"], "1");
+    assert_eq!(projected["decision"]["frame"]["tag"], "PromptChoice");
     assert_eq!(
         projected["programs"][0]["definition"]["kind"]["body"]["instructions"][3]["amount"]["tag"],
         "ControlledPermanentsOfChosenType"
@@ -373,7 +377,9 @@ fn current_root_projection_retains_all_locals_and_chosen_occurrences_after_compl
         A,
         GameCommand::Reply {
             decision: decision.id(),
-            choice: DecisionReply::CreatureType(second),
+            choice: DecisionReply::PromptChoice(
+                spellwake_engine::toolbox::PromptChoiceReply::CreatureType(second),
+            ),
         },
     );
     let projected = candidate(&completed, Some(&root), &aliases).unwrap();

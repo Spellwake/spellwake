@@ -2,7 +2,7 @@
 //! This is not a source-card fixture, seat-safe view or LKI qualification.
 use super::*;
 use crate::{
-    effects::{CopyResolution, CopyTargetChoice, CreatureTypeChoice},
+    effects::{CopyResolution, CopyTargetChoice},
     occurrence::ZoneReason,
     stack_window::{StackEntryId, StackKind},
 };
@@ -11,9 +11,9 @@ fn slot() -> CreatureTypeSlot {
     CreatureTypeSlot::new(0)
 }
 
-fn type_frame(state: &GameState) -> &CreatureTypeChoice {
-    let RuleFrame::CreatureType(frame) = state.pending_decision().unwrap().frame() else {
-        panic!("actual creature-type decision expected")
+fn type_frame(state: &GameState) -> &crate::toolbox::PromptChoiceFrame {
+    let RuleFrame::PromptChoice(frame) = state.pending_decision().unwrap().frame() else {
+        panic!("actual creature-type prompt decision expected")
     };
     frame
 }
@@ -53,20 +53,32 @@ fn reject_input(state: &GameState, input: GameInput, expected: GameError) {
 fn selected_body() -> ExecutableBody {
     let vocabulary = creature_types::selected_vocabulary().unwrap();
     ExecutableBody::new(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![
-            Instruction::ChooseCreatureType {
-                into: slot(),
-                excluding: BTreeSet::from([vocabulary.resolve_label("Dragon").unwrap()]),
-            },
-            Instruction::Discard {
-                players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                amount: crate::program::ValueExpr::count_battlefield(
+            Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                chooser: crate::toolbox::PlayerSelector::Resolving(
+                    crate::program::ResolvingPlayer::Controller,
+                ),
+                domain: crate::toolbox::PromptDomain::Subtype {
+                    kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                    excluding: BTreeSet::from([vocabulary.resolve_label("Dragon").unwrap()]),
+                    legacy_slot: Some(slot()),
+                },
+                category: crate::toolbox::ChoiceCategory::Generic,
+                bind_to: crate::toolbox::BindingId(0),
+                bind_unchosen: None,
+                tag_partition: None,
+                auto_resolve_trivial: false,
+                option_branches: Vec::new(),
+            })),
+            Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                crate::program::ValueExpr::count_battlefield(
                     crate::program::ObjectFilter::any()
                         .controlled()
                         .of_chosen_slot(slot()),
                 ),
-            },
+            ))),
             gain(4),
         ],
     )
@@ -89,14 +101,26 @@ fn setup() -> GameState {
             Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+                    BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
                     vec![
                         // A real live parent local has the same slot ordinal as
                         // the donor, but must not become a copied-body local.
-                        Instruction::ChooseCreatureType {
-                            into: slot(),
-                            excluding: BTreeSet::new(),
-                        },
+                        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                            chooser: crate::toolbox::PlayerSelector::Resolving(
+                                crate::program::ResolvingPlayer::Controller,
+                            ),
+                            domain: crate::toolbox::PromptDomain::Subtype {
+                                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                                excluding: BTreeSet::new(),
+                                legacy_slot: Some(slot()),
+                            },
+                            category: crate::toolbox::ChoiceCategory::Generic,
+                            bind_to: crate::toolbox::BindingId(0),
+                            bind_unchosen: None,
+                            tag_partition: None,
+                            auto_resolve_trivial: false,
+                            option_branches: Vec::new(),
+                        })),
                         Instruction::StackOp(Box::new(
                             crate::toolbox::StackOpSpec::copy_targeted_spell(),
                         )),
@@ -111,7 +135,7 @@ fn setup() -> GameState {
             Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                    BodyTarget::single_spell(crate::program::SpellFilter::any()),
                     vec![Instruction::StackOp(Box::new(
                         crate::toolbox::StackOpSpec::counter_targeted(
                             crate::toolbox::CounterDestination::Graveyard,
@@ -151,8 +175,8 @@ fn pending_copy() -> (GameState, StackEntryId, StackEntryId) {
     let state = cast(&state, B, 2, Some(TargetRef::Stack(original)));
     let copier = state.execution().window().entries().last().unwrap().id();
     let state = pass_to_boundary(state);
-    assert_eq!(type_frame(&state).entry(), copier);
-    assert_eq!(type_frame(&state).chooser(), B);
+    assert_eq!(type_frame(&state).entry, copier);
+    assert_eq!(type_frame(&state).chooser, B);
     assert!(
         state
             .execution()
@@ -166,7 +190,11 @@ fn pending_copy() -> (GameState, StackEntryId, StackEntryId) {
         .creature_vocabulary()
         .resolve_label("Elf")
         .unwrap();
-    let state = reply(&state, DecisionReply::CreatureType(elf)).into_state();
+    let state = reply(
+        &state,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(elf)),
+    )
+    .into_state();
     assert_eq!(copy_frame(&state).entry(), copier);
     assert_eq!(copy_frame(&state).original(), original);
     assert_eq!(copy_frame(&state).chooser(), B);
@@ -274,18 +302,18 @@ fn pass_for_fresh_type(mut state: GameState, entry: StackEntryId, chooser: SeatI
         }
     }
     let frame = type_frame(&state);
-    assert_eq!(frame.entry(), entry);
-    assert_eq!(frame.instruction(), 0);
-    assert_eq!(frame.chooser(), chooser);
-    assert_eq!(frame.slot(), slot());
-    assert_eq!(
-        frame.excluding(),
-        &BTreeSet::from([state
-            .execution()
-            .creature_vocabulary()
-            .resolve_label("Dragon")
-            .unwrap()])
-    );
+    assert_eq!(frame.entry, entry);
+    assert_eq!(frame.instruction, 0);
+    assert_eq!(frame.chooser, chooser);
+    let dragon = state
+        .execution()
+        .creature_vocabulary()
+        .resolve_label("Dragon")
+        .unwrap();
+    let crate::toolbox::ResolvedPromptDomain::CreatureType { allowed } = &frame.domain else {
+        panic!("creature type domain expected")
+    };
+    assert!(!allowed.contains(&dragon));
     let cursor = state.execution().resolution_state().unwrap();
     assert_eq!(cursor.entry(), entry);
     assert_eq!(cursor.instruction(), 0);
@@ -309,7 +337,10 @@ fn choose_count(
         .creature_vocabulary()
         .resolve_label(label)
         .unwrap();
-    let input = answer(state, DecisionReply::CreatureType(value));
+    let input = answer(
+        state,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(value)),
+    );
     let wrong = if input.actor == A { B } else { A };
     assert_rejected(state, wrong, input.command.clone(), GameError::WrongChooser);
     let result = advance(state, input.actor, input.command);

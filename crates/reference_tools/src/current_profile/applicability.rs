@@ -275,59 +275,112 @@ native!(StaticContinuousAbility, self, {
     Ok(())
 });
 native!(ExecutableBody, self, {
-    if matches!(self.target,spellwake_engine::program::BodyTarget::ControlledAbility {..} | spellwake_engine::program::BodyTarget::SinglePlayerOrPlaneswalker | spellwake_engine::program::BodyTarget::StackEntryTargetingControlledPermanent | spellwake_engine::program::BodyTarget::SingleStackEntry | spellwake_engine::program::BodyTarget::SinglePlaneswalker | spellwake_engine::program::BodyTarget::SingleAnyTarget | spellwake_engine::program::BodyTarget::FilteredPermanent(_)
-        | spellwake_engine::program::BodyTarget::AnyGraveyardCreature
-        | spellwake_engine::program::BodyTarget::AnyGraveyardCard
-        | spellwake_engine::program::BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-        | spellwake_engine::program::BodyTarget::FilteredOwnGraveyardCard(_)
-        | spellwake_engine::program::BodyTarget::FilteredAnyGraveyardCard { .. }
-        | spellwake_engine::program::BodyTarget::FilteredExiledCard(_)
-        | spellwake_engine::program::BodyTarget::SingleOpponentOrPlaneswalker
-        | spellwake_engine::program::BodyTarget::SingleSpell(_)
-            if !matches!(self.target, spellwake_engine::program::BodyTarget::SingleSpell(f)
-                if f != spellwake_engine::program::SpellFilter::creature()
-                    && f != spellwake_engine::program::SpellFilter::noncreature()))
-    {
+    let target_rejected = {
+        use spellwake_engine::program::{
+            AnyTargetKind, BodyTarget, ObjectFilter, SpellFilter, TargetZone,
+        };
+        match self.target {
+            BodyTarget::None | BodyTarget::Player { .. } => false,
+            BodyTarget::Object { zone, filter } => match zone {
+                TargetZone::Battlefield => {
+                    filter != ObjectFilter::any() && filter != ObjectFilter::creature()
+                }
+                TargetZone::OwnGraveyard => filter != ObjectFilter::any(),
+                TargetZone::AnyGraveyard { .. } => true,
+                TargetZone::Exile {
+                    owned_flashback_only,
+                } => !owned_flashback_only || filter != ObjectFilter::any(),
+                TargetZone::RecentlyDiscardedOrFromLibrary => false,
+            },
+            BodyTarget::AnyTarget(kind) => matches!(
+                kind,
+                AnyTargetKind::Any
+                    | AnyTargetKind::PlayerOrPlaneswalker
+                    | AnyTargetKind::OpponentOrPlaneswalker
+            ),
+            BodyTarget::Spell {
+                filter,
+                include_abilities,
+            } => {
+                !include_abilities
+                    && (filter == SpellFilter::creature() || filter == SpellFilter::noncreature())
+            }
+            BodyTarget::StackEntry(_) => true,
+        }
+    };
+    if target_rejected {
         return Err(ApplicabilityError);
     }
-    if self.triggered_modes().is_some() {
+    if self.triggered_modes().is_some() || self.permanent_target_bounds.is_some() {
         return Err(ApplicabilityError);
     }
     self.instructions.iter().try_for_each(|value| match value {
-        Instruction::OfferDynamicManaPayment { .. }
-        | Instruction::ChooseObjects { .. }
-        | Instruction::ChooseOption { .. }
-        | Instruction::BecomeCopy { .. }
-        | Instruction::PromptChoice(_)
-        | Instruction::BranchCondition { .. }
-        | Instruction::ForEach { .. }
+        Instruction::ForEach { .. }
         | Instruction::ForEachPlayerQuery { .. }
         | Instruction::BindEnv { .. }
         | Instruction::SetObjectTag { .. }
         | Instruction::UpdateStateTrack { .. }
         | Instruction::SideDeckOp(_)
         | Instruction::ScheduleDelayedEventTrigger { .. }
-        | Instruction::OptionalSequence { .. }
         | Instruction::FixedTargetClause(_)
         | Instruction::SearchLibrary { .. }
         | Instruction::ScheduleDelayedStepTrigger { .. }
-        | Instruction::EmitReflexiveTrigger { .. }
-        | Instruction::Attach(_)
-        | Instruction::AffectPermanentTargets { .. }
-        | Instruction::Sacrifice { .. }
-        | Instruction::Discard { .. } => Err(ApplicabilityError),
+        | Instruction::EmitReflexiveTrigger { .. } => Err(ApplicabilityError),
+        Instruction::PromptChoice(spec) if spec.as_mana_payment().is_some() => {
+            Err(ApplicabilityError)
+        }
+        Instruction::PromptChoice(spec) => {
+            if matches!(
+                &spec.domain,
+                spellwake_engine::toolbox::PromptDomain::Subtype {
+                    kind: spellwake_engine::toolbox::SubtypeChoiceKind::Creature,
+                    legacy_slot: Some(_),
+                    ..
+                }
+            ) {
+                Ok(())
+            } else {
+                Err(ApplicabilityError)
+            }
+        }
+        Instruction::OptionalSequence {
+            instructions: 1, ..
+        } => Ok(()),
+        Instruction::OptionalSequence { .. } => Err(ApplicabilityError),
         Instruction::CreateTokens { creations } => creations
             .iter()
             .try_for_each(|creation| creation.definition.program().check_current10()),
+        Instruction::ZoneOp(spec)
+            if spec.as_group_sacrifice().is_some() || spec.as_group_discard().is_some() =>
+        {
+            Err(ApplicabilityError)
+        }
         Instruction::ZoneOp(spec) => {
-            if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+            if matches!(
+                spec.destination,
+                spellwake_engine::toolbox::ZoneDest::SwapZones { .. }
+            ) || (matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
                 && matches!(
                     spec.selection,
                     spellwake_engine::toolbox::ZoneSelection::All
                 )
                 && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Hand)
                 && spec.shuffle_library.is_none()
-                && self.target != spellwake_engine::program::BodyTarget::SingleOwnGraveyardCard
+                && self.target != spellwake_engine::program::BodyTarget::SINGLE_OWN_GRAVEYARD_CARD)
+                || (matches!(
+                    &spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                        zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                        slice: spellwake_engine::toolbox::QuerySlice::Top(_),
+                        ..
+                    }
+                ) && matches!(
+                    spec.selection,
+                    spellwake_engine::toolbox::ZoneSelection::All
+                ) && matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                ) && spec.shuffle_library.is_none())
             {
                 Ok(())
             } else {
@@ -364,8 +417,11 @@ native!(ExecutableBody, self, {
                 spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield { .. } => {
                     if matches!(
                         self.target,
-                        spellwake_engine::program::BodyTarget::SinglePlayer
-                            | spellwake_engine::program::BodyTarget::SingleCreatureOrPlayer
+                        spellwake_engine::program::BodyTarget::Player {
+                            opponents_only: false
+                        } | spellwake_engine::program::BodyTarget::AnyTarget(
+                            spellwake_engine::program::AnyTargetKind::CreatureOrPlayer
+                        )
                     ) {
                         Err(ApplicabilityError)
                     } else {
@@ -375,41 +431,47 @@ native!(ExecutableBody, self, {
                 _ => Err(ApplicabilityError),
             }
         }
-        Instruction::BranchIfFalse { condition, .. }
-            if [&condition.left, &condition.right].iter().any(|value| {
-                matches!(
-                    value,
-                    spellwake_engine::program::ValueExpr::EventValue(
-                        spellwake_engine::program::EventValueKind::PaidAlternative
-                            | spellwake_engine::program::EventValueKind::Bargained
-                            | spellwake_engine::program::EventValueKind::KickerCount(_)
+        Instruction::BranchCondition { condition, .. } => match condition.as_ref() {
+            spellwake_engine::toolbox::ConditionExpr::Resolution(condition)
+                if ![&condition.left, &condition.right].iter().any(|value| {
+                    matches!(
+                        value,
+                        spellwake_engine::program::ValueExpr::EventValue(
+                            spellwake_engine::program::EventValueKind::PaidAlternative
+                                | spellwake_engine::program::EventValueKind::Bargained
+                                | spellwake_engine::program::EventValueKind::KickerCount(_)
+                        )
                     )
-                )
-            }) =>
-        {
-            Err(ApplicabilityError)
-        }
+                }) =>
+            {
+                Ok(())
+            }
+            _ => Err(ApplicabilityError),
+        },
         Instruction::MutatePlayer(spec)
             if matches!(
                 spec.op,
-                spellwake_engine::toolbox::PlayerMutation::CollectEvidence { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::Blight { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::Populate
-                    | spellwake_engine::toolbox::PlayerMutation::AdditionalLoyaltyActivation
-                    | spellwake_engine::toolbox::PlayerMutation::WatchNextSpellOrLoyalty { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::AdditionalCombat { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::Proliferate
-                    | spellwake_engine::toolbox::PlayerMutation::Scry(_)
-                    | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
-                    | spellwake_engine::toolbox::PlayerMutation::Mill(_)
-                    | spellwake_engine::toolbox::PlayerMutation::Bolster(_)
-                    | spellwake_engine::toolbox::PlayerMutation::Amass { .. }
+                spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                    spellwake_engine::toolbox::PlayerKeywordAction::CollectEvidence { .. }
+                        | spellwake_engine::toolbox::PlayerKeywordAction::Blight { .. }
+                        | spellwake_engine::toolbox::PlayerKeywordAction::Populate
+                        | spellwake_engine::toolbox::PlayerKeywordAction::Proliferate
+                        | spellwake_engine::toolbox::PlayerKeywordAction::Bolster(_)
+                        | spellwake_engine::toolbox::PlayerKeywordAction::Amass { .. }
+                        | spellwake_engine::toolbox::PlayerKeywordAction::ExtortDrain
+                ) | spellwake_engine::toolbox::PlayerMutation::TurnFlow(
+                    spellwake_engine::toolbox::TurnFlowOp::AdditionalLoyaltyActivation
+                        | spellwake_engine::toolbox::TurnFlowOp::AdditionalCombat { .. }
+                ) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::ManifestTop(_)
+                        | spellwake_engine::toolbox::LibraryTopAction::Scry(_)
+                        | spellwake_engine::toolbox::LibraryTopAction::Surveil(_)
+                        | spellwake_engine::toolbox::LibraryTopAction::Mill(_)
+                        | spellwake_engine::toolbox::LibraryTopAction::MayRevealTop
+                ) | spellwake_engine::toolbox::PlayerMutation::WatchNextSpellOrLoyalty { .. }
                     | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_)
                     | spellwake_engine::toolbox::PlayerMutation::OfferSourceCounters { .. }
                     | spellwake_engine::toolbox::PlayerMutation::RequireCondition(_)
-                    | spellwake_engine::toolbox::PlayerMutation::ExtortDrain
-                    | spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
                     | spellwake_engine::toolbox::PlayerMutation::ChooseRevealedHandCard { .. }
                     | spellwake_engine::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
                     | spellwake_engine::toolbox::PlayerMutation::SacrificeRandomUntilLand
@@ -420,29 +482,43 @@ native!(ExecutableBody, self, {
         Instruction::MutateObject(spec)
             if matches!(
                 spec.op,
-                spellwake_engine::toolbox::ObjectMutation::DistributeCounters { .. }
-                    | spellwake_engine::toolbox::ObjectMutation::Explore
-                    | spellwake_engine::toolbox::ObjectMutation::AdvanceClassLevel(_)
-                    | spellwake_engine::toolbox::ObjectMutation::SolveCase
-                    | spellwake_engine::toolbox::ObjectMutation::SetPrepared
-                    | spellwake_engine::toolbox::ObjectMutation::ReselectAttackDefender
-                    | spellwake_engine::toolbox::ObjectMutation::SoulbondPair { .. }
-                    | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Distribute { .. }
+                ) | spellwake_engine::toolbox::ObjectMutation::Explore
+                    | spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                        spellwake_engine::toolbox::ObjectStateMarkerOp::AdvanceClassLevel(_)
+                            | spellwake_engine::toolbox::ObjectStateMarkerOp::SolveCase
+                            | spellwake_engine::toolbox::ObjectStateMarkerOp::SetPrepared
+                            | spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::Combat(
+                        spellwake_engine::toolbox::ObjectCombatOp::ReselectAttackDefender
+                            | spellwake_engine::toolbox::ObjectCombatOp::SoulbondPair { .. }
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                        spellwake_engine::toolbox::TokenAttachOp::CreateAuraAttached { .. }
+                            | spellwake_engine::toolbox::TokenAttachOp::CreateAndAttach { .. }
+                    )
                     | spellwake_engine::toolbox::ObjectMutation::Ninjutsu
                     | spellwake_engine::toolbox::ObjectMutation::Unearth
                     | spellwake_engine::toolbox::ObjectMutation::Myriad
-                    | spellwake_engine::toolbox::ObjectMutation::ScheduleArtifactReturn(_)
-                    | spellwake_engine::toolbox::ObjectMutation::ExileUnearthed(_)
+                    | spellwake_engine::toolbox::ObjectMutation::KeywordZoneAction(
+                        spellwake_engine::toolbox::KeywordZoneOp::ScheduleArtifactReturn(_)
+                            | spellwake_engine::toolbox::KeywordZoneOp::ExileUnearthed(_)
+                            | spellwake_engine::toolbox::KeywordZoneOp::ExileDefeatedSiege
+                            | spellwake_engine::toolbox::KeywordZoneOp::SacrificeEvoked
+                            | spellwake_engine::toolbox::KeywordZoneOp::SacrificeStateTriggerSource
+                    )
                     | spellwake_engine::toolbox::ObjectMutation::ResolveTransfer(_)
-                    | spellwake_engine::toolbox::ObjectMutation::ExileDefeatedSiege
                     | spellwake_engine::toolbox::ObjectMutation::ResolveGrowth(_)
                     | spellwake_engine::toolbox::ObjectMutation::ResolveCounterKeyword(_)
-                    | spellwake_engine::toolbox::ObjectMutation::SacrificeEvoked
-                    | spellwake_engine::toolbox::ObjectMutation::SacrificeStateTriggerSource
                     | spellwake_engine::toolbox::ObjectMutation::ResolveKeywordTrigger(_)
-                    | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
-                    | spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
                     | spellwake_engine::toolbox::ObjectMutation::ResolvePowerAbility(_)
+                    | spellwake_engine::toolbox::ObjectMutation::Attach(
+                        spellwake_engine::toolbox::AttachOp::ToObject {
+                            ability: Some(_), ..
+                        }
+                    )
             ) =>
         {
             Err(ApplicabilityError)
@@ -482,17 +558,8 @@ native!(ExecutableBody, self, {
         {
             Err(ApplicabilityError)
         }
-        Instruction::BranchIfFalse { .. }
-        | Instruction::Jump { .. }
-        | Instruction::OptionalEffect { .. }
-        | Instruction::ChooseCreatureType { .. }
-        | Instruction::ExileTopPlay { .. }
+        Instruction::Jump { .. }
         | Instruction::RepeatLoop { .. }
-        | Instruction::ChooseValue { .. }
-        | Instruction::Fight { .. }
-        | Instruction::Exchange(_)
-        | Instruction::LookTopChooseExt { .. }
-        | Instruction::RevealUntilMatchExt { .. }
         | Instruction::DrawCards(_)
         | Instruction::MutateObject(_)
         | Instruction::AdjustLife(_)
@@ -1077,7 +1144,6 @@ native!(EffectWindow, self, {
             | PendingWorkKind::LandPlay
             | PendingWorkKind::ZoneMove
             | PendingWorkKind::ActivationCost
-            | PendingWorkKind::ImpulseReplacement
             | PendingWorkKind::CastRecovery,
         ) => Err(ApplicabilityError),
         Some(
@@ -1135,10 +1201,7 @@ native!(RuleFrame, self, {
         RuleFrame::TransformOrder(_) => Err(ApplicabilityError),
         RuleFrame::Mutation(_)
         | RuleFrame::RevealedPiles(_)
-        | RuleFrame::PlaneswalkerType(_)
-        | RuleFrame::AttackDirection(_)
         | RuleFrame::DrawReplacement(_)
-        | RuleFrame::DamageRecipientChoice(_)
         | RuleFrame::DamageSourceChoice(_)
         | RuleFrame::OpponentChoice(_)
         | RuleFrame::ReplacementChooser(_)
@@ -1160,12 +1223,18 @@ native!(RuleFrame, self, {
         | RuleFrame::CopyTargets(_)
         | RuleFrame::ManaColor(_)
         | RuleFrame::CreatureType(_) => Ok(()),
-        RuleFrame::LoyaltyRemoval(_)
-        | RuleFrame::ResolutionManaColor(_)
+        RuleFrame::PromptChoice(frame)
+            if matches!(
+                frame.domain,
+                spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. }
+            ) =>
+        {
+            Ok(())
+        }
+        RuleFrame::ResolutionManaColor(_)
         | RuleFrame::OptionIndex(_)
         | RuleFrame::PromptChoice(_)
         | RuleFrame::Proliferate(_)
-        | RuleFrame::CounterRemoval(_)
         | RuleFrame::UntapKeepTapped(_) => Err(ApplicabilityError),
     }
 });
@@ -1189,10 +1258,7 @@ native!(EffectDecision, self, {
         }
         EffectDecision::Mutation(_)
         | EffectDecision::RevealedPiles(_)
-        | EffectDecision::PlaneswalkerType(_)
-        | EffectDecision::AttackDirection(_)
         | EffectDecision::DrawReplacement(_)
-        | EffectDecision::DamageRecipientChoice(_)
         | EffectDecision::DamageSourceChoice(_)
         | EffectDecision::OpponentChoice(_)
         | EffectDecision::ReplacementChooser(_)
@@ -1213,12 +1279,18 @@ native!(EffectDecision, self, {
         | EffectDecision::TriggerTarget(_)
         | EffectDecision::CopyTargets(_)
         | EffectDecision::CreatureType(_) => Ok(()),
-        EffectDecision::LoyaltyRemoval(_)
-        | EffectDecision::ResolutionManaColor(_)
+        EffectDecision::PromptChoice(frame)
+            if matches!(
+                frame.domain,
+                spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. }
+            ) =>
+        {
+            Ok(())
+        }
+        EffectDecision::ResolutionManaColor(_)
         | EffectDecision::OptionIndex(_)
         | EffectDecision::PromptChoice(_)
         | EffectDecision::Proliferate(_)
-        | EffectDecision::CounterRemoval(_)
         | EffectDecision::UntapKeepTapped(_) => Err(ApplicabilityError),
     }
 });
@@ -1300,16 +1372,16 @@ native!(spellwake_engine::effects::DecisionReply, self, {
         | DecisionReply::TokenAuraChoice(_)
         | DecisionReply::LinkedReturnOrder(_)
         | DecisionReply::LinkedAuraChoice(_) => Err(ApplicabilityError),
+        DecisionReply::PromptChoice(
+            spellwake_engine::toolbox::PromptChoiceReply::CreatureType(_),
+        ) => Ok(()),
         DecisionReply::TransformOrder(_) | DecisionReply::PromptChoice(_) => {
             Err(ApplicabilityError)
         }
         DecisionReply::ChooseLandKind(_)
         | DecisionReply::MutateOnTop(_)
         | DecisionReply::ChoosePile(_)
-        | DecisionReply::PlaneswalkerType(_)
-        | DecisionReply::AttackDirection(_)
         | DecisionReply::DrawReplacement(_)
-        | DecisionReply::ChooseDamageRecipient(_)
         | DecisionReply::ChooseDamageSource(_)
         | DecisionReply::OpponentChoice(_)
         | DecisionReply::ReplacementChooser(_)
@@ -1349,7 +1421,6 @@ native!(spellwake_engine::effects::DecisionReply, self, {
         | DecisionReply::CreatureType(_) => Ok(()),
         DecisionReply::Proliferate(_)
         | DecisionReply::OptionIndex(_)
-        | DecisionReply::RemoveCounters(_)
         | DecisionReply::SplitMana(_)
         | DecisionReply::TriggerModes(_)
         | DecisionReply::ApplyCounterDoublersFirst(_)

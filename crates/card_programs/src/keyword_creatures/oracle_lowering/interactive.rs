@@ -900,22 +900,6 @@ pub(super) fn patch_any_color_cast_permission(op: &mut Instruction) -> bool {
                 false
             }
         }
-        Instruction::ExileTopPlay { any_color, .. }
-        | Instruction::LookTopChooseExt {
-            keep_dest:
-                spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. }
-                | spellwake_engine::program::LookTopKeepDest::ExileLinked { any_color, .. },
-            ..
-        }
-        | Instruction::RevealUntilMatchExt {
-            match_dest:
-                spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. }
-                | spellwake_engine::program::LookTopKeepDest::ExileLinked { any_color, .. },
-            ..
-        } => {
-            *any_color = true;
-            true
-        }
         _ => false,
     }
 }
@@ -1111,7 +1095,7 @@ pub(super) fn try_fuse_two_pile_split(
     .ok()?;
     if target_opponent {
         let mut probe = builder.clone();
-        probe.bind_target(BodyTarget::SingleOpponent).ok()?;
+        probe.bind_target(BodyTarget::SINGLE_OPPONENT).ok()?;
         *builder = probe;
     }
     builder
@@ -1192,21 +1176,25 @@ pub(super) fn lower_choose_from_group(
         if chooser == PlayerRefAst::You && matches!(count, ValueExprAst::Const(1)) {
             match group {
                 SubjectRefAst::Player(PlayerRefAst::AnyOpponent) => {
-                    builder.instructions.push(Instruction::ChooseValue {
-                        chooser: ResolvingPlayer::Controller,
-                        domain: spellwake_engine::program::ResolutionChoiceDomain::RandomPlayer {
-                            opponents_only: true,
-                        },
-                    });
+                    builder
+                        .instructions
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                                ResolvingPlayer::Controller,
+                                spellwake_engine::toolbox::PromptDomain::random_player(true),
+                            ),
+                        )));
                     return Ok(());
                 }
                 SubjectRefAst::Player(PlayerRefAst::AnyPlayer) => {
-                    builder.instructions.push(Instruction::ChooseValue {
-                        chooser: ResolvingPlayer::Controller,
-                        domain: spellwake_engine::program::ResolutionChoiceDomain::RandomPlayer {
-                            opponents_only: false,
-                        },
-                    });
+                    builder
+                        .instructions
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                                ResolvingPlayer::Controller,
+                                spellwake_engine::toolbox::PromptDomain::random_player(false),
+                            ),
+                        )));
                     return Ok(());
                 }
                 _ => {}
@@ -1226,19 +1214,18 @@ pub(super) fn lower_choose_from_group(
                 };
                 let bt = lower_target_subject(&single, vocabulary)?;
                 match bt {
-                    BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::FilteredAnyGraveyardCard { .. } => {
+                    BodyTarget::Object {
+                        zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                        ..
+                    } if bt != BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER => {
                         builder.bind_target(bt)?;
                         builder.graveyard_target_bounds = Some((0, 1));
                         return Ok(());
                     }
-                    BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_) => {
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    } => {
                         builder.bind_target(bt)?;
                         builder.up_to_one_target = true;
                         return Ok(());
@@ -1265,12 +1252,12 @@ pub(super) fn lower_choose_from_group(
                 let bt = lower_target_subject(&single, vocabulary)?;
                 if matches!(
                     bt,
-                    BodyTarget::SingleOwnGraveyardCard
-                        | BodyTarget::FilteredOwnGraveyardCard(_)
-                        | BodyTarget::AnyGraveyardCard
-                        | BodyTarget::AnyGraveyardCreature
-                        | BodyTarget::FilteredAnyGraveyardCard { .. }
-                ) {
+                    BodyTarget::Object {
+                        zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                        ..
+                    }
+                ) && bt != BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER
+                {
                     builder.bind_target(bt)?;
                     builder.graveyard_target_bounds = Some((min_t, max_t));
                     return Ok(());
@@ -1288,10 +1275,10 @@ pub(super) fn lower_choose_from_group(
                 let bt = lower_target_subject(&single, vocabulary)?;
                 if matches!(
                     bt,
-                    BodyTarget::SingleCreature
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::FilteredPermanent(_)
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    }
                 ) {
                     builder.bind_target(bt)?;
                     builder.up_to_one_target = true;
@@ -1307,23 +1294,27 @@ pub(super) fn lower_choose_from_group(
             SubjectRefAst::Player(PlayerRefAst::AnyOpponent)
                 if matches!(count, ValueExprAst::Const(1)) =>
             {
-                builder.instructions.push(Instruction::ChooseValue {
-                    chooser: ResolvingPlayer::Controller,
-                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
-                        opponents_only: true,
-                    },
-                });
+                builder
+                    .instructions
+                    .push(Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                            ResolvingPlayer::Controller,
+                            spellwake_engine::toolbox::PromptDomain::player(true),
+                        ),
+                    )));
                 return Ok(());
             }
             SubjectRefAst::Player(PlayerRefAst::AnyPlayer)
                 if matches!(count, ValueExprAst::Const(1)) =>
             {
-                builder.instructions.push(Instruction::ChooseValue {
-                    chooser: ResolvingPlayer::Controller,
-                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
-                        opponents_only: false,
-                    },
-                });
+                builder
+                    .instructions
+                    .push(Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                            ResolvingPlayer::Controller,
+                            spellwake_engine::toolbox::PromptDomain::player(false),
+                        ),
+                    )));
                 return Ok(());
             }
             _ => {}
@@ -1333,16 +1324,18 @@ pub(super) fn lower_choose_from_group(
         let (players, source_zone, filter, min, max) = lower_group_choose_spec(
             chooser, count, filter_ast, builder, vocabulary, in_trigger, bound_x,
         )?;
-        builder.instructions.push(Instruction::ChooseObjects {
-            players,
-            source_zone,
-            filter: Box::new(filter),
-            min,
-            max,
-            distinct_powers: false,
-            max_total_power: None,
-            unchosen_action: None,
-        });
+        builder.instructions.extend(
+            spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                players,
+                source_zone,
+                filter,
+                min,
+                max,
+                false,
+                None,
+                None,
+            ),
+        );
         return Ok(());
     }
     Err("oracle:unsupported-instruction")
@@ -1350,7 +1343,7 @@ pub(super) fn lower_choose_from_group(
 
 /// Fuse `ChooseFromGroup` / `PlayerChooseFromGroup` / `InteractiveChoice(ChooseFromGroup)` followed
 /// by a keep-vs-rest destruction, exile, bounce, sacrifice, discard, or tap into
-/// [`Instruction::ChooseObjects`] with `unchosen_action`.
+/// [`Instruction::PromptChoice`] plus a followup over unchosen objects.
 pub(super) fn try_fuse_choose_objects_and_rest(
     ins: &[InstructionAst],
     i: usize,
@@ -1360,7 +1353,7 @@ pub(super) fn try_fuse_choose_objects_and_rest(
     bound_x: Option<&ValueExprAst>,
 ) -> Option<usize> {
     let next = ins.get(i + 1)?;
-    let unchosen_action = extract_rest_action(next)?;
+    let unchosen_followup = extract_rest_followup(next)?;
     let mut probe = builder.clone();
     let spec = match &ins[i] {
         InstructionAst::ChooseFromGroup {
@@ -1427,16 +1420,18 @@ pub(super) fn try_fuse_choose_objects_and_rest(
         _ => return None,
     };
     *builder = probe;
-    builder.instructions.push(Instruction::ChooseObjects {
-        players: spec.players,
-        source_zone: spec.source_zone,
-        filter: Box::new(spec.filter),
-        min: spec.min,
-        max: spec.max,
-        distinct_powers: spec.distinct_powers,
-        max_total_power: spec.max_total_power,
-        unchosen_action: Some(unchosen_action),
-    });
+    builder.instructions.extend(
+        spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+            spec.players,
+            spec.source_zone,
+            spec.filter,
+            spec.min,
+            spec.max,
+            spec.distinct_powers,
+            spec.max_total_power,
+            Some(unchosen_followup),
+        ),
+    );
     Some(2)
 }
 
@@ -1450,10 +1445,11 @@ struct ChooseObjectsSpec {
     max_total_power: Option<ValueExpr>,
 }
 
-fn extract_rest_action(
-    op: &InstructionAst,
-) -> Option<spellwake_engine::program::UnchosenObjectsAction> {
-    use spellwake_engine::program::UnchosenObjectsAction;
+fn extract_rest_followup(op: &InstructionAst) -> Option<Instruction> {
+    use spellwake_engine::toolbox::{
+        GraveyardSemantics, MutateObjectSpec, ObjectMutation, ObjectQuery, PromptChoiceSpec,
+        TapStateOp, ZoneDest, ZoneOpSpec,
+    };
     let is_rest_subject = |subj: &SubjectRefAst| -> bool {
         match subj {
             SubjectRefAst::Anaphora(raw) => {
@@ -1471,12 +1467,23 @@ fn extract_rest_action(
             _ => false,
         }
     };
+    let unchosen = || ObjectQuery::Bound(PromptChoiceSpec::unchosen_binding());
     match op {
         InstructionAst::Destroy { subject, .. } if is_rest_subject(subject) => {
-            Some(UnchosenObjectsAction::Destroy)
+            Some(Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                unchosen(),
+                ZoneDest::Graveyard {
+                    semantics: GraveyardSemantics::Destroy {
+                        allow_regenerate: true,
+                    },
+                },
+            ))))
         }
         InstructionAst::Exile { subject, .. } if is_rest_subject(subject) => {
-            Some(UnchosenObjectsAction::Exile)
+            Some(Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                unchosen(),
+                ZoneDest::exile(),
+            ))))
         }
         InstructionAst::ReturnZone {
             subject,
@@ -1486,21 +1493,39 @@ fn extract_rest_action(
         } if (is_rest_subject(subject) || except.is_some())
             && to.to_ascii_lowercase().contains("hand") =>
         {
-            Some(UnchosenObjectsAction::ReturnToHand)
+            Some(Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                unchosen(),
+                ZoneDest::Hand,
+            ))))
         }
         InstructionAst::Sacrifice {
             subject, except, ..
-        } if is_rest_subject(subject) || except.is_some() => Some(UnchosenObjectsAction::Sacrifice),
+        } if is_rest_subject(subject) || except.is_some() => {
+            Some(Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                unchosen(),
+                ZoneDest::Graveyard {
+                    semantics: GraveyardSemantics::Sacrifice,
+                },
+            ))))
+        }
         InstructionAst::Discard { anaphora, .. }
             if anaphora.as_deref().is_some_and(|a| {
                 let low = a.to_ascii_lowercase();
                 low.contains("rest") || low.contains("other")
             }) =>
         {
-            Some(UnchosenObjectsAction::Discard)
+            Some(Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                unchosen(),
+                ZoneDest::Graveyard {
+                    semantics: GraveyardSemantics::Discard,
+                },
+            ))))
         }
         InstructionAst::TapPermanent { subject, .. } if is_rest_subject(subject) => {
-            Some(UnchosenObjectsAction::Tap)
+            Some(Instruction::MutateObject(Box::new(MutateObjectSpec::all(
+                unchosen(),
+                ObjectMutation::TapState(TapStateOp::Set(true)),
+            ))))
         }
         _ => None,
     }
@@ -1546,10 +1571,7 @@ fn lower_group_choose_spec(
             }
             Some(ZoneFilter::ThatPlayerHand)
                 if chooser == PlayerRefAst::You
-                    && matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    && matches!(builder.target, BodyTarget::Player { .. }) =>
             {
                 (SourceZoneFilter::TargetPlayerHand, false)
             }
@@ -1557,11 +1579,11 @@ fn lower_group_choose_spec(
                 (SourceZoneFilter::Hand, false)
             }
             Some(ZoneFilter::TargetPlayerHand) if chooser == PlayerRefAst::You => {
-                builder.bind_target(BodyTarget::SinglePlayer)?;
+                builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 (SourceZoneFilter::TargetPlayerHand, false)
             }
             Some(ZoneFilter::TargetOpponentHand) if chooser == PlayerRefAst::You => {
-                builder.bind_target(BodyTarget::SingleOpponent)?;
+                builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 (SourceZoneFilter::TargetPlayerHand, false)
             }
             Some(ZoneFilter::OpponentHand | ZoneFilter::OpponentsHands) => {
@@ -1572,10 +1594,7 @@ fn lower_group_choose_spec(
             }
             Some(ZoneFilter::ThatPlayerGraveyard)
                 if chooser == PlayerRefAst::You
-                    && matches!(
-                        builder.target,
-                        BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                    ) =>
+                    && matches!(builder.target, BodyTarget::Player { .. }) =>
             {
                 (SourceZoneFilter::TargetPlayerGraveyard, false)
             }
@@ -1583,11 +1602,11 @@ fn lower_group_choose_spec(
                 (SourceZoneFilter::Graveyard, false)
             }
             Some(ZoneFilter::TargetPlayerGraveyard) if chooser == PlayerRefAst::You => {
-                builder.bind_target(BodyTarget::SinglePlayer)?;
+                builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                 (SourceZoneFilter::TargetPlayerGraveyard, false)
             }
             Some(ZoneFilter::TargetOpponentGraveyard) if chooser == PlayerRefAst::You => {
-                builder.bind_target(BodyTarget::SingleOpponent)?;
+                builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                 (SourceZoneFilter::TargetPlayerGraveyard, false)
             }
             Some(ZoneFilter::OpponentGraveyard | ZoneFilter::OpponentsGraveyards) => {
@@ -1854,10 +1873,7 @@ fn parse_interactive_choose_objects(
         .or_else(|| body_phrase.strip_suffix(" from that player's graveyard"))
     {
         if chooser == PlayerRefAst::You {
-            if matches!(
-                builder.target,
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            ) {
+            if matches!(builder.target, BodyTarget::Player { .. }) {
                 (SourceZoneFilter::TargetPlayerGraveyard, p.trim())
             } else {
                 return None;
@@ -1872,7 +1888,7 @@ fn parse_interactive_choose_objects(
         if chooser != PlayerRefAst::You {
             return None;
         }
-        req_target = Some(BodyTarget::SinglePlayer);
+        req_target = Some(BodyTarget::SINGLE_PLAYER);
         (SourceZoneFilter::TargetPlayerGraveyard, p.trim())
     } else if let Some(p) = body_phrase
         .strip_suffix(" in target opponent's graveyard")
@@ -1881,7 +1897,7 @@ fn parse_interactive_choose_objects(
         if chooser != PlayerRefAst::You {
             return None;
         }
-        req_target = Some(BodyTarget::SingleOpponent);
+        req_target = Some(BodyTarget::SINGLE_OPPONENT);
         (SourceZoneFilter::TargetPlayerGraveyard, p.trim())
     } else if let Some(p) = body_phrase
         .strip_suffix(" in an opponent's graveyard")
@@ -1912,10 +1928,7 @@ fn parse_interactive_choose_objects(
         .or_else(|| body_phrase.strip_suffix(" from that player's hand"))
     {
         if chooser == PlayerRefAst::You {
-            if matches!(
-                builder.target,
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            ) {
+            if matches!(builder.target, BodyTarget::Player { .. }) {
                 (SourceZoneFilter::TargetPlayerHand, p.trim())
             } else {
                 return None;
@@ -1930,7 +1943,7 @@ fn parse_interactive_choose_objects(
         if chooser != PlayerRefAst::You {
             return None;
         }
-        req_target = Some(BodyTarget::SinglePlayer);
+        req_target = Some(BodyTarget::SINGLE_PLAYER);
         (SourceZoneFilter::TargetPlayerHand, p.trim())
     } else if let Some(p) = body_phrase
         .strip_suffix(" in target opponent's hand")
@@ -1939,7 +1952,7 @@ fn parse_interactive_choose_objects(
         if chooser != PlayerRefAst::You {
             return None;
         }
-        req_target = Some(BodyTarget::SingleOpponent);
+        req_target = Some(BodyTarget::SINGLE_OPPONENT);
         (SourceZoneFilter::TargetPlayerHand, p.trim())
     } else if let Some(p) = body_phrase
         .strip_suffix(" in an opponent's hand")
@@ -2095,32 +2108,26 @@ fn has_live_interactive_last_moved(
     for op in ops.iter().rev() {
         match op {
             Instruction::MutatePlayer(spec) => match &spec.op {
-                spellwake_engine::toolbox::PlayerMutation::Mill(_) => {
+                spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::Mill(_),
+                ) => {
                     return matches!(
                         expected,
                         InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Mill
                     );
                 }
-                spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
-                | spellwake_engine::toolbox::PlayerMutation::ManifestDread => {
+                spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::ManifestTop(_),
+                )
+                | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::ManifestDread,
+                ) => {
                     return matches!(expected, InteractiveLastMovedKind::Any);
                 }
                 spellwake_engine::toolbox::PlayerMutation::AddMana(_)
                 | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_) => continue,
                 _ => return false,
             },
-            Instruction::ExileTopPlay { .. } => {
-                return matches!(
-                    expected,
-                    InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
-                );
-            }
-            Instruction::Discard { .. } => {
-                return matches!(
-                    expected,
-                    InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Discard
-                );
-            }
             Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
                 if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
                     .is_some() =>
@@ -2159,30 +2166,19 @@ fn has_live_interactive_last_moved(
                     _ => matches!(expected, InteractiveLastMovedKind::Any),
                 };
             }
-            Instruction::DrawCards(_) => {
+            Instruction::DrawCards(_) | Instruction::SearchLibrary { .. } => {
                 return matches!(expected, InteractiveLastMovedKind::Any);
             }
-            Instruction::LookTopChooseExt { keep_dest, .. }
-            | Instruction::RevealUntilMatchExt {
-                match_dest: keep_dest,
-                ..
-            } => {
-                return match keep_dest {
-                    spellwake_engine::program::LookTopKeepDest::Exile { .. }
-                    | spellwake_engine::program::LookTopKeepDest::ExileLinked { .. } => matches!(
-                        expected,
-                        InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
-                    ),
-                    _ => matches!(expected, InteractiveLastMovedKind::Any),
-                };
-            }
-
-            Instruction::ChooseObjects { .. } | Instruction::SearchLibrary { .. } => {
+            Instruction::PromptChoice(spec)
+                if matches!(
+                    spec.domain,
+                    spellwake_engine::toolbox::PromptDomain::Objects { .. }
+                ) =>
+            {
                 return matches!(expected, InteractiveLastMovedKind::Any);
             }
-            Instruction::OptionalEffect { .. }
-            | Instruction::OptionalSequence { .. }
-            | Instruction::BranchIfFalse { .. }
+            Instruction::OptionalSequence { .. }
+            | Instruction::BranchCondition { .. }
             | Instruction::Jump { .. }
             | Instruction::ApplyContinuous(_)
             | Instruction::AdjustLife(_) => continue,
@@ -2282,7 +2278,7 @@ fn strip_interactive_last_moved_predicates(
 }
 
 /// Lower `InstructionAst::PlayerChooseOption { chooser, options }` into `ChooseValue` /
-/// `ChooseOptionForPlayers` / `ChooseCreatureType`.
+/// `ChooseOptionForPlayers` / `PromptChoice`.
 pub(super) fn lower_player_choose_option(
     chooser: PlayerRefAst,
     options: &[String],
@@ -2300,8 +2296,7 @@ pub(super) fn lower_player_choose_option(
         return try_lower_choose_option_ext(chooser, cleaned, builder, vocabulary, ids, in_trigger);
     }
     if options.len() <= 20 {
-        let domain =
-            spellwake_engine::program::ResolutionChoiceDomain::LabeledOption(options.to_vec());
+        let domain = spellwake_engine::toolbox::PromptDomain::labeled_option(options.to_vec());
         return emit_domain_for_player_ref(chooser, domain, builder, in_trigger);
     }
     Err("oracle:unsupported-choose-option")
@@ -2316,7 +2311,6 @@ pub(super) fn try_lower_choose_option_ext(
     ids: &mut LoweringIds,
     in_trigger: bool,
 ) -> Result<(), &'static str> {
-    use spellwake_engine::program::ResolutionChoiceDomain;
     use spellwake_engine::toolbox::{
         BindingId, ChoiceCategory, PlayerSelector, PromptChoiceSpec, PromptDomain,
         SubtypeChoiceKind, ZoneDest, ZoneOpSpec, ZoneSelection,
@@ -2387,12 +2381,14 @@ pub(super) fn try_lower_choose_option_ext(
         }
         let chooser_rp_opt = match chooser {
             PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer => {
-                builder.instructions.push(Instruction::ChooseValue {
-                    chooser: ResolvingPlayer::Controller,
-                    domain: ResolutionChoiceDomain::Player {
-                        opponents_only: chooser == PlayerRefAst::AnyOpponent,
-                    },
-                });
+                builder
+                    .instructions
+                    .push(Instruction::PromptChoice(Box::new(
+                        PromptChoiceSpec::choose_value(
+                            ResolvingPlayer::Controller,
+                            PromptDomain::player(chooser == PlayerRefAst::AnyOpponent),
+                        ),
+                    )));
                 Some(ResolvingPlayer::ChosenPlayer)
             }
             other => lower_resolving_player_in_context(other, builder, in_trigger).ok(),
@@ -2430,12 +2426,15 @@ pub(super) fn try_lower_choose_option_ext(
             chooser: PlayerSelector::Bound(SEAT_BIND),
             domain: PromptDomain::Subtype {
                 kind: SubtypeChoiceKind::Creature,
+                excluding: BTreeSet::new(),
+                legacy_slot: None,
             },
             category: ChoiceCategory::Generic,
             bind_to: CHOICE_BIND,
             bind_unchosen: None,
             tag_partition: None,
             auto_resolve_trivial: false,
+            option_branches: Vec::new(),
         }));
         builder.instructions.push(Instruction::ForEachPlayerQuery {
             selector: Box::new(PlayerSelector::Group(players)),
@@ -2456,12 +2455,15 @@ pub(super) fn try_lower_choose_option_ext(
                 chooser: PlayerSelector::Resolving(rp),
                 domain: PromptDomain::Subtype {
                     kind: SubtypeChoiceKind::Planeswalker,
+                    excluding: BTreeSet::new(),
+                    legacy_slot: None,
                 },
                 category: ChoiceCategory::Generic,
                 bind_to: CHOICE_BIND,
                 bind_unchosen: None,
                 tag_partition: None,
                 auto_resolve_trivial: false,
+                option_branches: Vec::new(),
             })));
         return Ok(());
     }
@@ -2492,37 +2494,30 @@ pub(super) fn try_lower_choose_option_ext(
                 bind_unchosen: None,
                 tag_partition: None,
                 auto_resolve_trivial: false,
+                option_branches: Vec::new(),
             })));
         return Ok(());
     }
 
     let domain = match eff_cleaned {
-        "an opponent at random" | "opponent at random" => ResolutionChoiceDomain::RandomPlayer {
-            opponents_only: true,
-        },
-        "a player at random" | "player at random" => ResolutionChoiceDomain::RandomPlayer {
-            opponents_only: false,
-        },
-        "an opponent" | "opponent" | "another opponent" => ResolutionChoiceDomain::Player {
-            opponents_only: true,
-        },
-        "a player" | "player" | "another player" => ResolutionChoiceDomain::Player {
-            opponents_only: false,
-        },
+        "an opponent at random" | "opponent at random" => PromptDomain::random_player(true),
+        "a player at random" | "player at random" => PromptDomain::random_player(false),
+        "an opponent" | "opponent" | "another opponent" => PromptDomain::player(true),
+        "a player" | "player" | "another player" => PromptDomain::player(false),
         "a number" | "number" | "a number 0 or greater" | "any number" | "0 or more" => {
-            ResolutionChoiceDomain::Number { min: 0, max: 20 }
+            PromptDomain::number_range(0, 20)
         }
         "a number greater than 0" | "a positive number" | "a number 1 or greater" => {
-            ResolutionChoiceDomain::Number { min: 1, max: 20 }
+            PromptDomain::number_range(1, 20)
         }
-        "1 or 2" => ResolutionChoiceDomain::Number { min: 1, max: 2 },
-        "0, 1, or 2" => ResolutionChoiceDomain::Number { min: 0, max: 2 },
-        "1, 2, or 3" => ResolutionChoiceDomain::Number { min: 1, max: 3 },
-        "1, 2, 3, or 4" => ResolutionChoiceDomain::Number { min: 1, max: 4 },
+        "1 or 2" => PromptDomain::number_range(1, 2),
+        "0, 1, or 2" => PromptDomain::number_range(0, 2),
+        "1, 2, or 3" => PromptDomain::number_range(1, 3),
+        "1, 2, 3, or 4" => PromptDomain::number_range(1, 4),
         "a color of mana" | "any one color" | "one color" | "a color" | "any color" => {
-            ResolutionChoiceDomain::Color
+            PromptDomain::color()
         }
-        "a permanent type" => ResolutionChoiceDomain::CardType(vec![
+        "a permanent type" => PromptDomain::card_type(vec![
             CardType::Artifact,
             CardType::Battle,
             CardType::Creature,
@@ -2530,7 +2525,7 @@ pub(super) fn try_lower_choose_option_ext(
             CardType::Land,
             CardType::Planeswalker,
         ]),
-        "a nonland card type" => ResolutionChoiceDomain::CardType(vec![
+        "a nonland card type" => PromptDomain::card_type(vec![
             CardType::Artifact,
             CardType::Battle,
             CardType::Creature,
@@ -2540,7 +2535,7 @@ pub(super) fn try_lower_choose_option_ext(
             CardType::Planeswalker,
             CardType::Sorcery,
         ]),
-        "a noncreature card type" => ResolutionChoiceDomain::CardType(vec![
+        "a noncreature card type" => PromptDomain::card_type(vec![
             CardType::Artifact,
             CardType::Battle,
             CardType::Enchantment,
@@ -2550,35 +2545,33 @@ pub(super) fn try_lower_choose_option_ext(
             CardType::Planeswalker,
             CardType::Sorcery,
         ]),
-        "the name of a card" => ResolutionChoiceDomain::CardName {
-            nonland_only: false,
-        },
+        "the name of a card" => PromptDomain::card_name(false),
         "a creature card name"
         | "a card name other than a basic land card name"
         | "a nonbasic land card name"
         | "an instant or sorcery card name"
-        | "a noncreature card name" => ResolutionChoiceDomain::CardName { nonland_only: true },
-        "a land type" => ResolutionChoiceDomain::BasicLandType,
+        | "a noncreature card name" => PromptDomain::card_name(true),
+        "a land type" => PromptDomain::basic_land_type(),
         "land or nonland" => {
-            ResolutionChoiceDomain::LabeledOption(vec!["land".to_owned(), "nonland".to_owned()])
+            PromptDomain::labeled_option(vec!["land".to_owned(), "nonland".to_owned()])
         }
         "odd or even" | "even or odd" => {
-            ResolutionChoiceDomain::LabeledOption(vec!["odd".to_owned(), "even".to_owned()])
+            PromptDomain::labeled_option(vec!["odd".to_owned(), "even".to_owned()])
         }
         "khans or dragons" | "dragons or khans" => {
-            ResolutionChoiceDomain::LabeledOption(vec!["Khans".to_owned(), "Dragons".to_owned()])
+            PromptDomain::labeled_option(vec!["Khans".to_owned(), "Dragons".to_owned()])
         }
         "mirran or phyrexian" | "phyrexian or mirran" => {
-            ResolutionChoiceDomain::LabeledOption(vec!["Mirran".to_owned(), "Phyrexian".to_owned()])
+            PromptDomain::labeled_option(vec!["Mirran".to_owned(), "Phyrexian".to_owned()])
         }
         "heads or tails" => {
-            ResolutionChoiceDomain::LabeledOption(vec!["heads".to_owned(), "tails".to_owned()])
+            PromptDomain::labeled_option(vec!["heads".to_owned(), "tails".to_owned()])
         }
         "friend or foe" => {
-            ResolutionChoiceDomain::LabeledOption(vec!["friend".to_owned(), "foe".to_owned()])
+            PromptDomain::labeled_option(vec!["friend".to_owned(), "foe".to_owned()])
         }
         "choose left or right" | "left or right" => {
-            ResolutionChoiceDomain::LabeledOption(vec!["left".to_owned(), "right".to_owned()])
+            PromptDomain::labeled_option(vec!["left".to_owned(), "right".to_owned()])
         }
         other => {
             if chooser == PlayerRefAst::You
@@ -2590,16 +2583,18 @@ pub(super) fn try_lower_choose_option_ext(
                 parse_interactive_choose_objects(chooser, other, builder, vocabulary, in_trigger)
             {
                 if spec.distinct_powers || spec.max_total_power.is_some() {
-                    builder.instructions.push(Instruction::ChooseObjects {
-                        players: spec.players,
-                        source_zone: spec.source_zone,
-                        filter: Box::new(spec.filter),
-                        min: spec.min,
-                        max: spec.max,
-                        distinct_powers: spec.distinct_powers,
-                        max_total_power: spec.max_total_power,
-                        unchosen_action: None,
-                    });
+                    builder
+                        .instructions
+                        .extend(PromptChoiceSpec::choose_objects_instructions(
+                            spec.players,
+                            spec.source_zone,
+                            spec.filter,
+                            spec.min,
+                            spec.max,
+                            spec.distinct_powers,
+                            spec.max_total_power,
+                            None,
+                        ));
                 } else if let AffectedPlayers::One(rp) = spec.players {
                     let query = super::toolbox_emit::source_zone_query(
                         spec.players,
@@ -2763,19 +2758,17 @@ fn try_bind_choose_target_phrase(
             };
             let is_gy = matches!(
                 bt,
-                BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }
+                BodyTarget::Object {
+                    zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                    ..
+                }
             );
             let is_perm = matches!(
                 bt,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_)
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
             );
             if !is_gy && !is_perm {
                 return false;
@@ -2815,19 +2808,17 @@ fn try_bind_choose_target_phrase(
             };
             let is_gy = matches!(
                 bt,
-                BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }
+                BodyTarget::Object {
+                    zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                    ..
+                }
             );
             let is_perm = matches!(
                 bt,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_)
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
             );
             if !is_gy && !is_perm {
                 return false;
@@ -2863,16 +2854,18 @@ pub(super) fn try_lower_interactive_choose_from_group(
     if let Some(spec) =
         parse_interactive_choose_objects(chooser, cleaned, builder, vocabulary, in_trigger)
     {
-        builder.instructions.push(Instruction::ChooseObjects {
-            players: spec.players,
-            source_zone: spec.source_zone,
-            filter: Box::new(spec.filter),
-            min: spec.min,
-            max: spec.max,
-            distinct_powers: spec.distinct_powers,
-            max_total_power: spec.max_total_power,
-            unchosen_action: None,
-        });
+        builder.instructions.extend(
+            spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                spec.players,
+                spec.source_zone,
+                spec.filter,
+                spec.min,
+                spec.max,
+                spec.distinct_powers,
+                spec.max_total_power,
+                None,
+            ),
+        );
         return Ok(());
     }
     try_lower_choose_option_ext(chooser, cleaned, builder, vocabulary, ids, in_trigger)
@@ -2881,42 +2874,46 @@ pub(super) fn try_lower_interactive_choose_from_group(
 
 fn emit_domain_for_player_ref(
     chooser: PlayerRefAst,
-    domain: spellwake_engine::program::ResolutionChoiceDomain,
+    domain: spellwake_engine::toolbox::PromptDomain,
     builder: &mut BodyBuilder,
     in_trigger: bool,
 ) -> Result<(), &'static str> {
+    use spellwake_engine::toolbox::{PromptChoiceSpec, PromptDomain};
     match chooser {
         PlayerRefAst::EachPlayer | PlayerRefAst::EachOpponent | PlayerRefAst::EachOtherPlayer => {
             let players = lower_affected_players_in_context(chooser, builder, in_trigger)?;
             push_for_each_player(
                 players,
-                vec![Instruction::ChooseValue {
-                    chooser: ResolvingPlayer::LoopPlayer,
-                    domain,
-                }],
+                vec![Instruction::PromptChoice(Box::new(
+                    PromptChoiceSpec::choose_value(ResolvingPlayer::LoopPlayer, domain),
+                ))],
                 builder,
             );
             Ok(())
         }
         PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer => {
-            builder.instructions.push(Instruction::ChooseValue {
-                chooser: ResolvingPlayer::Controller,
-                domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
-                    opponents_only: chooser == PlayerRefAst::AnyOpponent,
-                },
-            });
-            builder.instructions.push(Instruction::ChooseValue {
-                chooser: ResolvingPlayer::ChosenPlayer,
-                domain,
-            });
+            builder
+                .instructions
+                .push(Instruction::PromptChoice(Box::new(
+                    PromptChoiceSpec::choose_value(
+                        ResolvingPlayer::Controller,
+                        PromptDomain::player(chooser == PlayerRefAst::AnyOpponent),
+                    ),
+                )));
+            builder
+                .instructions
+                .push(Instruction::PromptChoice(Box::new(
+                    PromptChoiceSpec::choose_value(ResolvingPlayer::ChosenPlayer, domain),
+                )));
             Ok(())
         }
         other => {
             let rp = lower_resolving_player_in_context(other, builder, in_trigger)?;
-            builder.instructions.push(Instruction::ChooseValue {
-                chooser: rp,
-                domain,
-            });
+            builder
+                .instructions
+                .push(Instruction::PromptChoice(Box::new(
+                    PromptChoiceSpec::choose_value(rp, domain),
+                )));
             Ok(())
         }
     }
@@ -3199,9 +3196,9 @@ fn lower_prevention_recipient(
             if !is_valid_prevention_recipient_target(builder.target)
                 || builder.x_target_count
                 || builder.up_to_x_target_count
-                || builder.instructions.iter().any(|op| {
-                    matches!(op, Instruction::AffectPermanentTargets { maximum, .. } if *maximum != 1)
-                })
+                || builder
+                    .permanent_target_bounds
+                    .is_some_and(|(_, max)| max != 1)
             {
                 return Err("oracle:unsupported-prevention-recipient");
             }
@@ -3241,16 +3238,16 @@ pub(super) fn lower_prevent_all_damage(
 fn is_valid_prevention_recipient_target(target: BodyTarget) -> bool {
     matches!(
         target,
-        BodyTarget::SingleAnyTarget
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePermanent
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::SinglePlayer
-            | BodyTarget::SingleOpponent
-            | BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::FilteredPermanent(_)
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        } | BodyTarget::Player { .. }
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                    | AnyTargetKind::PlayerOrPlaneswalker
+                    | AnyTargetKind::OpponentOrPlaneswalker
+                    | AnyTargetKind::CreatureOrPlayer
+            )
     )
 }
 
@@ -3312,37 +3309,23 @@ pub(super) fn lower_prevent_all_damage_from(
             if is_x {
                 builder.x_target_count = true;
             }
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: min_t,
-                    maximum: max_t,
-                    action: PermanentTargetAction::PreventDamageThisTurn {
-                        combat_only,
-                        both_directions,
-                    },
-                });
+            builder.push_bounded_target_op(
+                min_t,
+                max_t,
+                super::toolbox_emit::prevent_targets_damage_this_turn(combat_only, both_directions),
+            );
             return Ok(());
         }
         if let SubjectRefAst::Anaphora(text) = source
             && matches!(text.as_str(), "those creatures" | "those permanents")
-            && let Some((min_t, max_t)) = builder.instructions.iter().find_map(|op| match op {
-                Instruction::AffectPermanentTargets {
-                    minimum, maximum, ..
-                } => Some((*minimum, *maximum)),
-                _ => None,
-            })
+            && builder.permanent_target_bounds.is_some()
         {
             builder
                 .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: min_t,
-                    maximum: max_t,
-                    action: PermanentTargetAction::PreventDamageThisTurn {
-                        combat_only,
-                        both_directions,
-                    },
-                });
+                .push(super::toolbox_emit::prevent_targets_damage_this_turn(
+                    combat_only,
+                    both_directions,
+                ));
             return Ok(());
         }
     }
@@ -3484,7 +3467,13 @@ pub(super) fn lower_prevent_all_damage_from(
             return Err("oracle:unsupported-prevention-source");
         }
         let bt = lower_target_subject(source, vocabulary)?;
-        if !matches!(bt, BodyTarget::SingleSpell(_)) {
+        if !matches!(
+            bt,
+            BodyTarget::Spell {
+                include_abilities: false,
+                ..
+            }
+        ) {
             return Err("oracle:unsupported-prevention-source");
         }
         builder.bind_target(bt)?;
@@ -3505,10 +3494,10 @@ pub(super) fn lower_prevent_all_damage_from(
         };
         if !matches!(
             target,
-            BodyTarget::SingleCreature
-                | BodyTarget::SinglePermanent
-                | BodyTarget::SinglePlaneswalker
-                | BodyTarget::FilteredPermanent(_)
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
+            }
         ) {
             return Err("oracle:unsupported-prevention-source");
         }
@@ -3519,10 +3508,11 @@ pub(super) fn lower_prevent_all_damage_from(
                 return Err("oracle:unsupported-prevention-source");
             }
             builder.bind_target(target)?;
-        } else if builder.x_target_count || builder.up_to_x_target_count
-            || builder.instructions.iter().any(|op| {
-                matches!(op, Instruction::AffectPermanentTargets { maximum, .. } if *maximum != 1)
-            })
+        } else if builder.x_target_count
+            || builder.up_to_x_target_count
+            || builder
+                .permanent_target_bounds
+                .is_some_and(|(_, max)| max != 1)
         {
             return Err("oracle:unsupported-prevention-source");
         }

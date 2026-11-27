@@ -245,7 +245,6 @@ pub enum PendingWorkKind {
     ZoneMove,
     LandPlay,
     ActivationCost,
-    ImpulseReplacement,
     LibraryTop,
     LookTop,
     /// One cursor owns frozen choices, owner orders and a resolving batch.
@@ -280,7 +279,6 @@ impl EffectWindow {
             | PendingWork::SelectedActivationCost(_)
             | PendingWork::GraveyardExile(_)
             | PendingWork::GraveyardShuffle(_) => PendingWorkKind::ActivationCost,
-            PendingWork::ImpulseReplacement(_) => PendingWorkKind::ImpulseReplacement,
             PendingWork::LibraryTop(_) => PendingWorkKind::LibraryTop,
             PendingWork::LookTop(_) => PendingWorkKind::LookTop,
             PendingWork::ResolutionSelection(_) => PendingWorkKind::ResolutionSelection,
@@ -360,7 +358,6 @@ impl EffectWindow {
                 | PendingWork::BattlefieldEntry(_)
                 | PendingWork::SearchEntry(_)
                 | PendingWork::LandPlay(_)
-                | PendingWork::ImpulseReplacement(_)
                 | PendingWork::Checks(_)
                 | PendingWork::Combat(_)
                 | PendingWork::Damage(_)
@@ -401,7 +398,6 @@ impl EffectWindow {
                 | PendingWork::SelectedActivationCost(_)
                 | PendingWork::GraveyardExile(_)
                 | PendingWork::GraveyardShuffle(_)
-                | PendingWork::ImpulseReplacement(_)
                 | PendingWork::ResolutionSelection(_)
                 | PendingWork::TokenEntry(_)
                 | PendingWork::Checks(_)
@@ -972,7 +968,6 @@ impl EffectWindow {
             return Ok(());
         }
         let count = match self.optional_instruction(&work.cursor)? {
-            Instruction::OptionalEffect { .. } => 1,
             Instruction::OptionalSequence { instructions, .. } => *instructions,
             _ => return Err(EffectError::WrongPhase),
         };
@@ -989,7 +984,10 @@ impl EffectWindow {
             ) || matches!(
                 next_instr,
                 Instruction::MutatePlayer(spec)
-                    if matches!(spec.op, crate::toolbox::PlayerMutation::PayCounter { .. })
+                    if matches!(
+                        spec.op,
+                        crate::toolbox::PlayerMutation::Counter { pay: true, .. }
+                    )
             );
             let unpaid_cost = is_payment && !self.window.participants().contains(&controller);
             if !unpaid_cost {
@@ -1056,7 +1054,7 @@ impl EffectWindow {
             }
             let general = matches!(
                 self.optional_instruction(&work.cursor)?,
-                Instruction::OptionalEffect { .. } | Instruction::OptionalSequence { .. }
+                Instruction::OptionalSequence { .. }
             );
             if !general && self.window.participants().contains(&work.chooser) {
                 return Ok(());
@@ -1066,7 +1064,7 @@ impl EffectWindow {
             }
             let is_sequence = matches!(
                 self.optional_instruction(&work.cursor)?,
-                Instruction::OptionalSequence { .. }
+                Instruction::OptionalSequence { instructions, .. } if *instructions > 1
             );
             let available = self.optional_effect_available(
                 self.optional_following_instruction(&work.cursor)?,
@@ -1115,21 +1113,18 @@ impl EffectWindow {
         instruction: &Instruction,
         is_sequence: bool,
     ) -> Result<bool, EffectError> {
-        let allowed_sequence_head =
-            matches!(instruction, Instruction::OfferDynamicManaPayment { .. })
-                || (is_sequence
-                    && matches!(
-                        instruction,
-                        Instruction::BranchIfFalse { .. } | Instruction::Jump { .. }
-                    ));
+        let allowed_sequence_head = matches!(
+            instruction,
+            Instruction::PromptChoice(spec) if spec.as_mana_payment().is_some()
+        ) || (is_sequence
+            && matches!(
+                instruction,
+                Instruction::BranchCondition { .. } | Instruction::Jump { .. }
+            ));
         if !instruction.is_optional_primitive() && !allowed_sequence_head {
             return Err(EffectError::InconsistentProgram);
         }
         match instruction {
-            Instruction::AffectPermanentTargets { .. } => {
-                Ok(self.window.target_assessment().is_some()
-                    && !self.legal_permanent_targets()?.is_empty())
-            }
             Instruction::AdjustLife(spec) => {
                 if let crate::toolbox::LifeOp::Pay(amount) = &spec.op {
                     let entry = self
@@ -1187,7 +1182,11 @@ impl EffectWindow {
                 }
             }
             Instruction::MutatePlayer(spec) => match &spec.op {
-                crate::toolbox::PlayerMutation::PayCounter { kind, amount } => {
+                crate::toolbox::PlayerMutation::Counter {
+                    kind,
+                    amount,
+                    pay: true,
+                } => {
                     let entry = self
                         .window
                         .resolving()
@@ -1208,7 +1207,9 @@ impl EffectWindow {
                             .iter()
                             .all(|s| self.player_counters_of_kind(*s, *kind) >= cost))
                 }
-                crate::toolbox::PlayerMutation::CollectEvidence { minimum } => {
+                crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::CollectEvidence { minimum },
+                ) => {
                     let controller = self
                         .window
                         .resolving()
@@ -1235,7 +1236,9 @@ impl EffectWindow {
                         });
                     Ok(total_mv >= needed)
                 }
-                crate::toolbox::PlayerMutation::Blight { .. } => {
+                crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::Blight { .. },
+                ) => {
                     let player = spec
                         .resolving_player()
                         .ok_or(EffectError::InconsistentProgram)?;
@@ -1248,7 +1251,9 @@ impl EffectWindow {
                             && self.window.cards().phased_out_under(v.object).is_none()
                     }))
                 }
-                crate::toolbox::PlayerMutation::Mill(amount) => {
+                crate::toolbox::PlayerMutation::LibraryTop(
+                    crate::toolbox::LibraryTopAction::Mill(amount),
+                ) => {
                     let controller = self
                         .window
                         .resolving()
@@ -1263,14 +1268,20 @@ impl EffectWindow {
                         && (!requested.is_positive()
                             || !self.window.cards().library(player).is_empty()))
                 }
-                crate::toolbox::PlayerMutation::Populate
+                crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::Populate,
+                )
                 | crate::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
                 | crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
                 | crate::toolbox::PlayerMutation::OfferSourceCounters { .. } => {
                     Err(EffectError::InconsistentProgram)
                 }
-                crate::toolbox::PlayerMutation::MayRevealLibraryTop
-                | crate::toolbox::PlayerMutation::ExtortDrain
+                crate::toolbox::PlayerMutation::LibraryTop(
+                    crate::toolbox::LibraryTopAction::MayRevealTop,
+                )
+                | crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::ExtortDrain,
+                )
                 | crate::toolbox::PlayerMutation::ChooseRevealedHandCard { .. } => {
                     let entry = self
                         .window
@@ -1281,67 +1292,16 @@ impl EffectWindow {
                 }
                 _ => Ok(true),
             },
-            Instruction::Discard {
-                players: crate::program::AffectedPlayers::One(role),
-                amount,
-            } => {
-                let controller = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                let player = self.resolving_player_identity_at(*role, None)?;
-                let requested = self.resolve_value_expr(controller, amount)?;
-                let hand_count = self
-                    .window
-                    .cards()
-                    .iter()
-                    .filter(|card| {
-                        card.zone() == ObjectZone::Hand(player) && card.card_id().is_some()
-                    })
-                    .count();
-                Ok(!requested.is_positive() || RulesInteger::from_usize(hand_count) >= requested)
-            }
-            Instruction::OfferDynamicManaPayment { .. } | Instruction::FixedTargetClause(_) => {
-                Ok(true)
-            }
-            Instruction::Sacrifice {
-                players: crate::program::AffectedPlayers::One(role),
-                amount,
-                filter,
-            } => {
-                let controller = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                let player = self.resolving_player_identity_at(*role, None)?;
-                let requested = self.resolve_value_expr(controller, amount)?;
-                let evaluated = self.evaluated_characteristics()?;
-                let excluded = BTreeSet::new();
-                let matching_count = evaluated
-                    .objects
-                    .values()
-                    .filter(|view| {
-                        view.zone == ObjectZone::Battlefield
-                            && view.controller == Some(player)
-                            && self.window.cards().phased_out_under(view.object).is_none()
-                            && filter.matches_view(view, &excluded, || {
-                                self.permanent_mana_value(view.object)
-                            })
-                    })
-                    .count();
-                Ok(!requested.is_positive()
-                    || RulesInteger::from_usize(matching_count) >= requested)
-            }
-            Instruction::ExileTopPlay { .. }
-            | Instruction::ChooseObjects { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::ChooseValue { .. }
-            | Instruction::Fight { .. }
-            | Instruction::Exchange(_)
-            | Instruction::DrawCards(_)
-            | Instruction::PromptChoice(_)
+            Instruction::FixedTargetClause(_) => Ok(true),
+            Instruction::PromptChoice(spec) => match &spec.domain {
+                crate::toolbox::PromptDomain::Subtype {
+                    kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                    excluding,
+                    ..
+                } => Ok(excluding.len() < self.creature_vocabulary.len()),
+                _ => Ok(true),
+            },
+            Instruction::DrawCards(_)
             | Instruction::BranchCondition { .. }
             | Instruction::ForEach { .. }
             | Instruction::ForEachPlayerQuery { .. }
@@ -1364,42 +1324,46 @@ impl EffectWindow {
                     Ok(self.window.target_assessment().is_some()
                         && !self.legal_permanent_targets()?.is_empty())
                 }
-                _ => Ok(true),
-            },
-            Instruction::BecomeCopy {
-                receiver, donor, ..
-            } => {
-                if **receiver == crate::program::EffectSubject::AbilitySource
-                    && *donor == crate::program::MoveSubjectRef::TargetObject
-                {
-                    let entry = self
-                        .window
-                        .resolving()
-                        .ok_or(EffectError::InconsistentProgram)?;
-                    let source_live = match entry.kind() {
-                        StackKind::ActivatedAbility { source }
-                        | StackKind::TriggeredAbility { source } => self
+                crate::toolbox::ContinuousPayload::BecomeCopy { donor, .. } => {
+                    let receiver_is_source = matches!(
+                        spec.selector.as_ref(),
+                        Some(crate::toolbox::ObjectQuery::Source)
+                    ) || matches!(
+                        spec.selector.as_ref(),
+                        Some(crate::toolbox::ObjectQuery::EffectSubject(s))
+                            if **s == crate::program::EffectSubject::AbilitySource
+                    );
+                    if receiver_is_source && **donor == crate::toolbox::ObjectQuery::Targets {
+                        let entry = self
+                            .window
+                            .resolving()
+                            .ok_or(EffectError::InconsistentProgram)?;
+                        let source_live = match entry.kind() {
+                            StackKind::ActivatedAbility { source }
+                            | StackKind::TriggeredAbility { source } => self
+                                .window
+                                .cards()
+                                .get(source.id())
+                                .is_some_and(|card| card.zone() == ObjectZone::Battlefield),
+                            _ => false,
+                        };
+                        if !source_live {
+                            return Ok(false);
+                        }
+                        let bound = self.instruction_target(entry)?;
+                        let TargetRef::Object(donor_id) = bound.choice().target else {
+                            return Ok(false);
+                        };
+                        return Ok(self
                             .window
                             .cards()
-                            .get(source.id())
-                            .is_some_and(|card| card.zone() == ObjectZone::Battlefield),
-                        _ => false,
-                    };
-                    if !source_live {
-                        return Ok(false);
+                            .get(donor_id)
+                            .is_some_and(|card| card.zone() == ObjectZone::Battlefield));
                     }
-                    let bound = self.instruction_target(entry)?;
-                    let TargetRef::Object(donor_id) = bound.choice().target else {
-                        return Ok(false);
-                    };
-                    return Ok(self
-                        .window
-                        .cards()
-                        .get(donor_id)
-                        .is_some_and(|card| card.zone() == ObjectZone::Battlefield));
+                    Ok(true)
                 }
-                Ok(true)
-            }
+                _ => Ok(true),
+            },
             Instruction::StackOp(spec) => {
                 if matches!(
                     spec.op,
@@ -1432,6 +1396,61 @@ impl EffectWindow {
                 }
             }
             Instruction::ZoneOp(spec) => {
+                if let Some((players, amount)) = spec.as_group_discard() {
+                    let crate::program::AffectedPlayers::One(role) = players else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let controller = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .controller();
+                    let player = self.resolving_player_identity_at(role, None)?;
+                    let requested = self.resolve_value_expr(controller, amount)?;
+                    let hand_count = self
+                        .window
+                        .cards()
+                        .iter()
+                        .filter(|card| {
+                            card.zone() == ObjectZone::Hand(player) && card.card_id().is_some()
+                        })
+                        .count();
+                    return Ok(!requested.is_positive()
+                        || RulesInteger::from_usize(hand_count) >= requested);
+                }
+                if let Some((players, amount, primary, secondary)) = spec.as_group_sacrifice() {
+                    let crate::program::AffectedPlayers::One(role) = players else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let controller = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .controller();
+                    let player = self.resolving_player_identity_at(role, None)?;
+                    let requested = self.resolve_value_expr(controller, amount)?;
+                    let evaluated = self.evaluated_characteristics()?;
+                    let excluded = BTreeSet::new();
+                    let matching_count = evaluated
+                        .objects
+                        .values()
+                        .filter(|view| {
+                            view.zone == ObjectZone::Battlefield
+                                && view.controller == Some(player)
+                                && self.window.cards().phased_out_under(view.object).is_none()
+                                && primary.matches_static_characteristics(view, &excluded, || {
+                                    self.permanent_mana_value(view.object)
+                                })
+                                && secondary.as_ref().is_none_or(|f| {
+                                    f.matches_static_characteristics(view, &excluded, || {
+                                        self.permanent_mana_value(view.object)
+                                    })
+                                })
+                        })
+                        .count();
+                    return Ok(!requested.is_positive()
+                        || RulesInteger::from_usize(matching_count) >= requested);
+                }
                 if let crate::toolbox::ZoneDest::Delayed(action) = &spec.destination {
                     return match action {
                         crate::toolbox::DelayedZoneAction::ReturnGraveyardToHand(_)
@@ -1568,17 +1587,34 @@ impl EffectWindow {
                 _ => Ok(true),
             },
             Instruction::MutateObject(spec) => {
-                if matches!(spec.op, crate::toolbox::ObjectMutation::ReturnEarthbentCard) {
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::KeywordZoneAction(
+                        crate::toolbox::KeywordZoneOp::ReturnEarthbentCard
+                    )
+                ) {
                     Err(EffectError::InconsistentProgram)
                 } else if matches!(
                     spec.op,
                     crate::toolbox::ObjectMutation::Earthbend { .. }
-                        | crate::toolbox::ObjectMutation::SoulbondPair { .. }
-                        | crate::toolbox::ObjectMutation::RememberPermanentTarget
-                        | crate::toolbox::ObjectMutation::ExileDefeatedSiege
+                        | crate::toolbox::ObjectMutation::Combat(
+                            crate::toolbox::ObjectCombatOp::SoulbondPair { .. }
+                        )
+                        | crate::toolbox::ObjectMutation::StateMarker(
+                            crate::toolbox::ObjectStateMarkerOp::RememberPermanentTarget
+                        )
+                        | crate::toolbox::ObjectMutation::KeywordZoneAction(
+                            crate::toolbox::KeywordZoneOp::ExileDefeatedSiege
+                                | crate::toolbox::KeywordZoneOp::SacrificeEvoked
+                        )
                         | crate::toolbox::ObjectMutation::ResolveGrowth(_)
                         | crate::toolbox::ObjectMutation::ResolveCounterKeyword(_)
-                        | crate::toolbox::ObjectMutation::SacrificeEvoked
+                        | crate::toolbox::ObjectMutation::Attach(
+                            crate::toolbox::AttachOp::ToObject {
+                                ability: Some(_),
+                                ..
+                            }
+                        )
                 ) {
                     let entry = self
                         .window
@@ -1588,29 +1624,31 @@ impl EffectWindow {
                     self.operation_available(instruction, bound.choice().target)
                 } else if matches!(
                     spec.op,
-                    crate::toolbox::ObjectMutation::AdvanceClassLevel(_)
-                        | crate::toolbox::ObjectMutation::SolveCase
-                        | crate::toolbox::ObjectMutation::SetPrepared
-                        | crate::toolbox::ObjectMutation::DistributeCounters { .. }
-                        | crate::toolbox::ObjectMutation::Enlist
-                        | crate::toolbox::ObjectMutation::ReselectAttackDefender
-                        | crate::toolbox::ObjectMutation::Explore
-                        | crate::toolbox::ObjectMutation::BecomeMonstrous { .. }
-                        | crate::toolbox::ObjectMutation::UnlockDoor { .. }
+                    crate::toolbox::ObjectMutation::StateMarker(
+                        crate::toolbox::ObjectStateMarkerOp::AdvanceClassLevel(_)
+                            | crate::toolbox::ObjectStateMarkerOp::SolveCase
+                            | crate::toolbox::ObjectStateMarkerOp::SetPrepared
+                            | crate::toolbox::ObjectStateMarkerOp::BecomeMonstrous { .. }
+                            | crate::toolbox::ObjectStateMarkerOp::UnlockDoor { .. }
+                    ) | crate::toolbox::ObjectMutation::Counters(
+                        crate::toolbox::CounterOp::Distribute { .. }
+                    ) | crate::toolbox::ObjectMutation::Combat(
+                        crate::toolbox::ObjectCombatOp::Enlist
+                            | crate::toolbox::ObjectCombatOp::ReselectAttackDefender
+                    ) | crate::toolbox::ObjectMutation::Explore
                         | crate::toolbox::ObjectMutation::Connive { .. }
-                        | crate::toolbox::ObjectMutation::ConniveFinalize
-                        | crate::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                        | crate::toolbox::ObjectMutation::TokenAttach(_)
                         | crate::toolbox::ObjectMutation::ResolveKeywordTrigger(_)
                         | crate::toolbox::ObjectMutation::Ninjutsu
                         | crate::toolbox::ObjectMutation::Unearth
                         | crate::toolbox::ObjectMutation::Myriad
-                        | crate::toolbox::ObjectMutation::ScheduleArtifactReturn(_)
-                        | crate::toolbox::ObjectMutation::ExileUnearthed(_)
-                        | crate::toolbox::ObjectMutation::SacrificeStateTriggerSource
+                        | crate::toolbox::ObjectMutation::KeywordZoneAction(
+                            crate::toolbox::KeywordZoneOp::ScheduleArtifactReturn(_)
+                                | crate::toolbox::KeywordZoneOp::ExileUnearthed(_)
+                                | crate::toolbox::KeywordZoneOp::SacrificeStateTriggerSource
+                        )
                         | crate::toolbox::ObjectMutation::ResolveTransfer(_)
                         | crate::toolbox::ObjectMutation::ResolvePowerAbility(_)
-                        | crate::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
-                        | crate::toolbox::ObjectMutation::CreateTokenCopy(_)
                 ) {
                     Ok(true)
                 } else if matches!(spec.source, crate::toolbox::ObjectQuery::Targets) {
@@ -1620,7 +1658,12 @@ impl EffectWindow {
                         .ok_or(EffectError::WrongResolutionFrame)?;
                     Ok(match self.instruction_target(entry)?.choice().target {
                         TargetRef::Object(card) => {
-                            if matches!(spec.op, crate::toolbox::ObjectMutation::RemoveFromCombat) {
+                            if matches!(
+                                spec.op,
+                                crate::toolbox::ObjectMutation::Combat(
+                                    crate::toolbox::ObjectCombatOp::RemoveFromCombat
+                                )
+                            ) {
                                 self.combat.as_ref().is_some_and(|combat| {
                                     combat.attacker(card).is_some()
                                         || combat.blocker(card).is_some()
@@ -1655,12 +1698,7 @@ impl EffectWindow {
             }
             Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::CreateTokens { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. } => Ok(true),
-            Instruction::Sacrifice { .. } | Instruction::Discard { .. } => {
-                Err(EffectError::InconsistentProgram)
-            }
+            | Instruction::CreateTokens { .. } => Ok(true),
             Instruction::SearchLibrary { filter } => {
                 if let Some(host) = filter.curse_host() {
                     Ok(self.searched_curse_host(host)?.is_some())
@@ -1668,21 +1706,8 @@ impl EffectWindow {
                     Ok(self.resolving_player(filter.searcher).is_ok())
                 }
             }
-            Instruction::ChooseCreatureType { excluding, .. } => {
-                Ok(excluding.len() < self.creature_vocabulary.len())
-            }
-            Instruction::Attach(_) => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::InconsistentProgram)?;
-                let bound = self.instruction_target(entry)?;
-                self.operation_available(instruction, bound.choice().target)
-            }
-            Instruction::OptionalSequence { .. } | Instruction::OptionalEffect { .. } => {
-                Err(EffectError::InconsistentProgram)
-            }
-            Instruction::BranchIfFalse { .. } | Instruction::Jump { .. } => {
+            Instruction::OptionalSequence { .. } => Err(EffectError::InconsistentProgram),
+            Instruction::Jump { .. } => {
                 if is_sequence {
                     Ok(true)
                 } else {
@@ -1736,60 +1761,58 @@ impl EffectWindow {
         append: &mut RulesJournal,
     ) -> Result<bool, EffectError> {
         match instruction {
-            op if matches!(
-                op,
-                Instruction::OptionalSequence { .. } | Instruction::OptionalEffect { .. }
-            ) || matches!(
-                op,
-                Instruction::MutateObject(spec)
-                    if matches!(
-                        spec.op,
-                        crate::toolbox::ObjectMutation::ResolveCounterKeyword(
-                            crate::program::CounterKeyword::SuspendLastCounter
+            op if matches!(op, Instruction::OptionalSequence { .. })
+                || matches!(
+                    op,
+                    Instruction::MutateObject(spec)
+                        if matches!(
+                            spec.op,
+                            crate::toolbox::ObjectMutation::ResolveCounterKeyword(
+                                crate::program::CounterKeyword::SuspendLastCounter
+                            )
                         )
-                    )
-            ) || matches!(
-                op,
-                Instruction::StackOp(spec)
-                    if matches!(
-                        spec.op,
-                        crate::toolbox::StackOpKind::Cascade
-                            | crate::toolbox::StackOpKind::CascadeBottom
-                            | crate::toolbox::StackOpKind::MadnessCast
-                            | crate::toolbox::StackOpKind::MiracleCast(_)
-                            | crate::toolbox::StackOpKind::CastFoundSpell(_)
-                            | crate::toolbox::StackOpKind::CastDefeatedSiege
-                            | crate::toolbox::StackOpKind::ReboundCast(_)
-                    )
-            ) || matches!(
-                op,
-                Instruction::MutatePlayer(spec)
-                    if matches!(
-                        spec.op,
-                        crate::toolbox::PlayerMutation::OfferSourceCounters { .. }
-                    )
-            ) =>
+                )
+                || matches!(
+                    op,
+                    Instruction::StackOp(spec)
+                        if matches!(
+                            spec.op,
+                            crate::toolbox::StackOpKind::Cascade
+                                | crate::toolbox::StackOpKind::CascadeBottom
+                                | crate::toolbox::StackOpKind::MadnessCast
+                                | crate::toolbox::StackOpKind::MiracleCast(_)
+                                | crate::toolbox::StackOpKind::CastFoundSpell(_)
+                                | crate::toolbox::StackOpKind::CastDefeatedSiege
+                                | crate::toolbox::StackOpKind::ReboundCast(_)
+                        )
+                )
+                || matches!(
+                    op,
+                    Instruction::MutatePlayer(spec)
+                        if matches!(
+                            spec.op,
+                            crate::toolbox::PlayerMutation::OfferSourceCounters { .. }
+                        )
+                ) =>
             {
                 let cursor = self
                     .resolution_cursor()
                     .ok_or(EffectError::WrongResolutionFrame)?
                     .clone();
                 let (chooser, available, cast) = match instruction {
-                    Instruction::OptionalEffect { chooser }
-                    | Instruction::OptionalSequence { chooser, .. } => {
+                    Instruction::OptionalSequence {
+                        chooser,
+                        instructions,
+                    } => {
                         if (*chooser == ResolvingPlayer::CombatDamageSourceController
                             && self.combat_damage_source_controller()?.is_none())
                             || (*chooser == ResolvingPlayer::HighestEntrantController
                                 && self.highest_entrant_controller()?.is_none())
                         {
-                            let count = match instruction {
-                                Instruction::OptionalSequence { instructions, .. } => *instructions,
-                                _ => 1,
-                            };
                             let next = cursor
                                 .instruction
                                 .checked_add(1)
-                                .and_then(|n| n.checked_add(count))
+                                .and_then(|n| n.checked_add(*instructions))
                                 .ok_or(EffectError::InconsistentProgram)?;
                             self.resolution_cursor_mut()
                                 .ok_or(EffectError::WrongResolutionFrame)?
@@ -1798,8 +1821,7 @@ impl EffectWindow {
                         }
 
                         let player = self.resolving_player_identity_at(*chooser, Some(&cursor))?;
-                        let is_sequence =
-                            matches!(instruction, Instruction::OptionalSequence { .. });
+                        let is_sequence = *instructions > 1;
                         let operation = self.optional_following_instruction(&cursor)?;
                         let available = self.optional_effect_available(operation, is_sequence)?;
                         (player, available, None)
@@ -1880,13 +1902,12 @@ impl EffectWindow {
                     })));
                 self.skip_unpayable_optional_after_departure()?;
             }
-            Instruction::OfferDynamicManaPayment {
-                payer,
-                fixed,
-                extra_generic,
-                paid_destination,
-                declined_destination,
-            } => {
+            Instruction::PromptChoice(spec) if spec.as_mana_payment().is_some() => {
+                let Some((payer, fixed, extra_generic, paid_destination, declined_destination)) =
+                    spec.as_mana_payment()
+                else {
+                    unreachable!();
+                };
                 let cursor = self
                     .resolution_cursor()
                     .ok_or(EffectError::WrongResolutionFrame)?
@@ -1913,7 +1934,7 @@ impl EffectWindow {
                         .max(0.into());
                     cost.generic = cost.generic.plus(&extra);
                 }
-                let payer = self.resolving_player_identity_at(*payer, Some(&cursor))?;
+                let payer = self.resolving_player_identity_at(payer, Some(&cursor))?;
                 let restricted_colors = self
                     .payloads
                     .get(&cursor.entry)
@@ -1923,7 +1944,12 @@ impl EffectWindow {
                         matches!(
                             op,
                             Instruction::MutatePlayer(spec)
-                                if matches!(spec.op, crate::toolbox::PlayerMutation::ExtortDrain)
+                                if matches!(
+                                    spec.op,
+                                    crate::toolbox::PlayerMutation::KeywordAction(
+                                        crate::toolbox::PlayerKeywordAction::ExtortDrain
+                                    )
+                                )
                         )
                     })
                     .then_some([ManaType::White, ManaType::Black]);
@@ -1937,24 +1963,13 @@ impl EffectWindow {
                         cursor,
                         payer,
                         cost,
-                        paid_destination: *paid_destination,
-                        declined_destination: *declined_destination,
+                        paid_destination,
+                        declined_destination,
                     },
                     append,
                 )?;
             }
-            Instruction::BranchIfFalse { .. }
-            | Instruction::Jump { .. }
-            | Instruction::AffectPermanentTargets { .. }
-            | Instruction::Sacrifice { .. }
-            | Instruction::Discard { .. }
-            | Instruction::ExileTopPlay { .. }
-            | Instruction::ChooseObjects { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::BecomeCopy { .. }
-            | Instruction::ChooseValue { .. }
-            | Instruction::Fight { .. }
-            | Instruction::Exchange(_)
+            Instruction::Jump { .. }
             | Instruction::ZoneOp(_)
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
@@ -1974,16 +1989,11 @@ impl EffectWindow {
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::ChooseCreatureType { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Attach(_)
             | Instruction::SearchLibrary { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::OptionalSequence { .. }
-            | Instruction::OptionalEffect { .. } => return Ok(false),
+            | Instruction::OptionalSequence { .. } => return Ok(false),
         }
         Ok(true)
     }
@@ -2333,19 +2343,6 @@ impl EffectWindow {
                         next.checked_add(*instructions)
                             .ok_or(EffectError::InconsistentProgram)?
                     }
-                }
-                Instruction::OptionalEffect { .. } => {
-                    let increment = if choice == OptionalEffectChoice::Take {
-                        1
-                    } else {
-                        work.cursor.results.last_action_succeeded = false;
-                        work.cursor.results.last_action_count = Some(0.into());
-                        2
-                    };
-                    work.cursor
-                        .instruction
-                        .checked_add(increment)
-                        .ok_or(EffectError::InconsistentProgram)?
                 }
                 _ => return Err(EffectError::InconsistentProgram),
             }

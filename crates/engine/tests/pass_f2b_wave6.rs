@@ -60,12 +60,12 @@ use spellwake_engine::{
         AdditionalCastCost, AffectedPlayers, BodyTarget, CardType, CombatActionKind, Comparison,
         DamageAmountSpec, DamageRecipientsRef, DamageSourceRef, EffectSubject, EventValueKind,
         ExecutableBody, Instruction, LibraryPlacement, LibrarySearch, ModalUniqueness,
-        MoveSubjectRef, ObjectFilter, ObjectStatKind, PermanentTargetAction, PlayerRelation,
-        Program, ProgramKind, PublicZoneDestination, ResolutionCondition, ResolvingPlayer,
-        SearchCardMatcher, SearchCount, SearchDestination, SearchSource, SelfFlashPermission,
-        SpellFilter, SpellModes, StackCopyTarget, TemporaryRuleKind, ValueExpr, ValueObjectRef,
-        ZoneActionPredicate, ZoneObjectKind, ZoneReplacementAbility, ZoneReplacementAbilityId,
-        ZoneReplacementChoice, ZoneReplacementSubject,
+        MoveSubjectRef, ObjectFilter, ObjectStatKind, PlayerRelation, Program, ProgramKind,
+        PublicZoneDestination, ResolutionCondition, ResolvingPlayer, SearchCardMatcher,
+        SearchCount, SearchDestination, SearchSource, SelfFlashPermission, SpellFilter, SpellModes,
+        StackCopyTarget, TemporaryRuleKind, ValueExpr, ValueObjectRef, ZoneActionPredicate,
+        ZoneObjectKind, ZoneReplacementAbility, ZoneReplacementAbilityId, ZoneReplacementChoice,
+        ZoneReplacementSubject,
     },
     targets::TargetRef,
     token::TokenRecipients,
@@ -169,7 +169,7 @@ fn damage_any_instant(amount: i64) -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![spellwake_engine::program::Instruction::DealDamage(
                 Box::new(spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -233,7 +233,7 @@ fn create_token_copy_grants_keywords_subtypes_card_types_and_each_opponent() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::MutateObject(Box::new(
                     spellwake_engine::toolbox::MutateObjectSpec::create_token_copy(
                         spellwake_engine::toolbox::ObjectQuery::from_move_subject(
@@ -329,7 +329,7 @@ fn cannot_be_copied_prevents_copy_stack_object() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(SpellFilter::any()),
+                BodyTarget::single_spell(SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::copy_stack(
                         StackCopyTarget::TargetSpell,

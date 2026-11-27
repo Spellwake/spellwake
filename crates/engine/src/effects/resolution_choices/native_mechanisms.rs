@@ -165,8 +165,9 @@ fn occurrences(result: &NativeCandidate) -> Vec<&RulesOccurrence> {
 #[test]
 fn optional_rejects_wrong_actor_kind_basis_frame_and_repeated_reply_atomically() {
     let state = pending(vec![
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         gain(1),
         gain(2),
@@ -553,8 +554,9 @@ fn positive_counted_production_restores_quote_then_fixed_production_pays_exactly
 
 fn wrapped(operation: Instruction) -> Vec<Instruction> {
     vec![
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         operation,
         gain(2),
@@ -585,7 +587,7 @@ fn creature_optional(operation: Instruction) -> GameState {
         vec![A, B],
         A,
         vec![
-            hand(1, A, BodyTarget::SingleCreature, wrapped(operation)),
+            hand(1, A, BodyTarget::SINGLE_CREATURE, wrapped(operation)),
             seed(
                 2,
                 B,
@@ -618,7 +620,7 @@ fn optional_target_life_runs_once_or_skips_before_the_shared_tail() {
                 crate::toolbox::PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
                 crate::program::ValueExpr::Literal(3.into()),
             ))),
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             TargetRef::Player(B),
         );
         let result = take_or_decline(&state, choice);
@@ -835,10 +837,10 @@ fn optional_counters_place_once_or_leave_physical_counters_unchanged() {
             crate::program::Instruction::MutateObject(Box::new(
                 crate::toolbox::MutateObjectSpec::all(
                     crate::toolbox::ObjectQuery::Targets,
-                    crate::toolbox::ObjectMutation::AddCounters {
+                    crate::toolbox::ObjectMutation::Counters(crate::toolbox::CounterOp::Add {
                         kind: _k,
                         amount: crate::program::ValueExpr::Literal(_a),
-                    },
+                    }),
                 ),
             ))
         });
@@ -879,7 +881,7 @@ fn earlier_bounce_removes_take_from_the_real_optional_counter_domain() {
             hand(
                 1,
                 A,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::program::Instruction::ZoneOp(Box::new(
                         crate::toolbox::ZoneOpSpec::move_all(
@@ -887,8 +889,9 @@ fn earlier_bounce_removes_take_from_the_real_optional_counter_domain() {
                             crate::toolbox::ZoneDest::Hand,
                         ),
                     )),
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     {
                         struct _Tmp {
@@ -908,10 +911,12 @@ fn earlier_bounce_removes_take_from_the_real_optional_counter_domain() {
                         crate::program::Instruction::MutateObject(Box::new(
                             crate::toolbox::MutateObjectSpec::all(
                                 crate::toolbox::ObjectQuery::Targets,
-                                crate::toolbox::ObjectMutation::AddCounters {
-                                    kind: _k,
-                                    amount: crate::program::ValueExpr::Literal(_a),
-                                },
+                                crate::toolbox::ObjectMutation::Counters(
+                                    crate::toolbox::CounterOp::Add {
+                                        kind: _k,
+                                        amount: crate::program::ValueExpr::Literal(_a),
+                                    },
+                                ),
                             ),
                         ))
                     },
@@ -1009,10 +1014,24 @@ fn optional_type_child_retains_cursor_rejects_reused_offer_and_excluded_type_the
     let vocabulary = creature_types::selected_vocabulary().unwrap();
     let human = vocabulary.resolve_label("Human").unwrap();
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
-        let state = pending(wrapped(Instruction::ChooseCreatureType {
-            into: CreatureTypeSlot::new(0),
-            excluding: BTreeSet::from([human]),
-        }));
+        let state = pending(wrapped(Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec {
+                chooser: crate::toolbox::PlayerSelector::Resolving(
+                    crate::program::ResolvingPlayer::Controller,
+                ),
+                domain: crate::toolbox::PromptDomain::Subtype {
+                    kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                    excluding: BTreeSet::from([human]),
+                    legacy_slot: Some(CreatureTypeSlot::new(0)),
+                },
+                category: crate::toolbox::ChoiceCategory::Generic,
+                bind_to: crate::toolbox::BindingId(0),
+                bind_unchosen: None,
+                tag_partition: None,
+                auto_resolve_trivial: false,
+                option_branches: Vec::new(),
+            },
+        ))));
         let old = command_reply(&state, DecisionReply::OptionalEffect(choice));
         let result = take_or_decline(&state, choice);
         if choice == OptionalEffectChoice::Decline {
@@ -1027,7 +1046,7 @@ fn optional_type_child_retains_cursor_rejects_reused_offer_and_excluded_type_the
         let child = result.state();
         assert!(matches!(
             child.pending_decision().unwrap().frame(),
-            RuleFrame::CreatureType(_)
+            RuleFrame::PromptChoice(_)
         ));
         assert_eq!(child.execution().instruction_index(), Some(1));
         assert!(
@@ -1042,11 +1061,17 @@ fn optional_type_child_retains_cursor_rejects_reused_offer_and_excluded_type_the
         reject(
             child,
             A,
-            command_reply(child, DecisionReply::CreatureType(human)),
-            GameError::Effect(EffectError::IllegalCreatureType),
+            command_reply(
+                child,
+                DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+            ),
+            GameError::Effect(EffectError::SelectionOutsideDomain),
         );
         let elf = vocabulary.resolve_label("Elf").unwrap();
-        let completed = reply(child, DecisionReply::CreatureType(elf));
+        let completed = reply(
+            child,
+            DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(elf)),
+        );
         assert_tail(&completed);
         assert_eq!(outcomes(&completed), 0);
         assert_eq!(occurrences(&completed).iter().filter(|row|matches!(row,RulesOccurrence::CreatureTypeChosen{slot,value,..} if *slot==CreatureTypeSlot::new(0) && *value==elf)).count(),1);
@@ -1168,7 +1193,7 @@ fn captured_after_source_change(control: bool, body: Vec<Instruction>) -> GameSt
         C,
         vec![
             original,
-            hand(2, B, BodyTarget::SinglePermanent, vec![response]),
+            hand(2, B, BodyTarget::SINGLE_PERMANENT, vec![response]),
             seed(
                 10,
                 A,
@@ -1255,8 +1280,9 @@ fn captured_optional_controller_survives_real_source_departure_and_control_chang
         let state = captured_after_source_change(
             control,
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 gain(1),
             ],
@@ -1285,15 +1311,18 @@ fn captured_optional_controller_survives_real_source_departure_and_control_chang
 
 fn captured_offer_body() -> Vec<Instruction> {
     vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::UniqueRelatedPlayer,
-            fixed: ManaCost::generic(1.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 4,
-            declined_destination: 1,
-        },
-        Instruction::OptionalEffect {
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::UniqueRelatedPlayer,
+                ManaCost::generic(1.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                4,
+                1,
+            ),
+        )),
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         crate::program::Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec::simple(
             crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
@@ -1382,8 +1411,9 @@ fn died_source_owner_graveyard_and_captured_controller_draw_are_independent() {
         Program::creature(None, 1.into(), 0.into(), BTreeSet::new()),
         crate::program::TriggerSpec::dies(crate::program::ObjectFilter::self_object()),
         vec![
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             crate::program::Instruction::DrawCards(Box::new(
                 crate::toolbox::DrawCardsSpec::simple(
@@ -1734,7 +1764,7 @@ fn spell_optional(operation: Instruction) -> (GameState, StackEntryId) {
             hand(
                 2,
                 A,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                BodyTarget::single_spell(crate::program::SpellFilter::any()),
                 wrapped(operation),
             ),
         ],
@@ -1824,7 +1854,7 @@ fn optional_copy_preserves_actual_copy_targets_child_and_rejects_reused_or_forei
             hand(
                 2,
                 A,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                BodyTarget::single_spell(crate::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::counter_targeted(
                         crate::toolbox::CounterDestination::Graveyard,
@@ -1834,7 +1864,7 @@ fn optional_copy_preserves_actual_copy_targets_child_and_rejects_reused_or_forei
             hand(
                 3,
                 A,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+                BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
                 wrapped(Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))),
@@ -1932,16 +1962,18 @@ fn copy_receiver(source_cost: SourceCost) -> Program {
             mana_cost: ManaCost::free(),
             source_cost,
             body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
-                wrapped(Instruction::BecomeCopy {
-                    receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-                    donor: crate::program::MoveSubjectRef::TargetObject,
-                    duration: ResolvedDuration::NoStatedDuration,
-                    exceptions: Box::new(crate::program::CopyExceptions {
-                        override_pt: None,
-                        ..Default::default()
-                    }),
-                }),
+                BodyTarget::SINGLE_PERMANENT,
+                wrapped(Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec::become_copy(
+                        crate::toolbox::ObjectQuery::Source,
+                        crate::toolbox::ObjectQuery::Targets,
+                        ResolvedDuration::NoStatedDuration,
+                        crate::program::CopyExceptions {
+                            override_pt: None,
+                            ..Default::default()
+                        },
+                    ),
+                ))),
             ),
         }],
     )
@@ -2094,8 +2126,9 @@ fn fresh_receiver_incarnation_cannot_replace_the_exact_captured_copy_source() {
     execution.pending_work = Some(PendingWork::Resolution(work.cursor));
     execution
         .begin_resolution_choice(
-            &Instruction::OptionalEffect {
+            &Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             &mut RulesJournal::default(),
         )
@@ -2156,7 +2189,7 @@ fn target_spell_controller_role_comes_from_the_actual_card_spell_or_spell_copy()
             hand(
                 2,
                 B,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+                BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
                 vec![Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],
@@ -2164,15 +2197,17 @@ fn target_spell_controller_role_comes_from_the_actual_card_spell_or_spell_copy()
             hand(
                 3,
                 A,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+                BodyTarget::single_spell(crate::program::SpellFilter::any()),
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::TargetSpellController,
-                        fixed: ManaCost::free(),
-                        extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 2,
-                        declined_destination: 1,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::TargetSpellController,
+                            ManaCost::free(),
+                            crate::program::ValueExpr::Literal(0.into()),
+                            2,
+                            1,
+                        ),
+                    )),
                     gain(2),
                 ],
             ),
@@ -2352,13 +2387,15 @@ fn payment_mana_source_denials_reach_physical_control_tap_capability_and_age_gua
 #[test]
 fn colored_resolution_cost_rejects_missing_required_color_before_valid_exact_spend() {
     let state = pending(vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::specific(ManaType::Blue, 1.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 2,
-            declined_destination: 1,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::specific(ManaType::Blue, 1.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                2,
+                1,
+            ),
+        )),
         gain(2),
     ]);
     let state = tap(&state, 10).into_state();
@@ -2408,8 +2445,9 @@ fn optional_damage_preserves_the_real_order_child_and_consumes_the_offer_once() 
         Instruction::ApplyContinuous(Box::new(
             crate::toolbox::ApplyContinuousSpec::damage_multiplier(2.into()),
         )),
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
             source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -2425,7 +2463,7 @@ fn optional_damage_preserves_the_real_order_child_and_consumes_the_offer_once() 
         vec![A, B],
         A,
         vec![
-            hand(1, A, BodyTarget::SingleCreature, body),
+            hand(1, A, BodyTarget::SINGLE_CREATURE, body),
             seed(
                 2,
                 B,
@@ -2652,13 +2690,26 @@ fn root_and_decision_exhaustion_during_color_preserve_the_already_paid_tap_prefi
 fn optional_type_literal_zero_draw_continuation_assigns_only_on_take() {
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
         let state = pending(vec![
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
-            Instruction::ChooseCreatureType {
-                into: CreatureTypeSlot::new(0),
-                excluding: BTreeSet::new(),
-            },
+            Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                chooser: crate::toolbox::PlayerSelector::Resolving(
+                    crate::program::ResolvingPlayer::Controller,
+                ),
+                domain: crate::toolbox::PromptDomain::Subtype {
+                    kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                    excluding: BTreeSet::new(),
+                    legacy_slot: Some(CreatureTypeSlot::new(0)),
+                },
+                category: crate::toolbox::ChoiceCategory::Generic,
+                bind_to: crate::toolbox::BindingId(0),
+                bind_unchosen: None,
+                tag_partition: None,
+                auto_resolve_trivial: false,
+                option_branches: Vec::new(),
+            })),
             crate::program::Instruction::DrawCards(Box::new(
                 crate::toolbox::DrawCardsSpec::simple(
                     crate::toolbox::PlayerSelector::Resolving(
@@ -2680,7 +2731,7 @@ fn optional_type_literal_zero_draw_continuation_assigns_only_on_take() {
         } else {
             assert!(matches!(
                 result.state().pending_decision().unwrap().frame(),
-                RuleFrame::CreatureType(_)
+                RuleFrame::PromptChoice(_)
             ));
             let human = result
                 .state()
@@ -2688,7 +2739,10 @@ fn optional_type_literal_zero_draw_continuation_assigns_only_on_take() {
                 .creature_vocabulary()
                 .resolve_label("Human")
                 .unwrap();
-            let completed = reply(result.state(), DecisionReply::CreatureType(human));
+            let completed = reply(
+                result.state(),
+                DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+            );
             assert!(completed.state().pending_decision().is_none());
             assert_eq!(occurrences(&completed).iter().filter(|row|matches!(row,RulesOccurrence::CreatureTypeChosen{slot,value,..} if *slot==CreatureTypeSlot::new(0) && *value==human)).count(),1);
             assert!(completed.draw_journal().events.is_empty());
@@ -2797,15 +2851,18 @@ fn returned_mana_source_incarnation_rejects_old_identity_before_current_source_s
 #[test]
 fn same_original_typed_inputs_reexecute_every_payment_parent_child_journal_and_whole_state() {
     let body = vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(3.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 1,
-            declined_destination: 4,
-        },
-        Instruction::OptionalEffect {
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(3.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                1,
+                4,
+            ),
+        )),
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         gain(1),
         gain(2),
@@ -2946,26 +3003,41 @@ fn same_original_typed_inputs_reexecute_every_payment_parent_child_journal_and_w
 #[test]
 fn nonempty_resolution_locals_survive_each_mana_prefix_and_both_optional_outcomes() {
     let state = pending(vec![
-        Instruction::ChooseCreatureType {
-            into: CreatureTypeSlot::new(0),
-            excluding: BTreeSet::new(),
-        },
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(3.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 2,
-            declined_destination: 5,
-        },
-        Instruction::OptionalEffect {
+        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+            chooser: crate::toolbox::PlayerSelector::Resolving(
+                crate::program::ResolvingPlayer::Controller,
+            ),
+            domain: crate::toolbox::PromptDomain::Subtype {
+                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                excluding: BTreeSet::new(),
+                legacy_slot: Some(CreatureTypeSlot::new(0)),
+            },
+            category: crate::toolbox::ChoiceCategory::Generic,
+            bind_to: crate::toolbox::BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+            option_branches: Vec::new(),
+        })),
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(3.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                2,
+                5,
+            ),
+        )),
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         gain(1),
         gain(2),
     ]);
     assert!(matches!(
         state.pending_decision().unwrap().frame(),
-        RuleFrame::CreatureType(_)
+        RuleFrame::PromptChoice(_)
     ));
     let human = state
         .execution()
@@ -2973,7 +3045,11 @@ fn nonempty_resolution_locals_survive_each_mana_prefix_and_both_optional_outcome
         .resolve_label("Human")
         .unwrap();
     let expected = BTreeMap::from([(CreatureTypeSlot::new(0), human)]);
-    let state = reply(&state, DecisionReply::CreatureType(human)).into_state();
+    let state = reply(
+        &state,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+    )
+    .into_state();
     let entry = payment_frame(&state).entry();
     let assert_parent = |state: &GameState, suspended| {
         let Some(ResolutionChoiceState::Payment {
@@ -3150,15 +3226,18 @@ fn actual_by_player_group_retains_two_entry_causes_for_distinct_payer_and_option
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::UniqueRelatedPlayer,
-                    fixed: ManaCost::generic(1.into()),
-                    extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 1,
-                    declined_destination: 3,
-                },
-                Instruction::OptionalEffect {
+                Instruction::PromptChoice(Box::new(
+                    crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                        ManaCost::generic(1.into()),
+                        crate::program::ValueExpr::Literal(0.into()),
+                        1,
+                        3,
+                    ),
+                )),
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 gain(1),
             ],

@@ -29,21 +29,21 @@ pub(crate) const B: SeatId = SeatId(3);
 
 pub(crate) fn selection(sacrifice: bool) -> Instruction {
     if sacrifice {
-        Instruction::Sacrifice {
-            players: AffectedPlayers::EachPlayer,
-            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            filter: PermanentTypeFilter {
+        Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+            AffectedPlayers::EachPlayer,
+            spellwake_engine::program::ValueExpr::Literal(1.into()),
+            PermanentTypeFilter {
                 any_types: Default::default(),
                 required_types: BTreeSet::new(),
                 forbidden_types: BTreeSet::new(),
                 object_filter: None,
             },
-        }
+        )))
     } else {
-        Instruction::Discard {
-            players: AffectedPlayers::EachPlayer,
-            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        }
+        Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+            AffectedPlayers::EachPlayer,
+            spellwake_engine::program::ValueExpr::Literal(1.into()),
+        )))
     }
 }
 pub(crate) fn creature() -> Program {
@@ -467,10 +467,11 @@ fn applicability_actual_owner_order_frame_and_effect_operands_are_excluded() {
     let ProgramKind::Spell(spell) = &mut program.kind else {
         unreachable!()
     };
-    let Instruction::Discard { amount, .. } = &mut spell.body.instructions[0] else {
-        unreachable!()
-    };
-    *amount = spellwake_engine::program::ValueExpr::Literal(2.into());
+    spell.body.instructions[0] =
+        Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+            AffectedPlayers::EachPlayer,
+            spellwake_engine::program::ValueExpr::Literal(2.into()),
+        )));
     let (context, mut seed) = seed(program);
     seed.cards.push(SeedCard {
         card: CardId(4),
@@ -595,7 +596,7 @@ fn applicability_real_activation_sacrifice_cost_remains_admissible() {
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::Sacrifice,
             body: ExecutableBody::new(
-                spellwake_engine::program::BodyTarget::SingleCreature,
+                spellwake_engine::program::BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -782,7 +783,7 @@ fn current10_refuses_printed_keywords_and_new_grants() {
         let program = Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                spellwake_engine::program::BodyTarget::SinglePermanent,
+                spellwake_engine::program::BodyTarget::SINGLE_PERMANENT,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

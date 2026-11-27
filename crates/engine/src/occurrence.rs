@@ -2151,7 +2151,6 @@ enum DelayedStepAction {
         object: ObjectId,
         kind: crate::program::EndStepCast,
     },
-    ReturnFromExile(Vec<ObjectId>),
     ReturnPermanentToHand(ObjectId),
     Unearth(ObjectId),
     Rebound(ObjectId),
@@ -2182,7 +2181,6 @@ pub(crate) enum AbilityCopyWatch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DelayedCopyAction {
     ReturnExiledWithCounters(Vec<ObjectId>),
-    ReturnExiled(Vec<ObjectId>),
     Sacrifice(Vec<ObjectId>),
     SpellTwice(Box<CastOccurrence>, BTreeSet<crate::characteristics::Color>),
     AbilityTwice(
@@ -2449,19 +2447,6 @@ impl TriggerState {
             DelayedCopyAction::ReturnExiledWithCounters(objects),
         ));
     }
-    pub(crate) fn delay_copy_exile_return(
-        &mut self,
-        original: StackEntryId,
-        controller: SeatId,
-        objects: Vec<ObjectId>,
-    ) {
-        self.delayed_copy_steps.push((
-            controller,
-            original,
-            crate::turn::Step::End,
-            DelayedCopyAction::ReturnExiled(objects),
-        ));
-    }
     pub(crate) fn delay_copy_sacrifice(
         &mut self,
         original: StackEntryId,
@@ -2489,18 +2474,6 @@ impl TriggerState {
         id: TriggerInstanceId,
     ) -> Option<(SeatId, StackEntryId, DelayedCopyAction)> {
         self.delayed_copy_waiting.remove(&id)
-    }
-    pub(crate) fn delay_exile_return(
-        &mut self,
-        source: SupportedAppearance,
-        controller: SeatId,
-        objects: Vec<ObjectId>,
-    ) {
-        self.delayed_steps.push(DelayedStepTrigger {
-            source,
-            controller,
-            action: DelayedStepAction::ReturnFromExile(objects),
-        });
     }
     pub(crate) fn delay_permanent_return_to_hand(
         &mut self,
@@ -3094,7 +3067,10 @@ impl TriggerState {
                     }),
                 ) {
                     *target = target.with_ability_source(source.object.id());
-                    if let BodyTarget::FilteredPermanent(filter) = target
+                    if let BodyTarget::Object {
+                        zone: crate::program::TargetZone::Battlefield,
+                        filter,
+                    } = target
                         && filter.has_related_player()
                     {
                         let player = causes
@@ -3117,21 +3093,15 @@ impl TriggerState {
                 {
                     let prepend = |target_body: &mut ExecutableBody| {
                         for op in &mut target_body.instructions {
-                            match op {
-                                crate::program::Instruction::BranchIfFalse {
-                                    destination, ..
-                                }
-                                | crate::program::Instruction::Jump { destination } => {
-                                    *destination = destination.saturating_add(1);
-                                }
-                                _ => {}
-                            }
+                            op.shift_jumps(1, 0);
                         }
                         let end = target_body.instructions.len().saturating_add(1);
                         target_body.instructions.insert(
                             0,
-                            crate::program::Instruction::BranchIfFalse {
-                                condition: rc.as_ref().clone(),
+                            crate::program::Instruction::BranchCondition {
+                                condition: Box::new(crate::toolbox::ConditionExpr::Resolution(
+                                    Box::new(rc.as_ref().clone()),
+                                )),
                                 destination: end,
                             },
                         );
@@ -3402,7 +3372,7 @@ impl TriggerState {
                     source: source.as_ref().clone(),
                     controller: *controller,
                     body: ExecutableBody::new(
-                        crate::program::BodyTarget::FilteredOwnGraveyardCard(
+                        crate::program::BodyTarget::filtered_own_graveyard(
                             crate::program::ObjectFilter::creature(),
                         ),
                         vec![crate::program::Instruction::ZoneOp(Box::new(
@@ -3482,7 +3452,7 @@ impl TriggerState {
                     source: source.as_ref().clone(),
                     controller: *controller,
                     body: ExecutableBody::new(
-                        crate::program::BodyTarget::FilteredPermanent(
+                        crate::program::BodyTarget::filtered_permanent(
                             crate::program::ObjectFilter::creature_or_planeswalker(),
                         ),
                         vec![crate::program::Instruction::DealDamage(Box::new(
@@ -3631,7 +3601,6 @@ impl TriggerState {
                         | DelayedStepAction::Sacrifice { step, .. } => position.step == *step,
                         DelayedStepAction::ReturnExiledWithCounters(_)
                         | DelayedStepAction::ReturnPermanentToHand(_)
-                        | DelayedStepAction::ReturnFromExile(_)
                         | DelayedStepAction::Cast { .. }
                         | DelayedStepAction::Unearth(_) => position.step == Step::End,
                         DelayedStepAction::Rebound(_) => {
@@ -3709,11 +3678,6 @@ impl TriggerState {
                                     crate::toolbox::ZoneOpSpec::return_delayed_permanent_to_hand(
                                         object,
                                     ),
-                                ))]
-                            }
-                            DelayedStepAction::ReturnFromExile(object) => {
-                                vec![Instruction::ZoneOp(Box::new(
-                                    crate::toolbox::ZoneOpSpec::return_delayed_exile(object),
                                 ))]
                             }
                             DelayedStepAction::Unearth(object) => {
@@ -3969,7 +3933,7 @@ impl TriggerState {
                         controller: emblem.controller,
                         emblem: emblem.id,
                         body: ExecutableBody::new(
-                            crate::program::BodyTarget::SingleAnyTarget,
+                            crate::program::BodyTarget::SINGLE_ANY_TARGET,
                             vec![crate::program::Instruction::DealDamage(Box::new(
                                 crate::toolbox::DealDamageSpec {
                                     source: crate::toolbox::DamageSourceQuery::EntrySource,

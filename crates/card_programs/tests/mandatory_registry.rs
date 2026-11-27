@@ -362,14 +362,14 @@ fn contract_program(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Program
 fn contract_body(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> ExecutableBody {
     let target = match raw["target"].as_str() {
         Some("None") => BodyTarget::None,
-        Some("SinglePlayer") => BodyTarget::SinglePlayer,
-        Some("SingleCreature") => BodyTarget::SingleCreature,
+        Some("SinglePlayer") => BodyTarget::SINGLE_PLAYER,
+        Some("SingleCreature") => BodyTarget::SINGLE_CREATURE,
         None => {
             assert_eq!(
                 raw["target"],
                 json!({"variant":"SingleSpell","filter":"AnySpell"})
             );
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any())
+            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any())
         }
         _ => panic!("unlisted frozen target"),
     };

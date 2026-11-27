@@ -673,31 +673,6 @@ impl EffectWindow {
             append,
         )
     }
-    /// Apply a direct life adjustment as one event across the current opponents.
-    pub(super) fn adjust_each_opponent_life_at_cut(
-        &mut self,
-        entry: StackEntryId,
-        instruction: usize,
-        controller: SeatId,
-        adjustment: &LifeAdjustment,
-        controller_adjustment: Option<&LifeAdjustment>,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let participants = self.window.participants();
-        let opponents = if participants.contains(&controller) {
-            self.combat_rules.opponents(participants, controller)?
-        } else {
-            participants.to_vec()
-        };
-        let mut adjustments: BTreeMap<_, _> = opponents
-            .into_iter()
-            .map(|player| (player, adjustment.clone()))
-            .collect();
-        if let Some(value) = controller_adjustment {
-            adjustments.insert(controller, value.clone());
-        }
-        self.adjust_players_at_cut(entry, instruction, adjustments, append)
-    }
 
     pub(super) fn adjust_players_at_cut(
         &mut self,

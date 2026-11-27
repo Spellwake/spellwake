@@ -446,82 +446,7 @@ impl EffectWindow {
         }
         Ok(movement)
     }
-    pub(super) fn remember_exiled_ability_donor(
-        &mut self,
-        entry: StackEntryId,
-        movement: &crate::object_identity::ObjectMovement,
-    ) {
-        let Some(StackKind::ActivatedAbility { source }) = self
-            .window
-            .resolving()
-            .filter(|actual| actual.id() == entry)
-            .map(|actual| actual.kind())
-        else {
-            return;
-        };
-        let source = source.id();
-        if movement.after.zone() != ObjectZone::Exile
-            || (!self
-                .window
-                .cards()
-                .get(source)
-                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-                && self.window.cards().phased_out_under(source).is_none())
-        {
-            return;
-        }
-        let donors = movement.arrivals().filter(|id| {
-            self.window
-                .cards()
-                .get(*id)
-                .is_some_and(|card| card.card_id().is_some())
-        });
-        self.characteristics
-            .ability_donors_in_exile
-            .entry(source)
-            .or_default()
-            .extend(donors);
-    }
 
-    pub(super) fn remember_imprinted_card(
-        &mut self,
-        entry: StackEntryId,
-        movement: &crate::object_identity::ObjectMovement,
-    ) {
-        if movement.after.zone() == ObjectZone::Exile
-            && let Some(trigger) = self
-                .execution_bindings(entry)
-                .and_then(|bindings| bindings.trigger.as_ref())
-            && (self
-                .window
-                .cards()
-                .get(trigger.source.object.id())
-                .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-                || self
-                    .window
-                    .cards()
-                    .phased_out_under(trigger.source.object.id())
-                    .is_some())
-        {
-            let source = trigger.source.object.id();
-            let cards = movement
-                .arrivals()
-                .filter(|id| {
-                    self.window
-                        .cards()
-                        .get(*id)
-                        .is_some_and(|card| card.card_id().is_some())
-                })
-                .collect::<Vec<_>>();
-            if !cards.is_empty() {
-                self.characteristics
-                    .imprinted_cards
-                    .entry(source)
-                    .or_default()
-                    .extend(cards);
-            }
-        }
-    }
     pub(crate) fn begin_retained_mana(&mut self, issued: &[ManaProductionRecord]) {
         self.retained_mana = Some(issued.iter().cloned().collect());
     }
@@ -3566,7 +3491,6 @@ impl EffectWindow {
                 work.replacements = None;
             } else {
                 self.linked_return_work = Some(LinkedReturnWork {
-                    library_bottom: None,
                     origin: LinkedReturnOrigin::Exile,
                     wake_entry: None,
                     objects: linked,
@@ -3699,17 +3623,7 @@ impl EffectWindow {
                     .get(&id)
                     .map(|copy| copy.definition.as_ref())
             });
-        let forced_host = self
-            .linked_return_work
-            .as_ref()
-            .filter(|work| work.objects.contains(&id))
-            .and_then(|work| match work.origin {
-                LinkedReturnOrigin::HandOrGraveyardAuras { host, .. } => {
-                    Some(TargetRef::Object(host))
-                }
-                _ => None,
-            });
-        self.prospective_aura_domain(id, owner, copy, forced_host, evaluated)
+        self.prospective_aura_domain(id, owner, copy, None, evaluated)
     }
 
     pub(super) fn prospective_aura_domain(
@@ -3827,8 +3741,6 @@ impl EffectWindow {
                                 | LinkedReturnOrigin::ExileWithCounters { .. }
                                 | LinkedReturnOrigin::Exile
                                 | LinkedReturnOrigin::Hand { .. }
-                                | LinkedReturnOrigin::HandOrGraveyardAuras { .. }
-                                | LinkedReturnOrigin::LibraryTop { .. }
                         )
                     })
                     .copied()
@@ -3946,7 +3858,6 @@ impl EffectWindow {
                         )
                 ),
             },
-            library_bottom: None,
             wake_entry: None,
             objects,
             orders: BTreeMap::new(),
@@ -3976,17 +3887,10 @@ impl EffectWindow {
         if objects.is_empty() {
             return Ok(());
         }
-        let auras = match origin {
-            LinkedReturnOrigin::HandOrGraveyardAuras { host, .. } => objects
-                .iter()
-                .map(|&id| (id, TargetRef::Object(host)))
-                .collect(),
-            _ => BTreeMap::new(),
-        };
+        let auras = BTreeMap::new();
         self.linked_return_work = Some(LinkedReturnWork {
             origin,
             objects,
-            library_bottom: None,
             wake_entry: None,
             orders: BTreeMap::new(),
             graveyard_orders: BTreeMap::new(),
@@ -4193,11 +4097,6 @@ impl EffectWindow {
             work.wake_entry,
             append,
         )?;
-        if let (LinkedReturnOrigin::LibraryTop { player, entry, .. }, Some(bottom)) =
-            (work.origin, work.library_bottom)
-        {
-            self.bottom_remaining_looked_at(player, entry, &bottom)?;
-        }
         Ok(())
     }
     fn return_linked_exiles(
@@ -4219,15 +4118,6 @@ impl EffectWindow {
                 let destination = destinations
                     .get(id)?
                     .physical(Some(origin.entry_controller(card)))?;
-                if matches!(origin, LinkedReturnOrigin::HandOrGraveyardAuras { .. })
-                    && matches!(
-                        (card.zone(), destination),
-                        (ObjectZone::Hand(_), ObjectDestination::Hand)
-                            | (ObjectZone::Graveyard(_), ObjectDestination::Graveyard)
-                    )
-                {
-                    return None;
-                }
                 (!matches!(
                     (origin, destination),
                     (LinkedReturnOrigin::Hand { .. }, ObjectDestination::Hand)
@@ -4240,10 +4130,6 @@ impl EffectWindow {
                         | (
                             LinkedReturnOrigin::Graveyard { .. },
                             ObjectDestination::Graveyard
-                        )
-                        | (
-                            LinkedReturnOrigin::LibraryTop { .. },
-                            ObjectDestination::LibraryTop
                         )
                 ))
                 .then_some((*id, destination))
@@ -4331,9 +4217,6 @@ impl EffectWindow {
                     .entered_from_graveyard
                     .insert(movement.after.id());
             }
-            if false && !movement.after.transformed() {
-                self.window.transform(movement.after.id())?;
-            }
             if let LinkedReturnOrigin::Graveyard {
                 entry,
                 entry_additions,
@@ -4368,8 +4251,7 @@ impl EffectWindow {
             self.stage_resolution_entry_choice(movement.before.id(), movement.after.id())?;
             if matches!(
                 origin,
-                LinkedReturnOrigin::LibraryTop { tapped: true, .. }
-                    | LinkedReturnOrigin::Hand { tapped: true, .. }
+                LinkedReturnOrigin::Hand { tapped: true, .. }
                     | LinkedReturnOrigin::Graveyard { tapped: true, .. }
                     | LinkedReturnOrigin::ChosenExile { tapped: true, .. }
             ) {

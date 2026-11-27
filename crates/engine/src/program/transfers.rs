@@ -23,8 +23,8 @@ impl TransferKeyword {
     pub(crate) fn target(self) -> BodyTarget {
         match self {
             Self::Graft(_) => BodyTarget::None,
-            Self::Modular(_) => BodyTarget::SingleCreature,
-            Self::Soulshift(_) => BodyTarget::SingleOwnGraveyardCard,
+            Self::Modular(_) => BodyTarget::SINGLE_CREATURE,
+            Self::Soulshift(_) => BodyTarget::SINGLE_OWN_GRAVEYARD_CARD,
         }
     }
     /// The static as-enters half of a printed graft or modular instance.
@@ -45,8 +45,9 @@ impl TransferKeyword {
             body: ExecutableBody::new(
                 self.target(),
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     Instruction::MutateObject(Box::new(
                         crate::toolbox::MutateObjectSpec::resolve_transfer(self),

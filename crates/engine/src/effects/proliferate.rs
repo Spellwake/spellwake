@@ -964,7 +964,12 @@ impl EffectWindow {
         let is_proliferate = matches!(
             self.current_instruction()?,
             Instruction::MutatePlayer(spec)
-                if matches!(spec.op, crate::toolbox::PlayerMutation::Proliferate)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Proliferate
+                    )
+                )
         );
         if !is_proliferate {
             return Err(EffectError::WrongResolutionFrame);

@@ -251,16 +251,31 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[7],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::ExileTopPlay {
-                        count: ValueExpr::literal(2),
-                        library_owner: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        duration: crate::program::ImpulsePlayDuration::ThisTurn,
-                        cast_only: false,
-                        free: false,
-                        any_color: false,
-                        face_down: false,
-                        grant_play: true,
-                    }],
+                    vec![
+                        Instruction::ZoneOp(Box::new(
+                            crate::toolbox::ZoneOpSpec::exile_top_library(
+                                crate::toolbox::PlayerSelector::Group(AffectedPlayers::One(
+                                    ResolvingPlayer::Controller,
+                                )),
+                                ValueExpr::literal(2),
+                                false,
+                            ),
+                        )),
+                        Instruction::ApplyContinuous(Box::new(
+                            crate::toolbox::ApplyContinuousSpec::impulse_play_permission(
+                                crate::toolbox::ObjectQuery::from_move_subject(
+                                    crate::program::MoveSubjectRef::LastMoved,
+                                ),
+                                crate::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                crate::program::ImpulsePlayDuration::ThisTurn,
+                                false,
+                                false,
+                                false,
+                            ),
+                        )),
+                    ],
                 ),
             },
             DungeonRoom {
@@ -336,25 +351,25 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::Discard {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: ValueExpr::literal(1),
-                        },
-                        Instruction::Sacrifice {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: ValueExpr::literal(1),
-                            filter: single_type_filter(CardType::Creature),
-                        },
-                        Instruction::Sacrifice {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: ValueExpr::literal(1),
-                            filter: single_type_filter(CardType::Artifact),
-                        },
-                        Instruction::Sacrifice {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: ValueExpr::literal(1),
-                            filter: single_type_filter(CardType::Land),
-                        },
+                        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            ValueExpr::literal(1),
+                        ))),
+                        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            ValueExpr::literal(1),
+                            single_type_filter(CardType::Creature),
+                        ))),
+                        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            ValueExpr::literal(1),
+                            single_type_filter(CardType::Artifact),
+                        ))),
+                        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            ValueExpr::literal(1),
+                            single_type_filter(CardType::Land),
+                        ))),
                     ],
                 ),
             },
@@ -447,6 +462,7 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                                 by: crate::toolbox::PlayerSelector::Resolving(
                                     crate::program::ResolvingPlayer::Controller,
                                 ),
+                                permanent: false,
                             },
                         ),
                     ))],
@@ -488,23 +504,23 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::LookTopChooseExt {
-                        library_owner: ResolvingPlayer::Controller,
-                        chooser: ResolvingPlayer::Controller,
-                        count: ValueExpr::literal(10),
-                        filter: Some(Box::new(ObjectFilter::creature())),
-                        max_picks: 1,
-                        take_all_matching: false,
-                        keep_dest: crate::program::LookTopKeepDest::Battlefield {
+                    crate::toolbox::zone_op::look_top_choose_instructions(
+                        ResolvingPlayer::Controller,
+                        ResolvingPlayer::Controller,
+                        ValueExpr::literal(10),
+                        Some(ObjectFilter::creature()),
+                        1,
+                        false,
+                        crate::program::LookTopKeepDest::Battlefield {
                             tapped: false,
                             attacking: false,
                         },
-                        rest_dest: crate::program::LookTopRestDest::BottomRandom,
-                        reveal_kept: false,
-                        reveal_all: true,
-                        reveal_only: false,
-                        secondary: None,
-                    }],
+                        crate::program::LookTopRestDest::BottomRandom,
+                        false,
+                        true,
+                        false,
+                        None,
+                    ),
                 ),
             },
         ],
@@ -536,7 +552,9 @@ pub fn incubator_token_creation(
                 vec![Instruction::MutateObject(Box::new(
                     crate::toolbox::MutateObjectSpec::all(
                         crate::toolbox::ObjectQuery::Source,
-                        crate::toolbox::ObjectMutation::Transform,
+                        crate::toolbox::ObjectMutation::Orientation(
+                            crate::toolbox::OrientationOp::Transform,
+                        ),
                     ),
                 ))],
             ),

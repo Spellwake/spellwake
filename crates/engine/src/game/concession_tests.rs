@@ -409,10 +409,10 @@ fn simultaneous_departures_create_independent_surviving_triggers() {
             vec![Instruction::MutateObject(Box::new(
                 crate::toolbox::MutateObjectSpec::all(
                     crate::toolbox::ObjectQuery::Source,
-                    crate::toolbox::ObjectMutation::AddCounters {
+                    crate::toolbox::ObjectMutation::Counters(crate::toolbox::CounterOp::Add {
                         kind: crate::effects::CounterKind::PlusOne,
                         amount: crate::program::ValueExpr::literal(13),
-                    },
+                    }),
                 ),
             ))],
         ),
@@ -465,7 +465,7 @@ fn departure_ends_temporary_control_before_exiling_remaining_objects() {
     let control = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![{
                 struct _Tmp {
                     parts: crate::characteristics::ResolvedPartsSpec,
@@ -543,7 +543,7 @@ fn a_permanent_is_exiled_when_its_default_controller_left_before_the_effect_expi
     let control = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![{
                 struct _Tmp {
                     parts: crate::characteristics::ResolvedPartsSpec,
@@ -632,7 +632,7 @@ fn skipped_departed_turn_expires_its_effects_and_returns_phased_permanents() {
     let instant = |instruction| {
         Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction]),
+            ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![instruction]),
         )
     };
     let control = instant({
@@ -661,7 +661,7 @@ fn skipped_departed_turn_expires_its_effects_and_returns_phased_permanents() {
     let phase = instant(crate::program::Instruction::MutateObject(Box::new(
         crate::toolbox::MutateObjectSpec::all(
             crate::toolbox::ObjectQuery::Targets,
-            crate::toolbox::ObjectMutation::PhaseOut,
+            crate::toolbox::ObjectMutation::Orientation(crate::toolbox::OrientationOp::PhaseOut),
         ),
     )));
     let boost = instant({
@@ -790,7 +790,7 @@ fn concession_library_partition_replacement_optional_and_final_order_cuts() {
                 crate::program::ValueExpr::Literal(3.into()),
             ),
         ))],
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         library.clone(),
     );
     let state = resolve(state, Some(TargetRef::Player(B)));
@@ -833,7 +833,7 @@ fn concession_library_partition_replacement_optional_and_final_order_cuts() {
                 crate::program::ValueExpr::Literal(3.into()),
             ),
         ))],
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         cards,
     );
     let state = resolve(state, Some(TargetRef::Player(B)));
@@ -896,10 +896,12 @@ fn concession_other_player_selection_retains_accepted_prefix() {
         .collect();
     let state = resolve(
         fixture(
-            vec![Instruction::Discard {
-                players: AffectedPlayers::EachPlayer,
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                crate::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::EachPlayer,
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
             BodyTarget::None,
             cards,
         ),
@@ -1131,10 +1133,24 @@ fn concession_keeps_actual_cast_payment_and_tap_at_a_later_choice() {
         ManaCost::one(ManaType::Red),
         ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::ChooseCreatureType {
-                into: CreatureTypeSlot::new(0),
-                excluding: BTreeSet::new(),
-            }],
+            vec![Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec {
+                    chooser: crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    domain: crate::toolbox::PromptDomain::Subtype {
+                        kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                        excluding: BTreeSet::new(),
+                        legacy_slot: Some(CreatureTypeSlot::new(0)),
+                    },
+                    category: crate::toolbox::ChoiceCategory::Generic,
+                    bind_to: crate::toolbox::BindingId(0),
+                    bind_unchosen: None,
+                    tag_partition: None,
+                    auto_resolve_trivial: false,
+                    option_branches: Vec::new(),
+                },
+            ))],
         ),
     );
     let state = root(
@@ -1185,7 +1201,7 @@ fn concession_keeps_actual_cast_payment_and_tap_at_a_later_choice() {
     let state = step(&state, B, GameCommand::Pass);
     assert!(matches!(
         state.pending_decision().unwrap().frame(),
-        RuleFrame::CreatureType(_)
+        RuleFrame::PromptChoice(_)
     ));
     assert_eq!(state.execution().mana(A, ManaType::Red), 0.into());
     assert_eq!(

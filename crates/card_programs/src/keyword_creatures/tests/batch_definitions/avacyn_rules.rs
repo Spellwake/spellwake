@@ -201,7 +201,7 @@ fn avacyn_rules_demonic_rising_rechecks_the_creature_count_at_resolution() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -306,7 +306,7 @@ fn avacyn_rules_peel_from_reality_returns_the_remaining_legal_target() {
                 B,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
                 ),
             ),
@@ -466,7 +466,7 @@ fn avacyn_rules_cavern_of_souls_protects_only_the_spell_that_used_its_mana() {
                     B,
                     ObjectDestination::Hand,
                     free_instant(
-                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                         Instruction::StackOp(Box::new(
                             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                                 spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -700,7 +700,7 @@ fn avacyn_rules_subtype_protection_prevents_targeting_and_damage_from_kindred_sp
                 A,
                 ObjectDestination::Hand,
                 vampire_spell(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
                         spellwake_engine::program::ValueExpr::literal(2),
@@ -1053,7 +1053,7 @@ fn avacyn_rules_divine_deflection_shares_capacity_across_controller_and_creature
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     Instruction::DealDamage(Box::new(
                         spellwake_engine::toolbox::DealDamageSpec::target_controllers_creatures(
                             spellwake_engine::program::ValueExpr::Literal(3.into()),

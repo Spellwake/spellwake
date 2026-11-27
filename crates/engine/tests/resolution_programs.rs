@@ -314,7 +314,7 @@ fn a_created_shield_is_observed_even_when_later_instructions_consume_it() {
             1,
             A,
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![shield(4), damage(3), damage(3)],
             ),
         )],
@@ -393,7 +393,7 @@ fn a_multiplier_is_reused_once_for_each_independent_instruction_attempt() {
             1,
             A,
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![multiplier(2), damage(1), damage(1)],
             ),
         )],
@@ -447,7 +447,7 @@ fn several_same_source_births_bind_actual_ids_before_a_later_damage_choice() {
             1,
             A,
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![shield(3), shield(4), damage(5), damage(3)],
             ),
         )],
@@ -519,7 +519,7 @@ fn pending_later_instruction_retains_earlier_work_and_blocks_priority_and_checks
             1,
             A,
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![damage(2), shield(4), multiplier(2), damage(3)],
             ),
         )],
@@ -572,7 +572,7 @@ fn twelve_attempts_in_one_candidate_preserve_typed_encounter_order() {
         vec![(
             1,
             A,
-            ExecutableBody::new(BodyTarget::SingleCreature, (1..=12).map(damage).collect()),
+            ExecutableBody::new(BodyTarget::SINGLE_CREATURE, (1..=12).map(damage).collect()),
         )],
     );
     let target = object(&game, FIRST);
@@ -616,7 +616,7 @@ fn reply_completes_prior_attempt_then_emits_twelve_later_attempts_without_replay
         vec![(
             1,
             A,
-            ExecutableBody::new(BodyTarget::SingleCreature, instructions),
+            ExecutableBody::new(BodyTarget::SINGLE_CREATURE, instructions),
         )],
     );
     let target = object(&game, FIRST);
@@ -699,13 +699,13 @@ fn two_copy_choices_keep_source_cursor_and_independent_full_programs_above_it() 
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1), damage(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(1), damage(2)]),
             ),
             (
                 2,
                 B,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(
+                    BodyTarget::single_spell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
                     vec![
@@ -822,13 +822,13 @@ fn copy_then_counter_preserves_the_independent_copied_sequence() {
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1), damage(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(1), damage(2)]),
             ),
             (
                 2,
                 B,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(
+                    BodyTarget::single_spell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
                     vec![
@@ -888,13 +888,13 @@ fn counter_then_copy_and_repeated_counter_skip_departed_stack_operands() {
                 (
                     1,
                     A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1), shield(5)]),
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(1), shield(5)]),
                 ),
                 (
                     2,
                     B,
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                         vec![
                             Instruction::StackOp(Box::new(
                                 spellwake_engine::toolbox::StackOpSpec::counter_targeted(
@@ -928,13 +928,13 @@ fn one_choice_convenience_wrappers_reject_a_second_prompt_atomically() {
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(1)]),
             ),
             (
                 2,
                 B,
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(
+                    BodyTarget::single_spell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
                     vec![
@@ -1020,7 +1020,7 @@ fn invalid_replies_preserve_prior_work_and_the_exact_second_choice() {
             1,
             A,
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![damage(2), shield(4), multiplier(2), damage(3), damage(2)],
             ),
         )],
@@ -1091,7 +1091,7 @@ fn later_damage_choice_has_fresh_identity_stage_and_exact_instruction_index() {
             1,
             A,
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![multiplier(2), multiplier(3), damage(1), damage(1)],
             ),
         )],

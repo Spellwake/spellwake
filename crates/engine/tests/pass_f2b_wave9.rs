@@ -20,8 +20,8 @@
 //! - `ObjectFilterFlags::{DIED_THIS_TURN, PUT_INTO_GY_THIS_TURN, PUT_INTO_GY_FROM_LIBRARY_THIS_TURN}`
 //!   in `Instruction::MoveGraveyardGroup`
 //! - `SourceZoneFilter::LastMoved` on `TemporaryRuleKind::ZoneCastPermission` snapshotting
-//!   `ExileTopPlay` exiled objects and revoking after zone change
-//! - `Instruction::RegenerateSubject`, `PermanentTargetAction::Regenerate`,
+//!   impulse-exiled objects and revoking after zone change
+//! - `Instruction::RegenerateSubject`, multi-target regenerate,
 //!   `EffectSubject::MatchingOtherThanTarget` (`Dark Dabbling`), and
 //!   `EffectSubject::TargetAndSharingColorMatching`
 //! - `PlayerMutation::AddMana` (fixed and interactive choice for non-controller) and
@@ -75,12 +75,11 @@ use spellwake_engine::{
         EffectManaYield, EffectSubject, EndStepCast, EntryCopyRule, EntryCopySpecExt,
         EntryCopyZone, EventValueKind, ExecutableBody, ExtremeLifeTieMode, ImpulsePlayDuration,
         Instruction, LibrarySearch, MoveSubjectRef, ObjectClause, ObjectColorFilter, ObjectFilter,
-        ObjectFilterFlags, PermanentDefinition, PermanentTargetAction, PlayerRelation,
-        PlayerTriggerAction, Program, ProgramKind, ResolutionCondition, ResolvingPlayer,
-        SearchCardMatcher, SearchManaValue, SourceStateExpr, SourceZoneFilter, StatusTriggerKind,
-        SubtypeFilter, Supertype, TemporaryRuleKind, TriggerCondition, TriggerEvent,
-        TriggerGrouping, TriggerPlayerScope, TriggerSpec, TriggerZone, TriggeredAbility,
-        TriggeredAbilityId, ValueExpr,
+        ObjectFilterFlags, PermanentDefinition, PlayerRelation, PlayerTriggerAction, Program,
+        ProgramKind, ResolutionCondition, ResolvingPlayer, SearchCardMatcher, SearchManaValue,
+        SourceStateExpr, SourceZoneFilter, StatusTriggerKind, SubtypeFilter, Supertype,
+        TemporaryRuleKind, TriggerCondition, TriggerEvent, TriggerGrouping, TriggerPlayerScope,
+        TriggerSpec, TriggerZone, TriggeredAbility, TriggeredAbilityId, ValueExpr,
     },
     setup::GameSeed,
     targets::TargetRef,
@@ -278,7 +277,7 @@ fn destroy_permanent_instant() -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -427,68 +426,68 @@ fn world_at_upkeep(
 fn chaos_warp_reveals_and_puts_opponent_permanent_under_owners_control() {
     let vocab = vocabulary();
 
+    let mut chaos_warp_ops = vec![Instruction::ZoneOp(Box::new(
+        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+            spellwake_engine::toolbox::ObjectQuery::Targets,
+            spellwake_engine::toolbox::ZoneDest::Library {
+                position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
+            },
+        ),
+    ))];
+    chaos_warp_ops.extend(
+        spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+            ResolvingPlayer::TargetOwner,
+            ResolvingPlayer::Controller,
+            ValueExpr::literal(1),
+            None,
+            0,
+            false,
+            spellwake_engine::program::LookTopKeepDest::Hand,
+            spellwake_engine::program::LookTopRestDest::BottomOrder,
+            true,
+            true,
+            true,
+            None,
+        ),
+    );
+    chaos_warp_ops.push(Instruction::ZoneOp(Box::new(
+        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+            spellwake_engine::toolbox::ObjectQuery::Revealed,
+            spellwake_engine::toolbox::ZoneDest::Battlefield {
+                controller: if true {
+                    spellwake_engine::toolbox::ZoneController::Owner
+                } else {
+                    spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                    ))
+                },
+                tapped: false,
+                attacking: false,
+                transformed: false,
+                face_down: None,
+                entering_counters: (None)
+                    .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
+                        (
+                            k,
+                            Box::new(spellwake_engine::program::ValueExpr::literal(i64::from(c))),
+                        )
+                    })
+                    .into_iter()
+                    .collect(),
+                attach_to: if false {
+                    Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
+                } else {
+                    None
+                },
+            },
+        ),
+    )));
     let chaos_warp = validated(
         Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(
-                BodyTarget::SinglePermanent,
-                vec![
-                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                        spellwake_engine::toolbox::ObjectQuery::Targets,
-                        spellwake_engine::toolbox::ZoneDest::Library {
-                            position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
-                        },
-                    ))),
-                    Instruction::LookTopChooseExt {
-                        library_owner: ResolvingPlayer::TargetOwner,
-                        chooser: ResolvingPlayer::Controller,
-                        count: ValueExpr::literal(1),
-                        filter: None,
-                        max_picks: 0,
-                        take_all_matching: false,
-                        keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                        rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                        reveal_kept: true,
-                        reveal_all: true,
-                        reveal_only: true,
-                        secondary: None,
-                    },
-                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                        spellwake_engine::toolbox::ObjectQuery::Revealed,
-                        spellwake_engine::toolbox::ZoneDest::Battlefield {
-                            controller: if true {
-                                spellwake_engine::toolbox::ZoneController::Owner
-                            } else {
-                                spellwake_engine::toolbox::ZoneController::Player(Box::new(
-                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                                        spellwake_engine::program::ResolvingPlayer::Controller,
-                                    ),
-                                ))
-                            },
-                            tapped: false,
-                            attacking: false,
-                            transformed: false,
-                            face_down: None,
-                            entering_counters: (None)
-                                .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
-                                    (
-                                        k,
-                                        Box::new(spellwake_engine::program::ValueExpr::literal(
-                                            i64::from(c),
-                                        )),
-                                    )
-                                })
-                                .into_iter()
-                                .collect(),
-                            attach_to: if false {
-                                Some(Box::new(spellwake_engine::toolbox::ObjectQuery::Source))
-                            } else {
-                                None
-                            },
-                        },
-                    ))),
-                ],
-            ),
+            ExecutableBody::new(BodyTarget::SINGLE_PERMANENT, chaos_warp_ops),
         ),
         &vocab,
     );
@@ -932,7 +931,7 @@ fn died_this_turn_and_put_into_gy_from_library_graveyard_return() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 12. RegenerateSubject, PermanentTargetAction::Regenerate, MatchingOtherThanTarget,
+// 12. RegenerateSubject, multi-target regenerate, MatchingOtherThanTarget,
 //     and TargetAndSharingColorMatching
 // ---------------------------------------------------------------------------
 
@@ -949,7 +948,7 @@ fn add_mana_for_player_and_cr605_1b_enchanted_land_tapped() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
                         ResolvingPlayer::TargetPlayer,
@@ -966,7 +965,7 @@ fn add_mana_for_player_and_cr605_1b_enchanted_land_tapped() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
                         ResolvingPlayer::TargetPlayer,

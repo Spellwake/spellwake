@@ -608,7 +608,7 @@ fn an_owned_spell_copy_creates_a_distinct_token_for_its_own_controller() {
         Program::instant(
             ManaCost::specific(ManaType::Blue, 2.into()),
             ExecutableBody::new(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],
@@ -997,16 +997,22 @@ fn copy_ability() -> ActivatedAbility {
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SinglePermanent,
-            vec![Instruction::BecomeCopy {
-                receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-                donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-                duration: ResolvedDuration::UntilEndOfTurn,
-                exceptions: Box::new(spellwake_engine::program::CopyExceptions {
-                    override_pt: None,
-                    ..Default::default()
-                }),
-            }],
+            BodyTarget::SINGLE_PERMANENT,
+            vec![Instruction::ApplyContinuous(Box::new(
+                spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        spellwake_engine::program::EffectSubject::AbilitySource,
+                    )),
+                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                        spellwake_engine::program::MoveSubjectRef::TargetObject,
+                    ),
+                    ResolvedDuration::UntilEndOfTurn,
+                    spellwake_engine::program::CopyExceptions {
+                        override_pt: None,
+                        ..Default::default()
+                    },
+                ),
+            ))],
         ),
     }
 }

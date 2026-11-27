@@ -231,7 +231,7 @@ fn mandatory_llanowar_control_change_is_a_separate_synthetic_mechanism() {
         program: Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![{
                     struct _Tmp {
                         parts: spellwake_engine::characteristics::ResolvedPartsSpec,

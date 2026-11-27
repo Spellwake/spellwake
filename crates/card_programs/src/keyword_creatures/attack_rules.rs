@@ -213,8 +213,12 @@ pub(super) fn compile(
             source_cost: spellwake_engine::activated::SourceCost::None,
             mana_cost: super::fixed_cost(price)?,
             body: spellwake_engine::program::ExecutableBody::new(
-                spellwake_engine::program::BodyTarget::SingleCreature,
-                vec![spellwake_engine::program::Instruction::Attach(ability)],
+                spellwake_engine::program::BodyTarget::SINGLE_CREATURE,
+                vec![spellwake_engine::program::Instruction::MutateObject(
+                    Box::new(spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                        ability,
+                    )),
+                )],
             ),
         };
         use spellwake_engine::characteristics::{
@@ -439,8 +443,9 @@ pub(super) fn compile(
         {
             body.instructions.insert(
                 0,
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: spellwake_engine::program::ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
             );
             if entry_search.replace(body).is_some() {
@@ -524,7 +529,7 @@ pub(super) fn compile(
                     ),
                 ),
                 ExecutableBody::new(
-                    BodyTarget::FilteredPermanent(ObjectFilter::creature().attacking()),
+                    BodyTarget::filtered_permanent(ObjectFilter::creature().attacking()),
                     vec![Instruction::MutateObject(Box::new(
                         spellwake_engine::toolbox::MutateObjectSpec::reselect_attack_defender(),
                     ))],

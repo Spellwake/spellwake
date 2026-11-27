@@ -77,7 +77,7 @@ fn cl_typeloss_roster() {
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::Tap,
         body: ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![effect(
                 vec![ResolvedPartSpec::ModifyPT(pt(1, 1))],
                 ResolvedDuration::UntilEndOfTurn,
@@ -95,7 +95,7 @@ fn cl_typeloss_roster() {
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![type_part(
                         TypeOperation::Remove(BTreeSet::from([CardType::Artifact])),
@@ -475,7 +475,7 @@ fn cl_combat_real_cuts() {
             ),
             spell(
                 2,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     remove_creature(ResolvedDuration::NoStatedDuration),
                     add_creature(ResolvedDuration::NoStatedDuration),

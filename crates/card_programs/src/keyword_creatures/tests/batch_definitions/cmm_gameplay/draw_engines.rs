@@ -20,7 +20,7 @@ fn cmm_zones_armorcraft_judge_counts_own_counter_bearing_creatures_once_each() {
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::PlusOne,
                     spellwake_engine::program::ValueExpr::Literal(count.into()),
@@ -278,7 +278,7 @@ fn cmm_zones_alms_collector_leaves_single_draws_and_allows_the_affected_player_t
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
                     spellwake_engine::program::ValueExpr::Literal(count.into()),
                 ),

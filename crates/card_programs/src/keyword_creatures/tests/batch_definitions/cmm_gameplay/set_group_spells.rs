@@ -149,7 +149,13 @@ fn cmm_kindred_dominance_and_crippling_fear_preserve_the_chosen_type() {
         );
         let choose = cast_named(&initial, &price);
         let resolved = finish_graveyard_choices(
-            reply(&choose, DecisionReply::CreatureType(human)).into_state(),
+            reply(
+                &choose,
+                DecisionReply::PromptChoice(
+                    spellwake_engine::toolbox::PromptChoiceReply::CreatureType(human),
+                ),
+            )
+            .into_state(),
         );
         for id in [2, 3, 6] {
             assert_eq!(physical(&resolved, id).zone(), ObjectZone::Battlefield);
@@ -208,7 +214,7 @@ fn cmm_star_of_extinction_damages_creatures_and_planeswalkers_only_after_a_legal
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,

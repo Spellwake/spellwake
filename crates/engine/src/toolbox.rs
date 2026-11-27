@@ -30,10 +30,14 @@ pub use continuous::{ApplyContinuousSpec, ContinuousPayload};
 pub use env::{BindingId, ExecEnv, ExecValue, ObjectSnapshot};
 pub use expr::ConditionExpr;
 pub use life_damage::{
-    AdjustLifeSpec, DamageSourceQuery, DamageTargetQuery, DealDamageSpec, LifeOp, MutatePlayerSpec,
-    PlayerMutation,
+    AdjustLifeSpec, DamageSourceQuery, DamageTargetQuery, DealDamageSpec, LibraryTopAction, LifeOp,
+    MutatePlayerSpec, PlayerDesignationOp, PlayerGameOutcome, PlayerKeywordAction, PlayerMutation,
+    RandomEventOp, TurnFlowOp,
 };
-pub use mutate::{DrawCardsSpec, MutateObjectSpec, ObjectMutation, TokenCopySpec};
+pub use mutate::{
+    AttachOp, ControlOp, CounterOp, DrawCardsSpec, KeywordZoneOp, MutateObjectSpec, ObjectCombatOp,
+    ObjectMutation, ObjectStateMarkerOp, OrientationOp, TapStateOp, TokenAttachOp, TokenCopySpec,
+};
 pub use query::{ObjectQuery, PlayerSelector, QuerySlice, QueryZone};
 pub use stack_op::{CounterDestination, StackOpKind, StackOpSpec, StackTargetSelector};
 pub use tags::{

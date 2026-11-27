@@ -41,7 +41,7 @@ fn rename(
 ) -> spellwake_engine::effects::SeedCard {
     spell(
         id,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![effect(vec![ResolvedPartSpec::Names(change)], duration)],
     )
 }

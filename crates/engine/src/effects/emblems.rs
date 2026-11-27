@@ -3,25 +3,6 @@ use super::*;
 use crate::occurrence::{EventCause, RulesOccurrence};
 
 impl EffectWindow {
-    pub(super) fn schedule_return_at_next_end_step(
-        &mut self,
-        entry: StackEntryId,
-        objects: Vec<ObjectId>,
-    ) -> Result<(), EffectError> {
-        let binding = self
-            .execution_bindings(entry)
-            .and_then(|value| value.trigger.as_ref())
-            .ok_or(EffectError::InconsistentProgram)?;
-        let controller = self
-            .window
-            .resolving()
-            .ok_or(EffectError::WrongResolutionFrame)?
-            .controller();
-        self.triggers
-            .delay_exile_return(binding.source.clone(), controller, objects);
-        Ok(())
-    }
-
     pub(crate) fn activate_sacrifice_emblem(
         &self,
         actor: SeatId,

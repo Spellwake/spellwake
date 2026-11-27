@@ -28,7 +28,7 @@ impl GrowthKeyword {
     pub(crate) fn target(&self) -> BodyTarget {
         match self {
             Self::Increment | Self::Evolve => BodyTarget::None,
-            _ => BodyTarget::SingleCreature,
+            _ => BodyTarget::SINGLE_CREATURE,
         }
     }
     /// Construct one independently stacked CR 702.100, 702.134 or 702.165 trigger.

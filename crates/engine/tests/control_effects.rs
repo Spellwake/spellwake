@@ -38,7 +38,7 @@ fn control_spell(
 ) -> SeedCard {
     let mut seed = spell(
         id,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![control(recipient, duration)],
     );
     seed.owner = owner;
@@ -225,7 +225,7 @@ fn control_effect_from_a_sacrificed_source_keeps_the_captured_ability_controller
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::Sacrifice,
             body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![control(
                     ControlRecipient::ResolvingController,
                     ResolvedDuration::NoStatedDuration,
@@ -275,7 +275,7 @@ fn control_effect_from_a_sacrificed_source_keeps_the_captured_ability_controller
 fn changing_control_away_and_back_within_one_body_removes_the_attacker_permanently() {
     let mut change_twice = spell(
         2,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![
             control(
                 ControlRecipient::ResolvingController,
@@ -467,7 +467,7 @@ fn control_and_haste_share_one_effect_but_do_not_rewrite_control_history() {
             controlled(1, P1, P1, source),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![
                         ResolvedPartSpec::Control(ControlRecipient::ResolvingController),
@@ -518,7 +518,7 @@ fn copying_an_opponents_control_spell_binds_the_copy_controller_and_new_target()
             ),
             spell(
                 4,
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],

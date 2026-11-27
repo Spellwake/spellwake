@@ -179,6 +179,42 @@ impl EffectWindow {
         })
     }
 
+    pub(super) fn satisfies_max_total_power(
+        &self,
+        entry: &StackEntry,
+        ids: &[ObjectId],
+        max_total_power: &crate::program::ValueExpr,
+    ) -> Result<bool, EffectError> {
+        if ids.is_empty() {
+            return Ok(true);
+        }
+        let limit = self.resolve_value_expr_with_source(
+            entry.controller(),
+            max_total_power,
+            self.resolution_cursor(),
+            self.entry_source_object(Some(entry)),
+        )?;
+        let evaluated = self.evaluated_characteristics()?;
+        let mut total = RulesInteger::from(0);
+        for &id in ids {
+            let Some(power) = evaluated.get(id).and_then(|obj| {
+                obj.power_toughness
+                    .as_ref()
+                    .map(|pt| pt.derived.power.clone())
+                    .or_else(|| {
+                        obj.defined
+                            .printed_pt
+                            .as_ref()
+                            .map(|pt| pt.baseline().power)
+                    })
+            }) else {
+                return Ok(false);
+            };
+            total = total.plus(&power);
+        }
+        Ok(total <= limit)
+    }
+
     pub(super) fn record_choice_and_emit(
         &mut self,
         entry: &StackEntry,
@@ -251,7 +287,9 @@ impl EffectWindow {
                     hidden: *hidden,
                 }
             }
-            PromptDomain::Players { selector, min, max } => {
+            PromptDomain::Players {
+                selector, min, max, ..
+            } => {
                 let candidates =
                     self.eval_player_selector_at(controller, Some(entry), selector, cursor)?;
                 let cap = u8::try_from(candidates.len()).unwrap_or(u8::MAX);
@@ -301,13 +339,16 @@ impl EffectWindow {
                 };
                 ResolvedPromptDomain::CardType { allowed: types }
             }
-            PromptDomain::Subtype { kind } => match kind {
+            PromptDomain::Subtype {
+                kind, excluding, ..
+            } => match kind {
                 SubtypeChoiceKind::Creature => ResolvedPromptDomain::CreatureType {
                     allowed: self
                         .creature_vocabulary
                         .members()
                         .iter()
                         .filter_map(|m| self.creature_vocabulary.resolve_label(m))
+                        .filter(|id| !excluding.contains(id))
                         .collect(),
                 },
                 SubtypeChoiceKind::BasicLand => ResolvedPromptDomain::BasicLandType {
@@ -339,6 +380,7 @@ impl EffectWindow {
                     min_per_pile: *min_per_pile,
                 }
             }
+            PromptDomain::ManaPayment { .. } => return Err(EffectError::InconsistentProgram),
         })
     }
 
@@ -399,14 +441,34 @@ impl EffectWindow {
         match reply {
             PromptChoiceReply::Objects(chosen) => {
                 if let PromptDomain::Objects {
-                    constraint: Some(constraint),
+                    constraint,
+                    max_total_power,
                     ..
                 } = &spec.domain
-                    && !self.satisfies_selection_constraint(&chosen, *constraint)?
                 {
-                    return Err(EffectError::SelectionOutsideDomain);
+                    if let Some(constraint) = constraint
+                        && !self.satisfies_selection_constraint(&chosen, *constraint)?
+                    {
+                        return Err(EffectError::SelectionOutsideDomain);
+                    }
+                    if let Some(expr) = max_total_power
+                        && !self.satisfies_max_total_power(entry, &chosen, expr)?
+                    {
+                        return Err(EffectError::SelectionOutsideDomain);
+                    }
                 }
                 chosen_count = chosen.len();
+                let mirror_lki = if spec.bind_to == crate::toolbox::BindingId(0) {
+                    let eval_lki = self.evaluated_characteristics()?;
+                    Some(
+                        chosen
+                            .iter()
+                            .filter_map(|id| eval_lki.get(*id).cloned())
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
                 if let Some(unchosen_slot) = spec.bind_unchosen
                     && let ResolvedPromptDomain::Objects { candidates, .. } = resolved_domain
                 {
@@ -421,6 +483,14 @@ impl EffectWindow {
                     }
                 }
                 if let Some(cur) = self.resolution_cursor_mut() {
+                    if let Some(lki) = mirror_lki {
+                        cur.vowed_creatures.extend(chosen.iter().copied());
+                        cur.results.last_action_lki = lki;
+                        cur.results.last_moved_objects = chosen.clone();
+                        cur.results.last_action_succeeded = !chosen.is_empty();
+                        cur.results.last_action_count =
+                            Some(RulesInteger::from_usize(chosen.len()));
+                    }
                     cur.env.bind(spec.bind_to, ExecValue::Objects(chosen));
                 }
             }
@@ -466,8 +536,44 @@ impl EffectWindow {
                 }
             }
             PromptChoiceReply::CreatureType(sub) => {
+                if let ResolvedPromptDomain::CreatureType { allowed } = resolved_domain
+                    && !allowed.contains(&sub)
+                {
+                    return Err(EffectError::IllegalCreatureType);
+                }
                 chosen_count = 1;
-                if let Some(cur) = self.resolution_cursor_mut() {
+                let legacy_slot = match &spec.domain {
+                    PromptDomain::Subtype { legacy_slot, .. } => *legacy_slot,
+                    _ => None,
+                };
+                if let Some(slot) = legacy_slot {
+                    let before = self.rules_snapshot(None)?;
+                    if let Some(cur) = self.resolution_cursor_mut() {
+                        if cur.values.insert(slot, sub).is_some() {
+                            return Err(EffectError::InconsistentProgram);
+                        }
+                        cur.env
+                            .bind(spec.bind_to, ExecValue::Subtypes(BTreeSet::from([sub])));
+                    }
+                    self.emit_from(
+                        EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before,
+                        None,
+                        append,
+                        |_, _, _| {
+                            Ok(vec![RulesOccurrence::CreatureTypeChosen {
+                                entry: entry.id(),
+                                instruction: index,
+                                slot,
+                                chooser,
+                                value: sub,
+                            }])
+                        },
+                    )?;
+                } else if let Some(cur) = self.resolution_cursor_mut() {
                     cur.env
                         .bind(spec.bind_to, ExecValue::Subtypes(BTreeSet::from([sub])));
                 }
@@ -489,6 +595,13 @@ impl EffectWindow {
             }
             PromptChoiceReply::CardName(name) => {
                 chosen_count = 1;
+                if let crate::stack_window::StackKind::ActivatedAbility { source }
+                | crate::stack_window::StackKind::TriggeredAbility { source } = entry.kind()
+                {
+                    self.characteristics
+                        .named_cards
+                        .insert(source.id(), name.clone());
+                }
                 if let Some(cur) = self.resolution_cursor_mut() {
                     cur.results.chosen_card_name = Some(name.clone());
                     cur.env.bind(spec.bind_to, ExecValue::CardName(name));

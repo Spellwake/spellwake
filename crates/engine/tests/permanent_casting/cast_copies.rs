@@ -20,7 +20,7 @@ fn fixture(kind: CastCopyKeyword) -> GameState {
             ),
         )),
         free.clone(),
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
     );
     source
         .program
@@ -67,7 +67,7 @@ fn fixture(kind: CastCopyKeyword) -> GameState {
             ),
         )),
         free.clone(),
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
     ));
     cards.push(spell(
         6,
@@ -81,7 +81,7 @@ fn fixture(kind: CastCopyKeyword) -> GameState {
             },
         ))),
         free,
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     initialize(
         Some(Step::PostcombatMain),

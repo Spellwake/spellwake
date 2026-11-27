@@ -42,7 +42,7 @@ fn color_spell(
 ) -> SeedCard {
     spell(
         id,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![effect(vec![ResolvedPartSpec::Color(change)], duration)],
     )
 }

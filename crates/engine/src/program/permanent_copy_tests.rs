@@ -10,20 +10,20 @@ fn source(instructions: Vec<Instruction>) -> Program {
             id: ActivatedAbilityId(1),
             source_cost: SourceCost::None,
             mana_cost: ManaCost::free(),
-            body: ExecutableBody::new(BodyTarget::SinglePermanent, instructions),
+            body: ExecutableBody::new(BodyTarget::SINGLE_PERMANENT, instructions),
         }],
     )
 }
 fn copy() -> Instruction {
-    Instruction::BecomeCopy {
-        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-        donor: crate::program::MoveSubjectRef::TargetObject,
-        duration: ResolvedDuration::UntilEndOfTurn,
-        exceptions: Box::new(crate::program::CopyExceptions {
+    Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec::become_copy(
+        crate::toolbox::ObjectQuery::Source,
+        crate::toolbox::ObjectQuery::Targets,
+        ResolvedDuration::UntilEndOfTurn,
+        crate::program::CopyExceptions {
             override_pt: None,
             ..Default::default()
-        }),
-    }
+        },
+    )))
 }
 #[test]
 fn copy_origin_and_lki_composition_are_admitted_explicitly() {
@@ -51,7 +51,7 @@ fn copy_origin_and_lki_composition_are_admitted_explicitly() {
         .validate(&v),
         Err(DefinitionError::InvalidInstruction)
     );
-    let body = ExecutableBody::new(BodyTarget::SinglePermanent, vec![copy()]);
+    let body = ExecutableBody::new(BodyTarget::SINGLE_PERMANENT, vec![copy()]);
     for spell in [
         Program::instant(ManaCost::free(), body.clone()),
         Program::sorcery(ManaCost::free(), body),
@@ -59,7 +59,7 @@ fn copy_origin_and_lki_composition_are_admitted_explicitly() {
         assert_eq!(spell.validate(&v), Err(DefinitionError::InvalidInstruction));
     }
     let mut invalid = source(vec![copy()]);
-    invalid.activated[0].body.target = BodyTarget::SinglePlayer;
+    invalid.activated[0].body.target = BodyTarget::SINGLE_PLAYER;
     assert_eq!(invalid.validate(&v), Err(DefinitionError::OperandFamily));
 }
 #[test]
@@ -72,15 +72,17 @@ fn strict_copy_codec_requires_explicit_nullable_exception_and_duration() {
             toughness: 12.into(),
         }),
     ] {
-        let p = source(vec![Instruction::BecomeCopy {
-            receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-            donor: crate::program::MoveSubjectRef::TargetObject,
-            duration: ResolvedDuration::UntilEndOfTurn,
-            exceptions: Box::new(crate::program::CopyExceptions {
-                override_pt: exception,
-                ..Default::default()
-            }),
-        }]);
+        let p = source(vec![Instruction::ApplyContinuous(Box::new(
+            crate::toolbox::ApplyContinuousSpec::become_copy(
+                crate::toolbox::ObjectQuery::Source,
+                crate::toolbox::ObjectQuery::Targets,
+                ResolvedDuration::UntilEndOfTurn,
+                crate::program::CopyExceptions {
+                    override_pt: exception,
+                    ..Default::default()
+                },
+            ),
+        ))]);
         assert!(p.validate(&v).is_ok());
         let wire = codec::view(&p);
         assert_eq!(

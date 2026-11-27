@@ -185,7 +185,7 @@ fn cmm_smothering_tithe_offers_the_drawer_two_mana_or_creates_a_treasure() {
         A,
         ObjectDestination::Hand,
         free_instant(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
                 spellwake_engine::program::ValueExpr::Literal(1.into()),
             ),
@@ -263,7 +263,15 @@ fn cmm_storm_kiln_artist_makes_treasure_on_cast_and_copy_and_counts_only_own_art
         .program
         .activated
         .iter()
-        .find(|ability| matches!(ability.body.target, BodyTarget::SingleSpell(_)))
+        .find(|ability| {
+            matches!(
+                ability.body.target,
+                BodyTarget::Spell {
+                    include_abilities: false,
+                    ..
+                }
+            )
+        })
         .unwrap()
         .id;
     let initial = game(
@@ -288,7 +296,7 @@ fn cmm_storm_kiln_artist_makes_treasure_on_cast_and_copy_and_counts_only_own_art
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::TargetPlayer,

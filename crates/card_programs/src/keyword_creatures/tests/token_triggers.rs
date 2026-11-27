@@ -118,7 +118,7 @@ fn scenarios(vocabulary: Arc<CreatureTypeVocabulary>, afterlife: Program, fabric
     let instant = |instruction| {
         Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(BodyTarget::SinglePermanent, vec![instruction]),
+            ExecutableBody::new(BodyTarget::SINGLE_PERMANENT, vec![instruction]),
         )
     };
     let cards = vec![

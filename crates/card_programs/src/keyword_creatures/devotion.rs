@@ -109,7 +109,7 @@ pub(super) fn compile(
                 ),
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         ObjectFilter::creature_or_enchantment().controlled(),
                     ),
                     vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
@@ -167,7 +167,7 @@ pub(super) fn compile(
             };
             if let Some((target, part)) = match effect {
                 "Another target creature gains lifelink until end of turn." => Some((
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         ObjectFilter::creature().other_than_ability_source(),
                     ),
                     ResolvedPartSpec::Abilities(AbilityChange::grant_keywords([
@@ -175,7 +175,7 @@ pub(super) fn compile(
                     ])),
                 )),
                 "Target creature gets -2/-1 until end of turn." => Some((
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     ResolvedPartSpec::ModifyPT(PowerToughness {
                         power: (-2).into(),
                         toughness: (-1).into(),

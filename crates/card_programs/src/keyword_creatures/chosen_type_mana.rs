@@ -80,10 +80,10 @@ pub(super) fn choose_and_gain_type(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::CountOtherSharingSourceSubtype,
                 ),
-                Instruction::Discard {
-                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ))),
             ],
         ),
     });

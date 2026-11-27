@@ -14,7 +14,8 @@ use crate::{
     targets::TargetRef,
     toolbox::{
         AdjustLifeSpec, DamageSourceQuery, DamageTargetQuery, DealDamageSpec, ExecValue, LifeOp,
-        MutatePlayerSpec, PlayerMutation,
+        MutatePlayerSpec, PlayerDesignationOp, PlayerGameOutcome, PlayerKeywordAction,
+        PlayerMutation, TurnFlowOp,
     },
 };
 use spellwake_contracts::RulesInteger;
@@ -204,6 +205,119 @@ impl EffectWindow {
                 }
                 if !adjustments.is_empty() {
                     self.adjust_players_at_cut(entry.id(), index, adjustments, ctx.append)?;
+                }
+            }
+            LifeOp::ExchangeTotals { other } => {
+                let p1_opt = seats.first().copied();
+                let p2_opt = self
+                    .eval_player_selector_at(controller, Some(entry), other, cursor_snap.as_ref())?
+                    .into_iter()
+                    .next();
+                if let (Some(p1), Some(p2)) = (p1_opt, p2_opt)
+                    && p1 != p2
+                    && let (Some(l1), Some(l2)) =
+                        (self.life.get(p1).cloned(), self.life.get(p2).cloned())
+                {
+                    let evaluated = self.evaluated_characteristics()?;
+                    let prohibited = self.life_gain_prohibitions(&evaluated)?;
+                    let blocked = (l2 > l1 && prohibited.contains(&p1))
+                        || (l1 > l2 && prohibited.contains(&p2));
+                    if !blocked {
+                        self.adjust_players_at_cut(
+                            entry.id(),
+                            index,
+                            BTreeMap::from([
+                                (p1, LifeAdjustment::Set(l2)),
+                                (p2, LifeAdjustment::Set(l1)),
+                            ]),
+                            ctx.append,
+                        )?;
+                    }
+                }
+            }
+            LifeOp::ExchangeWithStat { object, stat } => {
+                if let Some(seat) = seats.first().copied() {
+                    let obj_opt = if matches!(object.as_ref(), crate::toolbox::ObjectQuery::Targets)
+                        && self.window.target_assessment().is_some()
+                    {
+                        self.legal_permanent_targets()?.into_iter().next()
+                    } else {
+                        self.eval_object_query_at(
+                            controller,
+                            Some(entry),
+                            object,
+                            cursor_snap.as_ref(),
+                        )?
+                        .into_iter()
+                        .next()
+                    };
+                    if let Some(obj_id) = obj_opt {
+                        let before = self.rules_snapshot(None)?;
+                        let current = &before.view().evaluated;
+                        let stats_opt = current
+                            .get(obj_id)
+                            .filter(|o| o.zone == ObjectZone::Battlefield && o.is_creature())
+                            .and_then(|o| o.power_toughness.as_ref())
+                            .map(|pt| (pt.derived.power.clone(), pt.derived.toughness.clone()));
+                        if let (Some((pwr, tgh)), Some(life)) =
+                            (stats_opt, self.life.get(seat).cloned())
+                        {
+                            let use_power = *stat == crate::program::ObjectStatKind::Power;
+                            let stat_val = if use_power { pwr } else { tgh.clone() };
+                            let blocked = stat_val > life
+                                && self.life_gain_prohibitions(current)?.contains(&seat);
+                            if !blocked {
+                                let part = if use_power {
+                                    crate::characteristics::ResolvedPart::SetPT(
+                                        crate::characteristics::PowerToughness {
+                                            power: life,
+                                            toughness: tgh,
+                                        },
+                                    )
+                                } else {
+                                    crate::characteristics::ResolvedPart::SetToughness(life)
+                                };
+                                let effect = self.characteristics.add_effect(
+                                    entry.id(),
+                                    obj_id,
+                                    crate::characteristics::ResolvedParts(vec![part]),
+                                    crate::characteristics::ResolvedDuration::NoStatedDuration,
+                                )?;
+                                let life_changes = self
+                                    .life
+                                    .apply_adjustments(
+                                        &[(seat, LifeAdjustment::Set(stat_val))].into(),
+                                    )
+                                    .map_err(|_| EffectError::InconsistentProgram)?;
+                                self.emit_from(
+                                    EventCause::Instruction {
+                                        entry: entry.id(),
+                                        instruction: index,
+                                    },
+                                    &before,
+                                    None,
+                                    ctx.append,
+                                    |old, new, _| {
+                                        let appearances =
+                                            crate::effects::occurrence_flow::characteristic_appearance_changes(
+                                                old,
+                                                new,
+                                                effect.affected.iter().copied(),
+                                            )?;
+                                        let mut occs = life_changes
+                                            .into_iter()
+                                            .map(RulesOccurrence::LifeChanged)
+                                            .collect::<Vec<_>>();
+                                        occs.push(RulesOccurrence::ContinuousEffectCreated {
+                                            effect,
+                                            appearances,
+                                        });
+                                        Ok(occs)
+                                    },
+                                )?;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -569,6 +683,54 @@ impl EffectWindow {
                 }
                 return Ok(StepOutcome::Continue);
             }
+            DamageTargetQuery::Fight { first, second } => {
+                let resolve_side =
+                    |q: &crate::toolbox::ObjectQuery| -> Result<Vec<ObjectId>, EffectError> {
+                        if matches!(q, crate::toolbox::ObjectQuery::Targets)
+                            && self.window.target_assessment().is_some()
+                        {
+                            Ok(self
+                                .legal_permanent_targets()?
+                                .into_iter()
+                                .next()
+                                .into_iter()
+                                .collect())
+                        } else {
+                            self.eval_object_query_at(
+                                controller,
+                                Some(entry),
+                                q,
+                                cursor_snap.as_ref(),
+                            )
+                        }
+                    };
+                let first_objs = resolve_side(first)?;
+                let second_objs = resolve_side(second)?;
+                let mut pairs = Vec::new();
+                for &a in &first_objs {
+                    for &b in &second_objs {
+                        if a != b {
+                            pairs.push((a, b));
+                        }
+                    }
+                }
+                self.emit_fight_occurrences(entry.id(), index, &pairs, ctx.append)?;
+                let inputs = self.fight_damage_inputs(&pairs)?;
+                if inputs.is_empty() {
+                    self.advance_instruction()?;
+                } else {
+                    self.install_damage_batch(
+                        DamageOrigin::Resolution {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        DamageKind::Noncombat,
+                        inputs,
+                        ctx.journal,
+                    )?;
+                }
+                return Ok(StepOutcome::Continue);
+            }
             _ => {}
         }
         let current = self.evaluated_characteristics()?;
@@ -583,9 +745,18 @@ impl EffectWindow {
         let fixed_targets: Option<Vec<DamageRecipient>> = match &spec.recipients {
             DamageTargetQuery::Targets => {
                 let mut out = Vec::new();
-                if let Ok(t) = self.instruction_target(entry)
-                    && legal_target(&t)
-                {
+                let mode = cursor_snap
+                    .as_ref()
+                    .and_then(|c| self.instruction_mode(c.entry, c.instruction));
+                for t in entry.targets().targets() {
+                    if !legal_target(&t) {
+                        continue;
+                    }
+                    if let Some(m) = mode
+                        && !m.targets().any(|(id, _)| id == t.choice().id)
+                    {
+                        continue;
+                    }
                     match t.choice().target {
                         TargetRef::Player(p) => out.push(DamageRecipient::Player(p)),
                         TargetRef::Object(id) => {
@@ -744,6 +915,7 @@ impl EffectWindow {
             | DamageTargetQuery::OrderedTargets { .. }
             | DamageTargetQuery::DivideThree
             | DamageTargetQuery::Divided { .. }
+            | DamageTargetQuery::Fight { .. }
             | DamageTargetQuery::FromGrantingPermanent => unreachable!("handled above"),
         };
 
@@ -938,100 +1110,101 @@ impl EffectWindow {
             cursor_snap.as_ref(),
         )?;
         match &spec.op {
-            PlayerMutation::AddCounter { kind, amount } => {
+            PlayerMutation::Counter { kind, amount, pay } => {
                 let resolved = self.resolve_value_expr(controller, amount)?;
-                let source_id = match entry.kind() {
-                    StackKind::CardSpell(id) => crate::damage::DamageSourceId::Object(*id),
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => {
-                        crate::damage::DamageSourceId::Object(source.id())
-                    }
-                    StackKind::Emblem { emblem, .. } => {
-                        crate::damage::DamageSourceId::Emblem(*emblem)
-                    }
-                    StackKind::SpellCopy { .. }
-                    | StackKind::Speed
-                    | StackKind::Monarch
-                    | StackKind::DelayedCopy { .. } => {
-                        crate::damage::DamageSourceId::SpellCopy(entry.id())
-                    }
-                };
-                let before = self.rules_snapshot(None)?;
-                let mut occurrences = Vec::new();
-                for player in seats {
-                    if let Some(occ) = self.give_player_counters(
-                        player,
-                        *kind,
-                        &resolved,
-                        entry.id(),
-                        source_id,
-                        controller,
-                    )? {
-                        occurrences.push(occ);
-                    }
-                }
-                if !occurrences.is_empty() {
-                    self.emit_from(
-                        EventCause::Instruction {
-                            entry: entry.id(),
-                            instruction: index,
-                        },
-                        &before,
-                        None,
-                        ctx.append,
-                        |_, _, _| Ok(occurrences),
-                    )?;
-                }
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.last_action_succeeded = resolved.is_positive();
-                }
-            }
-            PlayerMutation::PayCounter { kind, amount } => {
-                let cost = self.resolve_value_expr(controller, amount)?.max(0.into());
-                let mut all_paid = !seats.is_empty();
-                for actor in seats {
-                    let before = self.player_counters_of_kind(actor, *kind);
-                    if before >= cost {
-                        if cost.is_positive() {
-                            let after = before.minus(&cost);
-                            let before_snapshot = self.rules_snapshot(None)?;
-                            let map = self
-                                .characteristics
-                                .player_counters
-                                .entry(*kind)
-                                .or_default();
-                            if after.is_positive() {
-                                map.insert(actor, after.clone());
-                            } else {
-                                map.remove(&actor);
+                if *pay {
+                    let cost = resolved.max(0.into());
+                    let mut all_paid = !seats.is_empty();
+                    for actor in seats {
+                        let before = self.player_counters_of_kind(actor, *kind);
+                        if before >= cost {
+                            if cost.is_positive() {
+                                let after = before.minus(&cost);
+                                let before_snapshot = self.rules_snapshot(None)?;
+                                let map = self
+                                    .characteristics
+                                    .player_counters
+                                    .entry(*kind)
+                                    .or_default();
+                                if after.is_positive() {
+                                    map.insert(actor, after.clone());
+                                } else {
+                                    map.remove(&actor);
+                                }
+                                self.emit_from(
+                                    EventCause::Instruction {
+                                        entry: entry.id(),
+                                        instruction: index,
+                                    },
+                                    &before_snapshot,
+                                    None,
+                                    ctx.append,
+                                    |_, _, _| {
+                                        Ok(vec![RulesOccurrence::PlayerCounterChanged {
+                                            player: actor,
+                                            kind: *kind,
+                                            before: before.clone(),
+                                            after: after.clone(),
+                                        }])
+                                    },
+                                )?;
                             }
-                            self.emit_from(
-                                EventCause::Instruction {
-                                    entry: entry.id(),
-                                    instruction: index,
-                                },
-                                &before_snapshot,
-                                None,
-                                ctx.append,
-                                |_, _, _| {
-                                    Ok(vec![RulesOccurrence::PlayerCounterChanged {
-                                        player: actor,
-                                        kind: *kind,
-                                        before: before.clone(),
-                                        after: after.clone(),
-                                    }])
-                                },
-                            )?;
+                        } else {
+                            all_paid = false;
                         }
-                    } else {
-                        all_paid = false;
+                    }
+                    if let Some(cursor) = self.resolution_cursor_mut() {
+                        cursor.results.last_action_succeeded = all_paid;
+                    }
+                } else {
+                    let source_id = match entry.kind() {
+                        StackKind::CardSpell(id) => crate::damage::DamageSourceId::Object(*id),
+                        StackKind::ActivatedAbility { source }
+                        | StackKind::TriggeredAbility { source } => {
+                            crate::damage::DamageSourceId::Object(source.id())
+                        }
+                        StackKind::Emblem { emblem, .. } => {
+                            crate::damage::DamageSourceId::Emblem(*emblem)
+                        }
+                        StackKind::SpellCopy { .. }
+                        | StackKind::Speed
+                        | StackKind::Monarch
+                        | StackKind::DelayedCopy { .. } => {
+                            crate::damage::DamageSourceId::SpellCopy(entry.id())
+                        }
+                    };
+                    let before = self.rules_snapshot(None)?;
+                    let mut occurrences = Vec::new();
+                    for player in seats {
+                        if let Some(occ) = self.give_player_counters(
+                            player,
+                            *kind,
+                            &resolved,
+                            entry.id(),
+                            source_id,
+                            controller,
+                        )? {
+                            occurrences.push(occ);
+                        }
+                    }
+                    if !occurrences.is_empty() {
+                        self.emit_from(
+                            EventCause::Instruction {
+                                entry: entry.id(),
+                                instruction: index,
+                            },
+                            &before,
+                            None,
+                            ctx.append,
+                            |_, _, _| Ok(occurrences),
+                        )?;
+                    }
+                    if let Some(cursor) = self.resolution_cursor_mut() {
+                        cursor.results.last_action_succeeded = resolved.is_positive();
                     }
                 }
-                if let Some(cursor) = self.resolution_cursor_mut() {
-                    cursor.results.last_action_succeeded = all_paid;
-                }
             }
-            PlayerMutation::WinGame => {
+            PlayerMutation::GameOutcome(PlayerGameOutcome::Win) => {
                 if let Some(&winner) = seats.first() {
                     let evaluated = self.evaluated_characteristics()?;
                     if self.window.participants().contains(&winner)
@@ -1052,7 +1225,7 @@ impl EffectWindow {
                     }
                 }
             }
-            PlayerMutation::LoseGame => {
+            PlayerMutation::GameOutcome(PlayerGameOutcome::Lose) => {
                 let evaluated = self.evaluated_characteristics()?;
                 let mut losing = BTreeSet::new();
                 for seat in seats {
@@ -1092,14 +1265,14 @@ impl EffectWindow {
                     )?;
                 }
             }
-            PlayerMutation::DrawGame => {
+            PlayerMutation::GameOutcome(PlayerGameOutcome::Draw) => {
                 let participants = self.window.participants().to_vec();
                 for seat in participants {
                     self.state_based_losses.insert(seat);
                 }
                 return Ok(StepOutcome::Complete(RuleCompletion::GameEnded));
             }
-            PlayerMutation::TakeExtraTurn => {
+            PlayerMutation::TurnFlow(TurnFlowOp::TakeExtraTurn) => {
                 let before = self.rules_snapshot(None)?;
                 let current = &before.view().evaluated;
                 for player in seats {
@@ -1130,7 +1303,7 @@ impl EffectWindow {
                     }
                 }
             }
-            PlayerMutation::EndTurn => {
+            PlayerMutation::TurnFlow(TurnFlowOp::EndTurn) => {
                 if !seats.contains(&self.window.active_player()) {
                     self.advance_instruction()?;
                     return Ok(StepOutcome::Continue);
@@ -1173,12 +1346,12 @@ impl EffectWindow {
                 self.additional_combats = 0;
                 return Ok(StepOutcome::Complete(RuleCompletion::Resolution));
             }
-            PlayerMutation::BecomeMonarch => {
+            PlayerMutation::Designation(PlayerDesignationOp::BecomeMonarch) => {
                 if let Some(&seat) = seats.first() {
                     self.become_monarch(entry.id(), index, seat, ctx.append)?;
                 }
             }
-            PlayerMutation::Ascend => {
+            PlayerMutation::Designation(PlayerDesignationOp::Ascend) => {
                 for seat in seats {
                     if !self.has_city_blessing(seat) {
                         let evaluated = self.evaluated_characteristics()?;
@@ -1209,10 +1382,10 @@ impl EffectWindow {
                     }
                 }
             }
-            PlayerMutation::IncreaseSpeed => {
+            PlayerMutation::Designation(PlayerDesignationOp::IncreaseSpeed) => {
                 self.resolve_speed(entry, index, ctx.append)?;
             }
-            PlayerMutation::SetDayNight(clock) => {
+            PlayerMutation::Designation(PlayerDesignationOp::SetDayNight(clock)) => {
                 let previous = self.day_night();
                 if previous != *clock {
                     let before = self.rules_snapshot(None)?;
@@ -1233,10 +1406,7 @@ impl EffectWindow {
                     )?;
                 }
             }
-            PlayerMutation::DisallowDamagePreventionThisTurn => {
-                self.damage_state.prevention_disallowed_this_turn = true;
-            }
-            PlayerMutation::AdditionalLoyaltyActivation => {
+            PlayerMutation::TurnFlow(TurnFlowOp::AdditionalLoyaltyActivation) => {
                 let value = self
                     .characteristics
                     .extra_loyalty_activations
@@ -1244,7 +1414,7 @@ impl EffectWindow {
                     .or_insert_with(|| 0.into());
                 *value = value.plus(&1.into());
             }
-            PlayerMutation::AdditionalCombat { untap } => {
+            PlayerMutation::TurnFlow(TurnFlowOp::AdditionalCombat { untap }) => {
                 let can_schedule_combat = self.current_step.is_some_and(|step| {
                     matches!(
                         step.phase(),
@@ -1441,7 +1611,7 @@ impl EffectWindow {
                     },
                 }
             }
-            PlayerMutation::Proliferate => {
+            PlayerMutation::KeywordAction(PlayerKeywordAction::Proliferate) => {
                 let choice = self.proliferate_choice()?;
                 if choice.domain().is_empty() {
                     self.proliferate(&choice, vec![], ctx.append)?;
@@ -1462,29 +1632,26 @@ impl EffectWindow {
                 }
                 return self.execute_add_mana(ctx, entry, index, recipient, yield_kind);
             }
-            PlayerMutation::ManifestTop { .. }
-            | PlayerMutation::TakeInitiative
+            PlayerMutation::LibraryTop(_)
+            | PlayerMutation::Designation(
+                PlayerDesignationOp::TakeInitiative | PlayerDesignationOp::RingTemptsYou,
+            )
             | PlayerMutation::VentureIntoDungeon { .. }
-            | PlayerMutation::RingTemptsYou
             | PlayerMutation::ChooseOneLastMoved
             | PlayerMutation::Behold { .. }
-            | PlayerMutation::ManifestDread
-            | PlayerMutation::Incubate { .. }
-            | PlayerMutation::Demonstrate
-            | PlayerMutation::Ripple(_)
+            | PlayerMutation::KeywordAction(_)
             | PlayerMutation::Vote { .. }
-            | PlayerMutation::Clash
-            | PlayerMutation::Bolster(_)
-            | PlayerMutation::Populate
-            | PlayerMutation::Amass { .. }
-            | PlayerMutation::Blight { .. }
-            | PlayerMutation::CollectEvidence { .. }
-            | PlayerMutation::Scry(_)
-            | PlayerMutation::Surveil(_)
-            | PlayerMutation::Mill(_) => {
+            | PlayerMutation::RandomEvent(_)
+            | PlayerMutation::OfferSourceCounters { .. }
+            | PlayerMutation::ChooseRevealedHandCard { .. }
+            | PlayerMutation::RevealTopTwoPiles { .. }
+            | PlayerMutation::OfferAnyPlayer { .. }
+            | PlayerMutation::SacrificeRandomUntilLand
+            | PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
+            | PlayerMutation::BindResolutionX(_)
+            | PlayerMutation::RequireCondition(_) => {
                 return Err(EffectError::InconsistentProgram);
             }
-            _ => return Err(EffectError::InconsistentProgram),
         }
         self.advance_instruction()?;
         Ok(StepOutcome::Continue)

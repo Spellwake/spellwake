@@ -257,7 +257,7 @@ fn cmm_loyal_apprentice_drake_guardian_and_subordinate_check_their_own_commander
                     A,
                     ObjectDestination::LibraryBottom,
                     free_instant(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -369,7 +369,7 @@ fn cmm_angelic_field_marshal_gains_two_power_and_toughness_and_grants_vigilance_
                 A,
                 ObjectDestination::LibraryBottom,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -783,7 +783,7 @@ fn partners_with_campfire() -> GameState {
                 A,
                 ObjectDestination::LibraryBottom,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,

@@ -122,7 +122,7 @@ pub(super) fn compile(
             mana_cost: spellwake_engine::mana::ManaCost::free(),
             source_cost: SourceCost::Tap,
             body: ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

@@ -164,7 +164,7 @@ fn avacyn_combat_exquisite_blood_uses_the_exact_opponent_life_loss() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::TargetPlayer,
@@ -178,7 +178,7 @@ fn avacyn_combat_exquisite_blood_uses_the_exact_opponent_life_loss() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
                             spellwake_engine::program::ResolvingPlayer::TargetPlayer,

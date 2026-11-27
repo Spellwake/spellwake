@@ -36,16 +36,18 @@ pub(super) fn exile_response(spell: u64, replacement: u64) -> [SeedCard; 2] {
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Sacrifice {
-                        players: AffectedPlayers::EachPlayer,
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        filter: PermanentTypeFilter {
-                            any_types: Default::default(),
-                            required_types: BTreeSet::new(),
-                            forbidden_types: BTreeSet::new(),
-                            object_filter: None,
-                        },
-                    }],
+                    vec![Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                            AffectedPlayers::EachPlayer,
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                            PermanentTypeFilter {
+                                any_types: Default::default(),
+                                required_types: BTreeSet::new(),
+                                forbidden_types: BTreeSet::new(),
+                                object_filter: None,
+                            },
+                        ),
+                    ))],
                 ),
             ),
         },

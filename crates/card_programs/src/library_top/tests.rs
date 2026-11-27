@@ -182,7 +182,7 @@ fn exact_four_raw_rows_native_source_signatures_and_complete_programs() {
                 ResolvingPlayer::TargetPlayer,
                 spellwake_engine::program::ValueExpr::Literal(2.into()),
             ))),
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             ProgramKey::LibraryTopMillDrawSpellV1,
         ),
     ] {

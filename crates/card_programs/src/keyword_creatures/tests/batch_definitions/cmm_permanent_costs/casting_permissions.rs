@@ -107,7 +107,7 @@ fn cmm_shimmer_myr_raff_capashen_and_skittering_cicada_flash_in_and_allow_exactl
 #[ignore = "requires dated Oracle source and creature vocabulary"]
 fn cmm_thryx_flashes_in_and_reduces_and_protects_its_controllers_spells_at_mana_value_five() {
     let counter = free_instant(
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
         Instruction::StackOp(Box::new(
             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                 spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -504,7 +504,7 @@ fn cmm_grand_abolisher_prohibits_opposing_spells_and_artifact_creature_enchantme
 fn cmm_destiny_spinner_protects_its_own_creature_and_enchantment_spells_and_turns_a_controlled_land_into_an_elemental_for_the_turn()
  {
     let counter = free_instant(
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
         Instruction::StackOp(Box::new(
             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                 spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -630,7 +630,7 @@ fn cmm_soul_of_new_phyrexia_grants_indestructible_to_its_controllers_permanents_
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -648,7 +648,7 @@ fn cmm_soul_of_new_phyrexia_grants_indestructible_to_its_controllers_permanents_
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

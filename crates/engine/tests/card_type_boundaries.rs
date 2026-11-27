@@ -55,7 +55,7 @@ fn defining_numeric_count_includes_kindred_and_reacts_to_last_carrier_loss() {
             ),
             spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![type_part(
                         TypeOperation::Remove(BTreeSet::from([CardType::Kindred])),
@@ -137,7 +137,7 @@ fn kindred_combat_eligibility_and_actual_membership_require_creature_type() {
             defender_creature,
             spell(
                 5,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![type_part(
                         TypeOperation::Remove(BTreeSet::from([CardType::Creature])),

@@ -3,7 +3,7 @@
 //! Behavioral integration tests for Mega-Batch 3 engine primitives:
 //! - `Instruction::StackOp` (`StackOpSpec::counter_matching` opponents-only spell sweep & ability sweep)
 //! - `Instruction::ReturnLinkedExile` (returns exiled card linked to source permanent)
-//! - `Instruction::MutateObject` (`ObjectMutation::TransferAllCountersFromTriggeringLki` on death LKI)
+//! - `Instruction::MutateObject` (`ObjectMutation::Counters(CounterOp::TransferFromTriggeringLki)` on death LKI)
 //! - `SpellCostModifier::AlternativeForMatching { pay_life_mv: true, each_player }`
 //! - `CastPermissionRule::Flash` with `cast_zone` enforcement
 //! - `Instruction::TransformSubject`
@@ -276,18 +276,29 @@ fn impulse_play_duration_until_next_end_step_and_until_next_upkeep_expire_on_ste
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::ExileTopPlay {
-                    count: ValueExpr::literal(1),
-                    library_owner: spellwake_engine::program::AffectedPlayers::One(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    duration: spellwake_engine::program::ImpulsePlayDuration::UntilNextEndStep,
-                    cast_only: false,
-                    free: false,
-                    any_color: false,
-                    face_down: false,
-                    grant_play: true,
-                }],
+                vec![
+                    Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::exile_top_library(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                            ValueExpr::literal(1),
+                            false,
+                        ),
+                    )),
+                    Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::impulse_play_permission(
+                            spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ImpulsePlayDuration::UntilNextEndStep,
+                            false,
+                            false,
+                            false,
+                        ),
+                    )),
+                ],
             ),
         ),
         &v,

@@ -123,7 +123,7 @@ fn all_real_cast_copy_spells_resolve_original_and_copy() {
         let removal = Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -206,8 +206,8 @@ fn all_real_cast_copy_spells_resolve_original_and_copy() {
         assert_eq!(zone(&g, 2), ObjectZone::Graveyard(b));
         let target = match spell.body.target {
             BodyTarget::None => None,
-            BodyTarget::SinglePlayer => Some(TargetRef::Player(b)),
-            BodyTarget::SingleCreature | BodyTarget::SinglePermanent => {
+            BodyTarget::SINGLE_PLAYER => Some(TargetRef::Player(b)),
+            BodyTarget::SINGLE_CREATURE | BodyTarget::SINGLE_PERMANENT => {
                 Some(TargetRef::Object(obj(&g, 3)))
             }
             other => panic!("new target {other:?}"),
@@ -240,7 +240,7 @@ fn all_real_cast_copy_spells_resolve_original_and_copy() {
                     RuleFrame::CopyTargets(_) => {
                         choices += 1;
                         DecisionReply::CopyTargets(match spell.body.target {
-                            BodyTarget::SingleCreature | BodyTarget::SinglePermanent => {
+                            BodyTarget::SINGLE_CREATURE | BodyTarget::SINGLE_PERMANENT => {
                                 CopyTargetChoice::Change(TargetRef::Object(obj(&g, 4)))
                             }
                             _ => CopyTargetChoice::Retain,

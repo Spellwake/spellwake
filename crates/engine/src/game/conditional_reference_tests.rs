@@ -21,14 +21,16 @@ fn gain(amount: i64) -> Instruction {
     )))
 }
 fn branch(threshold: i64, destination: usize) -> Instruction {
-    Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: crate::program::ValueExpr::PlayerStat(
-                crate::program::PlayerStatExpr::ControllerLife,
-            ),
-            comparison: Comparison::GreaterOrEqual,
-            right: crate::program::ValueExpr::Literal(threshold.into()),
-        },
+    Instruction::BranchCondition {
+        condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
+            ResolutionCondition {
+                left: crate::program::ValueExpr::PlayerStat(
+                    crate::program::PlayerStatExpr::ControllerLife,
+                ),
+                comparison: Comparison::GreaterOrEqual,
+                right: crate::program::ValueExpr::Literal(threshold.into()),
+            },
+        ))),
         destination,
     }
 }
@@ -55,7 +57,7 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
             vec![gain(5), branch(25, 3), gain(2), gain(1)],
         ),
         "CF4" => (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 branch(21, 2),
                 crate::program::Instruction::ZoneOp(Box::new(
@@ -89,7 +91,7 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
             owner: B,
             destination: ObjectDestination::Hand,
             program: spell(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![crate::program::Instruction::ZoneOp(Box::new(
                     crate::toolbox::ZoneOpSpec::move_all(
                         crate::toolbox::ObjectQuery::Targets,

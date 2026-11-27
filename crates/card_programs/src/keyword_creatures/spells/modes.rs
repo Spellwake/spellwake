@@ -106,15 +106,17 @@ fn mode_body(
         .and_then(|s| s.strip_suffix('.'))
     {
         return Some(ExecutableBody::new(
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
             vec![
-                Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::TargetSpellController,
-                    fixed: fixed_cost(price)?,
-                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                    paid_destination: 2,
-                    declined_destination: 1,
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::TargetSpellController,
+                        fixed_cost(price)?,
+                        spellwake_engine::program::ValueExpr::Literal(0.into()),
+                        2,
+                        1,
+                    ),
+                )),
                 Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -128,7 +130,7 @@ fn mode_body(
         .and_then(|s| s.strip_suffix(" +1/+1 counters on target creature."))
     {
         return Some(ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::PlusOne,
@@ -141,7 +143,7 @@ fn mode_body(
     }
     if text == "Target player draws a card and loses 1 life." {
         return Some(ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),

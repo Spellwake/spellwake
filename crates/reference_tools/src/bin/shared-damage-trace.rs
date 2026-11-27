@@ -201,7 +201,7 @@ impl Fixture {
                     destination: ObjectDestination::Hand,
                     program: Program::instant(
                         ManaCost::one(color),
-                        ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction]),
+                        ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![instruction]),
                     ),
                 },
             );

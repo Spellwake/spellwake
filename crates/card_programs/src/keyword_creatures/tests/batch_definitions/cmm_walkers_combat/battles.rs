@@ -128,7 +128,7 @@ fn shared_siege_spikeshot_goblin_hits_invasion_of_dominaria_then_combat_defeats_
 #[ignore = "requires dated Oracle source and creature vocabulary"]
 fn shared_siege_protector_who_gains_control_must_choose_another_opponent() {
     let steal = free_instant(
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
             spellwake_engine::toolbox::ObjectQuery::Targets,
             ResolvedPartsSpec(vec![ResolvedPartSpec::Control(

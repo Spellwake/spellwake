@@ -382,9 +382,6 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
         DecisionReply::PromptChoice(_) => {
             return Err("prompt choice exceeds historical scope".into());
         }
-        DecisionReply::RemoveCounters(_) => {
-            return Err("counter removal exceeds historical scope".into());
-        }
         DecisionReply::Proliferate(_) => return Err("proliferate exceeds historical scope".into()),
         DecisionReply::PayAttackCost { .. }
         | DecisionReply::RedeclareReversingMana(_)
@@ -479,10 +476,7 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
         DecisionReply::ChooseLandKind(_)
         | DecisionReply::MutateOnTop(_)
         | DecisionReply::ChoosePile(_)
-        | DecisionReply::PlaneswalkerType(_)
-        | DecisionReply::AttackDirection(_)
         | DecisionReply::DrawReplacement(_)
-        | DecisionReply::ChooseDamageRecipient(_)
         | DecisionReply::ChooseDamageSource(_)
         | DecisionReply::OpponentChoice(_)
         | DecisionReply::ReplacementChooser(_)
@@ -1171,9 +1165,6 @@ fn decision(
         RuleFrame::PromptChoice(_) => {
             return Err("historical ordinary scopes exclude prompt choices".into());
         }
-        RuleFrame::LoyaltyRemoval(_) => {
-            return Err("historical ordinary scopes exclude loyalty removal choices".into());
-        }
         RuleFrame::ResolutionManaColor(_) => {
             return Err("historical ordinary scopes exclude resolution mana choices".into());
         }
@@ -1209,9 +1200,6 @@ fn decision(
             FrameView::ResolutionPayment {
                 frame: projection::frame(value.frame(), state)?,
             }
-        }
-        RuleFrame::CounterRemoval(_) => {
-            return Err("counter removal exceeds historical scope".into());
         }
         RuleFrame::Proliferate(_) => return Err("proliferate exceeds historical scope".into()),
         RuleFrame::TriggerTarget(value) => {
@@ -1333,10 +1321,7 @@ fn decision(
         }
         RuleFrame::Mutation(_)
         | RuleFrame::RevealedPiles(_)
-        | RuleFrame::PlaneswalkerType(_)
-        | RuleFrame::AttackDirection(_)
         | RuleFrame::DrawReplacement(_)
-        | RuleFrame::DamageRecipientChoice(_)
         | RuleFrame::DamageSourceChoice(_)
         | RuleFrame::OpponentChoice(_)
         | RuleFrame::ReplacementChooser(_)
@@ -1840,6 +1825,12 @@ fn check_ordinary_projection_scope(
         || matches!(
             state.pending_decision().map(|pending| pending.frame()),
             Some(RuleFrame::CreatureType(_))
+                | Some(RuleFrame::PromptChoice(
+                    spellwake_engine::toolbox::PromptChoiceFrame {
+                        domain: spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. },
+                        ..
+                    }
+                ))
         )
     {
         return Err(
@@ -1895,7 +1886,9 @@ fn check_ordinary_projection_scope(
 /// Admission here bounds this diagnostic projection; the source-qualified
 /// Registry remains responsible for the exact finite card identities and traits.
 fn interaction_program(program: &spellwake_engine::program::Program) -> bool {
-    use spellwake_engine::program::{BodyTarget, CardType, Instruction, ProgramKind};
+    use spellwake_engine::program::{
+        BodyTarget, CardType, Instruction, ObjectFilter, ProgramKind, TargetZone,
+    };
     if !program.printed_keywords.is_empty()
         || !program.mana.is_empty()
         || program.card_types.len() != 1
@@ -1914,26 +1907,34 @@ fn interaction_program(program: &spellwake_engine::program::Program) -> bool {
             if program.has_type(CardType::Instant) || program.has_type(CardType::Sorcery) =>
         {
             match (spell.body.target, spell.body.instructions.as_slice()) {
-                (BodyTarget::SingleCreature, [Instruction::ZoneOp(spec)])
-                    if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
-                        && matches!(
-                            spec.selection,
-                            spellwake_engine::toolbox::ZoneSelection::All
-                        )
-                        && matches!(
-                            spec.destination,
-                            spellwake_engine::toolbox::ZoneDest::Hand
-                        )
-                        && spec.shuffle_library.is_none() =>
+                (
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        filter,
+                    },
+                    [Instruction::ZoneOp(spec)],
+                ) if filter == ObjectFilter::creature()
+                    && matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                    && matches!(
+                        spec.selection,
+                        spellwake_engine::toolbox::ZoneSelection::All
+                    )
+                    && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Hand)
+                    && spec.shuffle_library.is_none() =>
                 {
                     true
                 }
-                (BodyTarget::SingleSpell(filter), [Instruction::StackOp(spec)])
-                    if filter == spellwake_engine::program::SpellFilter::any()
-                        && **spec
-                            == spellwake_engine::toolbox::StackOpSpec::counter_targeted(
-                                spellwake_engine::toolbox::CounterDestination::Graveyard,
-                            ) =>
+                (
+                    BodyTarget::Spell {
+                        filter,
+                        include_abilities: false,
+                    },
+                    [Instruction::StackOp(spec)],
+                ) if filter == spellwake_engine::program::SpellFilter::any()
+                    && **spec
+                        == spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ) =>
                 {
                     true
                 }
@@ -2318,26 +2319,31 @@ mod tests {
                                 spellwake_engine::program::ValueExpr::Literal(1.into()),
                             ),
                         )),
-                        BodyTarget::SingleOpponent | BodyTarget::SinglePlayer => {
-                            Instruction::AdjustLife(Box::new(
-                                spellwake_engine::toolbox::AdjustLifeSpec::gain(
-                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                                        spellwake_engine::program::ResolvingPlayer::TargetPlayer,
-                                    ),
-                                    spellwake_engine::program::ValueExpr::literal(1),
+                        BodyTarget::Player { .. } => Instruction::AdjustLife(Box::new(
+                            spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    spellwake_engine::program::ResolvingPlayer::TargetPlayer,
                                 ),
+                                spellwake_engine::program::ValueExpr::literal(1),
+                            ),
+                        )),
+                        BodyTarget::Object {
+                            zone: spellwake_engine::program::TargetZone::Battlefield,
+                            filter,
+                        } if filter == spellwake_engine::program::ObjectFilter::creature() => {
+                            Instruction::DealDamage(Box::new(
+                                spellwake_engine::toolbox::DealDamageSpec {
+                                    source:
+                                        spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                                    recipients:
+                                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                                        spellwake_engine::program::ValueExpr::literal(1),
+                                    ),
+                                    exile_if_dies: false,
+                                },
                             ))
                         }
-                        BodyTarget::SingleCreature => Instruction::DealDamage(Box::new(
-                            spellwake_engine::toolbox::DealDamageSpec {
-                                source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
-                                recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                                amount: spellwake_engine::program::DamageAmountSpec::Expr(
-                                    spellwake_engine::program::ValueExpr::literal(1),
-                                ),
-                                exile_if_dies: false,
-                            },
-                        )),
                         _ => panic!("unsupported test target family"),
                     }],
                 ),
@@ -2411,10 +2417,12 @@ mod tests {
                     },
                     ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::ChooseCreatureType {
-                            into: CreatureTypeSlot::new(0),
-                            excluding: Default::default(),
-                        }],
+                        vec![Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                                CreatureTypeSlot::new(0),
+                                Default::default(),
+                            ),
+                        ))],
                     ),
                 ),
             }],
@@ -2464,7 +2472,11 @@ mod tests {
             A,
             GameCommand::Reply {
                 decision: state.pending_decision().unwrap().id(),
-                choice: DecisionReply::CreatureType(vocabulary.resolve_label("Elf").unwrap()),
+                choice: DecisionReply::PromptChoice(
+                    spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+                        vocabulary.resolve_label("Elf").unwrap(),
+                    ),
+                ),
             },
         );
         assert!(complete.state().execution().resolution_state().is_none());
@@ -2585,7 +2597,7 @@ mod tests {
 
     #[test]
     fn ordinary_predecessor_rejects_actual_target_frame_reply_and_each_new_placement_record() {
-        let (fixture, pending) = tapped_candidate_with_target(1, BodyTarget::SinglePlayer);
+        let (fixture, pending) = tapped_candidate_with_target(1, BodyTarget::SINGLE_PLAYER);
         assert!(matches!(
             pending.state().pending_decision().unwrap().frame(),
             RuleFrame::TriggerTarget(_)
@@ -2610,7 +2622,7 @@ mod tests {
                 },
             })
             .unwrap();
-        let (_, removed) = tapped_candidate_with_target(1, BodyTarget::SingleCreature);
+        let (_, removed) = tapped_candidate_with_target(1, BodyTarget::SINGLE_CREATURE);
         for (candidate, kind) in [(&pending, 0), (&accepted, 1), (&removed, 2)] {
             let records = candidate
                 .rules_journal()

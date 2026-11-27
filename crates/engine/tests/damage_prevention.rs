@@ -364,7 +364,7 @@ fn unshielded_damage_is_one_positive_occurrence_in_only_its_resolution_append() 
         vec![(
             1,
             A,
-            ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(5)]),
+            ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(5)]),
         )],
     );
     let target = object(&game, FIRST);
@@ -408,12 +408,12 @@ fn one_shield_prevents_exactly_its_capacity_without_a_choice_or_zero_damage_fact
                 (
                     1,
                     A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(capacity)]),
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(capacity)]),
                 ),
                 (
                     2,
                     A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(amount)]),
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(amount)]),
                 ),
             ],
         );
@@ -478,22 +478,22 @@ fn one_finite_shield_keeps_its_remainder_across_different_damage_events() {
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(5)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(5)]),
             ),
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(3)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(1)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(1)]),
             ),
             (
                 4,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(2)]),
             ),
         ],
     );
@@ -526,17 +526,17 @@ fn a_later_shield_never_rewrites_prior_damage_or_prior_candidate_facts() {
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(2)]),
             ),
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(3)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(3)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(4)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(4)]),
             ),
         ],
     );
@@ -569,17 +569,17 @@ fn pending_two(
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(first)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(first)]),
             ),
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(second)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(second)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(amount)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(amount)]),
             ),
         ],
     );
@@ -700,32 +700,32 @@ fn partial_choices_resume_one_attempt_without_rewinding_or_reemitting_accepted_w
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(1)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(1)]),
             ),
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(2)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(10)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(10)]),
             ),
             (
                 4,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(5)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(5)]),
             ),
             (
                 5,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(7)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(7)]),
             ),
             (
                 6,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(8)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(8)]),
             ),
         ],
     );
@@ -1035,17 +1035,17 @@ fn shields_on_other_incarnations_do_not_enter_the_choice_domain() {
             (
                 1,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(2)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(2)]),
             ),
             (
                 2,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![shield(4)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![shield(4)]),
             ),
             (
                 3,
                 A,
-                ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+                ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(3)]),
             ),
         ],
     );
@@ -1089,7 +1089,7 @@ fn copied_shields_are_independent_effects_and_survive_copy_cessation() {
                     1,
                     A,
                     ExecutableBody::new(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         vec![Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec { selector: None, payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield { amount: exact(HUGE) }, duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn, condition: None, one_shot: true, as_emblem: None, emblem_label: None }))],
                     ),
                 ),
@@ -1097,7 +1097,7 @@ fn copied_shields_are_independent_effects_and_survive_copy_cessation() {
                     2,
                     B,
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(
+                        BodyTarget::single_spell(
                             spellwake_engine::program::SpellFilter::copyable_instruction(),
                         ),
                         vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell()))],
@@ -1107,14 +1107,14 @@ fn copied_shields_are_independent_effects_and_survive_copy_cessation() {
                     3,
                     A,
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                         vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard)))],
                     ),
                 ),
                 (
                     4,
                     A,
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![damage(3)]),
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage(3)]),
                 ),
             ],
         );
@@ -1226,7 +1226,7 @@ fn zero_and_negative_literal_programs_reject_without_restricting_huge_positive_a
                     vec![(
                         1,
                         A,
-                        ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction])
+                        ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![instruction])
                     )]
                 ),
                 vec![]
@@ -1240,7 +1240,7 @@ fn zero_and_negative_literal_programs_reject_without_restricting_huge_positive_a
             1,
             A,
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec {
                         selector: None,

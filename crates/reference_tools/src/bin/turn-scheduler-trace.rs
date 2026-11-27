@@ -348,7 +348,7 @@ fn run() -> Result<Report, String> {
                 program: Program::instant(
                     ManaCost::one(ManaType::Blue),
                     ExecutableBody::new(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         vec![Instruction::ZoneOp(Box::new(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,

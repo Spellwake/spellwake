@@ -19,9 +19,9 @@ use spellwake_engine::{
     program::{
         AffectedPlayers, AttackRequirement, BodyTarget, CardType, CardTypeMask, Comparison,
         EffectSubject, ExecutableBody, Instruction, LibraryPlacement, ObjectFilter,
-        PermanentTargetAction, PermanentTypeFilter, PlayerRelation, Program, ProgramKind,
-        ResolutionCondition, ResolvingPlayer, SpellModes, TriggerGrouping, TriggerSpec,
-        TriggeredAbility, TriggeredAbilityId, ValueExpr,
+        PermanentTypeFilter, PlayerRelation, Program, ProgramKind, ResolutionCondition,
+        ResolvingPlayer, SpellModes, TriggerGrouping, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId, ValueExpr,
     },
     turn::Step,
 };
@@ -32,21 +32,15 @@ fn literal(value: i64) -> ValueExpr {
 }
 
 fn skip_unless_present(value: ValueExpr, destination: usize) -> Instruction {
-    Instruction::BranchIfFalse {
-        condition: ResolutionCondition {
-            left: value,
-            comparison: Comparison::Greater,
-            right: spellwake_engine::program::ValueExpr::Literal(0.into()),
-        },
+    Instruction::BranchCondition {
+        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+            Box::new(ResolutionCondition {
+                left: value,
+                comparison: Comparison::Greater,
+                right: spellwake_engine::program::ValueExpr::Literal(0.into()),
+            }),
+        )),
         destination,
-    }
-}
-
-fn affect(minimum: u16, maximum: u16, action: PermanentTargetAction) -> Instruction {
-    Instruction::AffectPermanentTargets {
-        minimum,
-        maximum,
-        action,
     }
 }
 
@@ -60,7 +54,7 @@ fn controlled_creature_pair(second: BodyTarget, effect: Instruction) -> Vec<Inst
         )))
     };
     vec![
-        clause(BodyTarget::FilteredPermanent(
+        clause(BodyTarget::filtered_permanent(
             ObjectFilter::creature().controlled(),
         )),
         clause(second),
@@ -70,10 +64,11 @@ fn controlled_creature_pair(second: BodyTarget, effect: Instruction) -> Vec<Inst
 
 fn optional_tap_change() -> Vec<Instruction> {
     vec![
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
-        affect(1, 1, PermanentTargetAction::ToggleTap),
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::toggle_targets_tapped(),
     ]
 }
 
@@ -93,18 +88,20 @@ fn stats(power: i64, toughness: i64) -> PowerToughness {
 }
 
 fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option<ExecutableBody> {
-    use BodyTarget::{None as NoTarget, SingleAnyTarget, SingleCreature, SinglePlayer};
+    use BodyTarget::None as NoTarget;
     use Instruction::*;
     let draw =
         |n| crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(literal(n));
-    let discard = |player, amount| Discard {
-        players: AffectedPlayers::One(player),
-        amount,
+    let discard = |player, amount| {
+        Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+            AffectedPlayers::One(player),
+            amount,
+        )))
     };
     let (target, instructions) = match rules {
         "Until end of turn, target creature gets +6/+6 and gains trample, and all creatures able to block it this turn do so." => {
             (
-                SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     modify_target(vec![
                         ResolvedPartSpec::ModifyPT(stats(6, 6)),
@@ -119,7 +116,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
 
         "As an additional cost to cast this spell, tap any number of untapped creatures you control.\nBurn at the Stake deals damage to any target equal to three times the number of creatures tapped this way." => {
             (
-                SingleAnyTarget,
+                BodyTarget::SINGLE_ANY_TARGET,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -135,7 +132,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
 
         "Target opponent reveals their hand. You choose a card from it with mana value 4 or greater and exile that card." => {
             (
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::choose_revealed_hand_card(
                         4,
@@ -156,28 +153,30 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                 NoTarget,
                 vec![
                     clause(
-                        BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()),
+                        BodyTarget::filtered_own_graveyard(ObjectFilter::creature()),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand(),
                     ),
                     clause(
-                        SinglePlayer,
-                        Sacrifice {
-                            players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                            amount: literal(1),
-                            filter: PermanentTypeFilter {
-                                any_types: BTreeSet::new(),
-                                required_types: [CardType::Creature].into(),
-                                forbidden_types: BTreeSet::new(),
-                                object_filter: None,
-                            },
-                        },
+                        BodyTarget::SINGLE_PLAYER,
+                        Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                                AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                                literal(1),
+                                PermanentTypeFilter {
+                                    any_types: BTreeSet::new(),
+                                    required_types: [CardType::Creature].into(),
+                                    forbidden_types: BTreeSet::new(),
+                                    object_filter: None,
+                                },
+                            ),
+                        )),
                     ),
                 ],
             )
         }
 
         "Destroy target creature with flying and all Equipment attached to that creature." => (
-            BodyTarget::FilteredPermanent(
+            BodyTarget::filtered_permanent(
                 ObjectFilter::creature().with_keyword(KeywordAbility::Flying),
             ),
             vec![
@@ -209,7 +208,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         "Return target creature card from your graveyard to the battlefield. If it's an Angel, put two +1/+1 counters on it." => {
             let angel = vocabulary.resolve_label("Angel")?;
             (
-                BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()),
+                BodyTarget::filtered_own_graveyard(ObjectFilter::creature()),
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec {
@@ -256,7 +255,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
 
         "Bonfire of the Damned deals X damage to target player or planeswalker and each creature that player or that planeswalker's controller controls." => {
             (
-                BodyTarget::SinglePlayerOrPlaneswalker,
+                BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec::target_controllers_creatures(
                         spellwake_engine::program::ValueExpr::chosen_x(),
@@ -268,7 +267,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         }
         "Aggravate deals 1 damage to each creature target player controls. Each creature dealt damage this way attacks this turn if able." => {
             (
-                SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec::target_controllers_creatures(
                         literal(1),
@@ -281,7 +280,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
 
         "Target player loses X life and you gain X life, where X is the greatest power among creatures you control." => {
             (
-                SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![Instruction::AdjustLife(Box::new(
                     spellwake_engine::toolbox::AdjustLifeSpec::drain(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -347,7 +346,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         }
 
         "Put target artifact, creature, or enchantment on the bottom of its owner's library." => (
-            BodyTarget::FilteredPermanent(ObjectFilter::any_types(
+            BodyTarget::filtered_permanent(ObjectFilter::any_types(
                 CardTypeMask::ARTIFACT
                     .union(CardTypeMask::CREATURE)
                     .union(CardTypeMask::ENCHANTMENT),
@@ -361,7 +360,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
 
         "Target creature gains flying until end of turn. Prevent all damage that would be dealt to that creature this turn." => {
             (
-                SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     modify_target(vec![ResolvedPartSpec::Abilities(
                         AbilityChange::grant_keywords([KeywordAbility::Flying]),
@@ -379,7 +378,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         }
         "Prevent all combat damage that would be dealt by creatures other than target creature this turn." => {
             (
-                SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
                         spellwake_engine::damage::TurnPreventionSpec {
@@ -394,7 +393,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
             )
         }
         "Counter target spell that's the second spell cast this turn." => (
-            BodyTarget::SingleSpell(
+            BodyTarget::single_spell(
                 spellwake_engine::program::SpellFilter::any()
                     .ordinal_this_turn(std::num::NonZeroU32::new(2)?),
             ),
@@ -402,36 +401,33 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         ),
         "Target creature gets +2/+2 until end of turn. If it's paired with a creature, that creature also gets +2/+2 until end of turn." => {
             (
-                SingleCreature,
-                vec![affect(
-                    1,
-                    1,
-                    PermanentTargetAction::ModifyWithPartner {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(stats(2, 2))]),
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                    },
-                )],
+                BodyTarget::SINGLE_CREATURE,
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::TargetsWithPairedPartner,
+                        ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(stats(2, 2))]),
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                ],
             )
         }
         "Counter target spell that targets a player." => (
-            BodyTarget::SingleSpell(
+            BodyTarget::single_spell(
                 spellwake_engine::program::SpellFilter::any().targeting_player(),
             ),
             vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard)))],
         ),
-        "Up to two target creatures can't be blocked this turn." => (
-            SingleCreature,
-            vec![affect(
-                0,
-                2,
-                PermanentTargetAction::Modify {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+        "Up to two target creatures can't be blocked this turn." => {
+            return Some(
+                ExecutableBody::new(
+                    BodyTarget::SINGLE_CREATURE,
+                    vec![modify_target(vec![ResolvedPartSpec::BlockingRestriction(
                         BlockingRestriction::CannotBeBlocked,
-                    )]),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                },
-            )],
-        ),
+                    )])],
+                )
+                .with_permanent_target_bounds(0, 2),
+            );
+        }
         "Return all nonland permanents to their owners' hands." => (
             NoTarget,
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(ObjectFilter::nonland(), spellwake_engine::program::PublicZoneDestination::Hand)],
@@ -439,12 +435,12 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         "Each player discards their hand, then draws seven cards." => (
             NoTarget,
             vec![
-                Discard {
-                    players: AffectedPlayers::EachPlayer,
-                    amount: spellwake_engine::program::ValueExpr::PlayerStat(
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::EachPlayer,
+                    spellwake_engine::program::ValueExpr::PlayerStat(
                         spellwake_engine::program::PlayerStatExpr::LargestHandSize,
                     ),
-                },
+                ))),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(literal(7)),
             ],
         ),
@@ -491,12 +487,17 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                 draw(2),
             ],
         ),
-        "Return up to two target creatures to their owners' hands." => (
-            SingleCreature,
-            vec![affect(0, 2, PermanentTargetAction::ReturnToHand)],
-        ),
+        "Return up to two target creatures to their owners' hands." => {
+            return Some(
+                ExecutableBody::new(
+                    BodyTarget::SINGLE_CREATURE,
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand()],
+                )
+                .with_permanent_target_bounds(0, 2),
+            );
+        }
         "Target player discards two cards and loses 2 life." => (
-            SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![
                 discard(ResolvingPlayer::TargetPlayer, literal(2)),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
@@ -508,7 +509,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
             ],
         ),
         "Target creature gains deathtouch until end of turn. Regenerate it." => (
-            SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 modify_target(vec![ResolvedPartSpec::Abilities(
                     AbilityChange::grant_keywords([KeywordAbility::Deathtouch]),
@@ -522,7 +523,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
             ) =>
         {
             (
-                SingleAnyTarget,
+                BodyTarget::SINGLE_ANY_TARGET,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -710,7 +711,7 @@ fn aura(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Opt
                     id: TriggeredAbilityId(0),
                     condition: spellwake_engine::program::TriggerSpec::self_attacks(),
                     grouping: TriggerGrouping::EachOccurrence,
-                    body: ExecutableBody::new(BodyTarget::SinglePermanent, optional_tap_change()),
+                    body: ExecutableBody::new(BodyTarget::SINGLE_PERMANENT, optional_tap_change()),
                 }))],
             )?;
         }
@@ -779,7 +780,7 @@ fn aura(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Opt
             let ability = activation(
                 ManaCost::free(),
                 SourceCost::Tap,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![modify_target(vec![ResolvedPartSpec::BlockingRestriction(
                     BlockingRestriction::CannotBlock,
                 )])],
@@ -857,7 +858,7 @@ fn enchantment(
                     Step::Upkeep,
                     PlayerRelation::Controller,
                 ),
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![
                     skip_unless_present(
                         spellwake_engine::program::ValueExpr::PlayerStat(
@@ -865,10 +866,10 @@ fn enchantment(
                         ),
                         2,
                     ),
-                    Instruction::Discard {
-                        players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                        amount: literal(1),
-                    },
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                        literal(1),
+                    ))),
                 ],
             );
         }
@@ -1004,7 +1005,7 @@ fn blink(optional: bool) -> Vec<Instruction> {
         });
     }
     instructions.extend([
-        affect(1, 1, PermanentTargetAction::Exile),
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
         Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::return_exiled_target_cohort(false, false),
         )),
@@ -1022,7 +1023,7 @@ fn artifact(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) ->
             spellwake_engine::program::TriggerSpec::enters(
                 spellwake_engine::program::ObjectFilter::self_object(),
             ),
-            BodyTarget::AnyGraveyardCard,
+            BodyTarget::ANY_GRAVEYARD_CARD,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::put_target_in_library(
                     LibraryPlacement::Bottom,
@@ -1072,7 +1073,7 @@ fn artifact(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) ->
                 tap_source: true,
                 exclude_source: true,
             },
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
                 Instruction::MutateObject(Box::new(
                     spellwake_engine::toolbox::MutateObjectSpec::remember_permanent_target(),
@@ -1121,12 +1122,12 @@ fn artifact(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) ->
         }
         "{1}, Sacrifice this artifact: Target opponent discards a card. If you control a Demon, that player loses 3 life." => {
             Some((
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![
-                    Instruction::Discard {
-                        players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                        amount: literal(1),
-                    },
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                        literal(1),
+                    ))),
                     single_subtype("Demon")?,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -1155,7 +1156,7 @@ fn artifact(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) ->
                     Step::End,
                     PlayerRelation::Controller,
                 ),
-                BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()),
+                BodyTarget::filtered_permanent(ObjectFilter::creature().controlled()),
                 blink(true),
             )
         }
@@ -1182,8 +1183,9 @@ fn artifact(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) ->
                 ),
                 BodyTarget::None,
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Source,
@@ -1331,7 +1333,7 @@ fn creature(
     rules: &str,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<Program> {
-    use BodyTarget::{None as NoTarget, SingleCreature, SinglePlayer};
+    use BodyTarget::None as NoTarget;
     use Instruction::*;
 
     let base = || ordinary_creature(card, vocabulary, Profile::Current, Some("")).ok();
@@ -1515,7 +1517,7 @@ fn creature(
                     tap_source: false,
                     from_graveyard: false,
                 },
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::choose_revealed_hand_card(
                         0,
@@ -1539,27 +1541,30 @@ fn creature(
                 vec![(
                     spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player().only_if(spellwake_engine::program::TriggerCondition::NoOtherControlledCreatures),
                     NoTarget,
-                    vec![
-                        Instruction::MutatePlayer(Box::new(
+                    {
+                        let mut ops = vec![Instruction::MutatePlayer(Box::new(
                             spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
                                 spellwake_engine::program::InterveningCondition::NoOtherControlledCreatures,
                             ),
-                        )),
-                        Instruction::LookTopChooseExt {
-                            library_owner: spellwake_engine::program::ResolvingPlayer::Controller,
-                            chooser: spellwake_engine::program::ResolvingPlayer::Controller,
-                            count: spellwake_engine::program::ValueExpr::Literal(4.into()),
-                            filter: None,
-                            max_picks: 1,
-                            take_all_matching: false,
-                            keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
-                            rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
-                            reveal_kept: false,
-                            reveal_all: false,
-                            reveal_only: false,
-                            secondary: None,
-                        },
-                    ],
+                        ))];
+                        ops.extend(
+                            spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                                spellwake_engine::program::ValueExpr::Literal(4.into()),
+                                None,
+                                1,
+                                false,
+                                spellwake_engine::program::LookTopKeepDest::Hand,
+                                spellwake_engine::program::LookTopRestDest::BottomOrder,
+                                false,
+                                false,
+                                false,
+                                None,
+                            ),
+                        );
+                        ops
+                    },
                 )],
             )
         }
@@ -1626,7 +1631,7 @@ fn creature(
                 "",
                 vec![(
                     spellwake_engine::program::TriggerSpec::enters(ObjectFilter::self_object()),
-                    BodyTarget::SingleOpponent,
+                    BodyTarget::SINGLE_OPPONENT,
                     vec![Instruction::MutatePlayer(Box::new(
                         spellwake_engine::toolbox::MutatePlayerSpec::sacrifice_random_until_land(),
                     ))],
@@ -1638,16 +1643,16 @@ fn creature(
                 "Undying",
                 vec![(
                     spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Enters { subject: spellwake_engine::program::ObjectFilter::self_object(), from_zone: spellwake_engine::program::TriggerFromZone::Graveyard, cast_origin: None, attached_to_creature: false }),
-                    BodyTarget::SingleOpponent,
+                    BodyTarget::SINGLE_OPPONENT,
                     vec![Instruction::MutateObject(Box::new(
                         spellwake_engine::toolbox::MutateObjectSpec::all(
                             spellwake_engine::toolbox::ObjectQuery::Source,
-                            spellwake_engine::toolbox::ObjectMutation::GainControl {
+                            spellwake_engine::toolbox::ObjectMutation::Control(spellwake_engine::toolbox::ControlOp::Gain {
                                 controller: spellwake_engine::toolbox::PlayerSelector::Resolving(
                                     ResolvingPlayer::TargetPlayer,
                                 ),
                                 duration: spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
-                            },
+                            }),
                         ),
                     ))],
                 )],
@@ -1660,7 +1665,7 @@ fn creature(
                 fixed_cost("{1}{G}")?,
                 SourceCost::Tap,
                 NoTarget,
-                controlled_creature_pair(SingleCreature, Instruction::Fight { first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst), second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond) }),
+                controlled_creature_pair(BodyTarget::SINGLE_CREATURE, Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec::fight(spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::RememberedFirst), spellwake_engine::toolbox::ObjectQuery::from_move_subject(spellwake_engine::program::MoveSubjectRef::RememberedSecond))))),
             ));
             return Some(program);
         }
@@ -1670,9 +1675,9 @@ fn creature(
             program.activated.push(activation(
                 fixed_cost("{2}{W}")?,
                 SourceCost::Tap,
-                SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
-                    affect(1, 1, PermanentTargetAction::Tap),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(true),
                     skip_unless_present(
                         spellwake_engine::program::ValueExpr::object_matches(spellwake_engine::program::MatchObjectRef::TargetObject, spellwake_engine::program::ObjectFilter::creature().with_subtype(
                             vocabulary.resolve_label("Zombie")?,
@@ -1725,7 +1730,7 @@ fn creature(
             program.activated.push(activation(
                 ManaCost::free(),
                 SourceCost::Sacrifice,
-                BodyTarget::AnyGraveyardCard,
+                BodyTarget::ANY_GRAVEYARD_CARD,
                 vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()],
             ));
             return Some(program);
@@ -1741,7 +1746,7 @@ fn creature(
                     tap_source: true,
                     exclude_source: true,
                 },
-                BodyTarget::FilteredPermanent(ObjectFilter::artifact_or_enchantment()),
+                BodyTarget::filtered_permanent(ObjectFilter::artifact_or_enchantment()),
                 vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()],
             ));
             return Some(program);
@@ -1781,7 +1786,7 @@ fn creature(
             program.activated.push(activation(
                 fixed_cost("{2}{R}")?,
                 SourceCost::None,
-                SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                         spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -1822,13 +1827,15 @@ fn creature(
                 spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::of_type(CardType::Instant)),
                 NoTarget,
                 vec![
-                    OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        fixed: fixed_cost("{1}")?,
-                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 1,
-                        declined_destination: 2,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::Controller,
+                            fixed_cost("{1}")?,
+                            spellwake_engine::program::ValueExpr::Literal(0.into()),
+                            1,
+                            2,
+                        ),
+                    )),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(literal(1)),
                 ],
             )],
@@ -1839,7 +1846,7 @@ fn creature(
             program.activated.push(activation(
                 fixed_cost("{3}{U}")?,
                 SourceCost::Tap,
-                BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled().other_than_ability_source()),
+                BodyTarget::filtered_permanent(ObjectFilter::creature().controlled().other_than_ability_source()),
                 blink(false),
             ));
             return Some(program);
@@ -1849,7 +1856,7 @@ fn creature(
                 "Flash, flying",
                 vec![(
                     spellwake_engine::program::TriggerSpec::enters(ObjectFilter::self_object()),
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         ObjectFilter::creature()
                             .controlled()
                             .without_subtype(vocabulary.resolve_label("Angel")?),
@@ -1889,7 +1896,7 @@ fn creature(
                     .map(|condition| {
                         (
                             condition,
-                            SinglePlayer,
+                            BodyTarget::SINGLE_PLAYER,
                             vec![
                                 crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                                     spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -1927,7 +1934,7 @@ fn creature(
                 "",
                 vec![(
                     spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::self_object(), mode: spellwake_engine::program::DiesTriggerMode::Permanent }),
-                    BodyTarget::SingleAnyTarget,
+                    BodyTarget::SINGLE_ANY_TARGET,
                     vec![Instruction::DealDamage(Box::new(
                         spellwake_engine::toolbox::DealDamageSpec::divide_three(),
                     ))],
@@ -1939,7 +1946,7 @@ fn creature(
                 "",
                 vec![(
                     spellwake_engine::program::TriggerSpec::enters(ObjectFilter::self_object()),
-                    BodyTarget::SinglePlayerOrPlaneswalker,
+                    BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                             spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -1956,7 +1963,7 @@ fn creature(
             "",
             vec![(
                 spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::self_object(), mode: spellwake_engine::program::DiesTriggerMode::Permanent }),
-                SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::mill(
                         ResolvingPlayer::TargetPlayer,
@@ -1984,10 +1991,11 @@ fn creature(
             "",
             vec![(
                 spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::self_object(), mode: spellwake_engine::program::DiesTriggerMode::Permanent }),
-                SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
-                    OptionalEffect {
+                    OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     modify_target(vec![ResolvedPartSpec::ModifyPT(stats(-2, -2))]),
                 ],
@@ -2010,7 +2018,7 @@ fn rain_of_thorns(cost: ManaCost) -> Program {
     ];
     let [artifact, enchantment, land] = targets.map(|filter| {
         ExecutableBody::new(
-            BodyTarget::FilteredPermanent(filter),
+            BodyTarget::filtered_permanent(filter),
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(

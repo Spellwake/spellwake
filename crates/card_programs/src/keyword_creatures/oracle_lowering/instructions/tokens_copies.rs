@@ -128,16 +128,18 @@ pub(super) fn lower_tokens_copies_instruction(
                                 "the exiled card" | "that exiled card" | "the card exiled with ~"
                             ) =>
                     {
-                        trial.instructions.push(Instruction::ChooseObjects {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            source_zone: SourceZoneFilter::LinkedExile,
-                            filter: Box::new(ObjectFilter::any()),
-                            min: ValueExpr::literal(1),
-                            max: ValueExpr::literal(1),
-                            distinct_powers: false,
-                            max_total_power: None,
-                            unchosen_action: None,
-                        });
+                        trial.instructions.extend(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                                AffectedPlayers::One(ResolvingPlayer::Controller),
+                                SourceZoneFilter::LinkedExile,
+                                ObjectFilter::any(),
+                                ValueExpr::literal(1),
+                                ValueExpr::literal(1),
+                                false,
+                                None,
+                                None,
+                            ),
+                        );
                         Some(MoveSubjectRef::LastMoved)
                     }
                     SubjectRefAst::Anaphora(raw)
@@ -167,16 +169,18 @@ pub(super) fn lower_tokens_copies_instruction(
                         if obj.has_target_player() {
                             None
                         } else {
-                            trial.instructions.push(Instruction::ChooseObjects {
-                                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                                source_zone: SourceZoneFilter::LinkedExile,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                distinct_powers: false,
-                                max_total_power: None,
-                                unchosen_action: None,
-                            });
+                            trial.instructions.extend(
+                                spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                                    SourceZoneFilter::LinkedExile,
+                                    obj,
+                                    ValueExpr::literal(1),
+                                    ValueExpr::literal(1),
+                                    false,
+                                    None,
+                                    None,
+                                ),
+                            );
                             Some(MoveSubjectRef::LastMoved)
                         }
                     }
@@ -215,16 +219,18 @@ pub(super) fn lower_tokens_copies_instruction(
                         if obj.has_target_player() {
                             None
                         } else {
-                            trial.instructions.push(Instruction::ChooseObjects {
-                                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                                source_zone,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                distinct_powers: false,
-                                max_total_power: None,
-                                unchosen_action: None,
-                            });
+                            trial.instructions.extend(
+                                spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                                    source_zone,
+                                    obj,
+                                    ValueExpr::literal(1),
+                                    ValueExpr::literal(1),
+                                    false,
+                                    None,
+                                    None,
+                                ),
+                            );
                             Some(MoveSubjectRef::LastMoved)
                         }
                     }
@@ -235,13 +241,13 @@ pub(super) fn lower_tokens_copies_instruction(
                     PlayerRefAst::EachOpponent => Some(TokenRecipients::EachOpponent),
                     PlayerRefAst::EachPlayer => Some(TokenRecipients::EachPlayer),
                     PlayerRefAst::TargetPlayer if trial.target == BodyTarget::None => {
-                        match trial.bind_target(BodyTarget::SinglePlayer) {
+                        match trial.bind_target(BodyTarget::SINGLE_PLAYER) {
                             Ok(()) => Some(TokenRecipients::Player(ResolvingPlayer::TargetPlayer)),
                             Err(_) => None,
                         }
                     }
                     PlayerRefAst::TargetOpponent if trial.target == BodyTarget::None => {
-                        match trial.bind_target(BodyTarget::SingleOpponent) {
+                        match trial.bind_target(BodyTarget::SINGLE_OPPONENT) {
                             Ok(()) => Some(TokenRecipients::Player(ResolvingPlayer::TargetPlayer)),
                             Err(_) => None,
                         }
@@ -487,11 +493,11 @@ pub(super) fn lower_tokens_copies_instruction(
                     TokenRecipients::Player(ResolvingPlayer::LoopPlayer)
                 }
                 PlayerRefAst::TargetPlayer => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     TokenRecipients::Player(ResolvingPlayer::TargetPlayer)
                 }
                 PlayerRefAst::TargetOpponent => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     TokenRecipients::Player(ResolvingPlayer::TargetPlayer)
                 }
                 PlayerRefAst::ThatPlayer
@@ -508,7 +514,6 @@ pub(super) fn lower_tokens_copies_instruction(
                                         op,
                                         Instruction::ZoneOp(_)
                                             | Instruction::ForEachPlayerQuery { .. }
-                                            | Instruction::Sacrifice { .. }
                                     )
                                 });
                             if after_group_removal {
@@ -526,23 +531,19 @@ pub(super) fn lower_tokens_copies_instruction(
                                 return Err("oracle:unbound-that-player");
                             }
                         }
-                        BodyTarget::SingleSpell(_)
-                        | BodyTarget::SingleStackObject(_)
-                        | BodyTarget::SingleStackEntry
-                        | BodyTarget::ControlledAbility { .. }
-                        | BodyTarget::StackEntryTargetingControlledPermanent => {
+                        BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
                             TokenRecipients::Player(ResolvingPlayer::TargetSpellController)
                         }
-                        BodyTarget::SingleCreature
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::SingleAnyTarget
-                        | BodyTarget::SingleCreatureOrPlayer
-                        | BodyTarget::SinglePlayerOrPlaneswalker
-                        | BodyTarget::SingleOpponentOrPlaneswalker
-                        | BodyTarget::FilteredPermanent(_) => {
-                            TokenRecipients::Player(ResolvingPlayer::TargetController)
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            ..
                         }
+                        | BodyTarget::AnyTarget(
+                            AnyTargetKind::Any
+                            | AnyTargetKind::CreatureOrPlayer
+                            | AnyTargetKind::PlayerOrPlaneswalker
+                            | AnyTargetKind::OpponentOrPlaneswalker,
+                        ) => TokenRecipients::Player(ResolvingPlayer::TargetController),
                         _ => return Err("oracle:unsupported-token-controller"),
                     }
                 }
@@ -554,32 +555,30 @@ pub(super) fn lower_tokens_copies_instruction(
                         if builder.instructions.iter().any(|op| {
                             matches!(
                                 op,
-                                Instruction::ZoneOp(_)
-                                    | Instruction::ForEachPlayerQuery { .. }
-                                    | Instruction::Sacrifice { .. }
+                                Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
                             )
                         }) =>
                     {
                         TokenRecipients::DestroyedPermanentControllers
                     }
                     BodyTarget::None => return Err("oracle:unbound-that-player"),
-                    BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::SingleAnyTarget
-                    | BodyTarget::SingleCreatureOrPlayer
-                    | BodyTarget::SinglePlayerOrPlaneswalker
-                    | BodyTarget::SingleOpponentOrPlaneswalker
-                    | BodyTarget::FilteredPermanent(_)
-                    | BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }
-                    | BodyTarget::SingleSpell(_) => {
-                        TokenRecipients::Player(ResolvingPlayer::TargetOwner)
+                    BodyTarget::Object {
+                        zone:
+                            TargetZone::Battlefield
+                            | TargetZone::OwnGraveyard
+                            | TargetZone::AnyGraveyard { .. },
+                        ..
                     }
+                    | BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                        | AnyTargetKind::CreatureOrPlayer
+                        | AnyTargetKind::PlayerOrPlaneswalker
+                        | AnyTargetKind::OpponentOrPlaneswalker,
+                    )
+                    | BodyTarget::Spell {
+                        include_abilities: false,
+                        ..
+                    } => TokenRecipients::Player(ResolvingPlayer::TargetOwner),
                     _ => return Err("oracle:unsupported-token-controller"),
                 },
                 _ => return Err("oracle:unsupported-token-controller"),
@@ -781,10 +780,11 @@ pub(super) fn lower_tokens_copies_instruction(
                         ) =>
                     {
                         match &spec.op {
-                            spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                                kind: src_kind,
-                                ..
-                            } => kind.is_none() || kind.as_ref() == Some(src_kind),
+                            spellwake_engine::toolbox::ObjectMutation::Counters(
+                                spellwake_engine::toolbox::CounterOp::Add {
+                                    kind: src_kind, ..
+                                },
+                            ) => kind.is_none() || kind.as_ref() == Some(src_kind),
                             _ => false,
                         }
                     }
@@ -1013,10 +1013,8 @@ pub(super) fn lower_tokens_copies_instruction(
                             | "that revealed card"
                     ) {
                         let q = if builder.target != BodyTarget::None
-                            && !matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            ) {
+                            && !matches!(builder.target, BodyTarget::Player { .. })
+                        {
                             spellwake_engine::toolbox::ObjectQuery::Targets
                         } else if last_instruction_moved_object(&builder.instructions)
                             || has_prior_moved_object(&builder.instructions)
@@ -1222,7 +1220,13 @@ pub(super) fn lower_tokens_copies_instruction(
                 }
                 SubjectRefAst::Anaphora(raw) => {
                     let low_raw = raw.trim().to_ascii_lowercase();
-                    let copy_target = if matches!(builder.target, BodyTarget::SingleSpell(_)) {
+                    let copy_target = if matches!(
+                        builder.target,
+                        BodyTarget::Spell {
+                            include_abilities: false,
+                            ..
+                        }
+                    ) {
                         StackCopyTarget::TargetSpell
                     } else if is_stack_body_target(builder.target) {
                         if low_raw.contains("ability") && !low_raw.contains("spell") {
@@ -1317,12 +1321,20 @@ pub(super) fn lower_tokens_copies_instruction(
             if *count == TargetCountAst::UpTo(1) {
                 builder.up_to_one_target = true;
             }
-            builder.instructions.push(Instruction::BecomeCopy {
-                receiver: Box::new(EffectSubject::AbilitySource),
-                donor: MoveSubjectRef::TargetObject,
-                duration: dur,
-                exceptions: Box::new(CopyExceptions::default()),
-            });
+            builder
+                .instructions
+                .push(Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::AbilitySource,
+                        )),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::TargetObject,
+                        ),
+                        dur,
+                        CopyExceptions::default(),
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::BecomeCopy {
@@ -1334,19 +1346,27 @@ pub(super) fn lower_tokens_copies_instruction(
             && matches!(source.as_ref(), SubjectRefAst::Anaphora(_))
             && matches!(
                 builder.target,
-                BodyTarget::SinglePermanent
-                    | BodyTarget::SingleCreature
-                    | BodyTarget::SinglePlaneswalker
-                    | BodyTarget::FilteredPermanent(_)
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
             ) =>
         {
             let dur = lower_duration(duration)?;
-            builder.instructions.push(Instruction::BecomeCopy {
-                receiver: Box::new(EffectSubject::AbilitySource),
-                donor: MoveSubjectRef::TargetObject,
-                duration: dur,
-                exceptions: Box::new(CopyExceptions::default()),
-            });
+            builder
+                .instructions
+                .push(Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::AbilitySource,
+                        )),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::TargetObject,
+                        ),
+                        dur,
+                        CopyExceptions::default(),
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::BecomeCopy {
@@ -1396,12 +1416,20 @@ pub(super) fn lower_tokens_copies_instruction(
                         ))],
                         ),
                     )));
-                builder.instructions.push(Instruction::BecomeCopy {
-                    receiver: Box::new(EffectSubject::LinkedFirst),
-                    donor: MoveSubjectRef::RememberedSecond,
-                    duration: dur,
-                    exceptions: Box::new(exc),
-                });
+                builder
+                    .instructions
+                    .push(Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                EffectSubject::LinkedFirst,
+                            )),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                MoveSubjectRef::RememberedSecond,
+                            ),
+                            dur,
+                            exc,
+                        ),
+                    )));
                 return Ok(());
             }
             let eff_receiver =
@@ -1449,10 +1477,10 @@ pub(super) fn lower_tokens_copies_instruction(
                 SubjectRefAst::Anaphora(_)
                     if matches!(
                         builder.target,
-                        BodyTarget::SinglePermanent
-                            | BodyTarget::SingleCreature
-                            | BodyTarget::SinglePlaneswalker
-                            | BodyTarget::FilteredPermanent(_)
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            ..
+                        }
                     ) =>
                 {
                     EffectSubject::TargetObject
@@ -1574,16 +1602,18 @@ pub(super) fn lower_tokens_copies_instruction(
                             "the exiled card" | "that exiled card" | "the card exiled with ~"
                         ) =>
                 {
-                    builder.instructions.push(Instruction::ChooseObjects {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        source_zone: SourceZoneFilter::LinkedExile,
-                        filter: Box::new(ObjectFilter::any()),
-                        min: ValueExpr::literal(1),
-                        max: ValueExpr::literal(1),
-                        distinct_powers: false,
-                        max_total_power: None,
-                        unchosen_action: None,
-                    });
+                    builder.instructions.extend(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            SourceZoneFilter::LinkedExile,
+                            ObjectFilter::any(),
+                            ValueExpr::literal(1),
+                            ValueExpr::literal(1),
+                            false,
+                            None,
+                            None,
+                        ),
+                    );
                     MoveSubjectRef::LastMoved
                 }
                 SubjectRefAst::Anaphora(raw)
@@ -1612,16 +1642,18 @@ pub(super) fn lower_tokens_copies_instruction(
                     if obj.has_target_player() {
                         return Err("oracle:unsupported-become-copy");
                     }
-                    builder.instructions.push(Instruction::ChooseObjects {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        source_zone: SourceZoneFilter::LinkedExile,
-                        filter: Box::new(obj),
-                        min: ValueExpr::literal(1),
-                        max: ValueExpr::literal(1),
-                        distinct_powers: false,
-                        max_total_power: None,
-                        unchosen_action: None,
-                    });
+                    builder.instructions.extend(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            SourceZoneFilter::LinkedExile,
+                            obj,
+                            ValueExpr::literal(1),
+                            ValueExpr::literal(1),
+                            false,
+                            None,
+                            None,
+                        ),
+                    );
                     MoveSubjectRef::LastMoved
                 }
                 SubjectRefAst::Group(f)
@@ -1657,26 +1689,32 @@ pub(super) fn lower_tokens_copies_instruction(
                     if obj.has_target_player() {
                         return Err("oracle:unsupported-become-copy");
                     }
-                    builder.instructions.push(Instruction::ChooseObjects {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        source_zone,
-                        filter: Box::new(obj),
-                        min: ValueExpr::literal(1),
-                        max: ValueExpr::literal(1),
-                        distinct_powers: false,
-                        max_total_power: None,
-                        unchosen_action: None,
-                    });
+                    builder.instructions.extend(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            source_zone,
+                            obj,
+                            ValueExpr::literal(1),
+                            ValueExpr::literal(1),
+                            false,
+                            None,
+                            None,
+                        ),
+                    );
                     MoveSubjectRef::LastMoved
                 }
                 _ => return Err("oracle:unsupported-become-copy"),
             };
-            builder.instructions.push(Instruction::BecomeCopy {
-                receiver: Box::new(receiver),
-                donor,
-                duration: dur,
-                exceptions: Box::new(exc),
-            });
+            builder
+                .instructions
+                .push(Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(receiver)),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(donor),
+                        dur,
+                        exc,
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::CreateEmblem(text) => {
@@ -1714,9 +1752,9 @@ pub(super) fn lower_tokens_copies_instruction(
                     count: TargetCountAst::Exact(1),
                 } => {
                     builder.bind_target(if *opponent_only {
-                        BodyTarget::SingleOpponent
+                        BodyTarget::SINGLE_OPPONENT
                     } else {
-                        BodyTarget::SinglePlayer
+                        BodyTarget::SINGLE_PLAYER
                     })?;
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::TargetPlayer,
@@ -1837,12 +1875,13 @@ pub(super) fn lower_tokens_copies_instruction(
                     Instruction::MutateObject(spec)
                         if matches!(
                             &spec.op,
-                            spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy)
+                            spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy))
                                 if copy.enters_attacking
                         ) =>
                     {
-                        if let spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) =
-                            &mut spec.op
+                        if let spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                            spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy),
+                        ) = &mut spec.op
                         {
                             copy.defender_scope = defender_scope;
                         }
@@ -1983,7 +2022,7 @@ pub(super) fn lower_tokens_copies_instruction(
                 in_trigger,
                 vocabulary,
             )?;
-            builder.bind_target(BodyTarget::FilteredPermanent(
+            builder.bind_target(BodyTarget::filtered_permanent(
                 ObjectFilter::land().controlled(),
             ))?;
             builder
@@ -2216,11 +2255,13 @@ fn set_last_copy_may_choose_new_targets(ops: &mut [Instruction]) -> bool {
                 }
             }
             Instruction::MutatePlayer(spec) => match &mut spec.op {
-                spellwake_engine::toolbox::PlayerMutation::FlipCoins {
-                    win_body,
-                    lose_body,
-                    ..
-                } => {
+                spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                    spellwake_engine::toolbox::RandomEventOp::FlipCoins {
+                        win_body,
+                        lose_body,
+                        ..
+                    },
+                ) => {
                     if let Some(body) = lose_body
                         && set_last_copy_may_choose_new_targets(&mut body.instructions)
                     {
@@ -2249,7 +2290,9 @@ fn set_last_copy_may_choose_new_targets(ops: &mut [Instruction]) -> bool {
                         return true;
                     }
                 }
-                spellwake_engine::toolbox::PlayerMutation::RollDie { bands, .. } => {
+                spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                    spellwake_engine::toolbox::RandomEventOp::RollDie { bands, .. },
+                ) => {
                     for band in bands.iter_mut().rev() {
                         if set_last_copy_may_choose_new_targets(&mut band.body.instructions) {
                             return true;
@@ -2269,9 +2312,9 @@ fn set_last_copy_may_choose_new_targets(ops: &mut [Instruction]) -> bool {
                     return true;
                 }
             }
-            Instruction::ChooseOption { options, .. } => {
-                for opt in options.iter_mut().rev() {
-                    if set_last_copy_may_choose_new_targets(&mut opt.body.instructions) {
+            Instruction::PromptChoice(spec) if !spec.option_branches.is_empty() => {
+                for opt in spec.option_branches.iter_mut().rev() {
+                    if set_last_copy_may_choose_new_targets(&mut opt.instructions) {
                         return true;
                     }
                 }
@@ -4141,7 +4184,7 @@ mod wave12_token_ability_tests {
                 ),
                 spell(
                     2,
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(

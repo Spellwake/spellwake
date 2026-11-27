@@ -10,10 +10,12 @@ fn field(player: SeatId) -> ObjectDestination {
     ObjectDestination::Battlefield { controller: player }
 }
 fn choice(state: GameState) -> GameState {
-    exile_hand::until(
-        state,
-        |s| matches!(s.pending_decision().map(|p|p.frame()),Some(RuleFrame::ResolutionSelect(f)) if f.operation()==ResolutionSelectionKind::MeldPartner),
-    )
+    exile_hand::until(state, |s| {
+        matches!(
+            s.pending_decision().map(|p| p.frame()),
+            Some(RuleFrame::ResolutionSelect(_))
+        )
+    })
 }
 fn view(s: &GameState, n: u64) -> spellwake_engine::characteristics::ObjectCharacteristics {
     s.execution()
@@ -38,7 +40,7 @@ fn shared_meld_graf_rats_chooses_one_genuine_partner_enters_once_and_both_cards_
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
                     ),
                 ),

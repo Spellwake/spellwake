@@ -1,5 +1,6 @@
 //! Synthetic native mechanisms through real GameState inputs, not card qualification.
 use super::*;
+use crate::program::PermanentTypeFilter;
 use crate::{
     game::{
         GameCommand, GameContext, GameError, GameId, GameInput, GameState, NativeCandidate,
@@ -38,16 +39,16 @@ fn gain(amount: i64) -> Instruction {
     )))
 }
 fn sacrifice(players: AffectedPlayers, amount: RulesInteger) -> Instruction {
-    Instruction::Sacrifice {
+    Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
         players,
-        amount: crate::program::ValueExpr::Literal(amount),
-        filter: PermanentTypeFilter {
+        crate::program::ValueExpr::Literal(amount),
+        PermanentTypeFilter {
             any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Creature]),
             forbidden_types: BTreeSet::new(),
             object_filter: None,
         },
-    }
+    )))
 }
 fn fixture(
     target: BodyTarget,
@@ -395,11 +396,13 @@ fn huge_discard_clamps_to_real_hand_and_orders_without_creating_a_failed_draw() 
         seed(11, B, ObjectDestination::Hand, creature()),
     ];
     let state = fixture(
-        BodyTarget::SinglePlayer,
-        vec![Instruction::Discard {
-            players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-            amount: crate::program::ValueExpr::Literal(huge),
-        }],
+        BodyTarget::SINGLE_PLAYER,
+        vec![Instruction::ZoneOp(Box::new(
+            crate::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                crate::program::ValueExpr::Literal(huge),
+            ),
+        ))],
         vec![A, B],
         A,
         cards,
@@ -609,7 +612,7 @@ fn same_body_bounce_excludes_hand_tokens_at_domain_and_commit_then_later_checks_
             cards.push(seed(10, A, ObjectDestination::Hand, creature()));
         }
         let state = fixture(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 crate::program::Instruction::ZoneOp(Box::new(
                     crate::toolbox::ZoneOpSpec::move_all(
@@ -617,12 +620,13 @@ fn same_body_bounce_excludes_hand_tokens_at_domain_and_commit_then_later_checks_
                         crate::toolbox::ZoneDest::Hand,
                     ),
                 )),
-                Instruction::Discard {
-                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    amount: crate::program::ValueExpr::Literal(1.into()),
-                },
-                Instruction::OptionalEffect {
+                Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ))),
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 gain(1),
             ],
@@ -765,31 +769,47 @@ fn counted_amount_is_frozen_once_under_resolving_controller_for_every_affected_p
     let state = fixture(
         BodyTarget::None,
         vec![
-            Instruction::ChooseCreatureType {
-                into: CreatureTypeSlot::new(0),
-                excluding: BTreeSet::new(),
-            },
-            Instruction::Sacrifice {
-                players: AffectedPlayers::EachPlayer,
-                amount: crate::program::ValueExpr::count_battlefield(
+            Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                chooser: crate::toolbox::PlayerSelector::Resolving(
+                    crate::program::ResolvingPlayer::Controller,
+                ),
+                domain: crate::toolbox::PromptDomain::Subtype {
+                    kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                    excluding: BTreeSet::new(),
+                    legacy_slot: Some(CreatureTypeSlot::new(0)),
+                },
+                category: crate::toolbox::ChoiceCategory::Generic,
+                bind_to: crate::toolbox::BindingId(0),
+                bind_unchosen: None,
+                tag_partition: None,
+                auto_resolve_trivial: false,
+                option_branches: Vec::new(),
+            })),
+            Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+                AffectedPlayers::EachPlayer,
+                crate::program::ValueExpr::count_battlefield(
                     crate::program::ObjectFilter::any()
                         .controlled()
                         .of_chosen_slot(CreatureTypeSlot::new(0)),
                 ),
-                filter: PermanentTypeFilter {
+                PermanentTypeFilter {
                     any_types: Default::default(),
                     required_types: BTreeSet::from([CardType::Creature]),
                     forbidden_types: BTreeSet::new(),
                     object_filter: None,
                 },
-            },
+            ))),
         ],
         vec![A, B],
         A,
         cards,
     );
     let state = pass_to_boundary(cast(&state, A, 1, None));
-    let mut state = reply(&state, DecisionReply::CreatureType(elf)).into_state();
+    let mut state = reply(
+        &state,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(elf)),
+    )
+    .into_state();
     assert_eq!(select_frame(&state).required(), 2);
     state = reply(
         &state,
@@ -850,10 +870,10 @@ fn zero_amount_leaves_real_hand_cards_and_emits_no_discard() {
     let state = fixture(
         BodyTarget::None,
         vec![
-            Instruction::Discard {
-                players: AffectedPlayers::EachPlayer,
-                amount: crate::program::ValueExpr::Literal(0.into()),
-            },
+            Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::EachPlayer,
+                crate::program::ValueExpr::Literal(0.into()),
+            ))),
             gain(1),
         ],
         vec![A, B],
@@ -886,8 +906,9 @@ fn a_battlefield_token_is_a_real_sacrifice_without_owner_order_or_physical_pile_
         BodyTarget::None,
         vec![
             sacrifice(AffectedPlayers::One(ResolvingPlayer::Controller), 1.into()),
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             gain(1),
         ],
@@ -973,7 +994,7 @@ fn current_evaluated_type_filter_is_independent_of_printed_types_and_zone_contro
     let prefix = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![{
                 struct _Tmp {
                     parts: crate::characteristics::ResolvedPartsSpec,
@@ -1027,16 +1048,18 @@ fn current_evaluated_type_filter_is_independent_of_printed_types_and_zone_contro
     ];
     let state = fixture(
         BodyTarget::None,
-        vec![Instruction::Sacrifice {
-            players: AffectedPlayers::EachPlayer,
-            amount: crate::program::ValueExpr::Literal(1.into()),
-            filter: PermanentTypeFilter {
-                any_types: Default::default(),
-                required_types: BTreeSet::from([CardType::Creature]),
-                forbidden_types: BTreeSet::from([CardType::Artifact]),
-                object_filter: None,
-            },
-        }],
+        vec![Instruction::ZoneOp(Box::new(
+            crate::toolbox::ZoneOpSpec::sacrifice(
+                AffectedPlayers::EachPlayer,
+                crate::program::ValueExpr::Literal(1.into()),
+                PermanentTypeFilter {
+                    any_types: Default::default(),
+                    required_types: BTreeSet::from([CardType::Creature]),
+                    forbidden_types: BTreeSet::from([CardType::Artifact]),
+                    object_filter: None,
+                },
+            ),
+        ))],
         vec![A, B],
         A,
         cards,

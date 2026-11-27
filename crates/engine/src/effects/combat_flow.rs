@@ -459,7 +459,12 @@ impl EffectWindow {
         let is_reselect = matches!(
             self.current_instruction()?,
             Instruction::MutateObject(spec)
-                if matches!(spec.op, crate::toolbox::ObjectMutation::ReselectAttackDefender)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::Combat(
+                        crate::toolbox::ObjectCombatOp::ReselectAttackDefender
+                    )
+                )
         );
         if !is_reselect || self.attack_defender_frame()?.as_ref() != Some(frame) {
             return Err(EffectError::WrongResolutionFrame);

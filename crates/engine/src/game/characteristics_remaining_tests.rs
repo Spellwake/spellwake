@@ -308,7 +308,7 @@ fn effect_spell(parts: Vec<ResolvedPartSpec>, duration: ResolvedDuration) -> Pro
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![{
                 struct _Tmp {
                     parts: crate::characteristics::ResolvedPartsSpec,

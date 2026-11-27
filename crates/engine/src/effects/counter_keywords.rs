@@ -127,11 +127,12 @@ impl EffectWindow {
             Instruction::MutateObject(spec)
                 if matches!(
                     spec.op,
-                    crate::toolbox::ObjectMutation::SacrificeEvoked
-                        | crate::toolbox::ObjectMutation::SacrificeStateTriggerSource
-                        | crate::toolbox::ObjectMutation::ResolveCounterKeyword(
-                            CounterKeyword::VanishingLastCounter
-                        )
+                    crate::toolbox::ObjectMutation::KeywordZoneAction(
+                        crate::toolbox::KeywordZoneOp::SacrificeEvoked
+                            | crate::toolbox::KeywordZoneOp::SacrificeStateTriggerSource
+                    ) | crate::toolbox::ObjectMutation::ResolveCounterKeyword(
+                        CounterKeyword::VanishingLastCounter
+                    )
                 ) =>
             {
                 Ok(true)

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![allow(dead_code, unused_imports)]
 //! Runtime and validation integration tests for Pass F2-B Wave 8B engine additions:
-//! - `ObjectMutation::MoveCounters` (direct 1-target move, interactive `any_number` `CounterRemoval`,
+//! - `ObjectMutation::Counters(CounterOp::Move { .. })` (direct 1-target move, interactive `any_number` counter removal,
 //!   and CR 122.5 no-op when `from == to`)
 //! - `SpellDefinition.uncastable_mana_cost` (CR 118.6: normal hand cast rejected, Suspend and
 //!   Cascade free casts succeed)
@@ -72,10 +72,9 @@ use spellwake_engine::{
         LibraryPlacement, LibrarySearch, MoveSubjectRef, ObjectClause, ObjectFilter,
         ObjectFilterFlags, ObjectStatKind, PermanentDefinition, PermanentTypeFilter, PhaseCheck,
         PlaneswalkerSubtype, PlayerRelation, PlayerStatExpr, PowerFilter, Program, ProgramKind,
-        ResolutionCondition, ResolvingPlayer, SacrificeSelection, SearchCardMatcher,
-        SpellDefinition, SpellFilter, SubtypeFilter, Supertype, TemporaryRuleKind, TriggerEvent,
-        TriggerGrouping, TriggerSpec, TriggerZone, TriggeredAbility, TriggeredAbilityId, ValueExpr,
-        ValueObjectRef, ValueZone,
+        ResolutionCondition, ResolvingPlayer, SearchCardMatcher, SpellDefinition, SpellFilter,
+        SubtypeFilter, Supertype, TemporaryRuleKind, TriggerEvent, TriggerGrouping, TriggerSpec,
+        TriggerZone, TriggeredAbility, TriggeredAbilityId, ValueExpr, ValueObjectRef, ValueZone,
     },
     setup::GameSeed,
     shuffle::EntropyTape,
@@ -260,7 +259,7 @@ fn damage_any_instant(amount: i64) -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![spellwake_engine::program::Instruction::DealDamage(
                 Box::new(spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -279,7 +278,7 @@ fn destroy_permanent_instant() -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -344,10 +343,23 @@ fn attack_player(attacker: ObjectId, defender: SeatId) -> AttackDeclaration {
 fn answer_yes_no_offer(game: &GameState, actor: SeatId, accept: bool) -> NativeCandidate {
     let pending = game
         .pending_decision()
-        .expect("expected OfferAnyPlayer OptionIndex frame");
+        .expect("expected OfferAnyPlayer option frame");
     assert_eq!(pending.chooser(), actor);
-    assert!(matches!(pending.frame(), RuleFrame::OptionIndex(_)));
-    reply(game, actor, DecisionReply::OptionIndex(u8::from(!accept)))
+    let choice = match pending.frame() {
+        RuleFrame::OptionIndex(_) => DecisionReply::OptionIndex(u8::from(!accept)),
+        RuleFrame::PromptChoice(frame)
+            if matches!(
+                frame.domain,
+                spellwake_engine::toolbox::ResolvedPromptDomain::Options { .. }
+            ) =>
+        {
+            DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Options(
+                vec![u8::from(!accept)],
+            ))
+        }
+        other => panic!("expected OfferAnyPlayer option frame, got {other:?}"),
+    };
+    reply(game, actor, choice)
 }
 
 fn world_at_upkeep(
@@ -507,7 +519,7 @@ fn find_hand_card_by_name(game: &GameState, owner: SeatId, expected: &str) -> Ob
 }
 
 // ---------------------------------------------------------------------------
-// 1. ObjectMutation::MoveCounters: direct move, interactive any_number CounterRemoval, CR 122.5
+// 1. ObjectMutation::Counters(CounterOp::Move { .. }): direct move, interactive any_number counter removal, CR 122.5
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -701,7 +713,7 @@ fn prohibit_casting_chosen_color_and_name_and_blocking_compare_anchor() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![effect(
                     vec![ResolvedPartSpec::ModifyPT(pt(2, 2))],
                     ResolvedDuration::UntilEndOfTurn,

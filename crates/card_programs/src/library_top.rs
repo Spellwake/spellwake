@@ -128,7 +128,7 @@ pub(super) fn definition(
             ProgramKey::LibraryTopMillDrawSpellV1,
             "Thought Scour",
             "Target player mills two cards.\nDraw a card.",
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::mill(
                 ResolvingPlayer::TargetPlayer,
                 spellwake_engine::program::ValueExpr::Literal(2.into()),

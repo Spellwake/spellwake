@@ -83,7 +83,7 @@ fn distinct_power_counts_exact_signed_values_and_current_layered_power() {
             count_spell(11, filter),
             spell(
                 12,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![effect(
                     vec![ResolvedPartSpec::ModifyPT(pt(2, 0))],
                     ResolvedDuration::UntilEndOfTurn,

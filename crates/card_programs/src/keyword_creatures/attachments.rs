@@ -143,7 +143,7 @@ pub(super) fn compile_rules(
             ),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -278,15 +278,21 @@ pub(super) fn compile_rules(
                     ),
                     BodyTarget::None,
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::all(
                                 spellwake_engine::toolbox::ObjectQuery::Source,
-                                spellwake_engine::toolbox::ObjectMutation::Attach {
-                                    host: spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
-                                },
+                                spellwake_engine::toolbox::ObjectMutation::Attach(
+                                    spellwake_engine::toolbox::AttachOp::ToObject {
+                                        host: Box::new(
+                                            spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                        ),
+                                        ability: None,
+                                    },
+                                ),
                             ),
                         )),
                     ],
@@ -308,19 +314,25 @@ pub(super) fn compile_rules(
                             )
                             .or_self(),
                     ),
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         spellwake_engine::program::ObjectFilter::creature().controlled(),
                     ),
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::all(
                                 spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
-                                spellwake_engine::toolbox::ObjectMutation::Attach {
-                                    host: spellwake_engine::toolbox::ObjectQuery::Targets,
-                                },
+                                spellwake_engine::toolbox::ObjectMutation::Attach(
+                                    spellwake_engine::toolbox::AttachOp::ToObject {
+                                        host: Box::new(
+                                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                                        ),
+                                        ability: None,
+                                    },
+                                ),
                             ),
                         )),
                     ],
@@ -368,7 +380,7 @@ pub(super) fn compile_rules(
                             linked_player: false,
                         },
                     ),
-                    BodyTarget::SinglePlayerOrPlaneswalker,
+                    BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER,
                     vec![Instruction::DealDamage(Box::new(
                         spellwake_engine::toolbox::DealDamageSpec::from_power(
                             spellwake_engine::program::PowerDamageSource::CreatureDealtDamage,
@@ -381,12 +393,14 @@ pub(super) fn compile_rules(
                     spellwake_engine::program::TriggerSpec::dies(
                         spellwake_engine::program::ObjectFilter::any().attached_to_self(),
                     ),
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         spellwake_engine::program::ObjectFilter::creature().controlled(),
                     ),
-                    vec![Instruction::Attach(
-                        spellwake_engine::attachment::AttachAbility::Equip,
-                    )],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                            spellwake_engine::attachment::AttachAbility::Equip,
+                        ),
+                    ))],
                 )
             }
             "Whenever equipped creature attacks, this Equipment deals 1 damage to target creature defending player controls." => {
@@ -397,7 +411,7 @@ pub(super) fn compile_rules(
                             capture_defender: false,
                         },
                     ),
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         spellwake_engine::program::ObjectFilter::creature().of_related_player(),
                     ),
                     vec![
@@ -419,8 +433,9 @@ pub(super) fn compile_rules(
                     ),
                     BodyTarget::None,
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         Instruction::SearchLibrary {
                             filter: Box::new(
@@ -812,13 +827,15 @@ fn bearer_trigger(keyword: &str, vocabulary: &CreatureTypeVocabulary) -> Option<
         }
         let mut instructions = Vec::new();
         if let Some(cost) = price {
-            instructions.push(Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::Controller,
-                fixed: cost,
-                extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                paid_destination: 1,
-                declined_destination: 2,
-            });
+            instructions.push(Instruction::PromptChoice(Box::new(
+                spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::Controller,
+                    cost,
+                    spellwake_engine::program::ValueExpr::Literal(0.into()),
+                    1,
+                    2,
+                ),
+            )));
         }
         instructions.push(Instruction::MutateObject(Box::new(
             spellwake_engine::toolbox::MutateObjectSpec::create_token_and_attach(Box::new(

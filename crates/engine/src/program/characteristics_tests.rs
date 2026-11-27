@@ -90,7 +90,7 @@ fn color_parts_and_indicators_have_strict_context_and_five_color_admission() {
         let p = Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![{
                     struct _Tmp {
                         parts: crate::characteristics::ResolvedPartsSpec,
@@ -208,12 +208,14 @@ fn text_parts_validate_singular_words_local_scope_and_strict_wire_context() {
     let program = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
-                Instruction::ChooseCreatureType {
-                    into: slot,
-                    excluding: BTreeSet::from([vampire]),
-                },
+                Instruction::PromptChoice(Box::new(
+                    crate::toolbox::PromptChoiceSpec::choose_creature_type(
+                        slot,
+                        BTreeSet::from([vampire]),
+                    ),
+                )),
                 {
                     struct _Tmp {
                         parts: crate::characteristics::ResolvedPartsSpec,
@@ -297,7 +299,7 @@ fn control_parts_bind_resolution_context_and_reject_foreign_operand_families() {
         let program = Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![{
                     struct _Tmp {
                         parts: crate::characteristics::ResolvedPartsSpec,
@@ -341,7 +343,7 @@ fn control_parts_bind_resolution_context_and_reject_foreign_operand_families() {
         json!({"tag":"Control","recipient":"ResolvingController"});
     assert!(codec::decode(wrong_live, &v).is_err());
     let targeted_spell = ExecutableBody::new(
-        BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+        BodyTarget::single_spell(crate::program::SpellFilter::any()),
         vec![{
             struct _Tmp {
                 parts: crate::characteristics::ResolvedPartsSpec,
@@ -430,7 +432,7 @@ fn ability_removal_definitions_round_trip_and_reject_malformed_or_duplicate_part
         let resolved = Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![{
                     struct _Tmp {
                         parts: crate::characteristics::ResolvedPartsSpec,
@@ -521,10 +523,12 @@ fn permanent(types: &[CardType], pt: Option<PowerToughness>) -> Program {
     )
 }
 fn choice_ability(targetless: bool) -> ActivatedAbility {
-    let mut instructions = vec![Instruction::ChooseCreatureType {
-        into: CreatureTypeSlot::new(0),
-        excluding: BTreeSet::new(),
-    }];
+    let mut instructions = vec![Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec::choose_creature_type(
+            CreatureTypeSlot::new(0),
+            BTreeSet::new(),
+        ),
+    ))];
     if !targetless {
         instructions.push(crate::program::Instruction::DealDamage(Box::new(
             crate::toolbox::DealDamageSpec {
@@ -555,7 +559,7 @@ fn choice_ability(targetless: bool) -> ActivatedAbility {
             if targetless {
                 BodyTarget::None
             } else {
-                BodyTarget::SingleCreature
+                BodyTarget::SINGLE_CREATURE
             },
             instructions,
         ),
@@ -660,7 +664,7 @@ fn cl_adm_undefined_slot() {
     let value = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![{
                 struct _Tmp {
                     parts: crate::characteristics::ResolvedPartsSpec,

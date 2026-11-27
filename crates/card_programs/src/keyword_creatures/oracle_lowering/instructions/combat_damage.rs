@@ -72,7 +72,11 @@ fn push_damage_group(instructions: &mut Vec<Instruction>, group: DamageGroup, am
 }
 
 fn rewrite_bt_related_to_first_target_controller(bt: &mut BodyTarget) {
-    if let BodyTarget::FilteredPermanent(obj) = bt {
+    if let BodyTarget::Object {
+        zone: TargetZone::Battlefield,
+        filter: obj,
+    } = bt
+    {
         let rewrite_clause = |c: &mut ObjectClause| {
             if c.controller == ControllerFilter::RelatedPlayer {
                 c.controller = ControllerFilter::FirstTargetController;
@@ -212,12 +216,10 @@ pub(super) fn lower_combat_damage_instruction(
             );
             let target_is_returned_gy_card = matches!(
                 builder.target,
-                BodyTarget::SingleOwnGraveyardCard
-                    | BodyTarget::AnyGraveyardCard
-                    | BodyTarget::AnyGraveyardCreature
-                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-                    | BodyTarget::FilteredOwnGraveyardCard(_)
-                    | BodyTarget::FilteredAnyGraveyardCard { .. }
+                BodyTarget::Object {
+                    zone: TargetZone::OwnGraveyard | TargetZone::AnyGraveyard { .. },
+                    ..
+                }
             ) && builder.instructions.iter().any(|op| {
                 matches!(
                     op,
@@ -296,12 +298,13 @@ pub(super) fn lower_combat_damage_instruction(
                     } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
                 );
                 let bt_is_creature = |bt: BodyTarget| {
-                    matches!(bt, BodyTarget::SingleCreature)
-                        || matches!(
-                            bt,
-                            BodyTarget::FilteredPermanent(ObjectFilter::Clause(c))
-                                if c.any_types == CardTypeMask::CREATURE
-                        )
+                    matches!(
+                        bt,
+                        BodyTarget::Object {
+                            zone: TargetZone::Battlefield,
+                            filter: ObjectFilter::Clause(c),
+                        } if c.any_types == CardTypeMask::CREATURE
+                    )
                 };
                 let eff_source = match source.as_ref() {
                     SubjectRefAst::InZone {
@@ -391,26 +394,26 @@ pub(super) fn lower_combat_damage_instruction(
                          b: &BodyBuilder|
                          -> Result<Option<BodyTarget>, &'static str> {
                             let bt_opt = match t {
-                                SubjectRefAst::AnyTarget => Some(BodyTarget::SingleAnyTarget),
+                                SubjectRefAst::AnyTarget => Some(BodyTarget::SINGLE_ANY_TARGET),
                                 SubjectRefAst::TargetPlayerOrPlaneswalker {
                                     opponent_only: false,
-                                } => Some(BodyTarget::SinglePlayerOrPlaneswalker),
+                                } => Some(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER),
                                 SubjectRefAst::TargetPlayerOrPlaneswalker {
                                     opponent_only: true,
-                                } => Some(BodyTarget::SingleOpponentOrPlaneswalker),
+                                } => Some(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER),
                                 SubjectRefAst::TargetPlayer {
                                     opponent_only,
                                     count: TargetCountAst::Exact(1),
                                 } => Some(if *opponent_only {
-                                    BodyTarget::SingleOpponent
+                                    BodyTarget::SINGLE_OPPONENT
                                 } else {
-                                    BodyTarget::SinglePlayer
+                                    BodyTarget::SINGLE_PLAYER
                                 }),
                                 SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-                                    Some(BodyTarget::SinglePlayer)
+                                    Some(BodyTarget::SINGLE_PLAYER)
                                 }
                                 SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                                    Some(BodyTarget::SingleOpponent)
+                                    Some(BodyTarget::SINGLE_OPPONENT)
                                 }
                                 SubjectRefAst::TargetObject {
                                     filter: dst_f,
@@ -455,16 +458,16 @@ pub(super) fn lower_combat_damage_instruction(
                             Ok(bt_opt.filter(|bt| {
                                 matches!(
                                     bt,
-                                    BodyTarget::SingleCreature
-                                        | BodyTarget::SinglePlaneswalker
-                                        | BodyTarget::SinglePermanent
-                                        | BodyTarget::FilteredPermanent(_)
-                                        | BodyTarget::SinglePlayer
-                                        | BodyTarget::SingleOpponent
-                                        | BodyTarget::SingleAnyTarget
-                                        | BodyTarget::SingleCreatureOrPlayer
-                                        | BodyTarget::SinglePlayerOrPlaneswalker
-                                        | BodyTarget::SingleOpponentOrPlaneswalker
+                                    BodyTarget::Object {
+                                        zone: TargetZone::Battlefield,
+                                        ..
+                                    } | BodyTarget::Player { .. }
+                                        | BodyTarget::AnyTarget(
+                                            AnyTargetKind::Any
+                                                | AnyTargetKind::CreatureOrPlayer
+                                                | AnyTargetKind::PlayerOrPlaneswalker
+                                                | AnyTargetKind::OpponentOrPlaneswalker
+                                        )
                                 )
                             }))
                         };
@@ -508,21 +511,19 @@ pub(super) fn lower_combat_damage_instruction(
                             && builder.target.guarantees_creature()
                             && !builder.instructions.is_empty()
                             && builder.graveyard_target_bounds.is_none()
+                            && builder.permanent_target_bounds.is_none()
                             && !builder.x_target_count
                             && !builder.up_to_one_target
                             && !builder.instructions.iter().any(|op| {
-                                matches!(
-                                    op,
-                                    Instruction::FixedTargetClause(_)
-                                        | Instruction::AffectPermanentTargets { .. }
-                                ) || matches!(
-                                    op,
-                                    Instruction::MutateObject(spec)
-                                        if matches!(
-                                            spec.op,
-                                            spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
-                                        )
-                                )
+                                matches!(op, Instruction::FixedTargetClause(_))
+                                    || matches!(
+                                        op,
+                                        Instruction::MutateObject(spec)
+                                            if matches!(
+                                                spec.op,
+                                                spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
+                                            )
+                                    )
                             })
                         {
                             let mut first_ops = std::mem::take(&mut builder.instructions);
@@ -687,16 +688,7 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                     SubjectRefAst::Anaphora(_)
                         if is_permanent_body_target(builder.target)
-                            && builder.instructions.iter().any(|op| {
-                                matches!(
-                                    op,
-                                    Instruction::AffectPermanentTargets {
-                                        minimum,
-                                        maximum,
-                                        ..
-                                    } if (*minimum, *maximum) != (1, 1)
-                                )
-                            }) =>
+                            && builder.permanent_target_bounds.is_some_and(|b| b != (1, 1)) =>
                     {
                         Some(DamageSourceRef::AllPermanentTargets)
                     }
@@ -828,11 +820,11 @@ pub(super) fn lower_combat_damage_instruction(
                             Some(DamageRecipientsRef::Target)
                         }
                         SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-                            builder.bind_target(BodyTarget::SinglePlayer)?;
+                            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                             Some(DamageRecipientsRef::Target)
                         }
                         SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                            builder.bind_target(BodyTarget::SingleOpponent)?;
+                            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                             Some(DamageRecipientsRef::Target)
                         }
                         SubjectRefAst::Anaphora(a)
@@ -862,7 +854,13 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         SubjectRefAst::Anaphora(raw)
                             if is_player_anaphora_label(raw)
-                                && matches!(builder.target, BodyTarget::SingleSpell(_)) =>
+                                && matches!(
+                                    builder.target,
+                                    BodyTarget::Spell {
+                                        include_abilities: false,
+                                        ..
+                                    }
+                                ) =>
                         {
                             Some(DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(
                                 AffectedPlayers::One(ResolvingPlayer::TargetSpellController),
@@ -962,15 +960,18 @@ pub(super) fn lower_combat_damage_instruction(
                             Some(DamageRecipientsRef::TargetController)
                         }
                         SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
-                            if matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            ) =>
+                            if matches!(builder.target, BodyTarget::Player { .. }) =>
                         {
                             Some(DamageRecipientsRef::Target)
                         }
                         SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
-                            if matches!(builder.target, BodyTarget::SingleSpell(_)) =>
+                            if matches!(
+                                builder.target,
+                                BodyTarget::Spell {
+                                    include_abilities: false,
+                                    ..
+                                }
+                            ) =>
                         {
                             Some(DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(
                                 AffectedPlayers::One(ResolvingPlayer::TargetSpellController),
@@ -999,12 +1000,17 @@ pub(super) fn lower_combat_damage_instruction(
                         SubjectRefAst::Player(
                             p @ (PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer),
                         ) => {
-                            builder.instructions.push(Instruction::ChooseValue {
-                                chooser: ResolvingPlayer::Controller,
-                                domain: ResolutionChoiceDomain::Player {
-                                    opponents_only: matches!(p, PlayerRefAst::AnyOpponent),
-                                },
-                            });
+                            builder
+                                .instructions
+                                .push(Instruction::PromptChoice(Box::new(
+                                    spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                                        ResolvingPlayer::Controller,
+                                        spellwake_engine::toolbox::PromptDomain::player(matches!(
+                                            p,
+                                            PlayerRefAst::AnyOpponent
+                                        )),
+                                    ),
+                                )));
                             Some(DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(
                                 AffectedPlayers::One(ResolvingPlayer::ChosenPlayer),
                             )))
@@ -1730,13 +1736,15 @@ pub(super) fn lower_combat_damage_instruction(
                         builder.x_target_count = true;
                     }
                     let amt_expr = lower_amt(builder)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: min_t,
-                            maximum: max_t,
-                            action: PermanentTargetAction::Damage(amt_expr),
-                        });
+                    builder.push_bounded_target_op(
+                        min_t,
+                        max_t,
+                        super::super::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            amt_expr,
+                            false,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetPlayer {
@@ -1755,9 +1763,9 @@ pub(super) fn lower_combat_damage_instruction(
                         _ => return Err("oracle:unsupported-damage-target"),
                     };
                     builder.bind_target(if *opponent_only {
-                        BodyTarget::SingleOpponent
+                        BodyTarget::SINGLE_OPPONENT
                     } else {
-                        BodyTarget::SinglePlayer
+                        BodyTarget::SINGLE_PLAYER
                     })?;
                     if is_x {
                         builder.x_target_count = true;
@@ -1783,13 +1791,15 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         TargetCountAst::Exact(n) if n >= 2 => {
                             if is_permanent_body_target(bt) {
-                                builder
-                                    .instructions
-                                    .push(Instruction::AffectPermanentTargets {
-                                        minimum: n,
-                                        maximum: n,
-                                        action: PermanentTargetAction::Damage(amt_expr),
-                                    });
+                                builder.push_bounded_target_op(
+                                    n,
+                                    n,
+                                    super::super::toolbox_emit::deal_damage(
+                                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                        amt_expr,
+                                        false,
+                                    ),
+                                );
                             } else {
                                 builder.instructions.push(Instruction::DealDamage(Box::new(
                                     spellwake_engine::toolbox::DealDamageSpec::announced_targets(
@@ -1801,13 +1811,15 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         TargetCountAst::UpTo(max) if max > 0 => {
                             if is_permanent_body_target(bt) {
-                                builder
-                                    .instructions
-                                    .push(Instruction::AffectPermanentTargets {
-                                        minimum: 0,
-                                        maximum: max,
-                                        action: PermanentTargetAction::Damage(amt_expr),
-                                    });
+                                builder.push_bounded_target_op(
+                                    0,
+                                    max,
+                                    super::super::toolbox_emit::deal_damage(
+                                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                        amt_expr,
+                                        false,
+                                    ),
+                                );
                             } else {
                                 builder.instructions.push(Instruction::DealDamage(Box::new(
                                     spellwake_engine::toolbox::DealDamageSpec::announced_targets(
@@ -1819,13 +1831,15 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         TargetCountAst::AnyNumber => {
                             if is_permanent_body_target(bt) {
-                                builder
-                                    .instructions
-                                    .push(Instruction::AffectPermanentTargets {
-                                        minimum: 0,
-                                        maximum: u16::MAX,
-                                        action: PermanentTargetAction::Damage(amt_expr),
-                                    });
+                                builder.push_bounded_target_op(
+                                    0,
+                                    u16::MAX,
+                                    super::super::toolbox_emit::deal_damage(
+                                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                        amt_expr,
+                                        false,
+                                    ),
+                                );
                             } else {
                                 builder.instructions.push(Instruction::DealDamage(Box::new(
                                     spellwake_engine::toolbox::DealDamageSpec::announced_targets(
@@ -1840,13 +1854,15 @@ pub(super) fn lower_combat_damage_instruction(
                         TargetCountAst::ChosenX if !in_trigger => {
                             builder.x_target_count = true;
                             if is_permanent_body_target(bt) {
-                                builder
-                                    .instructions
-                                    .push(Instruction::AffectPermanentTargets {
-                                        minimum: 0,
-                                        maximum: u16::MAX,
-                                        action: PermanentTargetAction::Damage(amt_expr),
-                                    });
+                                builder.push_bounded_target_op(
+                                    0,
+                                    u16::MAX,
+                                    super::super::toolbox_emit::deal_damage(
+                                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                        amt_expr,
+                                        false,
+                                    ),
+                                );
                             } else {
                                 builder.instructions.push(Instruction::DealDamage(Box::new(
                                     spellwake_engine::toolbox::DealDamageSpec::announced_targets(
@@ -1873,7 +1889,13 @@ pub(super) fn lower_combat_damage_instruction(
                 }
                 SubjectRefAst::Anaphora(raw)
                     if is_player_anaphora_label(raw)
-                        && matches!(builder.target, BodyTarget::SingleSpell(_)) =>
+                        && matches!(
+                            builder.target,
+                            BodyTarget::Spell {
+                                include_abilities: false,
+                                ..
+                            }
+                        ) =>
                 {
                     let amt_expr = lower_amt(builder)?;
                     push_damage_group(
@@ -2104,38 +2126,17 @@ pub(super) fn lower_combat_damage_instruction(
                         && !is_graveyard_body_target(builder.target) =>
                 {
                     let amt_expr = lower_amt(builder)?;
-                    if let Some((minimum, maximum)) =
-                        builder.instructions.iter().rev().find_map(|op| {
-                            if let Instruction::AffectPermanentTargets {
-                                minimum, maximum, ..
-                            } = op
-                            {
-                                Some((*minimum, *maximum))
-                            } else {
-                                None
-                            }
-                        })
-                    {
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum,
-                                maximum,
-                                action: PermanentTargetAction::Damage(amt_expr),
-                            });
-                    } else {
-                        push_damage_target(&mut builder.instructions, amt_expr);
-                    }
+                    push_damage_target(&mut builder.instructions, amt_expr);
                     Ok(())
                 }
                 SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
                     let amt_expr = lower_amt(builder)?;
                     push_damage_target(&mut builder.instructions, amt_expr);
                     Ok(())
                 }
                 SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
                     let amt_expr = lower_amt(builder)?;
                     push_damage_target(&mut builder.instructions, amt_expr);
                     Ok(())
@@ -2182,10 +2183,7 @@ pub(super) fn lower_combat_damage_instruction(
                         in_trigger,
                     )?;
                     if rp == ResolvingPlayer::TargetPlayer
-                        && matches!(
-                            builder.target,
-                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                        )
+                        && matches!(builder.target, BodyTarget::Player { .. })
                     {
                         push_damage_target(&mut builder.instructions, amt_expr);
                     } else {
@@ -2220,9 +2218,9 @@ pub(super) fn lower_combat_damage_instruction(
                         )
                     {
                         let bt = if f.controller == Some(ControllerRelation::TargetOpponent) {
-                            BodyTarget::SingleOpponent
+                            BodyTarget::SINGLE_OPPONENT
                         } else {
-                            BodyTarget::SinglePlayer
+                            BodyTarget::SINGLE_PLAYER
                         };
                         builder.bind_target(bt)?;
                         let amt_expr = lower_amt(builder)?;
@@ -2397,11 +2395,8 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         for it in target_items.into_iter().chain(non_target_items) {
                             let mut adj_it = it.clone();
-                            if matches!(
-                                builder.target,
-                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-                            ) {
-                                let tgt_ctrl = if builder.target == BodyTarget::SingleOpponent {
+                            if matches!(builder.target, BodyTarget::Player { .. }) {
+                                let tgt_ctrl = if builder.target == BodyTarget::SINGLE_OPPONENT {
                                     ControllerRelation::TargetOpponent
                                 } else {
                                     ControllerRelation::TargetPlayer
@@ -2572,7 +2567,7 @@ pub(super) fn lower_combat_damage_instruction(
                                                 )) => {
                                                     adj.controller = Some(
                                                         if builder.target
-                                                            == BodyTarget::SingleOpponent
+                                                            == BodyTarget::SINGLE_OPPONENT
                                                         {
                                                             ControllerRelation::TargetOpponent
                                                         } else {
@@ -2751,12 +2746,17 @@ pub(super) fn lower_combat_damage_instruction(
                     p @ (PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer),
                 ) => {
                     let amt_expr = lower_amt(builder)?;
-                    builder.instructions.push(Instruction::ChooseValue {
-                        chooser: ResolvingPlayer::Controller,
-                        domain: ResolutionChoiceDomain::Player {
-                            opponents_only: matches!(p, PlayerRefAst::AnyOpponent),
-                        },
-                    });
+                    builder
+                        .instructions
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                                ResolvingPlayer::Controller,
+                                spellwake_engine::toolbox::PromptDomain::player(matches!(
+                                    p,
+                                    PlayerRefAst::AnyOpponent
+                                )),
+                            ),
+                        )));
                     push_damage_group(
                         &mut builder.instructions,
                         DamageGroup::AffectedPlayers(AffectedPlayers::One(
@@ -2963,13 +2963,11 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         _ => return Err("oracle:unsupported-regenerate"),
                     };
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum,
-                            maximum,
-                            action: PermanentTargetAction::Regenerate,
-                        });
+                    builder.push_bounded_target_op(
+                        minimum,
+                        maximum,
+                        super::super::toolbox_emit::regenerate_target(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::AttachedHost(_) if has_source => {
@@ -3042,27 +3040,9 @@ pub(super) fn lower_combat_damage_instruction(
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(raw) => {
-                    if let Some((minimum, maximum)) =
-                        builder.instructions.iter().rev().find_map(|op| {
-                            if let Instruction::AffectPermanentTargets {
-                                minimum, maximum, ..
-                            } = op
-                            {
-                                Some((*minimum, *maximum))
-                            } else {
-                                None
-                            }
-                        })
+                    if builder.permanent_target_bounds.is_some()
+                        || is_permanent_body_target(builder.target)
                     {
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum,
-                                maximum,
-                                action: PermanentTargetAction::Regenerate,
-                            });
-                        Ok(())
-                    } else if is_permanent_body_target(builder.target) {
                         builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::regenerate_target());
                         Ok(())
                     } else if last_instruction_created_tokens(&builder.instructions) {
@@ -3178,10 +3158,16 @@ pub(super) fn lower_combat_damage_instruction(
                         ))],
                         ),
                     )));
-                builder.instructions.push(Instruction::Fight {
-                    first: Box::new(MoveSubjectRef::RememberedFirst),
-                    second: Box::new(MoveSubjectRef::RememberedSecond),
-                });
+                builder.instructions.push(Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::fight(
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::RememberedFirst,
+                        ),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::RememberedSecond,
+                        ),
+                    ),
+                )));
                 return Ok(());
             }
             let second_fight_target = match (a.as_ref(), b.as_ref()) {
@@ -3193,22 +3179,20 @@ pub(super) fn lower_combat_damage_instruction(
                 && builder.target.guarantees_creature()
                 && !builder.instructions.is_empty()
                 && builder.graveyard_target_bounds.is_none()
+                && builder.permanent_target_bounds.is_none()
                 && !builder.x_target_count
                 && !builder.up_to_x_target_count
                 && !builder.up_to_one_target
                 && !builder.instructions.iter().any(|op| {
-                    matches!(
-                        op,
-                        Instruction::FixedTargetClause(_)
-                            | Instruction::AffectPermanentTargets { .. }
-                    ) || matches!(
-                        op,
-                        Instruction::MutateObject(spec)
-                            if matches!(
-                                spec.op,
-                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
-                            )
-                    )
+                    matches!(op, Instruction::FixedTargetClause(_))
+                        || matches!(
+                            op,
+                            Instruction::MutateObject(spec)
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
+                                )
+                        )
                 })
             {
                 if !in_trigger && b_has_that_player {
@@ -3239,18 +3223,25 @@ pub(super) fn lower_combat_damage_instruction(
                         ))],
                         ),
                     )));
-                builder.instructions.push(Instruction::Fight {
-                    first: Box::new(MoveSubjectRef::RememberedFirst),
-                    second: Box::new(MoveSubjectRef::RememberedSecond),
-                });
+                builder.instructions.push(Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::fight(
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::RememberedFirst,
+                        ),
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            MoveSubjectRef::RememberedSecond,
+                        ),
+                    ),
+                )));
                 return Ok(());
             }
             let had_perm_target = matches!(
                 builder.target,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::FilteredPermanent(_)
-            );
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
+            ) && builder.target != BodyTarget::SINGLE_PLANESWALKER;
             let first = lower_fight_or_exchange_subject(
                 a,
                 builder,
@@ -3269,10 +3260,12 @@ pub(super) fn lower_combat_damage_instruction(
                 false,
                 had_perm_target,
             )?;
-            builder.instructions.push(Instruction::Fight {
-                first: Box::new(first),
-                second: Box::new(second),
-            });
+            builder.instructions.push(Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec::fight(
+                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(first),
+                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(second),
+                ),
+            )));
             Ok(())
         }
         InstructionAst::PreventAllDamageFrom {
@@ -3400,9 +3393,9 @@ pub(super) fn lower_combat_damage_instruction(
                             filter, builder, in_trigger, vocabulary,
                         )?
                     }
-                    SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => BodyTarget::SinglePlayer,
+                    SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => BodyTarget::SINGLE_PLAYER,
                     SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-                        BodyTarget::SingleOpponent
+                        BodyTarget::SINGLE_OPPONENT
                     }
                     _ => lower_target_subject(target, vocabulary)?,
                 };
@@ -3432,32 +3425,28 @@ pub(super) fn lower_combat_damage_instruction(
                     StaticDamageRecipient::TargetObject
                 } else if matches!(
                     bt,
-                    BodyTarget::SingleAnyTarget
-                        | BodyTarget::SingleCreatureOrPlayer
-                        | BodyTarget::SinglePlayerOrPlaneswalker
-                        | BodyTarget::SingleOpponentOrPlaneswalker
-                        | BodyTarget::SinglePlayer
-                        | BodyTarget::SingleOpponent
+                    BodyTarget::Player { .. }
+                        | BodyTarget::AnyTarget(
+                            AnyTargetKind::Any
+                                | AnyTargetKind::CreatureOrPlayer
+                                | AnyTargetKind::PlayerOrPlaneswalker
+                                | AnyTargetKind::OpponentOrPlaneswalker
+                        )
                 ) {
                     StaticDamageRecipient::TargetAny
                 } else {
                     return Err("oracle:unsupported-prevent-damage");
                 };
-                let rule = match amt_expr {
-                    ValueExpr::Literal(n) if n.is_positive() => {
-                        TemporaryRuleKind::PreventNextDamage {
-                            amount: n,
-                            source: None,
-                            recipient,
-                            combat_only: false,
-                        }
-                    }
-                    expr => TemporaryRuleKind::PreventNextDamageExpr {
-                        amount: Box::new(expr),
-                        source: None,
-                        recipient,
-                        combat_only: false,
-                    },
+                let rule = TemporaryRuleKind::PreventDamageShield {
+                    amount: Some(Box::new(amt_expr)),
+                    source: None,
+                    source_chosen_color: false,
+                    source_chosen_type: false,
+                    source_is_target: false,
+                    half_round_down: false,
+                    recipient,
+                    combat_only: false,
+                    one_shot: false,
                 };
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
@@ -3474,12 +3463,13 @@ pub(super) fn lower_combat_damage_instruction(
                     StaticDamageRecipient::TargetObject
                 } else if matches!(
                     builder.target,
-                    BodyTarget::SingleAnyTarget
-                        | BodyTarget::SingleCreatureOrPlayer
-                        | BodyTarget::SinglePlayerOrPlaneswalker
-                        | BodyTarget::SingleOpponentOrPlaneswalker
-                        | BodyTarget::SinglePlayer
-                        | BodyTarget::SingleOpponent
+                    BodyTarget::Player { .. }
+                        | BodyTarget::AnyTarget(
+                            AnyTargetKind::Any
+                                | AnyTargetKind::CreatureOrPlayer
+                                | AnyTargetKind::PlayerOrPlaneswalker
+                                | AnyTargetKind::OpponentOrPlaneswalker
+                        )
                 ) {
                     StaticDamageRecipient::TargetAny
                 } else {
@@ -3489,19 +3479,16 @@ pub(super) fn lower_combat_damage_instruction(
                 lower_redirect_from_subject(target, has_source, vocabulary)
                     .ok_or("oracle:unsupported-prevent-damage")?
             };
-            let rule = match amt_expr {
-                ValueExpr::Literal(n) if n.is_positive() => TemporaryRuleKind::PreventNextDamage {
-                    amount: n,
-                    source: None,
-                    recipient,
-                    combat_only: false,
-                },
-                expr => TemporaryRuleKind::PreventNextDamageExpr {
-                    amount: Box::new(expr),
-                    source: None,
-                    recipient,
-                    combat_only: false,
-                },
+            let rule = TemporaryRuleKind::PreventDamageShield {
+                amount: Some(Box::new(amt_expr)),
+                source: None,
+                source_chosen_color: false,
+                source_chosen_type: false,
+                source_is_target: false,
+                half_round_down: false,
+                recipient,
+                combat_only: false,
+                one_shot: false,
             };
             builder.instructions.push(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
@@ -3539,7 +3526,8 @@ pub(super) fn lower_combat_damage_instruction(
             }
             trial.instructions.push(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                    TemporaryRuleKind::PreventNextTimeDamage {
+                    TemporaryRuleKind::PreventDamageShield {
+                        amount: None,
                         source,
                         source_chosen_color,
                         source_chosen_type,
@@ -3547,6 +3535,7 @@ pub(super) fn lower_combat_damage_instruction(
                         half_round_down: false,
                         recipient,
                         combat_only: false,
+                        one_shot: true,
                     },
                     ResolvedDuration::UntilEndOfTurn,
                 ),
@@ -3588,7 +3577,9 @@ pub(super) fn lower_combat_damage_instruction(
                             ),
                             ObjectFilter::creature().attacking(),
                         ),
-                        spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Set(false),
+                        ),
                     ),
                 );
                 builder
@@ -3919,7 +3910,7 @@ pub(super) fn lower_combat_damage_instruction(
                     && let Some((target_colors, target_spells_only)) =
                         parse_cant_be_target_colors(target_clean)
                 {
-                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCounteredByColors {
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCountered {
                             colors: counter_colors,
                             filter: None,
                             controller_only: true,
@@ -3982,7 +3973,7 @@ pub(super) fn lower_combat_damage_instruction(
                             _ => return Err("oracle:unsupported-combat-mod"),
                         }
                     };
-                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCounteredByColors {
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantBeCountered {
                             colors,
                             filter,
                             controller_only,
@@ -4015,20 +4006,26 @@ pub(super) fn lower_combat_damage_instruction(
                 }
                 let prev_branch = builder.instructions[len - 2].clone();
                 let prev_grant = builder.instructions[len - 1].clone();
-                let Instruction::BranchIfFalse {
-                    condition:
-                        ResolutionCondition {
-                            left:
-                                ValueExpr::Count {
-                                    zone: prev_zone,
-                                    filter: prev_filter,
-                                    controller_scope,
-                                },
-                            comparison: Comparison::GreaterOrEqual,
-                            right,
-                        },
+                let Instruction::BranchCondition {
+                    condition,
                     destination,
                 } = prev_branch
+                else {
+                    return Err("oracle:unsupported-combat-mod");
+                };
+                let spellwake_engine::toolbox::ConditionExpr::Resolution(rc) = *condition else {
+                    return Err("oracle:unsupported-combat-mod");
+                };
+                let ResolutionCondition {
+                    left:
+                        ValueExpr::Count {
+                            zone: prev_zone,
+                            filter: prev_filter,
+                            controller_scope,
+                        },
+                    comparison: Comparison::GreaterOrEqual,
+                    right,
+                } = *rc
                 else {
                     return Err("oracle:unsupported-combat-mod");
                 };
@@ -4107,9 +4104,9 @@ pub(super) fn lower_combat_damage_instruction(
                         _ => return Err("oracle:unsupported-combat-mod"),
                     },
                     Instruction::MutateObject(spec) => match spec.op {
-                        spellwake_engine::toolbox::ObjectMutation::AddCounters { kind, amount }
-                            if prev_kw_counter == Some(kind) =>
-                        {
+                        spellwake_engine::toolbox::ObjectMutation::Counters(
+                            spellwake_engine::toolbox::CounterOp::Add { kind, amount },
+                        ) if prev_kw_counter == Some(kind) => {
                             SameGrantShape::AddCounters(spec.source, amount)
                         }
                         _ => return Err("oracle:unsupported-combat-mod"),
@@ -4133,8 +4130,10 @@ pub(super) fn lower_combat_damage_instruction(
                         right: ValueExpr::literal(1),
                     };
                     let next_dest = builder.instructions.len() + 2;
-                    builder.instructions.push(Instruction::BranchIfFalse {
-                        condition: cond,
+                    builder.instructions.push(Instruction::BranchCondition {
+                        condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(
+                            Box::new(cond),
+                        )),
                         destination: next_dest,
                     });
                     let grant_op = match &shape {
@@ -4220,12 +4219,10 @@ pub(super) fn lower_combat_damage_instruction(
             {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::DrawRule {
-                                id: ids.static_id(),
-                                rule: spellwake_engine::characteristics::StaticDrawRule::NoMaximumHandSize,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::DrawRule {
+                            id: ids.static_id(),
+                            rule: spellwake_engine::characteristics::StaticDrawRule::NoMaximumHandSize,
+                        }),
                         dur,
                     ),
                 );
@@ -4245,6 +4242,7 @@ pub(super) fn lower_combat_damage_instruction(
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
                         TemporaryRuleKind::CantBeCountered {
+                            colors: ColorMask::EMPTY,
                             filter: flt,
                             controller_only: true,
                             next_only: low == "next_spell_cant_be_countered",
@@ -4267,9 +4265,9 @@ pub(super) fn lower_combat_damage_instruction(
                         count: TargetCountAst::Exact(1),
                     } => {
                         builder.bind_target(if *opponent_only {
-                            BodyTarget::SingleOpponent
+                            BodyTarget::SINGLE_OPPONENT
                         } else {
-                            BodyTarget::SinglePlayer
+                            BodyTarget::SINGLE_PLAYER
                         })?;
                         AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                     }
@@ -4286,7 +4284,7 @@ pub(super) fn lower_combat_damage_instruction(
             if low
                 == "you can't lose life this turn, you can't lose the game this turn, and your opponents can't win the game this turn"
             {
-                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
+                builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::temporary_static(
                         StaticContinuousAbility::EventReplacement {
                             id: ids.static_id(),
                             event: spellwake_engine::characteristics::ReplaceableEvent::LifeLoss {
@@ -4296,15 +4294,13 @@ pub(super) fn lower_combat_damage_instruction(
                             action:
                                 spellwake_engine::characteristics::StaticReplacementAction::Skip,
                         },
-                    )), dur));
+                    ), dur));
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                        }),
                         dur,
                     ),
                 );
@@ -4317,12 +4313,10 @@ pub(super) fn lower_combat_damage_instruction(
             ) {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                        }),
                         dur,
                     ),
                 );
@@ -4358,12 +4352,10 @@ pub(super) fn lower_combat_damage_instruction(
                 };
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantLoseGame,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseGame,
+                        }),
                         eff_dur,
                     ),
                 );
@@ -4375,7 +4367,7 @@ pub(super) fn lower_combat_damage_instruction(
             ) {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                        TemporaryRuleKind::temporary_static(
                             StaticContinuousAbility::EventReplacement {
                                 id: ids.static_id(),
                                 event: ReplaceableEvent::LifeLoss {
@@ -4384,7 +4376,7 @@ pub(super) fn lower_combat_damage_instruction(
                                 condition: None,
                                 action: StaticReplacementAction::Skip,
                             },
-                        )),
+                        ),
                         dur,
                     ),
                 );
@@ -4399,23 +4391,19 @@ pub(super) fn lower_combat_damage_instruction(
             ) {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                        }),
                         dur,
                     ),
                 );
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
+                        }),
                         dur,
                     ),
                 );
@@ -4426,7 +4414,7 @@ pub(super) fn lower_combat_damage_instruction(
             {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                        TemporaryRuleKind::temporary_static(
                             StaticContinuousAbility::EventReplacement {
                                 id: ids.static_id(),
                                 event: ReplaceableEvent::LifeLoss {
@@ -4435,29 +4423,25 @@ pub(super) fn lower_combat_damage_instruction(
                                 condition: None,
                                 action: StaticReplacementAction::Skip,
                             },
-                        )),
+                        ),
                         dur,
                     ),
                 );
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantLoseOpponentsCantWin,
+                        }),
                         dur,
                     ),
                 );
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerCantWinOpponentsCantLose,
+                        }),
                         dur,
                     ),
                 );
@@ -4474,12 +4458,10 @@ pub(super) fn lower_combat_damage_instruction(
             ) {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                        TemporaryRuleKind::TemporaryStatic(Box::new(
-                            StaticContinuousAbility::Restriction {
-                                id: ids.static_id(),
-                                rule: StaticRestriction::ControllerLifeTotalCantChange,
-                            },
-                        )),
+                        TemporaryRuleKind::temporary_static(StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerLifeTotalCantChange,
+                        }),
                         dur,
                     ),
                 );
@@ -4512,12 +4494,12 @@ pub(super) fn lower_combat_damage_instruction(
                     }
                 };
                 if let Some(rel) = rel {
-                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::temporary_static(
                             StaticContinuousAbility::Restriction {
                                 id: ids.static_id(),
                                 rule: StaticRestriction::PlayersCantSearchLibraries(rel),
                             },
-                        )), dur));
+                        ), dur));
                     return Ok(());
                 }
             }
@@ -4541,9 +4523,9 @@ pub(super) fn lower_combat_damage_instruction(
                             count: TargetCountAst::Exact(1),
                         } => {
                             builder.bind_target(if *opponent_only {
-                                BodyTarget::SingleOpponent
+                                BodyTarget::SINGLE_OPPONENT
                             } else {
-                                BodyTarget::SinglePlayer
+                                BodyTarget::SINGLE_PLAYER
                             })?;
                             AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                         }
@@ -4600,12 +4582,12 @@ pub(super) fn lower_combat_damage_instruction(
                     } else {
                         StaticRestriction::PreventMatchingActivations(Box::new(sel))
                     };
-                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
+                    builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::temporary_static(
                             StaticContinuousAbility::Restriction {
                                 id: ids.static_id(),
                                 rule,
                             },
-                        )), eff_dur));
+                        ), eff_dur));
                     return Ok(());
                 }
                 if let Some((subj_raw, nonmana_only)) = rule_body
@@ -4712,7 +4694,7 @@ pub(super) fn lower_combat_damage_instruction(
                 "reselect which player or permanent target attacking creature is attacking",
             ) || low == "reselect_attack_defender"
             {
-                builder.bind_target(BodyTarget::FilteredPermanent(
+                builder.bind_target(BodyTarget::filtered_permanent(
                     ObjectFilter::creature().attacking(),
                 ))?;
                 builder
@@ -4765,12 +4747,12 @@ pub(super) fn lower_combat_damage_instruction(
                             spellwake_engine::toolbox::MutatePlayerSpec::additional_loyalty_activation(),
                         )));
                     } else {
-                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
+                        builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::temporary_static(
                                 StaticContinuousAbility::Modifier {
                                     id: ids.static_id(),
                                     rule: StaticModifierRule::TwiceLoyaltyPerTurn,
                                 },
-                            )), dur));
+                            ), dur));
                     }
                     return Ok(());
                 }
@@ -4827,9 +4809,9 @@ pub(super) fn lower_combat_damage_instruction(
                         count: TargetCountAst::Exact(1),
                     } => {
                         builder.bind_target(if *opponent_only {
-                            BodyTarget::SingleOpponent
+                            BodyTarget::SINGLE_OPPONENT
                         } else {
-                            BodyTarget::SinglePlayer
+                            BodyTarget::SINGLE_PLAYER
                         })?;
                         AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                     }
@@ -4839,6 +4821,7 @@ pub(super) fn lower_combat_damage_instruction(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
                         TemporaryRuleKind::CantCastSpells {
                             players,
+                            zone: None,
                             filter: flt,
                         },
                         dur,
@@ -4929,13 +4912,11 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: *n,
-                                maximum: *n,
-                                action: PermanentTargetAction::SkipNextUntap,
-                            });
+                        builder.push_bounded_target_op(
+                            *n,
+                            *n,
+                            super::super::toolbox_emit::skip_next_untap_targets(),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -4948,13 +4929,11 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: *n,
-                                action: PermanentTargetAction::SkipNextUntap,
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            *n,
+                            super::super::toolbox_emit::skip_next_untap_targets(),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetOneOf {
@@ -4965,13 +4944,11 @@ pub(super) fn lower_combat_damage_instruction(
                             options, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 1,
-                                maximum: 1,
-                                action: PermanentTargetAction::SkipNextUntap,
-                            });
+                        builder.push_bounded_target_op(
+                            1,
+                            1,
+                            super::super::toolbox_emit::skip_next_untap_targets(),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetOneOf {
@@ -4982,13 +4959,11 @@ pub(super) fn lower_combat_damage_instruction(
                             options, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: 1,
-                                action: PermanentTargetAction::SkipNextUntap,
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            1,
+                            super::super::toolbox_emit::skip_next_untap_targets(),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5001,13 +4976,11 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: u16::MAX,
-                                action: PermanentTargetAction::SkipNextUntap,
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            u16::MAX,
+                            super::super::toolbox_emit::skip_next_untap_targets(),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5023,13 +4996,11 @@ pub(super) fn lower_combat_damage_instruction(
                         )?;
                         builder.bind_target(bt)?;
                         builder.x_target_count = true;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: u16::MAX,
-                                action: PermanentTargetAction::SkipNextUntap,
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            u16::MAX,
+                            super::super::toolbox_emit::skip_next_untap_targets(),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
@@ -5039,34 +5010,9 @@ pub(super) fn lower_combat_damage_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
-                        if let Some(Instruction::AffectPermanentTargets { action, .. }) =
-                            builder.instructions.last_mut()
-                            && *action == PermanentTargetAction::Tap
-                        {
-                            *action = PermanentTargetAction::TapAndSkipNextUntap;
-                            return Ok(());
-                        }
-                        let has_multi_target = builder.instructions.iter().any(|op| {
-                            matches!(
-                                op,
-                                Instruction::AffectPermanentTargets {
-                                    minimum,
-                                    maximum,
-                                    ..
-                                } if (*minimum, *maximum) != (1, 1)
-                            )
-                        });
-                        if has_multi_target {
-                            builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(EffectSubject::TargetObject));
-                        } else {
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 1,
-                                    maximum: 1,
-                                    action: PermanentTargetAction::SkipNextUntap,
-                                });
-                        }
+                        builder
+                            .instructions
+                            .push(super::super::toolbox_emit::skip_next_untap_targets());
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
@@ -5302,13 +5248,11 @@ pub(super) fn lower_combat_damage_instruction(
                             options, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: 1,
-                                action: PermanentTargetAction::RequireCombatAction(action_kind),
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            1,
+                            super::super::toolbox_emit::require_combat_action_targets(action_kind),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5321,13 +5265,11 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: *n,
-                                maximum: *n,
-                                action: PermanentTargetAction::RequireCombatAction(action_kind),
-                            });
+                        builder.push_bounded_target_op(
+                            *n,
+                            *n,
+                            super::super::toolbox_emit::require_combat_action_targets(action_kind),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5342,13 +5284,11 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: *max,
-                                action: PermanentTargetAction::RequireCombatAction(action_kind),
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            *max,
+                            super::super::toolbox_emit::require_combat_action_targets(action_kind),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5361,13 +5301,11 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: u16::MAX,
-                                action: PermanentTargetAction::RequireCombatAction(action_kind),
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            u16::MAX,
+                            super::super::toolbox_emit::require_combat_action_targets(action_kind),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5383,13 +5321,11 @@ pub(super) fn lower_combat_damage_instruction(
                         )?;
                         builder.bind_target(bt)?;
                         builder.x_target_count = true;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: u16::MAX,
-                                action: PermanentTargetAction::RequireCombatAction(action_kind),
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            u16::MAX,
+                            super::super::toolbox_emit::require_combat_action_targets(action_kind),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
@@ -5651,12 +5587,12 @@ pub(super) fn lower_combat_damage_instruction(
                     if (!sel_needs_source && !br_dur.requires_ability_source()) || has_source {
                         builder.instructions.push(
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
-                                TemporaryRuleKind::TemporaryStatic(Box::new(
+                                TemporaryRuleKind::temporary_static(
                                     StaticContinuousAbility::Restriction {
                                         id: ids.static_id(),
                                         rule: StaticRestriction::CannotBeSacrificed(Box::new(sel)),
                                     },
-                                )),
+                                ),
                                 br_dur,
                             ),
                         );
@@ -5800,18 +5736,15 @@ pub(super) fn lower_combat_damage_instruction(
                             options, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: 1,
-                                action: PermanentTargetAction::Modify {
-                                    parts: ResolvedPartsSpec(vec![
-                                        ResolvedPartSpec::BlockingRestriction(br),
-                                    ]),
-                                    duration: br_dur,
-                                },
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            1,
+                            super::super::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5824,18 +5757,15 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: *n,
-                                maximum: *n,
-                                action: PermanentTargetAction::Modify {
-                                    parts: ResolvedPartsSpec(vec![
-                                        ResolvedPartSpec::BlockingRestriction(br),
-                                    ]),
-                                    duration: br_dur,
-                                },
-                            });
+                        builder.push_bounded_target_op(
+                            *n,
+                            *n,
+                            super::super::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5850,18 +5780,15 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: *max,
-                                action: PermanentTargetAction::Modify {
-                                    parts: ResolvedPartsSpec(vec![
-                                        ResolvedPartSpec::BlockingRestriction(br),
-                                    ]),
-                                    duration: br_dur,
-                                },
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            *max,
+                            super::super::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5874,18 +5801,15 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: u16::MAX,
-                                action: PermanentTargetAction::Modify {
-                                    parts: ResolvedPartsSpec(vec![
-                                        ResolvedPartSpec::BlockingRestriction(br),
-                                    ]),
-                                    duration: br_dur,
-                                },
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            u16::MAX,
+                            super::super::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5901,18 +5825,15 @@ pub(super) fn lower_combat_damage_instruction(
                         )?;
                         builder.bind_target(bt)?;
                         builder.x_target_count = true;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: u16::MAX,
-                                action: PermanentTargetAction::Modify {
-                                    parts: ResolvedPartsSpec(vec![
-                                        ResolvedPartSpec::BlockingRestriction(br),
-                                    ]),
-                                    duration: br_dur,
-                                },
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            u16::MAX,
+                            super::super::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::AttachedHost(_) => {
@@ -5965,43 +5886,23 @@ pub(super) fn lower_combat_damage_instruction(
                         if is_permanent_body_target(builder.target)
                             || matches!(
                                 builder.target,
-                                BodyTarget::SingleAnyTarget
-                                    | BodyTarget::SingleCreatureOrPlayer
-                                    | BodyTarget::SinglePlayerOrPlaneswalker
-                                    | BodyTarget::SingleOpponentOrPlaneswalker
+                                BodyTarget::AnyTarget(
+                                    AnyTargetKind::Any
+                                        | AnyTargetKind::CreatureOrPlayer
+                                        | AnyTargetKind::PlayerOrPlaneswalker
+                                        | AnyTargetKind::OpponentOrPlaneswalker
+                                )
                             ) =>
                     {
                         let parts =
                             ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]);
-                        if let Some((minimum, maximum)) =
-                            builder.instructions.iter().rev().find_map(|op| {
-                                if let Instruction::AffectPermanentTargets {
-                                    minimum,
-                                    maximum,
-                                    ..
-                                } = op
-                                {
-                                    Some((*minimum, *maximum))
-                                } else {
-                                    None
-                                }
-                            })
-                        {
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum,
-                                    maximum,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: br_dur,
-                                    },
-                                });
-                        } else {
-                            builder
-                                .instructions
-                                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, parts, br_dur));
-                        }
+                        builder.instructions.push(
+                            super::super::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                parts,
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
@@ -6043,7 +5944,7 @@ pub(super) fn lower_combat_damage_instruction(
                         let obj = lower_object_filter_in_context(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
-                        builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
+                        builder.bind_target(BodyTarget::filtered_permanent(obj))?;
                         builder
                             .instructions
                             .push(Instruction::ApplyContinuous(Box::new(
@@ -6202,21 +6103,19 @@ pub(super) fn lower_combat_damage_instruction(
                         ) && is_permanent_body_target(builder.target)
                             && !builder.instructions.is_empty()
                             && builder.graveyard_target_bounds.is_none()
+                            && builder.permanent_target_bounds.is_none()
                             && !builder.x_target_count
                             && !builder.up_to_one_target
                             && !builder.instructions.iter().any(|op| {
-                                matches!(
-                                    op,
-                                    Instruction::FixedTargetClause(_)
-                                        | Instruction::AffectPermanentTargets { .. }
-                                ) || matches!(
-                                    op,
-                                    Instruction::MutateObject(spec)
-                                        if matches!(
-                                            spec.op,
-                                            spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
-                                        )
-                                )
+                                matches!(op, Instruction::FixedTargetClause(_))
+                                    || matches!(
+                                        op,
+                                        Instruction::MutateObject(spec)
+                                            if matches!(
+                                                spec.op,
+                                                spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
+                                            )
+                                    )
                             })
                         {
                             let mut first_ops = std::mem::take(&mut builder.instructions);
@@ -6355,27 +6254,14 @@ pub(super) fn lower_combat_damage_instruction(
             } else {
                 let expr =
                     lower_value_expr_in_context(resolved_amt, &trial, in_trigger, vocabulary)?;
-                match expr {
-                    ValueExpr::Literal(n) if n.is_positive() => {
-                        TemporaryRuleKind::RedirectNextDamage {
-                            source,
-                            source_is_target,
-                            from: from_rec,
-                            to: to_dst,
-                            combat_only: false,
-                            amount: Some(n),
-                            one_shot: false,
-                        }
-                    }
-                    dyn_expr => TemporaryRuleKind::RedirectNextDamageExpr {
-                        source,
-                        source_is_target,
-                        from: from_rec,
-                        to: to_dst,
-                        combat_only: false,
-                        amount: Box::new(dyn_expr),
-                        one_shot: false,
-                    },
+                TemporaryRuleKind::RedirectNextDamage {
+                    source,
+                    source_is_target,
+                    from: from_rec,
+                    to: to_dst,
+                    combat_only: false,
+                    amount: Some(Box::new(expr)),
+                    one_shot: false,
                 }
             };
             trial.instructions.push(
@@ -6586,19 +6472,19 @@ pub(super) fn lower_combat_damage_instruction(
                 | "any target or targets"
                 | "creatures, planeswalkers, and/or players"
                 | "creatures, planeswalkers, or players"
-                | "creatures, planeswalkers, and players" => Some(BodyTarget::SingleAnyTarget),
+                | "creatures, planeswalkers, and players" => Some(BodyTarget::SINGLE_ANY_TARGET),
                 "creatures and/or players" | "creatures or players" | "creatures and players" => {
-                    Some(BodyTarget::SingleCreatureOrPlayer)
+                    Some(BodyTarget::SINGLE_CREATURE_OR_PLAYER)
                 }
                 "players and/or planeswalkers" | "players or planeswalkers" => {
-                    Some(BodyTarget::SinglePlayerOrPlaneswalker)
+                    Some(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER)
                 }
                 "opponents and/or planeswalkers" | "opponents or planeswalkers" => {
-                    Some(BodyTarget::SingleOpponentOrPlaneswalker)
+                    Some(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER)
                 }
                 "creatures and/or planeswalkers"
                 | "creatures or planeswalkers"
-                | "creatures and planeswalkers" => Some(BodyTarget::FilteredPermanent(
+                | "creatures and planeswalkers" => Some(BodyTarget::filtered_permanent(
                     ObjectFilter::Clause(ObjectClause {
                         any_types: CardTypeMask::CREATURE.union(CardTypeMask::PLANESWALKER),
                         ..ObjectClause::any()
@@ -6610,7 +6496,7 @@ pub(super) fn lower_combat_damage_instruction(
                 | "creatures or planeswalkers you don't control"
                 | "creatures and/or planeswalkers an opponent controls"
                 | "creatures or planeswalkers an opponent controls" => Some(
-                    BodyTarget::FilteredPermanent(ObjectFilter::Clause(ObjectClause {
+                    BodyTarget::filtered_permanent(ObjectFilter::Clause(ObjectClause {
                         any_types: CardTypeMask::CREATURE.union(CardTypeMask::PLANESWALKER),
                         controller: ControllerFilter::Opponent,
                         ..ObjectClause::any()
@@ -6636,14 +6522,15 @@ pub(super) fn lower_combat_damage_instruction(
             if let Some(bt) = bt
                 && matches!(
                     bt,
-                    BodyTarget::SingleAnyTarget
-                        | BodyTarget::SingleCreature
-                        | BodyTarget::SinglePlaneswalker
-                        | BodyTarget::SingleCreatureOrPlayer
-                        | BodyTarget::SinglePlayerOrPlaneswalker
-                        | BodyTarget::SingleOpponentOrPlaneswalker
-                        | BodyTarget::SinglePermanent
-                        | BodyTarget::FilteredPermanent(_)
+                    BodyTarget::Object {
+                        zone: TargetZone::Battlefield,
+                        ..
+                    } | BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                            | AnyTargetKind::CreatureOrPlayer
+                            | AnyTargetKind::PlayerOrPlaneswalker
+                            | AnyTargetKind::OpponentOrPlaneswalker
+                    )
                 )
             {
                 builder.bind_target(bt)?;
@@ -6658,7 +6545,7 @@ pub(super) fn lower_combat_damage_instruction(
                 {
                     if in_trigger
                         && total == 3
-                        && bt == BodyTarget::SingleAnyTarget
+                        && bt == BodyTarget::SINGLE_ANY_TARGET
                         && !x_exact
                         && !x_up_to
                     {
@@ -6932,10 +6819,11 @@ pub(super) fn lower_fight_or_exchange_subject(
             let bt = lower_battlefield_body_target(&f_clean, vocabulary)?;
             let valid_bt = matches!(
                 bt,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::FilteredPermanent(_)
-            ) || (allow_planeswalker && bt == BodyTarget::SinglePlaneswalker);
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
+            ) && (allow_planeswalker || bt != BodyTarget::SINGLE_PLANESWALKER);
             if !valid_bt {
                 return Err("oracle:unsupported-fight");
             }
@@ -6954,10 +6842,11 @@ pub(super) fn lower_fight_or_exchange_subject(
             )?;
             let valid_bt = matches!(
                 bt,
-                BodyTarget::SingleCreature
-                    | BodyTarget::SinglePermanent
-                    | BodyTarget::FilteredPermanent(_)
-            ) || (allow_planeswalker && bt == BodyTarget::SinglePlaneswalker);
+                BodyTarget::Object {
+                    zone: TargetZone::Battlefield,
+                    ..
+                }
+            ) && (allow_planeswalker || bt != BodyTarget::SINGLE_PLANESWALKER);
             if !valid_bt {
                 return Err("oracle:unsupported-fight");
             }
@@ -6996,9 +6885,9 @@ pub(super) fn extract_resolving_player_from_subject(
             count: TargetCountAst::Exact(1),
         } => {
             builder.bind_target(if *opponent_only {
-                BodyTarget::SingleOpponent
+                BodyTarget::SINGLE_OPPONENT
             } else {
-                BodyTarget::SinglePlayer
+                BodyTarget::SINGLE_PLAYER
             })?;
             Ok(ResolvingPlayer::TargetPlayer)
         }
@@ -7006,27 +6895,32 @@ pub(super) fn extract_resolving_player_from_subject(
     }
 }
 
-pub(super) fn parse_exchange_zone_from_subject(subj: &SubjectRefAst) -> Option<ExchangeZone> {
+pub(super) fn parse_exchange_zone_from_subject(
+    subj: &SubjectRefAst,
+    player: ResolvingPlayer,
+) -> Option<spellwake_engine::toolbox::QueryZone> {
+    use spellwake_engine::toolbox::{PlayerSelector, QueryZone};
+    let ps = || Box::new(PlayerSelector::Resolving(player));
     match subj {
         SubjectRefAst::Anaphora(raw) => {
             let low = raw.trim().to_ascii_lowercase();
             if low.contains("hand") {
-                Some(ExchangeZone::Hand)
+                Some(QueryZone::Hand(ps()))
             } else if low.contains("graveyard") {
-                Some(ExchangeZone::Graveyard)
+                Some(QueryZone::Graveyard(ps()))
             } else if low.contains("library") {
-                Some(ExchangeZone::Library)
+                Some(QueryZone::Library(ps()))
             } else if low.contains("exile") {
-                Some(ExchangeZone::Exile)
+                Some(QueryZone::Exile)
             } else {
                 None
             }
         }
         SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f) => match f.zone {
-            Some(ZoneFilter::YourHand) => Some(ExchangeZone::Hand),
-            Some(ZoneFilter::YourGraveyard) => Some(ExchangeZone::Graveyard),
-            Some(ZoneFilter::YourLibrary) => Some(ExchangeZone::Library),
-            Some(ZoneFilter::Exile) => Some(ExchangeZone::Exile),
+            Some(ZoneFilter::YourHand) => Some(QueryZone::Hand(ps())),
+            Some(ZoneFilter::YourGraveyard) => Some(QueryZone::Graveyard(ps())),
+            Some(ZoneFilter::YourLibrary) => Some(QueryZone::Library(ps())),
+            Some(ZoneFilter::Exile) => Some(QueryZone::Exile),
             _ => None,
         },
         _ => None,
@@ -7048,7 +6942,7 @@ pub(super) fn parse_next_time_source_with_target(
         if matches!(filter_clean, "source" | "permanent") {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SinglePermanent)
+                    .bind_target(BodyTarget::SINGLE_PERMANENT)
                     .map(|()| (None, false, false, true)),
             );
         }
@@ -7093,35 +6987,35 @@ pub(super) fn parse_damage_recipient_phrase_with_target(
         "any target" | "target creature, planeswalker, or player" | "target creature or player" => {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SingleAnyTarget)
+                    .bind_target(BodyTarget::SINGLE_ANY_TARGET)
                     .map(|()| StaticDamageRecipient::TargetAny),
             );
         }
         "target player or planeswalker" => {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SinglePlayerOrPlaneswalker)
+                    .bind_target(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER)
                     .map(|()| StaticDamageRecipient::TargetAny),
             );
         }
         "target opponent or planeswalker" => {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SingleOpponentOrPlaneswalker)
+                    .bind_target(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER)
                     .map(|()| StaticDamageRecipient::TargetAny),
             );
         }
         "target player" => {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SinglePlayer)
+                    .bind_target(BodyTarget::SINGLE_PLAYER)
                     .map(|()| StaticDamageRecipient::TargetAny),
             );
         }
         "target opponent" => {
             return Some(
                 builder
-                    .bind_target(BodyTarget::SingleOpponent)
+                    .bind_target(BodyTarget::SINGLE_OPPONENT)
                     .map(|()| StaticDamageRecipient::TargetAny),
             );
         }
@@ -7131,11 +7025,12 @@ pub(super) fn parse_damage_recipient_phrase_with_target(
         "that player"
             if matches!(
                 builder.target,
-                BodyTarget::SinglePlayer
-                    | BodyTarget::SingleOpponent
-                    | BodyTarget::SingleAnyTarget
-                    | BodyTarget::SinglePlayerOrPlaneswalker
-                    | BodyTarget::SingleOpponentOrPlaneswalker
+                BodyTarget::Player { .. }
+                    | BodyTarget::AnyTarget(
+                        AnyTargetKind::Any
+                            | AnyTargetKind::PlayerOrPlaneswalker
+                            | AnyTargetKind::OpponentOrPlaneswalker
+                    )
             ) =>
         {
             return Some(Ok(StaticDamageRecipient::TargetAny));
@@ -7258,28 +7153,28 @@ pub(super) fn parse_damage_redirect_target(
         "any target" | "target creature, planeswalker, or player" | "target creature or player" => {
             Some(
                 builder
-                    .bind_target(BodyTarget::SingleAnyTarget)
+                    .bind_target(BodyTarget::SINGLE_ANY_TARGET)
                     .map(|()| DamageRedirectTarget::TargetAny),
             )
         }
         "target player or planeswalker" => Some(
             builder
-                .bind_target(BodyTarget::SinglePlayerOrPlaneswalker)
+                .bind_target(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER)
                 .map(|()| DamageRedirectTarget::TargetAny),
         ),
         "target opponent or planeswalker" => Some(
             builder
-                .bind_target(BodyTarget::SingleOpponentOrPlaneswalker)
+                .bind_target(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER)
                 .map(|()| DamageRedirectTarget::TargetAny),
         ),
         "target player" => Some(
             builder
-                .bind_target(BodyTarget::SinglePlayer)
+                .bind_target(BodyTarget::SINGLE_PLAYER)
                 .map(|()| DamageRedirectTarget::TargetAny),
         ),
         "target opponent" => Some(
             builder
-                .bind_target(BodyTarget::SingleOpponent)
+                .bind_target(BodyTarget::SINGLE_OPPONENT)
                 .map(|()| DamageRedirectTarget::TargetAny),
         ),
         "that creature" | "that permanent" | "it" if is_permanent_body_target(builder.target) => {
@@ -7317,14 +7212,14 @@ pub(super) fn lower_redirect_from_subject_with_target(
 ) -> Result<StaticDamageRecipient, &'static str> {
     match subj {
         SubjectRefAst::AnyTarget => {
-            builder.bind_target(BodyTarget::SingleAnyTarget)?;
+            builder.bind_target(BodyTarget::SINGLE_ANY_TARGET)?;
             Ok(StaticDamageRecipient::TargetAny)
         }
         SubjectRefAst::TargetPlayerOrPlaneswalker { opponent_only } => {
             builder.bind_target(if *opponent_only {
-                BodyTarget::SingleOpponentOrPlaneswalker
+                BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER
             } else {
-                BodyTarget::SinglePlayerOrPlaneswalker
+                BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER
             })?;
             Ok(StaticDamageRecipient::TargetAny)
         }
@@ -7333,18 +7228,18 @@ pub(super) fn lower_redirect_from_subject_with_target(
             count: TargetCountAst::Exact(1),
         } => {
             builder.bind_target(if *opponent_only {
-                BodyTarget::SingleOpponent
+                BodyTarget::SINGLE_OPPONENT
             } else {
-                BodyTarget::SinglePlayer
+                BodyTarget::SINGLE_PLAYER
             })?;
             Ok(StaticDamageRecipient::TargetAny)
         }
         SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok(StaticDamageRecipient::TargetAny)
         }
         SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok(StaticDamageRecipient::TargetAny)
         }
         SubjectRefAst::TargetObject {
@@ -7457,14 +7352,14 @@ pub(super) fn lower_redirect_to_subject(
             Ok(DamageRedirectTarget::DamageSourceController)
         }
         SubjectRefAst::AnyTarget => {
-            builder.bind_target(BodyTarget::SingleAnyTarget)?;
+            builder.bind_target(BodyTarget::SINGLE_ANY_TARGET)?;
             Ok(DamageRedirectTarget::TargetAny)
         }
         SubjectRefAst::TargetPlayerOrPlaneswalker { opponent_only } => {
             builder.bind_target(if *opponent_only {
-                BodyTarget::SingleOpponentOrPlaneswalker
+                BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER
             } else {
-                BodyTarget::SinglePlayerOrPlaneswalker
+                BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER
             })?;
             Ok(DamageRedirectTarget::TargetAny)
         }
@@ -7473,18 +7368,18 @@ pub(super) fn lower_redirect_to_subject(
             count: TargetCountAst::Exact(1),
         } => {
             builder.bind_target(if *opponent_only {
-                BodyTarget::SingleOpponent
+                BodyTarget::SINGLE_OPPONENT
             } else {
-                BodyTarget::SinglePlayer
+                BodyTarget::SINGLE_PLAYER
             })?;
             Ok(DamageRedirectTarget::TargetAny)
         }
         SubjectRefAst::Player(PlayerRefAst::TargetPlayer) => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok(DamageRedirectTarget::TargetAny)
         }
         SubjectRefAst::Player(PlayerRefAst::TargetOpponent) => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok(DamageRedirectTarget::TargetAny)
         }
         SubjectRefAst::TargetObject {
@@ -7942,18 +7837,10 @@ pub(super) fn try_lower_redirect_next_damage(
         if !check_single_target_slot(source_is_target, from, to, false) {
             return None;
         }
-        let rule = if let Some(n) = lit_n {
-            TemporaryRuleKind::RedirectNextDamage {
-                source,
-                source_is_target,
-                from,
-                to,
-                combat_only,
-                amount: Some(i64::from(n).into()),
-                one_shot: false,
-            }
+        let amount_expr = if let Some(n) = lit_n {
+            ValueExpr::Literal(i64::from(n).into())
         } else {
-            let x_expr = match bound_x {
+            match bound_x {
                 Some(expr) => {
                     match lower_value_expr_in_context(expr, &trial, in_trigger, vocabulary) {
                         Ok(v) => v,
@@ -7961,16 +7848,16 @@ pub(super) fn try_lower_redirect_next_damage(
                     }
                 }
                 None => ValueExpr::chosen_x(),
-            };
-            TemporaryRuleKind::RedirectNextDamageExpr {
-                source,
-                source_is_target,
-                from,
-                to,
-                combat_only,
-                amount: Box::new(x_expr),
-                one_shot: false,
             }
+        };
+        let rule = TemporaryRuleKind::RedirectNextDamage {
+            source,
+            source_is_target,
+            from,
+            to,
+            combat_only,
+            amount: Some(Box::new(amount_expr)),
+            one_shot: false,
         };
         trial.instructions.push(
             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
@@ -8135,7 +8022,7 @@ pub(super) fn lower_target_one_of_damage_body_target(
                 has_non_perm_special = true;
             }
             SubjectRefAst::AnyTarget => {
-                return Ok(BodyTarget::SingleAnyTarget);
+                return Ok(BodyTarget::SINGLE_ANY_TARGET);
             }
             SubjectRefAst::TargetObject { filter, .. }
                 if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
@@ -8174,12 +8061,12 @@ pub(super) fn lower_target_one_of_damage_body_target(
             return Err("oracle:unsupported-damage-target");
         }
         return match (has_any_player, has_opponent, has_creature, has_planeswalker) {
-            (true, false, true, true) => Ok(BodyTarget::SingleAnyTarget),
-            (true, false, true, false) => Ok(BodyTarget::SingleCreatureOrPlayer),
-            (true, false, false, true) => Ok(BodyTarget::SinglePlayerOrPlaneswalker),
-            (false, true, false, true) => Ok(BodyTarget::SingleOpponentOrPlaneswalker),
-            (true, false, false, false) => Ok(BodyTarget::SinglePlayer),
-            (false, true, false, false) => Ok(BodyTarget::SingleOpponent),
+            (true, false, true, true) => Ok(BodyTarget::SINGLE_ANY_TARGET),
+            (true, false, true, false) => Ok(BodyTarget::SINGLE_CREATURE_OR_PLAYER),
+            (true, false, false, true) => Ok(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER),
+            (false, true, false, true) => Ok(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER),
+            (true, false, false, false) => Ok(BodyTarget::SINGLE_PLAYER),
+            (false, true, false, false) => Ok(BodyTarget::SINGLE_OPPONENT),
             _ => Err("oracle:unsupported-damage-target"),
         };
     }
@@ -8187,14 +8074,14 @@ pub(super) fn lower_target_one_of_damage_body_target(
         1 => {
             let f = ObjectFilter::Clause(perm_clauses[0]);
             if f == ObjectFilter::creature() {
-                Ok(BodyTarget::SingleCreature)
+                Ok(BodyTarget::SINGLE_CREATURE)
             } else if f == ObjectFilter::planeswalker() {
-                Ok(BodyTarget::SinglePlaneswalker)
+                Ok(BodyTarget::SINGLE_PLANESWALKER)
             } else {
-                Ok(BodyTarget::FilteredPermanent(f))
+                Ok(BodyTarget::filtered_permanent(f))
             }
         }
-        2 => Ok(BodyTarget::FilteredPermanent(ObjectFilter::Either(
+        2 => Ok(BodyTarget::filtered_permanent(ObjectFilter::Either(
             perm_clauses[0],
             perm_clauses[1],
         ))),
@@ -8204,14 +8091,14 @@ pub(super) fn lower_target_one_of_damage_body_target(
 
 fn has_prior_exile_instruction(ops: &[Instruction]) -> bool {
     ops.iter().any(|op| {
-        matches!(op, Instruction::ExileTopPlay { .. })
-            || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                .is_some_and(|spec| {
-                    matches!(
-                        spec.destination,
-                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                    )
-                })
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op).is_some_and(
+            |spec| {
+                matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                )
+            },
+        )
     })
 }
 

@@ -41,7 +41,7 @@ fn actual_ability_removal_retains_color_definition_in_after_appearance() {
             card(1, creature(), true),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
                         AbilityRemoval::All,

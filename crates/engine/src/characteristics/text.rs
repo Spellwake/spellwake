@@ -334,48 +334,58 @@ fn rewrite_object_query(change: CreatureTypeTextChange, query: &mut crate::toolb
     }
 }
 
+fn rewrite_condition_expr(
+    change: CreatureTypeTextChange,
+    cond: &mut crate::toolbox::ConditionExpr,
+) {
+    match cond {
+        crate::toolbox::ConditionExpr::Always(_) | crate::toolbox::ConditionExpr::BoundBool(_) => {}
+        crate::toolbox::ConditionExpr::Compare { left, right, .. } => {
+            left.rewrite_creature_type(change.from, change.to);
+            right.rewrite_creature_type(change.from, change.to);
+        }
+        crate::toolbox::ConditionExpr::Resolution(rc) => {
+            rc.rewrite_creature_type(change.from, change.to);
+        }
+        crate::toolbox::ConditionExpr::NonEmpty(q)
+        | crate::toolbox::ConditionExpr::HasTag { query: q, .. } => {
+            rewrite_object_query(change, q);
+        }
+        crate::toolbox::ConditionExpr::AllMatch { query, filter, .. }
+        | crate::toolbox::ConditionExpr::AnyMatch { query, filter } => {
+            rewrite_object_query(change, query);
+            filter.rewrite_creature_type(change.from, change.to);
+        }
+        crate::toolbox::ConditionExpr::And(cs) | crate::toolbox::ConditionExpr::Or(cs) => {
+            for c in cs {
+                rewrite_condition_expr(change, c);
+            }
+        }
+        crate::toolbox::ConditionExpr::Not(c) => rewrite_condition_expr(change, c),
+    }
+}
+
 fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
     if let Some(modes) = &mut value.triggered_modes {
         for option in &mut modes.options {
             body(change, option);
         }
     }
-    if let crate::program::BodyTarget::FilteredPermanent(filter)
-    | crate::program::BodyTarget::FilteredOwnGraveyardCard(filter)
-    | crate::program::BodyTarget::FilteredAnyGraveyardCard { filter, .. }
-    | crate::program::BodyTarget::FilteredExiledCard(filter) = &mut value.target
-    {
-        filter.rewrite_creature_type(change.from, change.to);
-    } else if let crate::program::BodyTarget::SingleSpell(filter)
-    | crate::program::BodyTarget::SingleStackObject(filter) = &mut value.target
-    {
-        filter.rewrite_creature_type(change.from, change.to);
+    match &mut value.target {
+        crate::program::BodyTarget::Object { filter, .. } => {
+            filter.rewrite_creature_type(change.from, change.to);
+        }
+        crate::program::BodyTarget::Spell { filter, .. } => {
+            filter.rewrite_creature_type(change.from, change.to);
+        }
+        _ => {}
     }
     for instruction in &mut value.instructions {
         let rewrite_amount = |amount: &mut crate::program::ValueExpr| {
             amount.rewrite_creature_type(change.from, change.to);
         };
         match instruction {
-            Instruction::OfferDynamicManaPayment {
-                extra_generic: amount,
-                ..
-            }
-            | Instruction::Discard { amount, .. }
-            | Instruction::ExileTopPlay { count: amount, .. }
-            | Instruction::RepeatLoop { count: amount, .. } => rewrite_amount(amount),
-            Instruction::ChooseObjects {
-                min,
-                max,
-                max_total_power,
-                ..
-            } => {
-                rewrite_amount(min);
-                rewrite_amount(max);
-                if let Some(limit) = max_total_power {
-                    rewrite_amount(limit);
-                }
-            }
-            Instruction::Sacrifice { amount, .. } => rewrite_amount(amount),
+            Instruction::RepeatLoop { count: amount, .. } => rewrite_amount(amount),
             Instruction::CreateTokens { creations } => {
                 for spec in creations {
                     rewrite_amount(&mut spec.amount);
@@ -384,21 +394,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             _ => {}
         }
         match instruction {
-            Instruction::Sacrifice { filter, .. } => {
-                if let Some(obj) = &mut filter.object_filter {
-                    obj.rewrite_creature_type(change.from, change.to);
-                }
-            }
-            Instruction::ChooseObjects { filter, .. } => {
-                filter.rewrite_creature_type(change.from, change.to);
-            }
             Instruction::RepeatLoop { body: inner, .. } => {
                 body(change, inner);
-            }
-            Instruction::ChooseOption { options, .. } => {
-                for branch in options {
-                    body(change, &mut branch.body);
-                }
             }
             Instruction::DrawCards(spec) => {
                 rewrite_amount(&mut spec.amount);
@@ -409,7 +406,11 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 | crate::toolbox::LifeOp::Set(v)
                 | crate::toolbox::LifeOp::Pay(v)
                 | crate::toolbox::LifeOp::Drain { amount: v, .. } => rewrite_amount(v),
-                crate::toolbox::LifeOp::LoseHalf { .. } => {}
+                crate::toolbox::LifeOp::ExchangeWithStat { object, .. } => {
+                    rewrite_object_query(change, object);
+                }
+                crate::toolbox::LifeOp::LoseHalf { .. }
+                | crate::toolbox::LifeOp::ExchangeTotals { .. } => {}
             },
             Instruction::DealDamage(spec) => {
                 if let crate::toolbox::DamageSourceQuery::Objects(q) = &mut spec.source {
@@ -419,6 +420,10 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     crate::toolbox::DamageTargetQuery::Objects(q)
                     | crate::toolbox::DamageTargetQuery::Both { objects: q, .. } => {
                         rewrite_object_query(change, q);
+                    }
+                    crate::toolbox::DamageTargetQuery::Fight { first, second } => {
+                        rewrite_object_query(change, first);
+                        rewrite_object_query(change, second);
                     }
                     crate::toolbox::DamageTargetQuery::Relative(rel) => {
                         if let crate::program::DamageRecipientsRef::Group(group) = rel.as_mut() {
@@ -454,19 +459,26 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
             }
             Instruction::MutatePlayer(spec) => match &mut spec.op {
-                crate::toolbox::PlayerMutation::AddCounter { amount, .. }
-                | crate::toolbox::PlayerMutation::PayCounter { amount, .. }
-                | crate::toolbox::PlayerMutation::Scry(amount)
-                | crate::toolbox::PlayerMutation::Surveil(amount)
-                | crate::toolbox::PlayerMutation::Mill(amount)
-                | crate::toolbox::PlayerMutation::CollectEvidence { minimum: amount }
-                | crate::toolbox::PlayerMutation::Blight { amount } => {
+                crate::toolbox::PlayerMutation::Counter { amount, .. }
+                | crate::toolbox::PlayerMutation::LibraryTop(
+                    crate::toolbox::LibraryTopAction::Scry(amount)
+                    | crate::toolbox::LibraryTopAction::Surveil(amount)
+                    | crate::toolbox::LibraryTopAction::Mill(amount)
+                    | crate::toolbox::LibraryTopAction::ManifestTop(amount),
+                )
+                | crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::CollectEvidence { minimum: amount }
+                    | crate::toolbox::PlayerKeywordAction::Blight { amount }
+                    | crate::toolbox::PlayerKeywordAction::Incubate { count: amount },
+                ) => {
                     rewrite_amount(amount);
                 }
                 crate::toolbox::PlayerMutation::Behold { filter, .. } => {
                     filter.rewrite_creature_type(change.from, change.to);
                 }
-                crate::toolbox::PlayerMutation::Amass { subtype: kind, .. } => {
+                crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::Amass { subtype: kind, .. },
+                ) => {
                     word(change, kind);
                 }
                 crate::toolbox::PlayerMutation::AddMana(yield_kind) => {
@@ -499,16 +511,20 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 crate::toolbox::PlayerMutation::RevealTopTwoPiles { count, .. } => {
                     rewrite_amount(count);
                 }
-                crate::toolbox::PlayerMutation::RollDie { bands, .. } => {
+                crate::toolbox::PlayerMutation::RandomEvent(
+                    crate::toolbox::RandomEventOp::RollDie { bands, .. },
+                ) => {
                     for band in bands {
                         body(change, &mut band.body);
                     }
                 }
-                crate::toolbox::PlayerMutation::FlipCoins {
-                    win_body,
-                    lose_body,
-                    ..
-                } => {
+                crate::toolbox::PlayerMutation::RandomEvent(
+                    crate::toolbox::RandomEventOp::FlipCoins {
+                        win_body,
+                        lose_body,
+                        ..
+                    },
+                ) => {
                     if let Some(inner) = win_body {
                         body(change, inner);
                     }
@@ -532,21 +548,29 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::MutateObject(spec) => {
                 rewrite_object_query(change, &mut spec.source);
                 match &mut spec.op {
-                    crate::toolbox::ObjectMutation::AddCounters { amount, .. }
-                    | crate::toolbox::ObjectMutation::RemoveCounters { amount, .. }
-                    | crate::toolbox::ObjectMutation::BecomeMonstrous { amount }
-                    | crate::toolbox::ObjectMutation::Earthbend { amount }
-                    | crate::toolbox::ObjectMutation::MoveCounters {
-                        amount: Some(amount),
-                        ..
-                    } => rewrite_amount(amount),
-                    crate::toolbox::ObjectMutation::CreateAuraTokenAttached {
-                        definition, ..
+                    crate::toolbox::ObjectMutation::Counters(
+                        crate::toolbox::CounterOp::Add { amount, .. }
+                        | crate::toolbox::CounterOp::Remove { amount, .. }
+                        | crate::toolbox::CounterOp::Move {
+                            amount: Some(amount),
+                            ..
+                        },
+                    )
+                    | crate::toolbox::ObjectMutation::StateMarker(
+                        crate::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+                    )
+                    | crate::toolbox::ObjectMutation::Earthbend { amount } => {
+                        rewrite_amount(amount)
                     }
-                    | crate::toolbox::ObjectMutation::CreateTokenAndAttach { definition } => {
+                    crate::toolbox::ObjectMutation::TokenAttach(
+                        crate::toolbox::TokenAttachOp::CreateAuraAttached { definition, .. }
+                        | crate::toolbox::TokenAttachOp::CreateAndAttach { definition },
+                    ) => {
                         definition.rewrite_creature_types(change);
                     }
-                    crate::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
+                    crate::toolbox::ObjectMutation::TokenAttach(
+                        crate::toolbox::TokenAttachOp::CreateCopy(copy),
+                    ) => {
                         rewrite_amount(&mut copy.count);
                         words(change, &mut copy.extra_subtypes);
                         for ability in &mut copy.extra_activated {
@@ -562,12 +586,25 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                             rewrite_mana_output(change, &mut mana.output);
                         }
                     }
+                    crate::toolbox::ObjectMutation::Attach(
+                        crate::toolbox::AttachOp::ToObject { host, .. },
+                    ) => {
+                        rewrite_object_query(change, host);
+                    }
+                    crate::toolbox::ObjectMutation::Control(
+                        crate::toolbox::ControlOp::Exchange { other },
+                    ) => {
+                        rewrite_object_query(change, other);
+                    }
                     _ => {}
                 }
             }
             Instruction::ApplyContinuous(spec) => {
                 if let Some(query) = &mut spec.selector {
                     rewrite_object_query(change, query);
+                }
+                if let Some(cond) = &mut spec.condition {
+                    rewrite_condition_expr(change, cond);
                 }
                 match &mut spec.payload {
                     crate::toolbox::ContinuousPayload::ResolvedParts(value)
@@ -594,48 +631,93 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                             }
                         }
                     }
+                    crate::toolbox::ContinuousPayload::BecomeCopy { donor, exceptions } => {
+                        rewrite_object_query(change, donor);
+                        if exceptions.extra_creature_subtypes.remove(&change.from) {
+                            exceptions.extra_creature_subtypes.insert(change.to);
+                        }
+                        for tr in &mut exceptions.extra_triggered {
+                            trigger(change, tr);
+                        }
+                        for act in &mut exceptions.extra_activated {
+                            body(change, &mut act.body);
+                        }
+                    }
                     _ => {}
                 }
             }
             Instruction::ScheduleDelayedEventTrigger { body: inner, .. } => {
                 body(change, inner);
             }
-            Instruction::ExileTopPlay { .. }
-            | Instruction::ChooseValue { .. }
-            | Instruction::ZoneOp(_)
-            | Instruction::PromptChoice(_)
-            | Instruction::BranchCondition { .. }
-            | Instruction::ForEach { .. }
-            | Instruction::ForEachPlayerQuery { .. }
-            | Instruction::BindEnv { .. }
+            Instruction::BranchCondition { condition, .. } => {
+                rewrite_condition_expr(change, condition);
+            }
+            Instruction::ZoneOp(spec) => {
+                rewrite_object_query(change, &mut spec.source);
+                match &mut spec.selection {
+                    crate::toolbox::ZoneSelection::All => {}
+                    crate::toolbox::ZoneSelection::Random { count, .. } => {
+                        rewrite_amount(count);
+                    }
+                    crate::toolbox::ZoneSelection::Prompt { min, max, .. } => {
+                        rewrite_amount(min);
+                        rewrite_amount(max);
+                    }
+                }
+            }
+            Instruction::PromptChoice(spec) => {
+                match &mut spec.domain {
+                    crate::toolbox::PromptDomain::Subtype { excluding, .. } => {
+                        words(change, excluding);
+                    }
+                    crate::toolbox::PromptDomain::Objects {
+                        query,
+                        min,
+                        max,
+                        max_total_power,
+                        ..
+                    } => {
+                        rewrite_object_query(change, query);
+                        rewrite_amount(min);
+                        rewrite_amount(max);
+                        if let Some(limit) = max_total_power {
+                            rewrite_amount(limit);
+                        }
+                    }
+                    crate::toolbox::PromptDomain::Number { min, max } => {
+                        rewrite_amount(min);
+                        rewrite_amount(max);
+                    }
+                    crate::toolbox::PromptDomain::Partition { query, .. } => {
+                        rewrite_object_query(change, query);
+                    }
+                    crate::toolbox::PromptDomain::ManaPayment { extra_generic, .. } => {
+                        rewrite_amount(extra_generic);
+                    }
+                    crate::toolbox::PromptDomain::Players { .. }
+                    | crate::toolbox::PromptDomain::Options { .. }
+                    | crate::toolbox::PromptDomain::Color { .. }
+                    | crate::toolbox::PromptDomain::CardType { .. }
+                    | crate::toolbox::PromptDomain::CardName { .. } => {}
+                }
+                for branch in &mut spec.option_branches {
+                    body(change, branch);
+                }
+            }
+            Instruction::ForEach {
+                query, body: inner, ..
+            } => {
+                rewrite_object_query(change, query);
+                body(change, inner);
+            }
+            Instruction::ForEachPlayerQuery { body: inner, .. } => {
+                body(change, inner);
+            }
+            Instruction::BindEnv { .. }
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::StackOp(_)
-            | Instruction::Fight { .. }
-            | Instruction::Exchange(_) => {}
-            Instruction::BecomeCopy {
-                receiver,
-                exceptions,
-                ..
-            } => {
-                receiver.rewrite_creature_type(change.from, change.to);
-                if exceptions.extra_creature_subtypes.remove(&change.from) {
-                    exceptions.extra_creature_subtypes.insert(change.to);
-                }
-                for tr in &mut exceptions.extra_triggered {
-                    trigger(change, tr);
-                }
-                for act in &mut exceptions.extra_activated {
-                    body(change, &mut act.body);
-                }
-            }
-            Instruction::BranchIfFalse { condition, .. } => {
-                condition.left.rewrite_creature_type(change.from, change.to);
-                condition
-                    .right
-                    .rewrite_creature_type(change.from, change.to);
-            }
+            | Instruction::StackOp(_) => {}
             Instruction::FixedTargetClause(clause) => body(change, clause),
             Instruction::CreateTokens { creations } => {
                 for creation in creations {
@@ -652,7 +734,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     creation.definition.rewrite_creature_types(change);
                 }
             }
-            Instruction::ChooseCreatureType { excluding, .. } => words(change, excluding),
             Instruction::SearchLibrary { filter } => {
                 if let crate::program::SearchCount::UpToExpr(expr) = &mut filter.count {
                     rewrite_amount(expr);
@@ -673,53 +754,12 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     _ => {}
                 }
             }
-            Instruction::AffectPermanentTargets { action, .. } => match action {
-                crate::program::PermanentTargetAction::PutCounters { amount, .. }
-                | crate::program::PermanentTargetAction::Damage(amount) => {
-                    rewrite_amount(amount);
-                }
-                crate::program::PermanentTargetAction::RemoveCounters {
-                    amount: Some(amount),
-                    ..
-                } => {
-                    rewrite_amount(amount);
-                }
-                crate::program::PermanentTargetAction::Modify { parts: value, .. }
-                | crate::program::PermanentTargetAction::ModifyWithPartner {
-                    parts: value, ..
-                } => {
-                    parts(change, value);
-                }
-                _ => {}
-            },
-            Instruction::RevealUntilMatchExt { filter, count, .. } => {
-                filter.rewrite_creature_type(change.from, change.to);
-                rewrite_amount(count);
-            }
-            Instruction::LookTopChooseExt {
-                count,
-                filter,
-                secondary,
-                ..
-            } => {
-                rewrite_amount(count);
-                if let Some(filter) = filter {
-                    filter.rewrite_creature_type(change.from, change.to);
-                }
-                if let Some(sec) = secondary {
-                    sec.filter.rewrite_creature_type(change.from, change.to);
-                }
-            }
             // These admitted instructions contain no literal creature-type words.
             // Draw's chosen-type reference remains a runtime local value.
             Instruction::OptionalSequence { .. }
-            | Instruction::OptionalEffect { .. }
-            | Instruction::Discard { .. }
             | Instruction::Jump { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
-            | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Attach(_) => {}
+            | Instruction::EmitReflexiveTrigger { .. } => {}
         }
     }
 }

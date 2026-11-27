@@ -218,7 +218,7 @@ fn cmm_sliver_keyword_definitions_cast_and_track_control_and_source_departure() 
         let removal = Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(
                     ),
@@ -375,7 +375,7 @@ fn cmm_sliver_keyword_grants_change_combat_and_destruction_rules() {
             let destroy = Program::instant(
                 ManaCost::free(),
                 ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -673,7 +673,7 @@ fn crystalline_sliver_grants_shroud_to_noncreature_slivers_and_both_players() {
     let target = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
@@ -692,18 +692,20 @@ fn crystalline_sliver_grants_shroud_to_noncreature_slivers_and_both_players() {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::Sacrifice {
-                players: spellwake_engine::program::AffectedPlayers::One(
-                    spellwake_engine::program::ResolvingPlayer::Controller,
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                    spellwake_engine::program::AffectedPlayers::One(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    spellwake_engine::program::PermanentTypeFilter {
+                        any_types: Default::default(),
+                        required_types: [CardType::Creature].into(),
+                        forbidden_types: BTreeSet::new(),
+                        object_filter: None,
+                    },
                 ),
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                filter: spellwake_engine::program::PermanentTypeFilter {
-                    any_types: Default::default(),
-                    required_types: [CardType::Creature].into(),
-                    forbidden_types: BTreeSet::new(),
-                    object_filter: None,
-                },
-            }],
+            ))],
         ),
     );
     let state = world(
@@ -784,7 +786,7 @@ fn sliver_creature_grants_follow_host_type_changes() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

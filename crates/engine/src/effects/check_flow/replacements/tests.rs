@@ -603,22 +603,24 @@ fn copied_cleanup_source_functions_before_expiry_then_waiting_only_triggers_repe
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SinglePermanent,
-            vec![Instruction::BecomeCopy {
-                receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-                donor: crate::program::MoveSubjectRef::TargetObject,
-                duration: ResolvedDuration::UntilEndOfTurn,
-                exceptions: Box::new(crate::program::CopyExceptions {
-                    override_pt: None,
-                    ..Default::default()
-                }),
-            }],
+            BodyTarget::SINGLE_PERMANENT,
+            vec![Instruction::ApplyContinuous(Box::new(
+                crate::toolbox::ApplyContinuousSpec::become_copy(
+                    crate::toolbox::ObjectQuery::Source,
+                    crate::toolbox::ObjectQuery::Targets,
+                    ResolvedDuration::UntilEndOfTurn,
+                    crate::program::CopyExceptions {
+                        override_pt: None,
+                        ..Default::default()
+                    },
+                ),
+            ))],
         ),
     });
     cards.push(bf(300, A, A, holder));
     cards.push(instant(
         2,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![crate::program::Instruction::ZoneOp(Box::new(
             crate::toolbox::ZoneOpSpec::move_all(
                 crate::toolbox::ObjectQuery::Targets,
@@ -845,37 +847,37 @@ fn complete_pass_run() -> Run {
     .unwrap();
     let main = instant(
         1,
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![
             Instruction::CreateTokens {
                 creations: vec![TokenCreation::one(token)],
             },
-            Instruction::Sacrifice {
-                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                amount: crate::program::ValueExpr::Literal(1.into()),
-                filter: PermanentTypeFilter {
+            Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                crate::program::ValueExpr::Literal(1.into()),
+                PermanentTypeFilter {
                     any_types: Default::default(),
                     required_types: BTreeSet::from([crate::program::CardType::Creature]),
                     forbidden_types: BTreeSet::new(),
                     object_filter: None,
                 },
-            },
+            ))),
             crate::program::Instruction::MutateObject(Box::new(
                 crate::toolbox::MutateObjectSpec::all(
                     crate::toolbox::ObjectQuery::Targets,
-                    crate::toolbox::ObjectMutation::AddCounters {
+                    crate::toolbox::ObjectMutation::Counters(crate::toolbox::CounterOp::Add {
                         kind: crate::effects::CounterKind::PlusOne,
                         amount: crate::program::ValueExpr::Literal(1.into()),
-                    },
+                    }),
                 ),
             )),
             crate::program::Instruction::MutateObject(Box::new(
                 crate::toolbox::MutateObjectSpec::all(
                     crate::toolbox::ObjectQuery::Targets,
-                    crate::toolbox::ObjectMutation::AddCounters {
+                    crate::toolbox::ObjectMutation::Counters(crate::toolbox::CounterOp::Add {
                         kind: crate::effects::CounterKind::MinusOne,
                         amount: crate::program::ValueExpr::Literal(1.into()),
-                    },
+                    }),
                 ),
             )),
             crate::program::Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
@@ -899,7 +901,7 @@ fn complete_pass_run() -> Run {
     let copier = |card| {
         instant(
             card,
-            BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+            BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
             vec![Instruction::StackOp(Box::new(
                 crate::toolbox::StackOpSpec::copy_targeted_spell(),
             ))],
@@ -1519,16 +1521,16 @@ fn already_departed_token_cessation_only_pass_does_not_construct_empty_replaceme
                     Instruction::CreateTokens {
                         creations: vec![TokenCreation::one(token)],
                     },
-                    Instruction::Sacrifice {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        amount: crate::program::ValueExpr::Literal(1.into()),
-                        filter: PermanentTypeFilter {
+                    Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+                        AffectedPlayers::One(ResolvingPlayer::Controller),
+                        crate::program::ValueExpr::Literal(1.into()),
+                        PermanentTypeFilter {
                             any_types: Default::default(),
                             required_types: BTreeSet::from([crate::program::CardType::Creature]),
                             forbidden_types: BTreeSet::new(),
                             object_filter: None,
                         },
-                    },
+                    ))),
                     gain(1),
                 ],
             ),
@@ -1595,7 +1597,7 @@ fn cleanup_sba_after_real_expiry_uses_pass_one_and_the_actual_turn_work_parent()
             ),
             instant(
                 1,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
                     {
                         struct _Tmp {
@@ -1643,10 +1645,12 @@ fn cleanup_sba_after_real_expiry_uses_pass_one_and_the_actual_turn_work_parent()
                         crate::program::Instruction::MutateObject(Box::new(
                             crate::toolbox::MutateObjectSpec::all(
                                 crate::toolbox::ObjectQuery::Targets,
-                                crate::toolbox::ObjectMutation::AddCounters {
-                                    kind: _k,
-                                    amount: crate::program::ValueExpr::Literal(_a),
-                                },
+                                crate::toolbox::ObjectMutation::Counters(
+                                    crate::toolbox::CounterOp::Add {
+                                        kind: _k,
+                                        amount: crate::program::ValueExpr::Literal(_a),
+                                    },
+                                ),
                             ),
                         ))
                     },

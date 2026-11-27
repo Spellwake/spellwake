@@ -70,10 +70,12 @@ fn all_real_madness_cards_discard_then_pay_the_printed_price_and_resolve() {
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Discard {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    }],
+                    vec![Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::discard(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
+                    ))],
                 ),
             ),
         );
@@ -159,10 +161,18 @@ fn all_real_madness_cards_discard_then_pay_the_printed_price_and_resolve() {
         let p = pending.pending_decision().unwrap();
         assert_eq!(zone(&pending, 1), ObjectZone::Exile);
         let target = match &bound.instruction.kind {
-            ProgramKind::Spell(s) if matches!(s.body.target, BodyTarget::SingleSpell(_)) => {
+            ProgramKind::Spell(s)
+                if matches!(
+                    s.body.target,
+                    BodyTarget::Spell {
+                        include_abilities: false,
+                        ..
+                    }
+                ) =>
+            {
                 Some(TargetRef::Stack(original_entry))
             }
-            ProgramKind::Spell(s) if s.body.target == BodyTarget::SingleCreature => {
+            ProgramKind::Spell(s) if s.body.target == BodyTarget::SINGLE_CREATURE => {
                 Some(TargetRef::Object(obj(&pending, 4)))
             }
             _ => None,

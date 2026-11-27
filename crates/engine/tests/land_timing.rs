@@ -557,7 +557,7 @@ fn wrong_holder_nonactive_player_and_occupied_stack_reject_both_main_actions() {
         true,
         ManaCost::free(),
         vec![damage()],
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     cards.push(spell(
         11,
@@ -565,7 +565,7 @@ fn wrong_holder_nonactive_player_and_occupied_stack_reject_both_main_actions() {
         true,
         ManaCost::free(),
         vec![damage()],
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     cards.push(spell(
         12,
@@ -573,7 +573,7 @@ fn wrong_holder_nonactive_player_and_occupied_stack_reject_both_main_actions() {
         false,
         ManaCost::free(),
         vec![damage()],
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     let game = setup(Some(Step::PrecombatMain), cards);
     let target = TargetRef::Object(object(&game, 90));
@@ -630,7 +630,7 @@ fn nonmain_ready_steps_reject_land_and_sorcery_but_allow_instant() {
             true,
             ManaCost::free(),
             vec![damage()],
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
         ));
         cards.push(spell(
             11,
@@ -638,7 +638,7 @@ fn nonmain_ready_steps_reject_land_and_sorcery_but_allow_instant() {
             false,
             ManaCost::free(),
             vec![damage()],
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
         ));
         let game = setup(Some(step), cards);
         let target = TargetRef::Object(object(&game, 90));
@@ -674,7 +674,7 @@ fn calendar_free_root_and_direct_executor_cannot_admit_sorcery_or_land() {
         true,
         ManaCost::free(),
         vec![damage()],
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     cards.push(spell(
         11,
@@ -682,7 +682,7 @@ fn calendar_free_root_and_direct_executor_cannot_admit_sorcery_or_land() {
         false,
         ManaCost::free(),
         vec![damage()],
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     let game = setup(None, cards);
     let target = TargetRef::Object(object(&game, 90));
@@ -738,7 +738,7 @@ fn direct_executor_from_scheduled_root_still_cannot_bypass_sorcery_calendar() {
         true,
         ManaCost::one(ManaType::Green),
         vec![damage()],
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     let game = setup(Some(Step::PrecombatMain), cards);
     let execution = game.execution();
@@ -767,7 +767,7 @@ fn executor_checks_must_finish_before_even_an_instant_can_be_cast() {
         false,
         ManaCost::free(),
         vec![damage()],
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     let execution = EffectWindow::new({
         // Fixture premise: seeded BF timestamps follow this authored card sequence.
@@ -816,7 +816,7 @@ fn nonactive_instant_can_start_an_empty_stack_and_returns_active_priority_after_
         false,
         ManaCost::free(),
         vec![damage()],
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     let game = setup(Some(Step::PrecombatMain), cards);
     let target = object(&game, 90);
@@ -851,7 +851,7 @@ fn mandatory_combat_and_discard_work_reject_player_land_and_sorcery() {
             true,
             ManaCost::free(),
             vec![damage()],
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
         ));
         if step == Step::Cleanup {
             cards.extend((20..=25).map(|id| land(id, A, ObjectDestination::Hand)));
@@ -949,7 +949,7 @@ fn sorcery_in_both_mains_pays_exact_cost_and_resolves_in_the_same_step() {
             true,
             ManaCost::one(ManaType::Green),
             vec![damage(), damage()],
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
         ));
         let game = setup(Some(step), cards);
         let target = object(&game, 90);
@@ -980,7 +980,7 @@ fn invalid_sorcery_payment_and_targets_preserve_prior_land_and_nonzero_pool() {
         true,
         ManaCost::generic(1.into()),
         vec![damage()],
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     let game = setup(Some(Step::PrecombatMain), cards);
     let played = play(&game, A, 1).into_state();
@@ -1051,7 +1051,7 @@ fn opponent_instant_response_counters_actual_sorcery() {
         true,
         ManaCost::free(),
         vec![damage()],
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     cards.push(spell(
         11,
@@ -1063,7 +1063,7 @@ fn opponent_instant_response_counters_actual_sorcery() {
                 spellwake_engine::toolbox::CounterDestination::Graveyard,
             ),
         ))],
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
     ));
     let game = setup(Some(Step::PrecombatMain), cards);
     let target = object(&game, 90);
@@ -1092,7 +1092,7 @@ fn copying_actual_sorcery_uses_owned_reply_and_blocks_land_during_decision() {
         true,
         ManaCost::free(),
         vec![damage()],
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
     ));
     cards.push(spell(
         11,
@@ -1102,7 +1102,7 @@ fn copying_actual_sorcery_uses_owned_reply_and_blocks_land_during_decision() {
         vec![Instruction::StackOp(Box::new(
             spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
         ))],
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::copyable_instruction()),
     ));
     let game = setup(Some(Step::PrecombatMain), cards);
     let target = object(&game, 90);
@@ -1215,7 +1215,7 @@ fn hand_lands_and_permanents_have_no_invented_casting_cost_or_spell_path() {
                 id: ActivatedAbilityId(1),
                 mana_cost: ManaCost::free(),
                 source_cost: SourceCost::Tap,
-                body: ExecutableBody::new(BodyTarget::SingleCreature, vec![damage()]),
+                body: ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![damage()]),
             }],
         ),
     });
@@ -1277,7 +1277,7 @@ fn invalid_authored_sorcery_programs_reject_at_setup() {
         ),
     ] {
         let mut cards = seeds();
-        let mut authored = spell(10, A, true, cost, instructions, BodyTarget::SingleCreature);
+        let mut authored = spell(10, A, true, cost, instructions, BodyTarget::SINGLE_CREATURE);
         authored.destination = destination;
         cards.push(authored);
         assert_eq!(

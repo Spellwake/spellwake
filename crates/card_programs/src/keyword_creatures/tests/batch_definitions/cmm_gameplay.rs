@@ -331,7 +331,7 @@ pub(super) fn remove_spell(n: u64, owner: SeatId) -> SeedCard {
         owner,
         ObjectDestination::Hand,
         free_instant(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -360,7 +360,7 @@ fn cmm_spell_games_counterspell_revalidates_the_targeted_stack_entry() {
         B,
         ObjectDestination::Hand,
         free_instant(
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
             Instruction::StackOp(Box::new(
                 spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                     spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -1048,7 +1048,7 @@ fn cmm_discount_games_medallions_reduce_generic_cost_and_track_active_source() {
             )
         };
         let strip = free_instant(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
                 ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
@@ -1058,7 +1058,7 @@ fn cmm_discount_games_medallions_reduce_generic_cost_and_track_active_source() {
             ),
         );
         let take = free_instant(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
                 ResolvedPartsSpec(vec![ResolvedPartSpec::Control(
@@ -1331,7 +1331,7 @@ fn cmm_darksteel_ingot_survives_destroy_but_can_be_sacrificed_and_adds_each_colo
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1350,18 +1350,16 @@ fn cmm_darksteel_ingot_survives_destroy_but_can_be_sacrificed_and_adds_each_colo
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                Instruction::Sacrifice {
-                    players: AffectedPlayers::One(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    filter: PermanentTypeFilter {
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                    AffectedPlayers::One(spellwake_engine::program::ResolvingPlayer::Controller),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    PermanentTypeFilter {
                         any_types: Default::default(),
                         required_types: [CardType::Artifact].into(),
                         forbidden_types: BTreeSet::new(),
                         object_filter: None,
                     },
-                },
+                ))),
             ),
         ),
     ];
@@ -1478,7 +1476,7 @@ fn cmm_azusa_rechecks_additional_land_plays_after_source_departure_and_next_turn
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1783,7 +1781,7 @@ fn cmm_exclude_counters_only_a_creature_spell_and_draws_only_on_resolution() {
                 B,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                    BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                     Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                             spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -1840,7 +1838,7 @@ fn cmm_tower_and_vessel_prevent_only_their_controllers_cleanup_discard() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,

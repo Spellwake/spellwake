@@ -138,7 +138,7 @@ fn effect_body(text: &str, vocab: &CreatureTypeVocabulary) -> Option<ExecutableB
             )),
         ),
         "put two +1/+1 counters on target creature." => (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                 spellwake_engine::effects::CounterKind::PlusOne,
                 spellwake_engine::program::ValueExpr::literal(2),
@@ -157,14 +157,14 @@ fn effect_body(text: &str, vocab: &CreatureTypeVocabulary) -> Option<ExecutableB
             ),
         ),
         "target player discards two cards." => (
-            BodyTarget::SinglePlayer,
-            Instruction::Discard {
-                players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-            },
+            BodyTarget::SINGLE_PLAYER,
+            Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                spellwake_engine::program::ValueExpr::Literal(2.into()),
+            ))),
         ),
         "it deals 6 damage to target creature." => (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                 spellwake_engine::toolbox::DamageTargetQuery::Targets,
                 spellwake_engine::program::ValueExpr::literal(6),

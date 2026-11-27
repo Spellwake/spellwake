@@ -101,7 +101,7 @@ fn object(game: &GameState, card: u64) -> ObjectId {
 }
 fn choice_reply(game: &GameState, label: &str) -> GameInput {
     let decision = game.pending_decision().unwrap();
-    assert!(matches!(decision.frame(), RuleFrame::CreatureType(_)));
+    assert!(matches!(decision.frame(), RuleFrame::PromptChoice(_)));
     let value = game
         .execution
         .creature_vocabulary()
@@ -112,7 +112,9 @@ fn choice_reply(game: &GameState, label: &str) -> GameInput {
         A,
         GameCommand::Reply {
             decision: decision.id(),
-            choice: DecisionReply::CreatureType(value),
+            choice: DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(
+                value,
+            )),
         },
     )
 }
@@ -122,16 +124,40 @@ fn accepted_first_choice() -> GameState {
     let program = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             vec![
-                Instruction::ChooseCreatureType {
-                    into: q0,
-                    excluding: BTreeSet::new(),
-                },
-                Instruction::ChooseCreatureType {
-                    into: q1,
-                    excluding: BTreeSet::new(),
-                },
+                Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                    chooser: crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    domain: crate::toolbox::PromptDomain::Subtype {
+                        kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                        excluding: BTreeSet::new(),
+                        legacy_slot: Some(q0),
+                    },
+                    category: crate::toolbox::ChoiceCategory::Generic,
+                    bind_to: crate::toolbox::BindingId(0),
+                    bind_unchosen: None,
+                    tag_partition: None,
+                    auto_resolve_trivial: false,
+                    option_branches: Vec::new(),
+                })),
+                Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                    chooser: crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    domain: crate::toolbox::PromptDomain::Subtype {
+                        kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                        excluding: BTreeSet::new(),
+                        legacy_slot: Some(q1),
+                    },
+                    category: crate::toolbox::ChoiceCategory::Generic,
+                    bind_to: crate::toolbox::BindingId(0),
+                    bind_unchosen: None,
+                    tag_partition: None,
+                    auto_resolve_trivial: false,
+                    option_branches: Vec::new(),
+                })),
                 {
                     struct _Tmp {
                         parts: crate::characteristics::ResolvedPartsSpec,

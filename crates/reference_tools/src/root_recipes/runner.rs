@@ -1099,9 +1099,14 @@ impl Driver<'_> {
                     .map(program::token_member)
                     .collect::<Result<_, _>>()?,
             ),
-            ("CreatureType", RuleFrame::CreatureType(_)) => {
-                lower_creature_type_reply(state, items, &self.selected.vocabulary)?
-            }
+            (
+                "CreatureType",
+                RuleFrame::CreatureType(_)
+                | RuleFrame::PromptChoice(spellwake_engine::toolbox::PromptChoiceFrame {
+                    domain: spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. },
+                    ..
+                }),
+            ) => lower_creature_type_reply(state, items, &self.selected.vocabulary)?,
             (
                 "DamageOrder",
                 RuleFrame::Damage(spellwake_engine::effects::DamageDecision::Order(frame)),
@@ -1683,6 +1688,38 @@ impl Driver<'_> {
                     && *frame.excluding() == exclusions
                     && exclusions.len() == excluding.len()
                     && domain == "exact_vocabulary_minus_exclusions"
+            }
+            (
+                input::FrameGuard::CreatureType {
+                    entry_ref,
+                    instruction,
+                    chooser,
+                    vocabulary,
+                    excluding,
+                    domain,
+                    ..
+                },
+                RuleFrame::PromptChoice(frame),
+            ) => {
+                let exclusions = excluding
+                    .iter()
+                    .map(|value| {
+                        crate::creature_types::id(value.clone(), &self.selected.vocabulary)
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()?;
+                if let spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { allowed } =
+                    &frame.domain
+                {
+                    frame.entry == self.entry(entry_ref)?
+                        && frame.instruction == input::canonical_usize(instruction)?
+                        && frame.chooser == input::seat(chooser)?
+                        && self.selected.vocabulary.id().to_string() == *vocabulary
+                        && exclusions.iter().all(|ex| !allowed.contains(ex))
+                        && exclusions.len() == excluding.len()
+                        && domain == "exact_vocabulary_minus_exclusions"
+                } else {
+                    false
+                }
             }
             (
                 input::FrameGuard::TriggerTarget {
@@ -2492,15 +2529,27 @@ pub(super) fn lower_creature_type_reply(
     items: &[Value],
     vocabulary: &spellwake_contracts::creature_types::CreatureTypeVocabulary,
 ) -> Result<DecisionReply, String> {
-    let Some(RuleFrame::CreatureType(_)) = state.pending_decision().map(|pending| pending.frame())
-    else {
-        return Err("recipe reply reached a different actual frame".into());
+    let is_prompt = match state.pending_decision().map(|pending| pending.frame()) {
+        Some(RuleFrame::CreatureType(_)) => false,
+        Some(RuleFrame::PromptChoice(frame))
+            if matches!(
+                frame.domain,
+                spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. }
+            ) =>
+        {
+            true
+        }
+        _ => return Err("recipe reply reached a different actual frame".into()),
     };
     let [value] = items else {
         return Err("CreatureType reply requires exactly one literal ID item".into());
     };
-    Ok(DecisionReply::CreatureType(crate::creature_types::id(
-        value.clone(),
-        vocabulary,
-    )?))
+    let chosen = crate::creature_types::id(value.clone(), vocabulary)?;
+    if is_prompt {
+        Ok(DecisionReply::PromptChoice(
+            spellwake_engine::toolbox::PromptChoiceReply::CreatureType(chosen),
+        ))
+    } else {
+        Ok(DecisionReply::CreatureType(chosen))
+    }
 }

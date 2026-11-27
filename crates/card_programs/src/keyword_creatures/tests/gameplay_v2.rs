@@ -189,13 +189,19 @@ fn cast_new_card(
     let has_target = kind.contains("— Aura") || target != BodyTarget::None;
     let target_player = matches!(
         target,
-        BodyTarget::SinglePlayer | BodyTarget::SingleCreatureOrPlayer
+        BodyTarget::SINGLE_PLAYER | BodyTarget::SINGLE_CREATURE_OR_PLAYER
     );
     let out_of_hand = target
-        == BodyTarget::SingleSpell(
+        == BodyTarget::single_spell(
             spellwake_engine::program::SpellFilter::any().not_from_owners_hand(),
         );
-    let target_spell = matches!(target, BodyTarget::SingleSpell(_));
+    let target_spell = matches!(
+        target,
+        BodyTarget::Spell {
+            include_abilities: false,
+            ..
+        }
+    );
     let mut cards = vec![source];
     let toughness = if audited.is_some() {
         ordinary_spell_audit::TARGET_TOUGHNESS

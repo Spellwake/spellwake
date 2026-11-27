@@ -238,7 +238,7 @@ impl EffectWindow {
         Ok(out)
     }
 
-    fn collect_zone_objects(
+    pub(super) fn collect_zone_objects(
         &self,
         controller: SeatId,
         entry: Option<&StackEntry>,
@@ -360,58 +360,65 @@ impl EffectWindow {
                 zone,
                 filter,
                 slice,
-            } => {
-                let raw = self.collect_zone_objects(controller, entry, zone, cursor)?;
-                match slice {
-                    QuerySlice::All => raw
-                        .into_iter()
-                        .filter(|&id| {
-                            self.object_passes_filter(
+            } => match (zone, slice) {
+                (QueryZone::Library(players), QuerySlice::Top(expr)) => {
+                    let count = self
+                        .resolve_value_expr_with_source(controller, expr, cursor, source_id)?
+                        .to_usize()
+                        .unwrap_or(0);
+                    let seats = self.eval_player_selector_at(controller, entry, players, cursor)?;
+                    let cards = self.window.cards();
+                    let mut collected = Vec::new();
+                    for seat in seats {
+                        for &id in cards.library(seat).iter().take(count) {
+                            if self.object_passes_filter(
                                 id, **filter, controller, source_id, &evaluated,
-                            )
-                        })
-                        .collect(),
-                    QuerySlice::Top(expr) => {
-                        let count = self
-                            .resolve_value_expr_with_source(controller, expr, cursor, source_id)?
-                            .to_usize()
-                            .unwrap_or(0);
-                        raw.into_iter()
-                            .take(count)
-                            .filter(|&id| {
-                                self.object_passes_filter(
-                                    id, **filter, controller, source_id, &evaluated,
-                                )
-                            })
-                            .collect()
+                            ) {
+                                collected.push(id);
+                            }
+                        }
                     }
-                    QuerySlice::Bottom(expr) => {
-                        let count = self
-                            .resolve_value_expr_with_source(controller, expr, cursor, source_id)?
-                            .to_usize()
-                            .unwrap_or(0);
-                        let skip = raw.len().saturating_sub(count);
-                        raw.into_iter()
-                            .skip(skip)
-                            .filter(|&id| {
-                                self.object_passes_filter(
-                                    id, **filter, controller, source_id, &evaluated,
-                                )
-                            })
-                            .collect()
+                    collected
+                }
+                (QueryZone::Library(players), QuerySlice::Bottom(expr)) => {
+                    let count = self
+                        .resolve_value_expr_with_source(controller, expr, cursor, source_id)?
+                        .to_usize()
+                        .unwrap_or(0);
+                    let seats = self.eval_player_selector_at(controller, entry, players, cursor)?;
+                    let cards = self.window.cards();
+                    let mut collected = Vec::new();
+                    for seat in seats {
+                        let lib = cards.library(seat);
+                        let skip = lib.len().saturating_sub(count);
+                        for &id in lib.iter().skip(skip) {
+                            if self.object_passes_filter(
+                                id, **filter, controller, source_id, &evaluated,
+                            ) {
+                                collected.push(id);
+                            }
+                        }
                     }
+                    collected
+                }
+                (
+                    QueryZone::Library(players),
                     QuerySlice::UntilMatch {
                         filter: match_filter,
                         count,
                         include_non_matches,
-                    } => {
-                        let need = self
-                            .resolve_value_expr_with_source(controller, count, cursor, source_id)?
-                            .to_usize()
-                            .unwrap_or(0);
+                    },
+                ) => {
+                    let need = self
+                        .resolve_value_expr_with_source(controller, count, cursor, source_id)?
+                        .to_usize()
+                        .unwrap_or(0);
+                    let seats = self.eval_player_selector_at(controller, entry, players, cursor)?;
+                    let cards = self.window.cards();
+                    let mut collected = Vec::new();
+                    for seat in seats {
                         let mut matched = 0usize;
-                        let mut collected = Vec::new();
-                        for id in raw {
+                        for &id in cards.library(seat) {
                             if matched >= need {
                                 break;
                             }
@@ -437,10 +444,97 @@ impl EffectWindow {
                                 collected.push(id);
                             }
                         }
-                        collected
+                    }
+                    collected
+                }
+                (_, slice) => {
+                    let raw = self.collect_zone_objects(controller, entry, zone, cursor)?;
+                    match slice {
+                        QuerySlice::All => raw
+                            .into_iter()
+                            .filter(|&id| {
+                                self.object_passes_filter(
+                                    id, **filter, controller, source_id, &evaluated,
+                                )
+                            })
+                            .collect(),
+                        QuerySlice::Top(expr) => {
+                            let count = self
+                                .resolve_value_expr_with_source(
+                                    controller, expr, cursor, source_id,
+                                )?
+                                .to_usize()
+                                .unwrap_or(0);
+                            raw.into_iter()
+                                .take(count)
+                                .filter(|&id| {
+                                    self.object_passes_filter(
+                                        id, **filter, controller, source_id, &evaluated,
+                                    )
+                                })
+                                .collect()
+                        }
+                        QuerySlice::Bottom(expr) => {
+                            let count = self
+                                .resolve_value_expr_with_source(
+                                    controller, expr, cursor, source_id,
+                                )?
+                                .to_usize()
+                                .unwrap_or(0);
+                            let skip = raw.len().saturating_sub(count);
+                            raw.into_iter()
+                                .skip(skip)
+                                .filter(|&id| {
+                                    self.object_passes_filter(
+                                        id, **filter, controller, source_id, &evaluated,
+                                    )
+                                })
+                                .collect()
+                        }
+                        QuerySlice::UntilMatch {
+                            filter: match_filter,
+                            count,
+                            include_non_matches,
+                        } => {
+                            let need = self
+                                .resolve_value_expr_with_source(
+                                    controller, count, cursor, source_id,
+                                )?
+                                .to_usize()
+                                .unwrap_or(0);
+                            let mut matched = 0usize;
+                            let mut collected = Vec::new();
+                            for id in raw {
+                                if matched >= need {
+                                    break;
+                                }
+                                let is_hit = self.object_passes_filter(
+                                    id,
+                                    **match_filter,
+                                    controller,
+                                    source_id,
+                                    &evaluated,
+                                );
+                                if is_hit {
+                                    matched += 1;
+                                    if self.object_passes_filter(
+                                        id, **filter, controller, source_id, &evaluated,
+                                    ) {
+                                        collected.push(id);
+                                    }
+                                } else if *include_non_matches
+                                    && self.object_passes_filter(
+                                        id, **filter, controller, source_id, &evaluated,
+                                    )
+                                {
+                                    collected.push(id);
+                                }
+                            }
+                            collected
+                        }
                     }
                 }
-            }
+            },
             ObjectQuery::Empty => Vec::new(),
             ObjectQuery::Fixed(ids) => ids
                 .iter()
@@ -543,21 +637,94 @@ impl EffectWindow {
                         .collect()
                 })
                 .unwrap_or_default(),
-            ObjectQuery::Targets => entry
-                .or_else(|| self.window.resolving())
-                .map(|e| {
-                    e.targets()
-                        .targets()
+            ObjectQuery::Targets => {
+                if let Some(assessment) = self.window.target_assessment()
+                    && (entry.is_none() || self.window.resolving() == entry)
+                {
+                    let mode = cursor.and_then(|c| self.instruction_mode(c.entry, c.instruction));
+                    assessment
+                        .results()
                         .iter()
-                        .filter_map(|t| match t.choice().target {
+                        .filter(|row| {
+                            row.legality == crate::targets::TargetLegality::Legal
+                                && mode
+                                    .is_none_or(|m| m.targets().any(|(id, _)| id == row.choice.id))
+                        })
+                        .filter_map(|row| match row.choice.target {
                             TargetRef::Object(id) if self.window.cards().get(id).is_some() => {
                                 Some(id)
                             }
                             _ => None,
                         })
                         .collect()
-                })
-                .unwrap_or_default(),
+                } else {
+                    entry
+                        .or_else(|| self.window.resolving())
+                        .map(|e| {
+                            e.targets()
+                                .targets()
+                                .iter()
+                                .filter_map(|t| match t.choice().target {
+                                    TargetRef::Object(id)
+                                        if self.window.cards().get(id).is_some() =>
+                                    {
+                                        Some(id)
+                                    }
+                                    _ => None,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                }
+            }
+            ObjectQuery::TargetsWithPairedPartner => {
+                let mut targets: Vec<ObjectId> = if let Some(assessment) =
+                    self.window.target_assessment()
+                    && (entry.is_none() || self.window.resolving() == entry)
+                {
+                    let mode = cursor.and_then(|c| self.instruction_mode(c.entry, c.instruction));
+                    assessment
+                        .results()
+                        .iter()
+                        .filter(|row| {
+                            row.legality == crate::targets::TargetLegality::Legal
+                                && mode
+                                    .is_none_or(|m| m.targets().any(|(id, _)| id == row.choice.id))
+                        })
+                        .filter_map(|row| match row.choice.target {
+                            TargetRef::Object(id) if self.window.cards().get(id).is_some() => {
+                                Some(id)
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                } else {
+                    entry
+                        .or_else(|| self.window.resolving())
+                        .map(|e| {
+                            e.targets()
+                                .targets()
+                                .iter()
+                                .filter_map(|t| match t.choice().target {
+                                    TargetRef::Object(id)
+                                        if self.window.cards().get(id).is_some() =>
+                                    {
+                                        Some(id)
+                                    }
+                                    _ => None,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                let partners: Vec<ObjectId> = targets
+                    .iter()
+                    .filter_map(|t| self.characteristics.paired_creatures.get(t).copied())
+                    .filter(|p| self.window.cards().get(*p).is_some())
+                    .collect();
+                targets.extend(partners);
+                targets
+            }
             ObjectQuery::Source => source_id
                 .filter(|id| self.window.cards().get(*id).is_some())
                 .into_iter()
@@ -724,6 +891,21 @@ impl EffectWindow {
             }
             ConditionExpr::Not(c) => {
                 Ok(!self.eval_condition_expr_at(controller, entry, c, cursor)?)
+            }
+            ConditionExpr::Resolution(res_cond) => {
+                let lhs = self.resolve_value_expr_with_source(
+                    controller,
+                    &res_cond.left,
+                    cursor,
+                    source_id,
+                )?;
+                let rhs = self.resolve_value_expr_with_source(
+                    controller,
+                    &res_cond.right,
+                    cursor,
+                    source_id,
+                )?;
+                Ok(res_cond.comparison.evaluate(&lhs, &rhs))
             }
         }
     }

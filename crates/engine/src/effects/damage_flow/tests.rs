@@ -37,7 +37,7 @@ fn prepared() -> (
         program: Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ApplyContinuous(Box::new(
                     crate::toolbox::ApplyContinuousSpec {
                         selector: None,
@@ -461,7 +461,7 @@ pub(crate) fn n04_player_batch_fixture() -> (EffectWindow, RuleProgress) {
         program: Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![crate::program::Instruction::DealDamage(Box::new(
                     crate::toolbox::DealDamageSpec {
                         source: crate::toolbox::DamageSourceQuery::EntrySource,

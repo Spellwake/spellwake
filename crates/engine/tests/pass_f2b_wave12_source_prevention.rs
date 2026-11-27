@@ -95,7 +95,7 @@ fn pinger(sacrifice: bool) -> Program {
             SourceCost::None
         },
         body: ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![spellwake_engine::program::Instruction::DealDamage(
                 Box::new(spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -146,7 +146,11 @@ fn source_prevention_is_not_recipient_protection_and_preserves_damage_kind() {
             vec![
                 card(1, pinger(false), true),
                 card(2, pinger(false), true),
-                spell(10, BodyTarget::SingleCreature, vec![prevent_legacy(filter)]),
+                spell(
+                    10,
+                    BodyTarget::SINGLE_CREATURE,
+                    vec![prevent_legacy(filter)],
+                ),
             ],
             vec![CardId(1), CardId(2)],
         );
@@ -182,7 +186,7 @@ fn departed_source_still_matches_its_captured_prevention_identity() {
             card(1, pinger(true), true),
             spell(
                 10,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![prevent_legacy(TurnPreventionFilter::FromTarget)],
             ),
         ],
@@ -202,7 +206,7 @@ fn combat_prevention_stops_only_the_selected_attacker() {
             controlled(3, P1, P1, pinger(false)),
             spell(
                 10,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![prevent_legacy(TurnPreventionFilter::CombatFromTarget)],
             ),
         ],
@@ -241,7 +245,7 @@ fn source_prevention_rejects_wrong_target_family_and_absent_ability_source() {
     ] {
         let bad = Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(BodyTarget::SinglePlayer, vec![prevent_legacy(filter)]),
+            ExecutableBody::new(BodyTarget::SINGLE_PLAYER, vec![prevent_legacy(filter)]),
         );
         assert!(bad.validate(&vocab).is_err());
     }
@@ -285,7 +289,7 @@ fn source_prevention_expires_at_cleanup() {
             card(1, pinger(false), true),
             spell(
                 10,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![prevent_legacy(TurnPreventionFilter::FromTarget)],
             ),
         ],

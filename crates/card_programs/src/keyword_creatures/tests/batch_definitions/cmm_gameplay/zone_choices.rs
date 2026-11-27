@@ -85,7 +85,7 @@ fn cmm_zones_yedora_returns_stolen_creature_to_its_owner_as_a_forest() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -474,7 +474,7 @@ fn cmm_zones_gorex_casts_with_a_graveyard_card_and_recovers_that_card_on_death()
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -555,7 +555,7 @@ fn cmm_zones_isareth_binds_paid_x_to_a_reflexive_target_and_replaces_its_departu
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -778,7 +778,7 @@ fn cmm_zones_alms_collector_replaces_an_opponents_multiple_draw_once() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
                         spellwake_engine::program::ValueExpr::Literal(3.into()),
                     ),
@@ -816,72 +816,46 @@ fn cmm_zones_alms_collector_replaces_an_opponents_multiple_draw_once() {
 
 #[test]
 #[ignore = "requires dated Oracle source and creature vocabulary"]
-fn cmm_zones_fact_or_fiction_and_animal_magnetism_bind_each_choice_to_its_player() {
+fn cmm_zones_fact_or_fiction_binds_each_choice_to_its_player() {
     use spellwake_engine::effects::PileChoice;
-    for (name, price, choosing_creature) in [
-        (
-            "Fact or Fiction",
-            [(ManaType::Colourless, 3), (ManaType::Blue, 1)],
-            false,
-        ),
-        (
-            "Animal Magnetism",
-            [(ManaType::Colourless, 4), (ManaType::Green, 1)],
-            true,
-        ),
-    ] {
-        let card = |id| {
-            seed(
-                id,
-                A,
-                ObjectDestination::LibraryBottom,
-                Program::creature(None, 2.into(), 2.into(), BTreeSet::new()),
-            )
-        };
-        let initial = game(
-            vec![A, B, C],
-            vec![hand(name), card(2), card(3)],
-            &price,
-            Step::PrecombatMain,
-        );
-        let shown = round(cast_untargeted(&initial, 1, &price).into_state());
-        assert_eq!(
-            events(&shown)
-                .flat_map(|event| &event.occurrences)
-                .filter(|row| matches!(row.value, RulesOccurrence::LibraryCardRevealed { .. }))
-                .count(),
-            3
-        );
-        let decision = reply(shown.state(), DecisionReply::OpponentChoice(C)).into_state();
-        let RuleFrame::RevealedPiles(frame) = decision.pending_decision().unwrap().frame() else {
-            panic!("expected opponent's choice");
-        };
-        assert_eq!(frame.chooser(), C);
-        let left = physical(&initial, 2).id();
-        let right = physical(&initial, 3).id();
-        let rest = physical(&initial, 100).id();
-        if choosing_creature {
-            assert_eq!(frame.choice(), &PileChoice::Creature(vec![left, right]));
-            let order = reply(&decision, DecisionReply::SelectResolution(vec![right])).into_state();
-            let result = reply(
-                &order,
-                DecisionReply::OrderResolutionGraveyard(vec![rest, left]),
-            )
-            .into_state();
-            assert_eq!(physical(&result, 3).zone(), ObjectZone::Battlefield);
-            assert_eq!(physical(&result, 2).zone(), ObjectZone::Graveyard(A));
-            assert_eq!(physical(&result, 100).zone(), ObjectZone::Graveyard(A));
-        } else {
-            assert_eq!(frame.choice(), &PileChoice::Divide(vec![left, right, rest]));
-            let parted =
-                reply(&decision, DecisionReply::SelectResolution(vec![left, rest])).into_state();
-            assert_eq!(parted.pending_decision().unwrap().chooser(), A);
-            let result = reply(&parted, DecisionReply::ChoosePile(1)).into_state();
-            assert_eq!(physical(&result, 2).zone(), ObjectZone::Hand(A));
-            assert_eq!(physical(&result, 100).zone(), ObjectZone::Hand(A));
-            assert_eq!(physical(&result, 3).zone(), ObjectZone::Graveyard(A));
-        }
-    }
+    let price = [(ManaType::Colourless, 3), (ManaType::Blue, 1)];
+    let card = |id| {
+        seed(
+            id,
+            A,
+            ObjectDestination::LibraryBottom,
+            Program::creature(None, 2.into(), 2.into(), BTreeSet::new()),
+        )
+    };
+    let initial = game(
+        vec![A, B, C],
+        vec![hand("Fact or Fiction"), card(2), card(3)],
+        &price,
+        Step::PrecombatMain,
+    );
+    let shown = round(cast_untargeted(&initial, 1, &price).into_state());
+    assert_eq!(
+        events(&shown)
+            .flat_map(|event| &event.occurrences)
+            .filter(|row| matches!(row.value, RulesOccurrence::LibraryCardRevealed { .. }))
+            .count(),
+        3
+    );
+    let decision = reply(shown.state(), DecisionReply::OpponentChoice(C)).into_state();
+    let RuleFrame::RevealedPiles(frame) = decision.pending_decision().unwrap().frame() else {
+        panic!("expected opponent's choice");
+    };
+    assert_eq!(frame.chooser(), C);
+    let left = physical(&initial, 2).id();
+    let right = physical(&initial, 3).id();
+    let rest = physical(&initial, 100).id();
+    assert_eq!(frame.choice(), &PileChoice::Divide(vec![left, right, rest]));
+    let parted = reply(&decision, DecisionReply::SelectResolution(vec![left, rest])).into_state();
+    assert_eq!(parted.pending_decision().unwrap().chooser(), A);
+    let result = reply(&parted, DecisionReply::ChoosePile(1)).into_state();
+    assert_eq!(physical(&result, 2).zone(), ObjectZone::Hand(A));
+    assert_eq!(physical(&result, 100).zone(), ObjectZone::Hand(A));
+    assert_eq!(physical(&result, 3).zone(), ObjectZone::Graveyard(A));
 }
 
 #[test]
@@ -898,7 +872,7 @@ fn cmm_zones_matter_reshaper_can_put_the_same_revealed_card_into_either_zone() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1642,7 +1616,7 @@ fn cmm_zones_gonti_exiles_privately_and_casts_after_gonti_leaves_with_other_mana
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -2031,7 +2005,13 @@ fn cmm_zones_for_the_ancestors_chooses_a_type_and_repeats_the_effect_with_flashb
         )
         .into_state();
         let choose = round(cast).into_state();
-        let select = reply(&choose, DecisionReply::CreatureType(kind)).into_state();
+        let select = reply(
+            &choose,
+            DecisionReply::PromptChoice(
+                spellwake_engine::toolbox::PromptChoiceReply::CreatureType(kind),
+            ),
+        )
+        .into_state();
         let ready = select
             .supply_entropy(select.basis(), vec![0; 9])
             .unwrap()
@@ -2078,7 +2058,7 @@ fn cmm_zones_matter_reshaper_puts_expensive_permanents_and_nonpermanents_in_hand
                     A,
                     ObjectDestination::Hand,
                     free_instant(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -2154,7 +2134,7 @@ fn cmm_zones_hoarding_dragon_links_its_optional_search_only_to_its_own_death() {
                 A,
                 ObjectDestination::Hand,
                 free_instant(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,

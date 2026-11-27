@@ -3,16 +3,16 @@
 //! Runtime integration tests for Pass F2-B Wave 7 primitives:
 //! - `ForEachPlayerQuery` + `ResolvingPlayer::LoopPlayer` (APNAP order)
 //! - `OfferAnyPlayer` (accepting player runs `cost_body` + `paid_body`, or `declined_body` if all decline)
-//! - `DealDamageToAnnouncedTargets` (multi-target equal damage) and `PermanentTargetAction::Damage`
+//! - `DealDamageToAnnouncedTargets` (multi-target equal damage) and bounded multi-target damage
 //! - `UntapOrTapSelect` (non-targeted selection, exact count and `up_to: true`)
 //! - `GrantChosenProtection` (`UntilControllerNextTurn`) and `ResolvedPartSpec::{ChosenColor,
 //!   ChosenBasicLandType, ProtectionFromEachOpponent, CannotBeTargetedByColors}`
 //! - `RemoveCountersFromSubject` (specific kind, any kind, remove all) and
-//!   `PermanentTargetAction::RemoveCounters`
+//!   bounded multi-target counter removal
 //! - `MoveGroupToLibrary` (`LibraryPlacement::BottomRandom`) and `MoveGraveyardGroupOwned`
 //!   (`under_owner_control`)
 //! - `ExileLibraryTopLinked` + `CastPermissionRule::ExileMatchingExt` (Nightveil Specter flow)
-//! - `LookTopChooseExt` (`keep_dest: LibraryTop` and `rest_dest: Hand`) and `RevealUntilMatchExt`
+//! - `ZoneOpSpec::look_top_choose_instructions` (`keep_dest: LibraryTop` and `rest_dest: Hand`) and `ZoneOpSpec::reveal_until_match_instructions`
 //! - `CreateTokenCopyExt` (nonlegendary, override P/T, extra keywords, extra colors)
 //! - `Program.activation_cost_reductions`, `ActivationRestriction::{XNonZero, OnlySpendManaType}`,
 //!   and `ExtraActivationCost::{PaySnowMana, ExileTopLibrary, RevealSource, SacrificeAnyNumber}`
@@ -79,14 +79,13 @@ use spellwake_engine::{
         DynamicStatAnchor, EffectSubject, EntryCopyRule, EntryCopySpecExt, EntryCopyZone,
         EventValueKind, ExecutableBody, GraveyardSelfCast, Instruction, LibraryPlacement,
         LinkedExileGroup, LookTopKeepDest, LookTopRestDest, MatchObjectRef, MoveSubjectRef,
-        ObjectColorFilter, ObjectFilter, ObjectStatKind, PermanentTargetAction, PlayerRelation,
-        PlayerStatExpr, PowerFilter, Program, ProgramKind, ProtectionRecipients,
-        PublicZoneDestination, ResolutionChoiceDomain, ResolutionCondition, ResolvingPlayer,
-        SourceStateExpr, SourceZoneFilter, SpellFilter, Supertype, TemporaryRuleKind, TriggerEvent,
-        TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr,
-        ZoneActionKind, ZoneActionPredicate, ZoneObjectKind, ZoneReplacementAbility,
-        ZoneReplacementAbilityId, ZoneReplacementChoice, ZoneReplacementExtra,
-        ZoneReplacementSubject,
+        ObjectColorFilter, ObjectFilter, ObjectStatKind, PlayerRelation, PlayerStatExpr,
+        PowerFilter, Program, ProgramKind, ProtectionRecipients, PublicZoneDestination,
+        ResolutionCondition, ResolvingPlayer, SourceStateExpr, SourceZoneFilter, SpellFilter,
+        Supertype, TemporaryRuleKind, TriggerEvent, TriggerGrouping, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId, ValueExpr, ZoneActionKind, ZoneActionPredicate, ZoneObjectKind,
+        ZoneReplacementAbility, ZoneReplacementAbilityId, ZoneReplacementChoice,
+        ZoneReplacementExtra, ZoneReplacementSubject,
     },
     targets::TargetRef,
     token::{
@@ -219,7 +218,7 @@ fn damage_any_instant(amount: i64) -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleAnyTarget,
+            BodyTarget::SINGLE_ANY_TARGET,
             vec![spellwake_engine::program::Instruction::DealDamage(
                 Box::new(spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -332,6 +331,35 @@ fn answer_yes_no_offer(
                 .unwrap_or(0);
             DecisionReply::OptionIndex(if accept { accept_idx } else { decline_idx })
         }
+        RuleFrame::PromptChoice(frame) => {
+            let spellwake_engine::toolbox::ResolvedPromptDomain::Options { labels, .. } =
+                &frame.domain
+            else {
+                panic!("unexpected PromptChoice offer domain: {:?}", frame.domain);
+            };
+            let decline_idx = labels
+                .iter()
+                .position(|l| {
+                    let lower = l.to_ascii_lowercase();
+                    lower.contains("decline") || lower == "no" || lower.contains("pass")
+                })
+                .and_then(|i| u8::try_from(i).ok())
+                .unwrap_or(1);
+            let accept_idx = labels
+                .iter()
+                .position(|l| {
+                    let lower = l.to_ascii_lowercase();
+                    lower.contains("accept")
+                        || lower.contains("pay")
+                        || lower == "yes"
+                        || lower.contains("take")
+                })
+                .and_then(|i| u8::try_from(i).ok())
+                .unwrap_or(0);
+            DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Options(
+                vec![if accept { accept_idx } else { decline_idx }],
+            ))
+        }
         other => panic!("unexpected offer decision frame: {other:?}"),
     };
     reply(game, expected_chooser, choice)
@@ -356,6 +384,19 @@ fn answer_color_choice(
     let choice = match decision.frame() {
         RuleFrame::ResolutionManaColor(_) => DecisionReply::ManaColor(mana_type),
         RuleFrame::OptionIndex(_) => DecisionReply::OptionIndex(option_idx),
+        RuleFrame::PromptChoice(frame) => match &frame.domain {
+            spellwake_engine::toolbox::ResolvedPromptDomain::Color { .. } => {
+                DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Color(
+                    mana_type,
+                ))
+            }
+            spellwake_engine::toolbox::ResolvedPromptDomain::Options { .. } => {
+                DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Options(
+                    vec![option_idx],
+                ))
+            }
+            other => panic!("unexpected PromptChoice color choice domain: {other:?}"),
+        },
         other => panic!("unexpected color choice frame: {other:?}"),
     };
     reply(game, expected_chooser, choice)
@@ -371,6 +412,16 @@ fn answer_look_pick(
         .expect("expected look-top selection decision");
     assert_eq!(decision.chooser(), expected_chooser);
     let choice = match decision.frame() {
+        RuleFrame::PromptChoice(frame)
+            if matches!(
+                frame.domain,
+                spellwake_engine::toolbox::ResolvedPromptDomain::Objects { .. }
+            ) =>
+        {
+            DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Objects(
+                vec![chosen],
+            ))
+        }
         RuleFrame::RevealedPiles(_) | RuleFrame::ResolutionSelect(_) => {
             DecisionReply::SelectResolution(vec![chosen])
         }
@@ -448,7 +499,7 @@ fn advance_to_p1_upkeep_p0_priority(game: &GameState) -> NativeCandidate {
 // ============================================================================
 
 // ============================================================================
-// 3. DealDamageToAnnouncedTargets & PermanentTargetAction::Damage
+// 3. DealDamageToAnnouncedTargets & bounded multi-target DealDamage
 // ============================================================================
 
 #[test]
@@ -459,7 +510,7 @@ fn deal_damage_to_announced_targets_and_permanent_target_action_damage() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleAnyTarget,
+                BodyTarget::SINGLE_ANY_TARGET,
                 vec![Instruction::DealDamage(Box::new(
                     spellwake_engine::toolbox::DealDamageSpec::announced_targets(
                         ValueExpr::literal(2),
@@ -475,13 +526,19 @@ fn deal_damage_to_announced_targets_and_permanent_target_action_damage() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
-                vec![Instruction::AffectPermanentTargets {
-                    minimum: 1,
-                    maximum: 2,
-                    action: PermanentTargetAction::Damage(ValueExpr::literal(3)),
-                }],
-            ),
+                BodyTarget::SINGLE_CREATURE,
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            ValueExpr::literal(3),
+                        ),
+                        exile_if_dies: false,
+                    },
+                ))],
+            )
+            .with_permanent_target_bounds(1, 2),
         ),
         &vocab,
     );
@@ -534,7 +591,7 @@ fn deal_damage_to_announced_targets_and_permanent_target_action_damage() {
         2.into()
     );
 
-    // Part B: PermanentTargetAction::Damage deals 3 to both opp_c1 (lethal: 2+3=5) and opp_c2 (3).
+    // Part B: Bounded multi-target DealDamage deals 3 to both opp_c1 (lethal: 2+3=5) and opp_c2 (3).
     let cast_b = submit(
         after_a.state(),
         P0,
@@ -583,7 +640,7 @@ fn deal_damage_to_announced_targets_and_permanent_target_action_damage() {
 // ============================================================================
 
 // ============================================================================
-// 6. RemoveCountersFromSubject & PermanentTargetAction::RemoveCounters
+// 6. RemoveCountersFromSubject & bounded multi-target counter removal
 // ============================================================================
 
 // ============================================================================
@@ -789,7 +846,7 @@ fn exile_library_top_linked_and_exile_matching_ext_nightveil_specter_flow() {
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::ZoneScan {
@@ -953,7 +1010,7 @@ fn exile_library_top_linked_and_exile_matching_ext_nightveil_specter_flow() {
 }
 
 // ============================================================================
-// 9. LookTopChooseExt (LibraryTop & rest_dest: Hand) and RevealUntilMatchExt
+// 9. ZoneOpSpec look-top choose (LibraryTop & rest_dest: Hand) and reveal-until-match
 // ============================================================================
 
 #[test]
@@ -971,20 +1028,20 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::LookTopChooseExt {
-                    library_owner: ResolvingPlayer::Controller,
-                    chooser: ResolvingPlayer::Controller,
-                    count: ValueExpr::literal(2),
-                    filter: None,
-                    max_picks: 1,
-                    take_all_matching: false,
-                    keep_dest: LookTopKeepDest::LibraryTop,
-                    rest_dest: LookTopRestDest::Graveyard,
-                    reveal_kept: false,
-                    reveal_all: false,
-                    reveal_only: false,
-                    secondary: None,
-                }],
+                spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                    ResolvingPlayer::Controller,
+                    ResolvingPlayer::Controller,
+                    ValueExpr::literal(2),
+                    None,
+                    1,
+                    false,
+                    LookTopKeepDest::LibraryTop,
+                    LookTopRestDest::Graveyard,
+                    false,
+                    false,
+                    false,
+                    None,
+                ),
             ),
         ),
         &vocab,
@@ -994,20 +1051,20 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::LookTopChooseExt {
-                    library_owner: ResolvingPlayer::Controller,
-                    chooser: ResolvingPlayer::Controller,
-                    count: ValueExpr::literal(2),
-                    filter: Some(Box::new(ObjectFilter::creature())),
-                    max_picks: 1,
-                    take_all_matching: true,
-                    keep_dest: LookTopKeepDest::Graveyard,
-                    rest_dest: LookTopRestDest::Hand,
-                    reveal_kept: false,
-                    reveal_all: false,
-                    reveal_only: false,
-                    secondary: None,
-                }],
+                spellwake_engine::toolbox::ZoneOpSpec::look_top_choose_instructions(
+                    ResolvingPlayer::Controller,
+                    ResolvingPlayer::Controller,
+                    ValueExpr::literal(2),
+                    Some(ObjectFilter::creature()),
+                    1,
+                    true,
+                    LookTopKeepDest::Graveyard,
+                    LookTopRestDest::Hand,
+                    false,
+                    false,
+                    false,
+                    None,
+                ),
             ),
         ),
         &vocab,
@@ -1017,20 +1074,20 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::RevealUntilMatchExt {
-                    library_owner: ResolvingPlayer::Controller,
-                    chooser: ResolvingPlayer::Controller,
-                    filter: Box::new(ObjectFilter::creature()),
-                    count: ValueExpr::literal(1),
-                    match_dest: LookTopKeepDest::Battlefield {
+                spellwake_engine::toolbox::ZoneOpSpec::reveal_until_match_instructions(
+                    ResolvingPlayer::Controller,
+                    ResolvingPlayer::Controller,
+                    ObjectFilter::creature(),
+                    ValueExpr::literal(1),
+                    LookTopKeepDest::Battlefield {
                         tapped: true,
                         attacking: false,
                     },
-                    rest_dest: LookTopRestDest::BottomRandom,
-                    keep_all_revealed: false,
-                    optional_keep: false,
-                    exile_instead_of_reveal: false,
-                }],
+                    LookTopRestDest::BottomRandom,
+                    false,
+                    false,
+                    false,
+                ),
             ),
         ),
         &vocab,
@@ -1048,6 +1105,14 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
     );
     let card_11 = object(&game_a, 11);
     let pending_a = cast_untargeted(&game_a, 1);
+    assert!(matches!(
+        pending_a.state().pending_decision().map(|d| d.frame()),
+        Some(RuleFrame::PromptChoice(frame))
+            if matches!(
+                frame.domain,
+                spellwake_engine::toolbox::ResolvedPromptDomain::Objects { .. }
+            )
+    ));
     let after_a = answer_look_pick(pending_a.state(), P0, card_11);
     let lib_a = after_a.state().execution().window().cards().library(P0);
     assert_eq!(lib_a, vec![object(after_a.state(), 11)]);
@@ -1163,7 +1228,7 @@ fn create_token_copy_ext_applies_nonlegendary_pt_keywords_and_colors() {
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::MutateObject(Box::new(
                     spellwake_engine::toolbox::MutateObjectSpec::create_token_copy(
                         spellwake_engine::toolbox::ObjectQuery::from_move_subject(
@@ -1476,10 +1541,12 @@ fn zone_replacement_source_self_discard_by_opponent_matching_not_cast_and_exile_
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::Discard {
-                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    amount: ValueExpr::literal(1),
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::Controller),
+                        ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -1488,11 +1555,13 @@ fn zone_replacement_source_self_discard_by_opponent_matching_not_cast_and_exile_
         Program::instant(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleOpponent,
-                vec![Instruction::Discard {
-                    players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                    amount: ValueExpr::literal(1),
-                }],
+                BodyTarget::SINGLE_OPPONENT,
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                        ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -1589,7 +1658,7 @@ fn zone_replacement_source_self_discard_by_opponent_matching_not_cast_and_exile_
         Program::sorcery(
             ManaCost::free(),
             ExecutableBody::new(
-                BodyTarget::SingleOwnGraveyardCard,
+                BodyTarget::SINGLE_OWN_GRAVEYARD_CARD,
                 vec![Instruction::ZoneOp(Box::new(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

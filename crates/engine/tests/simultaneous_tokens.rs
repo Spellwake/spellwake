@@ -596,7 +596,7 @@ fn owned_copied_batch_creates_for_copy_controller_after_the_original_is_countere
     use spellwake_engine::targets::TargetRef;
     let mut copier = spell(
         2,
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
         vec![Instruction::StackOp(Box::new(
             spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
         ))],
@@ -604,7 +604,7 @@ fn owned_copied_batch_creates_for_copy_controller_after_the_original_is_countere
     copier.owner = P1;
     let counter = spell(
         3,
-        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
         vec![Instruction::StackOp(Box::new(
             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                 spellwake_engine::toolbox::CounterDestination::Graveyard,

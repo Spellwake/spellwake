@@ -86,7 +86,7 @@ fn known_identities_bind_versioned_partial_programs_without_claiming_behavior_or
             Program::instant(
                 ManaCost::one(ManaType::Red),
                 ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![spellwake_engine::program::Instruction::DealDamage(
                         Box::new(spellwake_engine::toolbox::DealDamageSpec {
                             source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -116,7 +116,7 @@ fn known_identities_bind_versioned_partial_programs_without_claiming_behavior_or
             Program::instant(
                 ManaCost::specific(ManaType::Blue, 2.into()),
                 ExecutableBody::new(
-                    BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                    BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                     vec![Instruction::StackOp(Box::new(
                         spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                             spellwake_engine::toolbox::CounterDestination::Graveyard

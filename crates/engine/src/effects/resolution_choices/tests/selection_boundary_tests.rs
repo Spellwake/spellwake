@@ -5,19 +5,22 @@ use crate::program::{AffectedPlayers, PermanentTypeFilter};
 #[test]
 fn target_player_role_uses_the_bound_player_for_optional_and_payment_choices() {
     let mut state = initialize_for_target(
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![
-            Instruction::OptionalEffect {
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::TargetPlayer,
+                instructions: 1,
             },
             gain(1),
-            Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::TargetPlayer,
-                fixed: ManaCost::free(),
-                extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                paid_destination: 3,
-                declined_destination: 4,
-            },
+            Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::TargetPlayer,
+                    ManaCost::free(),
+                    crate::program::ValueExpr::Literal(0.into()),
+                    3,
+                    4,
+                ),
+            )),
             gain(2),
         ],
     )
@@ -73,20 +76,20 @@ fn target_player_role_uses_the_bound_player_for_optional_and_payment_choices() {
 #[test]
 fn empty_selection_continues_the_same_body_without_prompts_or_selected_moves() {
     for operation in [
-        Instruction::Sacrifice {
-            players: AffectedPlayers::EachPlayer,
-            amount: crate::program::ValueExpr::Literal(1.into()),
-            filter: PermanentTypeFilter {
+        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+            AffectedPlayers::EachPlayer,
+            crate::program::ValueExpr::Literal(1.into()),
+            PermanentTypeFilter {
                 any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::new(),
                 object_filter: None,
             },
-        },
-        Instruction::Discard {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: crate::program::ValueExpr::Literal(0.into()),
-        },
+        ))),
+        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+            AffectedPlayers::One(ResolvingPlayer::Controller),
+            crate::program::ValueExpr::Literal(0.into()),
+        ))),
     ] {
         let mut state = initialize(vec![gain(1), operation, gain(2)]).into_state();
         state = candidate(

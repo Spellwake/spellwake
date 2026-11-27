@@ -19,9 +19,7 @@ fn cmm_duplicant_and_phyrexian_ingester_keep_distinct_imprint_values_when_the_en
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
-                BodyTarget::ControlledAbility {
-                    colorless_source: false,
-                },
+                BodyTarget::controlled_ability(false),
                 vec![Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::copy_targeted_ability(),
                 ))],
@@ -516,7 +514,7 @@ fn cmm_grasp_of_fate_exiles_up_to_one_nonland_per_opponent_and_returns_the_exact
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                     spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,

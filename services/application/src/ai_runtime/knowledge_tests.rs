@@ -799,7 +799,7 @@ fn compact_prompt_snapshot_only_fallback_exposes_ninjutsu_and_library_top_handle
 fn bounce_to_opponent_hand_tracks_bounced_card_and_invalidates_when_cast() {
     let unsummon = free_instant(
         "Unsummon",
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1176,7 +1176,7 @@ fn opponent_scry_invalidates_prior_public_library_top_knowledge_without_leaking_
     );
     let destroy = free_instant(
         "Destroy Courser",
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -1634,7 +1634,7 @@ fn public_and_private_library_searches_scope_reveals_and_invalidate_shuffled_car
 fn hand_reveal_tracks_remaining_cards_and_invalidates_discarded_and_played_cards() {
     let peek_and_discard = free_instant(
         "Peek and Discard Fixture",
-        BodyTarget::SingleOpponent,
+        BodyTarget::SINGLE_OPPONENT,
         vec![
             Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::zone(
@@ -1647,10 +1647,10 @@ fn hand_reveal_tracks_remaining_cards_and_invalidates_discarded_and_played_cards
                 ),
                 spellwake_engine::toolbox::ZoneDest::RevealOnly,
             ))),
-            Instruction::Discard {
-                players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                amount: ValueExpr::literal(1),
-            },
+            Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                ValueExpr::literal(1),
+            ))),
         ],
     );
     let mut h = Harness::scheduled(
@@ -1932,7 +1932,7 @@ fn morph_and_foretell_hidden_information_never_leaks_and_invalidates_prior_hand_
     foretell.exile_action = Some(ExileAction::Foretell(ManaCost::generic(1.into())));
     let peek = free_instant(
         "Peek Hand",
-        BodyTarget::SingleOpponent,
+        BodyTarget::SINGLE_OPPONENT,
         vec![Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::zone(

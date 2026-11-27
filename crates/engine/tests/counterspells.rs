@@ -25,7 +25,7 @@ fn setup(blue: RulesInteger, cost: RulesInteger) -> EffectWindow {
                 program: Program::instant(
                     ManaCost::one(ManaType::Red),
                     ExecutableBody::new(
-                        BodyTarget::SingleCreature,
+                        BodyTarget::SINGLE_CREATURE,
                         vec![spellwake_engine::program::Instruction::DealDamage(
                             Box::new(spellwake_engine::toolbox::DealDamageSpec {
                                 source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
@@ -46,7 +46,7 @@ fn setup(blue: RulesInteger, cost: RulesInteger) -> EffectWindow {
                 program: Program::instant(
                     ManaCost::specific(ManaType::Blue, cost.clone()),
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                         vec![Instruction::StackOp(Box::new(
                             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                                 spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -73,7 +73,7 @@ fn setup(blue: RulesInteger, cost: RulesInteger) -> EffectWindow {
                 program: Program::instant(
                     ManaCost::specific(ManaType::Blue, cost),
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                         vec![Instruction::StackOp(Box::new(
                             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                                 spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -302,7 +302,7 @@ fn negative_specific_cost_programs_are_rejected_at_setup() {
                 program: Program::instant(
                     ManaCost::specific(ManaType::Blue, amount),
                     ExecutableBody::new(
-                        BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                        BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                         vec![Instruction::StackOp(Box::new(
                             spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                                 spellwake_engine::toolbox::CounterDestination::Graveyard,

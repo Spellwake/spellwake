@@ -514,7 +514,7 @@ fn newly_played_land_creature_requires_haste_and_all_removal_disables_intrinsic_
             card(1, program, false),
             spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::Abilities(AbilityChange::grant_keywords(
                         [KeywordAbility::Haste],
@@ -675,7 +675,7 @@ fn counted_mana_uses_the_shared_current_land_filter_and_excludes_hand_and_oppone
             ),
             spell(
                 6,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![effect(
                     vec![ResolvedPartSpec::Type(TypeChangeSpec {
                         land_subtypes: SubtypeOperation::Set(BTreeSet::from([LandType::Island])),

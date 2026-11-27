@@ -437,20 +437,11 @@ pub fn reply(value: &DecisionReply) -> Value {
         DecisionReply::LinkedAuraChoice(value) => {
             json!({"tag":"LinkedAuraChoice","target":target(*value)})
         }
-        DecisionReply::PlaneswalkerType(direction) => {
-            json!({"tag":"PlaneswalkerType","subtype":direction.label()})
-        }
-        DecisionReply::AttackDirection(direction) => {
-            json!({"tag":"AttackDirection","direction":format!("{direction:?}")})
-        }
         DecisionReply::ChooseLandKind(land) => json!({"tag":"ChooseLandKind","land":land}),
         DecisionReply::MutateOnTop(value) => json!({"tag":"MutateOnTop","on_top":value}),
         DecisionReply::ChoosePile(pile) => json!({"tag":"ChoosePile","pile":pile}),
         DecisionReply::DrawReplacement(choice) => {
             json!({"tag":"DrawReplacement","choice":format!("{choice:?}")})
-        }
-        DecisionReply::ChooseDamageRecipient(recipient) => {
-            json!({"tag":"ChooseDamageRecipient","recipient":target(*recipient)})
         }
         DecisionReply::ChooseDamageSource(source) => {
             json!({"tag":"ChooseDamageSource","source":opaque(source)})
@@ -470,9 +461,6 @@ pub fn reply(value: &DecisionReply) -> Value {
         }
         DecisionReply::TimestampOrder(values) => {
             json!({"tag":"TimestampOrder","order":values.iter().map(|value|value.ordinal()).collect::<Vec<_>>()})
-        }
-        DecisionReply::RemoveCounters(counts) => {
-            json!({"tag":"RemoveCounters","counts":counts.iter().map(|(kind,count)|json!({"kind":format!("{kind:?}"),"count":count})).collect::<Vec<_>>()})
         }
         DecisionReply::Proliferate(values) => {
             json!({"tag":"Proliferate","selected":values.iter().map(|value|target(*value)).collect::<Vec<_>>()})
@@ -2691,12 +2679,6 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
         RuleFrame::LinkedAuraChoice(f) => {
             json!({"tag":"LinkedAuraChoice","chooser":f.chooser().0,"object":opaque(f.object()),"domain":f.domain().iter().copied().map(target).collect::<Vec<_>>()})
         }
-        RuleFrame::PlaneswalkerType(value) => {
-            json!({"tag":"PlaneswalkerType","chooser":value.chooser().0})
-        }
-        RuleFrame::AttackDirection(value) => {
-            json!({"tag":"AttackDirection","chooser":value.chooser().0})
-        }
         RuleFrame::MyriadDefender(value) => {
             json!({"tag":"MyriadDefender","chooser":value.chooser().0,"opponent":value.opponent().0,"may_decline":value.may_decline(),"defenders":value.defenders().map(target).collect::<Vec<_>>()})
         }
@@ -2709,17 +2691,11 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
         RuleFrame::TimestampOrder(value) => {
             json!({"tag":"TimestampOrder","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction(),"chooser":value.chooser().0,"members":value.members().iter().map(|member|json!({"ordinal":member.member.ordinal(),"creator":member.creator.0,"definition":program::view(&member.definition)})).collect::<Vec<_>>()})
         }
-        RuleFrame::CounterRemoval(frame) => {
-            json!({"tag":"CounterRemoval","chooser":frame.chooser().0,"object":opaque(frame.object()),"maximum":frame.maximum(),"domain":frame.domain().iter().map(|(kind,count)|json!({"kind":format!("{kind:?}"),"count":count})).collect::<Vec<_>>()})
-        }
         RuleFrame::Proliferate(frame) => {
             json!({"tag":"Proliferate","chooser":frame.chooser().0,"revision":frame.revision().to_string(),"domain":frame.domain().iter().map(|(who,kinds)|json!({"recipient":target(*who),"counters":kinds.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()})
         }
         RuleFrame::DrawReplacement(value) => {
             json!({"tag":"DrawReplacement","revision":value.revision,"chooser":value.chooser.0,"domain":format!("{:?}",value.domain)})
-        }
-        RuleFrame::DamageRecipientChoice(value) => {
-            json!({"tag":"DamageRecipientChoice","chooser":value.chooser().0,"recipients":value.recipients().iter().copied().map(target).collect::<Vec<_>>()})
         }
         RuleFrame::DamageSourceChoice(value) => {
             json!({"tag":"DamageSourceChoice","chooser":value.chooser().0,"sources":value.sources().iter().map(opaque).collect::<Vec<_>>()})
@@ -2736,36 +2712,11 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
         RuleFrame::RevealedPiles(value) => {
             use spellwake_engine::effects::PileChoice;
             let choice = match value.choice() {
-                PileChoice::DividePermanents(cards) => {
-                    json!({"kind":"DividePermanents","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
-                }
-                PileChoice::Sacrifice { first, second } => {
-                    json!({"kind":"Sacrifice","first":first.iter().map(opaque).collect::<Vec<_>>(),"second":second.iter().map(opaque).collect::<Vec<_>>()})
-                }
                 PileChoice::Divide(cards) => {
                     json!({"kind":"Divide","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
                 }
                 PileChoice::Take { first, second } => {
                     json!({"kind":"Take","first":first.iter().map(opaque).collect::<Vec<_>>(),"second":second.iter().map(opaque).collect::<Vec<_>>()})
-                }
-                PileChoice::OneToHandRestBottom(cards) => {
-                    json!({"kind":"OneToHandRestBottom","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
-                }
-                PileChoice::OptionalCreatureToBattlefield { looked, eligible } => {
-                    json!({"kind":"OptionalCreatureToBattlefield","looked":looked.iter().map(opaque).collect::<Vec<_>>(),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>()})
-                }
-                PileChoice::OptionalUpTo {
-                    looked,
-                    eligible,
-                    max,
-                } => {
-                    json!({"kind":"OptionalUpTo","looked":looked.iter().map(opaque).collect::<Vec<_>>(),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>(),"max":max})
-                }
-                PileChoice::OneToHand(cards) => {
-                    json!({"kind":"OneToHand","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
-                }
-                PileChoice::Creature(cards) => {
-                    json!({"kind":"Creature","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
                 }
                 PileChoice::BottomOrder(cards) => {
                     json!({"kind":"BottomOrder","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
@@ -2775,9 +2726,6 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
                 }
             };
             json!({"tag":"RevealedPiles","chooser":value.chooser().0,"choice":choice})
-        }
-        RuleFrame::LoyaltyRemoval(value) => {
-            json!({"tag":"LoyaltyRemoval","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction(),"chooser":value.chooser().0,"objects":value.objects().iter().map(opaque).collect::<Vec<_>>()})
         }
         RuleFrame::ResolutionManaColor(value) if value.split().is_some() => {
             let (first, second, total) = value.split().expect("split checked by pattern guard");
@@ -3223,11 +3171,6 @@ pub fn pending_work(execution: &EffectWindow) -> Result<Value, String> {
         Some(PendingWorkKind::LookTop) => {
             return Err("historical pending-work projection excludes private top-look work".into());
         }
-        Some(PendingWorkKind::ImpulseReplacement) => {
-            return Err(
-                "historical pending-work projection excludes impulse replacement work".into(),
-            );
-        }
         Some(
             PendingWorkKind::BattlefieldEntry
             | PendingWorkKind::PermanentEntry
@@ -3380,38 +3323,9 @@ pub fn zone_replacement_work(value: &spellwake_engine::effects::ZoneReplacementB
 /// Complete privileged selected-object continuation; every accepted prefix stays explicit.
 pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value {
     let operation = match value.operation {
-        ResolutionSelectionOperation::MillEachPlayer { amount, segments } => {
-            json!({"tag":"MillEachPlayer","amount":amount,"segments":segments.iter().map(|(seat,cards)|json!({"player":seat.0,"cards":cards.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()})
-        }
         ResolutionSelectionOperation::Populate => json!({"tag":"Populate"}),
-        ResolutionSelectionOperation::ChooseObjects { .. } => json!({"tag":"ChooseObjects"}),
-        ResolutionSelectionOperation::DestroyAnnouncedTargets { objects } => {
-            json!({"tag":"DestroyAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::SacrificeContributor { eligible } => {
-            json!({"tag":"SacrificeContributor","eligible":eligible.iter().map(opaque).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::OtherControlledCreature {
-            source, sacrifice, ..
-        } => json!({"tag":"OtherControlledCreature","source":opaque(source),"sacrifice":sacrifice}),
-        ResolutionSelectionOperation::PutHandCardOnBottom => json!({"tag":"PutHandCardOnBottom"}),
-        ResolutionSelectionOperation::PutInLibrary { objects, placement } => {
-            json!({"tag":"PutInLibrary","placement":opaque(placement),"objects":objects.iter().map(opaque).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::ShuffleAnnouncedTargets { objects } => {
-            json!({"tag":"ShuffleAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
-        }
         ResolutionSelectionOperation::ExileAnnouncedTargets { objects } => {
             json!({"tag":"ExileAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::ExileLibrarySegment { player, cards } => {
-            json!({"tag":"ExileLibrarySegment","player":player.0,"cards":cards.iter().map(opaque).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::ReturnAnnouncedTargets { objects } => {
-            json!({"tag":"ReturnAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::TapOrUntapControlled { tap, filter } => {
-            json!({"tag":"TapOrUntapControlled","tap":tap,"filter":format!("{filter:?}")})
         }
         ResolutionSelectionOperation::Blight { amount } => {
             json!({"tag":"Blight","amount":amount})
@@ -3419,21 +3333,8 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
         ResolutionSelectionOperation::CollectEvidence { minimum } => {
             json!({"tag":"CollectEvidence","minimum":minimum})
         }
-        ResolutionSelectionOperation::SelectZoneCards {
-            source_zone,
-            destination,
-            ..
-        } => {
-            json!({"tag":"SelectZoneCards","source_zone":format!("{source_zone:?}"),"destination":format!("{destination:?}")})
-        }
         ResolutionSelectionOperation::ReturnSingle { object } => {
             json!({"tag":"ReturnSingle","object":opaque(object)})
-        }
-        ResolutionSelectionOperation::DestroySingle { object } => {
-            json!({"tag":"DestroySingle","object":opaque(object)})
-        }
-        ResolutionSelectionOperation::WholeGroup { group, destination } => {
-            json!({"tag":"WholeGroup","group":opaque(group),"destination":opaque(destination)})
         }
         ResolutionSelectionOperation::ExileSingle {
             object,
@@ -3442,32 +3343,42 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
         } => {
             json!({"tag":"ExileSingle","object":opaque(object),"source":source.map(opaque),"monarch_controller":monarch_controller.map(|seat|seat.0)})
         }
-        ResolutionSelectionOperation::SacrificeMatching { filter, .. } => match filter {
-            spellwake_engine::program::SacrificeSelection::Subtype(kind) => {
-                json!({"tag":"SacrificeMatching","subtype":creature_type_id(*kind)})
-            }
-            spellwake_engine::program::SacrificeSelection::NontokenCreature => {
-                json!({"tag":"SacrificeMatching","subtype":null})
-            }
-            other => json!({"tag":"SacrificeMatching","kind":format!("{other:?}")}),
-        },
-        ResolutionSelectionOperation::Sacrifice { filter } => json!({
-            "tag":"Sacrifice",
-            "filter":{"required_types":filter.required_types.iter().map(opaque).collect::<Vec<_>>(),
-                      "forbidden_types":filter.forbidden_types.iter().map(opaque).collect::<Vec<_>>()}
-        }),
+        ResolutionSelectionOperation::Sacrifice { primary, secondary } => {
+            let (req, forb) = match primary {
+                spellwake_engine::program::ObjectFilter::Clause(c) => {
+                    let all_types = [
+                        spellwake_engine::program::CardType::Artifact,
+                        spellwake_engine::program::CardType::Battle,
+                        spellwake_engine::program::CardType::Creature,
+                        spellwake_engine::program::CardType::Enchantment,
+                        spellwake_engine::program::CardType::Instant,
+                        spellwake_engine::program::CardType::Kindred,
+                        spellwake_engine::program::CardType::Land,
+                        spellwake_engine::program::CardType::Planeswalker,
+                        spellwake_engine::program::CardType::Sorcery,
+                    ];
+                    (
+                        all_types
+                            .iter()
+                            .filter(|&&t| c.required_types.contains(t))
+                            .map(opaque)
+                            .collect::<Vec<_>>(),
+                        all_types
+                            .iter()
+                            .filter(|&&t| c.forbidden_types.contains(t))
+                            .map(opaque)
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                _ => (Vec::new(), Vec::new()),
+            };
+            json!({
+                "tag":"Sacrifice",
+                "filter":{"required_types":req,"forbidden_types":forb,"has_secondary":secondary.is_some()}
+            })
+        }
         ResolutionSelectionOperation::ExileLinkedTargets { objects, source } => {
             json!({"tag":"ExileLinkedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>(),"source":opaque(source)})
-        }
-        ResolutionSelectionOperation::AttachToSource {
-            source,
-            eligible,
-            optional,
-        } => {
-            json!({"tag":"AttachToSource","source":opaque(source),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>(),"optional":optional})
-        }
-        ResolutionSelectionOperation::CopyDifferentlyNamedTokens => {
-            json!({"tag":"CopyDifferentlyNamedTokens"})
         }
         ResolutionSelectionOperation::Amass {
             amount,
@@ -3479,47 +3390,6 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
         }
         ResolutionSelectionOperation::Bolster { amount, eligible } => {
             json!({"tag":"Bolster","amount":amount,"eligible":eligible.iter().map(opaque).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::Untap { kind } => json!({"tag":"Untap","kind":opaque(kind)}),
-        ResolutionSelectionOperation::EnterAurasAttachedToSource { source, eligible } => {
-            json!({"tag":"EnterAurasAttachedToSource","source":opaque(source),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>() })
-        }
-        ResolutionSelectionOperation::ChooseCreaturesToKeep => {
-            json!({"tag":"ChooseCreaturesToKeep"})
-        }
-        ResolutionSelectionOperation::LibraryCohortToGraveyard { player, cards } => {
-            json!({"tag":"LibraryCohortToGraveyard","player":player.0,"count":cards.len()})
-        }
-        ResolutionSelectionOperation::ChooseVow => json!({"tag":"ChooseVow"}),
-        ResolutionSelectionOperation::ExileFromHand {
-            allow_battlefield: true,
-        } => json!({"tag":"ExileFromHandOrBattlefield"}),
-        ResolutionSelectionOperation::ExileFromHand {
-            allow_battlefield: false,
-        } => json!({"tag":"ExileFromHand"}),
-        ResolutionSelectionOperation::PayLifeToSaveCreatures { cost, saved } => json!({
-            "tag":"PayLifeToSaveCreatures","cost":cost,"saved":saved.iter()
-                .map(|(player, objects)| json!({"player":player.0,"objects":objects.iter().map(opaque).collect::<Vec<_>>() }))
-                .collect::<Vec<_>>(),
-        }),
-        ResolutionSelectionOperation::SacrificeExceptVowed { kept } => {
-            json!({"tag":"SacrificeExceptVowed","kept":kept.iter().map(opaque).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::SacrificeColored => json!({"tag":"SacrificeColored"}),
-        ResolutionSelectionOperation::ExileChosen { filter } => {
-            json!({"tag":"ExileChosen","required_types":filter.required_types.iter().map(|v|format!("{v:?}")).collect::<Vec<_>>(),"forbidden_types":filter.forbidden_types.iter().map(|v|format!("{v:?}")).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::ReturnToHand { filter } => {
-            json!({"tag":"ReturnToHand","required_types":filter.required_types.iter().map(|v|format!("{v:?}")).collect::<Vec<_>>(),"forbidden_types":filter.forbidden_types.iter().map(|v|format!("{v:?}")).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::ExileChosenGraveyardCards { player, domain } => {
-            json!({"tag":"ExileChosenGraveyardCards","player":player.0,"domain":domain.iter().map(opaque).collect::<Vec<_>>() })
-        }
-        ResolutionSelectionOperation::ExileGraveyardTargets { objects } => {
-            json!({"tag":"ExileGraveyardTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::ReturnGraveyardCardsToHand { objects } => {
-            json!({"tag":"ReturnTargetGraveyardCreatureToHand","objects":objects.iter().map(opaque).collect::<Vec<_>>() })
         }
         ResolutionSelectionOperation::RevealedHand {
             chooser,
@@ -3537,15 +3407,6 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
                 row["count"] = json!(count.get());
             }
             row
-        }
-        ResolutionSelectionOperation::GraveyardCreatureToHand => {
-            json!({"tag":"GraveyardCreatureToHand"})
-        }
-        ResolutionSelectionOperation::OwnedCommandersToHand => {
-            json!({"tag":"OwnedCommandersToHand"})
-        }
-        ResolutionSelectionOperation::RandomDiscard { object } => {
-            json!({"tag":"RandomDiscard","object":opaque(object)})
         }
         ResolutionSelectionOperation::RandomSacrifice { object } => {
             json!({"tag":"RandomSacrifice","object":opaque(object)})

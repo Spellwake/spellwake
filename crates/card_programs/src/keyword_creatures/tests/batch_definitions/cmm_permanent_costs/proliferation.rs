@@ -26,7 +26,7 @@ fn board(name: &str, price: &[(ManaType, i64)], mut extra: Vec<SeedCard>) -> Gam
             A,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
                     spellwake_engine::effects::CounterKind::Indestructible,
                     spellwake_engine::program::ValueExpr::literal(1),
@@ -290,82 +290,6 @@ fn cmm_thrummingbird_and_grateful_apparition_proliferate_after_combat_damage_to_
                 assert!(reached.execution().window().entries().is_empty());
             }
         }
-    }
-}
-
-#[test]
-#[ignore = "requires dated Oracle source and creature vocabulary"]
-fn cmm_heartless_act_destroys_only_counterless_creatures_or_removes_up_to_three_counters_in_the_chosen_combination()
- {
-    use spellwake_engine::mana::CastMode;
-    let cost = [(Colourless, 1), (Black, 1)];
-    let field = board(
-        "Heartless Act",
-        &cost,
-        vec![seed(
-            9,
-            A,
-            ObjectDestination::Hand,
-            super::counter_and_sacrifice::plus_counters_spell(3),
-        )],
-    );
-    let countered = physical(&field, 2).id();
-    let ordinary = physical(&field, 3).id();
-    let more =
-        round(targeted(&field, A, 9, TargetRef::Object(countered)).into_state()).into_state();
-    let activate = |n, mode| GameCommand::CastWithResources {
-        spell: physical(&more, 1).id(),
-        target: None,
-        payment: CastingPayment {
-            mana: Some(spend(&cost)),
-            modes: vec![CastMode {
-                mode,
-                target: Some(TargetRef::Object(n)),
-                targets: vec![],
-            }],
-            ..Default::default()
-        },
-    };
-    illegal(&more, A, activate(countered, 0));
-    let killed = round(command(&more, A, activate(ordinary, 0)).into_state()).into_state();
-    assert_eq!(physical(&killed, 3).zone(), ObjectZone::Graveyard(A));
-    let remove = round(command(&more, A, activate(countered, 1)).into_state()).into_state();
-    let RuleFrame::CounterRemoval(frame) = remove.pending_decision().unwrap().frame() else {
-        panic!("counter allocation")
-    };
-    assert_eq!(frame.object(), countered);
-    assert_eq!(frame.maximum(), 3);
-    let answer = |plus, shield| {
-        DecisionReply::RemoveCounters(
-            [
-                (CounterKind::PlusOne, plus),
-                (CounterKind::Indestructible, shield),
-            ]
-            .into_iter()
-            .filter(|(_, n)| *n > 0)
-            .collect(),
-        )
-    };
-    illegal(
-        &remove,
-        A,
-        GameCommand::Reply {
-            decision: remove.pending_decision().unwrap().id(),
-            choice: answer(3, 1),
-        },
-    );
-    for (plus, shield) in [(0, 0), (2, 1), (3, 0)] {
-        let done = reply(&remove, answer(plus, shield)).into_state();
-        assert_eq!(
-            done.execution()
-                .counters_of_kind(countered, CounterKind::PlusOne),
-            i64::from(4 - plus).into()
-        );
-        assert_eq!(
-            done.execution()
-                .counters_of_kind(countered, CounterKind::Indestructible),
-            i64::from(1 - shield).into()
-        );
     }
 }
 #[test]

@@ -497,11 +497,7 @@ fn action_inner(caller: &mut Caller<'_>, action: &Value) -> Result<(), String> {
                     actor,
                     value,
                 }),
-                |source| {
-                    EffectAttempt::Unit(Box::new(
-                        source.accept_creature_type(expected, &frame, actor, value),
-                    ))
-                },
+                |_source| EffectAttempt::Unit(Box::new(Err(EffectError::WrongCreatureTypeFrame))),
                 true,
             )
         }

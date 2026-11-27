@@ -75,7 +75,9 @@ impl EffectWindow {
         let revision = self.next_revision(expected)?;
         let entrant_only = match self.current_instruction()? {
             Instruction::MutateObject(spec) => match &spec.op {
-                crate::toolbox::ObjectMutation::SoulbondPair { entrant_only } => entrant_only,
+                crate::toolbox::ObjectMutation::Combat(
+                    crate::toolbox::ObjectCombatOp::SoulbondPair { entrant_only },
+                ) => entrant_only,
                 _ => return Err(EffectError::WrongResolutionFrame),
             },
             _ => return Err(EffectError::WrongResolutionFrame),

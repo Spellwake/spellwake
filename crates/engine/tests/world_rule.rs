@@ -303,7 +303,7 @@ fn actual_world_gain_keeps_the_new_world_even_when_its_ordering_timestamp_is_old
             card(2, P0, artifact(false)),
             trajectories::spell(
                 3,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![change(TypeOperation::Add(BTreeSet::from([
                     Supertype::World,
                 ])))],
@@ -352,16 +352,22 @@ fn normal_entries_and_resolved_gain_regain_or_copy_use_actual_world_history() {
                 mana_cost: ManaCost::free(),
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
-                    BodyTarget::SinglePermanent,
-                    vec![Instruction::BecomeCopy {
-                        receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-                        donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-                        duration: ResolvedDuration::NoStatedDuration,
-                        exceptions: Box::new(spellwake_engine::program::CopyExceptions {
-                            override_pt: None,
-                            ..Default::default()
-                        }),
-                    }],
+                    BodyTarget::SINGLE_PERMANENT,
+                    vec![Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                spellwake_engine::program::EffectSubject::AbilitySource,
+                            )),
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                spellwake_engine::program::MoveSubjectRef::TargetObject,
+                            ),
+                            ResolvedDuration::NoStatedDuration,
+                            spellwake_engine::program::CopyExceptions {
+                                override_pt: None,
+                                ..Default::default()
+                            },
+                        ),
+                    ))],
                 ),
             });
         }
@@ -375,14 +381,14 @@ fn normal_entries_and_resolved_gain_regain_or_copy_use_actual_world_history() {
                 world,
                 trajectories::spell(
                     3,
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     vec![change(TypeOperation::Remove(BTreeSet::from([
                         Supertype::World,
                     ])))],
                 ),
                 trajectories::spell(
                     4,
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     vec![change(TypeOperation::Add(BTreeSet::from([
                         Supertype::World,
                     ])))],
@@ -475,7 +481,7 @@ fn world_loss_and_regain_inside_one_resolving_body_renew_age_without_midbody_che
             card(1, P0, artifact(true)),
             trajectories::spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
                     change(TypeOperation::Remove(BTreeSet::from([Supertype::World]))),
                     change(TypeOperation::Add(BTreeSet::from([Supertype::World]))),
@@ -625,16 +631,22 @@ fn copy_and_source_controller_changes_track_continuity_instead_of_restarting_eve
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SinglePermanent,
-            vec![Instruction::BecomeCopy {
-                receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
-                donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-                duration: ResolvedDuration::NoStatedDuration,
-                exceptions: Box::new(spellwake_engine::program::CopyExceptions {
-                    override_pt: None,
-                    ..Default::default()
-                }),
-            }],
+            BodyTarget::SINGLE_PERMANENT,
+            vec![Instruction::ApplyContinuous(Box::new(
+                spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        spellwake_engine::program::EffectSubject::AbilitySource,
+                    )),
+                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                        spellwake_engine::program::MoveSubjectRef::TargetObject,
+                    ),
+                    ResolvedDuration::NoStatedDuration,
+                    spellwake_engine::program::CopyExceptions {
+                        override_pt: None,
+                        ..Default::default()
+                    },
+                ),
+            ))],
         ),
     }];
     let mut enabler = artifact(false);
@@ -662,7 +674,7 @@ fn copy_and_source_controller_changes_track_continuity_instead_of_restarting_eve
             card(3, P1, artifact(false)),
             trajectories::spell(
                 4,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![trajectories::effect(
                     vec![ResolvedPartSpec::Control(ControlRecipient::TargetOwner)],
                     ResolvedDuration::NoStatedDuration,
@@ -722,7 +734,7 @@ fn changing_a_worlds_controller_without_losing_world_preserves_its_tenure() {
             original,
             trajectories::spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![trajectories::effect(
                     vec![ResolvedPartSpec::Control(ControlRecipient::TargetOwner)],
                     ResolvedDuration::NoStatedDuration,
@@ -773,10 +785,10 @@ fn cleanup_expiry_reacquires_world_with_new_tenure_and_removes_the_other_current
         vec![
             card(1, P0, artifact(true)),
             card(2, P1, artifact(false)),
-            trajectories::spell(3, BodyTarget::SinglePermanent, vec![remove]),
+            trajectories::spell(3, BodyTarget::SINGLE_PERMANENT, vec![remove]),
             trajectories::spell(
                 4,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![change(TypeOperation::Add(BTreeSet::from([
                     Supertype::World,
                 ])))],

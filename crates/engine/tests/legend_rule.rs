@@ -489,7 +489,7 @@ fn cleanup_expiration_exposes_a_legend_conflict_and_keeps_priority_before_repeat
         incoming,
         tr::spell(
             10,
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![tr::effect(
                 vec![ResolvedPartSpec::Names(NameOperation::Set(names(&[
                     "Beta",
@@ -542,7 +542,7 @@ fn actual_supertype_control_copy_and_name_add_operations_create_current_legend_c
                 second.program.supertypes.clear();
                 Some(tr::spell(
                     20,
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     vec![tr::effect(
                         vec![ResolvedPartSpec::Type(TypeChangeSpec {
                             land_subtypes: SubtypeOperation::Keep,
@@ -559,7 +559,7 @@ fn actual_supertype_control_copy_and_name_add_operations_create_current_legend_c
                 second.destination = ObjectDestination::Battlefield { controller: P1 };
                 Some(tr::spell(
                     20,
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     vec![tr::effect(
                         vec![ResolvedPartSpec::Control(
                             ControlRecipient::ResolvingController,
@@ -576,18 +576,22 @@ fn actual_supertype_control_copy_and_name_add_operations_create_current_legend_c
                     mana_cost: ManaCost::free(),
                     source_cost: SourceCost::None,
                     body: ExecutableBody::new(
-                        BodyTarget::SinglePermanent,
-                        vec![Instruction::BecomeCopy {
-                            receiver: Box::new(
-                                spellwake_engine::program::EffectSubject::AbilitySource,
+                        BodyTarget::SINGLE_PERMANENT,
+                        vec![Instruction::ApplyContinuous(Box::new(
+                            spellwake_engine::toolbox::ApplyContinuousSpec::become_copy(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    spellwake_engine::program::EffectSubject::AbilitySource,
+                                )),
+                                spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                    spellwake_engine::program::MoveSubjectRef::TargetObject,
+                                ),
+                                ResolvedDuration::NoStatedDuration,
+                                spellwake_engine::program::CopyExceptions {
+                                    override_pt: None,
+                                    ..Default::default()
+                                },
                             ),
-                            donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
-                            duration: ResolvedDuration::NoStatedDuration,
-                            exceptions: Box::new(spellwake_engine::program::CopyExceptions {
-                                override_pt: None,
-                                ..Default::default()
-                            }),
-                        }],
+                        ))],
                     ),
                 });
                 None
@@ -596,7 +600,7 @@ fn actual_supertype_control_copy_and_name_add_operations_create_current_legend_c
                 second.program.names = names(&["Beta"]);
                 Some(tr::spell(
                     20,
-                    BodyTarget::SinglePermanent,
+                    BodyTarget::SINGLE_PERMANENT,
                     vec![tr::effect(
                         vec![ResolvedPartSpec::Names(NameOperation::Add(names(&[
                             "Alpha",

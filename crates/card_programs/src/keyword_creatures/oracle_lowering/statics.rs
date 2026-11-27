@@ -4002,8 +4002,9 @@ pub(super) fn lower_static(
                 let body = ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::OptionalEffect {
+                        Instruction::OptionalSequence {
                             chooser: ResolvingPlayer::Controller,
+                            instructions: 1,
                         },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::exert_source(),
                     ],
@@ -5436,7 +5437,7 @@ pub(super) fn lower_static(
                 id: ids.activated(),
                 mana_cost: ManaCost::free(),
                 source_cost: SourceCost::None,
-                body: ExecutableBody::new(BodyTarget::FilteredPermanent(nonland_controlled), ops),
+                body: ExecutableBody::new(BodyTarget::filtered_permanent(nonland_controlled), ops),
             });
             Ok(())
         }
@@ -6953,16 +6954,14 @@ fn try_lower_compound_exile_play_replacement(
     }
     let body = ExecutableBody::new(
         BodyTarget::None,
-        vec![Instruction::ExileTopPlay {
-            count: cnt,
-            library_owner: AffectedPlayers::One(ResolvingPlayer::Controller),
-            duration: impulse_dur,
-            cast_only: *cast_only,
-            free: *free,
-            any_color: false,
-            face_down: *face_down,
-            grant_play: true,
-        }],
+        vec![
+            super::toolbox_emit::exile_top_library_group(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                cnt,
+                *face_down,
+            ),
+            super::toolbox_emit::impulse_play_last_moved(impulse_dur, *cast_only, *free, false),
+        ],
     );
     let ability = StaticContinuousAbility::EventReplacement {
         id: ids.static_id(),
@@ -9031,13 +9030,15 @@ fn lower_dynamic_ward_trigger(
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferDynamicManaPayment {
-                    payer: ResolvingPlayer::UniqueRelatedPlayer,
-                    fixed: ManaCost::free(),
-                    extra_generic,
-                    paid_destination: 2,
-                    declined_destination: 1,
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                        ManaCost::free(),
+                        extra_generic,
+                        2,
+                        1,
+                    ),
+                )),
                 Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_ward_source(),
                 )),
@@ -15624,8 +15625,12 @@ fn parse_granted_equip_or_crew_part(
                 mana_cost,
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::Attach(AttachAbility::Equip)],
+                    BodyTarget::SINGLE_CREATURE,
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                            AttachAbility::Equip,
+                        ),
+                    ))],
                 ),
             })));
         }
@@ -15668,8 +15673,12 @@ fn parse_granted_equip_or_crew_part(
                     mana_cost,
                     source_cost: SourceCost::None,
                     body: ExecutableBody::new(
-                        BodyTarget::FilteredPermanent(obj),
-                        vec![Instruction::Attach(AttachAbility::Equip)],
+                        BodyTarget::filtered_permanent(obj),
+                        vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
+                                AttachAbility::Equip,
+                            ),
+                        ))],
                     ),
                 })));
             }
@@ -15991,19 +16000,22 @@ pub(super) fn lower_ability_change(
                     body: ExecutableBody::new(
                         BodyTarget::None,
                         vec![
-                            Instruction::OptionalEffect {
+                            Instruction::OptionalSequence {
                                 chooser: ResolvingPlayer::Controller,
+                                instructions: 1,
                             },
-                            Instruction::Sacrifice {
-                                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                                amount: ValueExpr::literal(1),
-                                filter: PermanentTypeFilter {
-                                    any_types: BTreeSet::new(),
-                                    required_types: BTreeSet::from([CardType::Creature]),
-                                    forbidden_types: BTreeSet::new(),
-                                    object_filter: None,
-                                },
-                            },
+                            Instruction::ZoneOp(Box::new(
+                                spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                                    ValueExpr::literal(1),
+                                    PermanentTypeFilter {
+                                        any_types: BTreeSet::new(),
+                                        required_types: BTreeSet::from([CardType::Creature]),
+                                        forbidden_types: BTreeSet::new(),
+                                        object_filter: None,
+                                    },
+                                ),
+                            )),
                         ],
                     ),
                 });
@@ -16062,16 +16074,13 @@ pub(super) fn lower_ability_change(
                     ),
                     grouping: TriggerGrouping::EachOccurrence,
                     body: ExecutableBody::new(
-                        BodyTarget::FilteredPermanent(ObjectFilter::creature().opposing()),
+                        BodyTarget::filtered_permanent(ObjectFilter::creature().opposing()),
                         vec![
-                            Instruction::OptionalEffect {
+                            Instruction::OptionalSequence {
                                 chooser: ResolvingPlayer::Controller,
+                                instructions: 1,
                             },
-                            Instruction::AffectPermanentTargets {
-                                minimum: 1,
-                                maximum: 1,
-                                action: PermanentTargetAction::Untap,
-                            },
+                            super::toolbox_emit::set_targets_tapped(false),
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
                                 ResolvedPartsSpec(vec![
@@ -16167,16 +16176,18 @@ pub(super) fn lower_ability_change(
                         grouping: TriggerGrouping::EachOccurrence,
                         body: ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::Sacrifice {
-                                players: AffectedPlayers::One(ResolvingPlayer::DefendingPlayer),
-                                amount: ValueExpr::literal(n),
-                                filter: PermanentTypeFilter {
-                                    any_types: BTreeSet::new(),
-                                    required_types: BTreeSet::new(),
-                                    forbidden_types: BTreeSet::new(),
-                                    object_filter: None,
-                                },
-                            }],
+                            vec![Instruction::ZoneOp(Box::new(
+                                spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                                    AffectedPlayers::One(ResolvingPlayer::DefendingPlayer),
+                                    ValueExpr::literal(n),
+                                    PermanentTypeFilter {
+                                        any_types: BTreeSet::new(),
+                                        required_types: BTreeSet::new(),
+                                        forbidden_types: BTreeSet::new(),
+                                        object_filter: None,
+                                    },
+                                ),
+                            ))],
                         ),
                     });
                 } else if let Some(n_str) = low.strip_prefix("afterlife ")
@@ -16828,7 +16839,19 @@ fn lower_anaphora_cost_modifier(
                 ab.body
                     .instructions
                     .iter()
-                    .any(|op| matches!(op, Instruction::Attach(AttachAbility::Equip)))
+                    .any(|op| {
+                        matches!(
+                            op,
+                            Instruction::MutateObject(spec)
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::ObjectMutation::Attach(spellwake_engine::toolbox::AttachOp::ToObject {
+                                        ability: Some(AttachAbility::Equip),
+                                        ..
+                                    })
+                                )
+                        )
+                    })
                     .then_some(ab.id)
             });
             match (equip_ids.next(), equip_ids.next()) {

@@ -475,29 +475,20 @@ impl EffectWindow {
                     return Ok(false);
                 };
                 match &spec.op {
-                    crate::toolbox::PlayerMutation::Scry(amount) => {
-                        (LibraryActionKind::Scry, player, amount)
-                    }
-                    crate::toolbox::PlayerMutation::Surveil(amount) => {
-                        (LibraryActionKind::Surveil, player, amount)
-                    }
-                    crate::toolbox::PlayerMutation::Mill(amount) => {
-                        (LibraryActionKind::Mill, player, amount)
-                    }
+                    crate::toolbox::PlayerMutation::LibraryTop(
+                        crate::toolbox::LibraryTopAction::Scry(amount),
+                    ) => (LibraryActionKind::Scry, player, amount),
+                    crate::toolbox::PlayerMutation::LibraryTop(
+                        crate::toolbox::LibraryTopAction::Surveil(amount),
+                    ) => (LibraryActionKind::Surveil, player, amount),
+                    crate::toolbox::PlayerMutation::LibraryTop(
+                        crate::toolbox::LibraryTopAction::Mill(amount),
+                    ) => (LibraryActionKind::Mill, player, amount),
                     _ => return Ok(false),
                 }
             }
-            Instruction::BranchIfFalse { .. }
-            | Instruction::Jump { .. }
+            Instruction::Jump { .. }
             | Instruction::OptionalSequence { .. }
-            | Instruction::OptionalEffect { .. }
-            | Instruction::ExileTopPlay { .. }
-            | Instruction::ChooseObjects { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::BecomeCopy { .. }
-            | Instruction::ChooseValue { .. }
-            | Instruction::Fight { .. }
-            | Instruction::Exchange(_)
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -511,19 +502,11 @@ impl EffectWindow {
             | Instruction::StackOp(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::ChooseCreatureType { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::Attach(_)
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }
-            | Instruction::AffectPermanentTargets { .. }
-            | Instruction::Sacrifice { .. }
-            | Instruction::Discard { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::RevealUntilMatchExt { .. }
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
             | Instruction::AdjustLife(_)
@@ -1062,15 +1045,15 @@ impl EffectWindow {
                     .resolving_player()
                     .ok_or(EffectError::InconsistentLibraryTopWork)?;
                 match &spec.op {
-                    crate::toolbox::PlayerMutation::Scry(amount) => {
-                        (LibraryActionKind::Scry, player, amount)
-                    }
-                    crate::toolbox::PlayerMutation::Surveil(amount) => {
-                        (LibraryActionKind::Surveil, player, amount)
-                    }
-                    crate::toolbox::PlayerMutation::Mill(amount) => {
-                        (LibraryActionKind::Mill, player, amount)
-                    }
+                    crate::toolbox::PlayerMutation::LibraryTop(
+                        crate::toolbox::LibraryTopAction::Scry(amount),
+                    ) => (LibraryActionKind::Scry, player, amount),
+                    crate::toolbox::PlayerMutation::LibraryTop(
+                        crate::toolbox::LibraryTopAction::Surveil(amount),
+                    ) => (LibraryActionKind::Surveil, player, amount),
+                    crate::toolbox::PlayerMutation::LibraryTop(
+                        crate::toolbox::LibraryTopAction::Mill(amount),
+                    ) => (LibraryActionKind::Mill, player, amount),
                     _ => return Err(EffectError::InconsistentLibraryTopWork),
                 }
             }

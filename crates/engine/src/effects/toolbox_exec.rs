@@ -146,10 +146,10 @@ impl EffectWindow {
                 } else {
                     let id = self.next_temp_rule_id;
                     self.next_temp_rule_id = self.next_temp_rule_id.saturating_add(1);
-                    let rule_kind = if spec.one_shot {
-                        TemporaryRuleKind::OneShotEventReplacement(rule.clone())
-                    } else {
-                        TemporaryRuleKind::TemporaryStatic(rule.clone())
+                    let rule_kind = TemporaryRuleKind::TemporaryStatic {
+                        ability: rule.clone(),
+                        condition: None,
+                        one_shot: spec.one_shot,
                     };
                     let bound_target = self
                         .instruction_target(entry)
@@ -309,6 +309,7 @@ impl EffectWindow {
                 cast_only,
                 free,
                 any_color,
+                impulse_duration,
             } => {
                 let grantee = self
                     .eval_player_selector_at(
@@ -320,7 +321,12 @@ impl EffectWindow {
                     .into_iter()
                     .next()
                     .unwrap_or(controller);
-                let play_duration = match spec.duration {
+                let exile_source = match entry.kind() {
+                    StackKind::TriggeredAbility { source }
+                    | StackKind::ActivatedAbility { source } => Some(source.id()),
+                    _ => None,
+                };
+                let fallback_duration = match spec.duration {
                     crate::characteristics::ResolvedDuration::UntilEndOfTurn
                     | crate::characteristics::ResolvedDuration::UntilEndOfCombat => {
                         CardPlayDuration::ThroughTurn
@@ -350,15 +356,52 @@ impl EffectWindow {
                         ObjectZone::Hand(_) => CardPlayZone::Hand,
                         _ => continue,
                     };
-                    self.card_play_permissions.insert(CardPlayPermission {
-                        zone,
-                        object: obj,
-                        player: grantee,
-                        duration: play_duration,
-                        any_color: *any_color,
-                        free: *free,
-                        cast_only: *cast_only,
-                    });
+                    if *cast_only
+                        && self
+                            .copiable_program(obj)
+                            .is_some_and(|program| program.has_type(CardType::Land))
+                    {
+                        continue;
+                    }
+                    let permission = (obj, grantee);
+                    if let Some(imp_dur) = *impulse_duration {
+                        if imp_dur == crate::program::ImpulsePlayDuration::UntilNextFromSource
+                            && zone == CardPlayZone::Exile
+                            && let Some(source) = exile_source
+                        {
+                            self.exile_play_until_next.insert(source, permission);
+                            if *free {
+                                self.free_exiled_cards.insert(permission);
+                            }
+                            continue;
+                        }
+                        let play_duration = self.map_impulse_play_duration(imp_dur, grantee);
+                        self.card_play_permissions.insert(CardPlayPermission {
+                            zone,
+                            object: obj,
+                            player: grantee,
+                            duration: play_duration,
+                            any_color: *any_color,
+                            free: *free,
+                            cast_only: *cast_only,
+                        });
+                        if *free && zone == CardPlayZone::Exile {
+                            self.free_exiled_cards.insert(permission);
+                        }
+                    } else {
+                        self.card_play_permissions.insert(CardPlayPermission {
+                            zone,
+                            object: obj,
+                            player: grantee,
+                            duration: fallback_duration,
+                            any_color: *any_color,
+                            free: *free,
+                            cast_only: *cast_only,
+                        });
+                        if *free && zone == CardPlayZone::Exile {
+                            self.free_exiled_cards.insert(permission);
+                        }
+                    }
                 }
             }
             ContinuousPayload::PreventDamage(prev_spec) => {
@@ -678,8 +721,158 @@ impl EffectWindow {
                     )?;
                 }
             }
+            ContinuousPayload::BecomeCopy { donor, exceptions } => {
+                let donor_id = if matches!(donor.as_ref(), crate::toolbox::ObjectQuery::Targets) {
+                    self.instruction_target(entry)
+                        .ok()
+                        .and_then(|bound| match bound.choice().target {
+                            TargetRef::Object(id) => Some(id),
+                            _ => None,
+                        })
+                        .or_else(|| {
+                            self.eval_object_query_at(
+                                controller,
+                                Some(entry),
+                                donor,
+                                self.resolution_cursor(),
+                            )
+                            .ok()
+                            .and_then(|v| v.into_iter().next())
+                        })
+                } else {
+                    self.eval_object_query_at(
+                        controller,
+                        Some(entry),
+                        donor,
+                        self.resolution_cursor(),
+                    )?
+                    .into_iter()
+                    .next()
+                };
+                if let Some(resolved_dur) = self.resolve_duration(entry, spec.duration)?
+                    && let Some(donor_id) = donor_id
+                    && let Some(base) = self.copiable_program(donor_id).cloned()
+                {
+                    let receivers: Vec<ObjectId> = locked_objects
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|id| {
+                            self.window
+                                .cards()
+                                .get(*id)
+                                .is_some_and(|obj| obj.zone() == ObjectZone::Battlefield)
+                        })
+                        .collect();
+                    if !receivers.is_empty() {
+                        let before = self.rules_snapshot(None)?;
+                        let mut created = Vec::new();
+                        for recv_id in receivers {
+                            let mut copied = base.clone();
+                            apply_copy_exceptions(
+                                &mut copied,
+                                exceptions,
+                                self.copiable_program(recv_id),
+                            );
+                            let effect = self.characteristics.add_effect(
+                                entry.id(),
+                                recv_id,
+                                crate::characteristics::ResolvedParts(vec![
+                                    crate::characteristics::ResolvedPart::Copy(Box::new(copied)),
+                                ]),
+                                resolved_dur,
+                            )?;
+                            created.push(effect);
+                        }
+                        self.emit_from(
+                            EventCause::Instruction {
+                                entry: entry.id(),
+                                instruction: index,
+                            },
+                            &before,
+                            None,
+                            ctx.append,
+                            |old, new, _| {
+                                let mut occs = Vec::with_capacity(created.len());
+                                for effect in created {
+                                    let appearances =
+                                        occurrence_flow::characteristic_appearance_changes(
+                                            old,
+                                            new,
+                                            effect.affected.iter().copied(),
+                                        )?;
+                                    occs.push(RulesOccurrence::ContinuousEffectCreated {
+                                        effect,
+                                        appearances,
+                                    });
+                                }
+                                Ok(occs)
+                            },
+                        )?;
+                    }
+                }
+            }
         }
 
+        self.advance_instruction()?;
+        Ok(StepOutcome::Continue)
+    }
+
+    // Applies a validated prompt reply and splices option branches when present.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_prompt_choice_reply(
+        &mut self,
+        ctx: &mut RuleStepContext<'_>,
+        entry: &StackEntry,
+        index: usize,
+        actor: SeatId,
+        spec: &crate::toolbox::PromptChoiceSpec,
+        resolved_domain: &crate::toolbox::ResolvedPromptDomain,
+        reply: crate::toolbox::PromptChoiceReply,
+    ) -> Result<StepOutcome, EffectError> {
+        let chosen_option_for_splice = if !spec.option_branches.is_empty()
+            && let crate::toolbox::PromptChoiceReply::Options(ref idxs) = reply
+        {
+            Some(idxs.first().copied().unwrap_or(0))
+        } else {
+            None
+        };
+        self.apply_prompt_reply(
+            entry,
+            index,
+            actor,
+            spec,
+            resolved_domain,
+            reply,
+            ctx.append,
+        )?;
+        if let Some(chosen_idx) = chosen_option_for_splice {
+            let branch = spec
+                .option_branches
+                .get(usize::from(chosen_idx))
+                .ok_or(EffectError::InconsistentProgram)?;
+            let inserted = branch.instructions.len();
+            let base = isize::try_from(index).map_err(|_| EffectError::InconsistentProgram)?;
+            let mut spliced = Vec::with_capacity(inserted);
+            for op in &branch.instructions {
+                let mut cloned = op.clone();
+                cloned.shift_jumps(base, 0);
+                spliced.push(cloned);
+            }
+            let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry.id())
+            else {
+                return Err(EffectError::InconsistentProgram);
+            };
+            let delta =
+                isize::try_from(inserted).map_err(|_| EffectError::InconsistentProgram)? - 1;
+            for op in &mut payload.body.instructions {
+                op.shift_jumps(delta, index + 1);
+            }
+            payload.body.instructions.splice(index..=index, spliced);
+            for mode in &mut payload.modes {
+                mode.shift_for_splice(index, inserted);
+            }
+            return Ok(StepOutcome::Continue);
+        }
         self.advance_instruction()?;
         Ok(StepOutcome::Continue)
     }
@@ -838,6 +1031,58 @@ impl EffectWindow {
                 condition,
                 destination,
             } => {
+                if let crate::toolbox::ConditionExpr::Resolution(res_cond) = condition.as_ref() {
+                    if self.window.resolving() != Some(entry)
+                        || self.resolution_cursor().map(|cursor| cursor.entry) != Some(entry.id())
+                    {
+                        return Err(EffectError::InconsistentProgram);
+                    }
+                    let zero_target_skip = entry.targets().targets().is_empty()
+                        && self
+                            .payloads
+                            .get(&entry.id())
+                            .and_then(StackPayload::body)
+                            .is_some_and(ExecutableBody::is_up_to_one_target)
+                        && (res_cond.left.uses_target() || res_cond.right.uses_target());
+                    if zero_target_skip {
+                        self.set_instruction(destination)?;
+                        ctx.append.records.push(
+                            crate::occurrence::RulesRecord::InstructionBranch {
+                                entry: entry.id(),
+                                instruction: index,
+                                condition: (**res_cond).clone(),
+                                left: 0.into(),
+                                right: 0.into(),
+                                result: false,
+                                next: destination,
+                            },
+                        );
+                        return Ok(StepOutcome::Continue);
+                    }
+                    let left = self.resolve_value_expr(controller, &res_cond.left)?;
+                    let right = self.resolve_value_expr(controller, &res_cond.right)?;
+                    let result = res_cond.comparison.evaluate(&left, &right);
+                    let next = if result {
+                        index
+                            .checked_add(1)
+                            .ok_or(EffectError::InconsistentProgram)?
+                    } else {
+                        destination
+                    };
+                    self.set_instruction(next)?;
+                    ctx.append
+                        .records
+                        .push(crate::occurrence::RulesRecord::InstructionBranch {
+                            entry: entry.id(),
+                            instruction: index,
+                            condition: (**res_cond).clone(),
+                            left,
+                            right,
+                            result,
+                            next,
+                        });
+                    return Ok(StepOutcome::Continue);
+                }
                 let holds = self.eval_condition_expr_at(
                     controller,
                     Some(entry),
@@ -922,7 +1167,25 @@ impl EffectWindow {
                 self.splice_replacing_current(entry.id(), index, &expanded)?;
                 Ok(StepOutcome::Continue)
             }
+            Instruction::PromptChoice(spec)
+                if matches!(
+                    spec.domain,
+                    crate::toolbox::PromptDomain::ManaPayment { .. }
+                ) =>
+            {
+                Ok(StepOutcome::Next(Instruction::PromptChoice(spec)))
+            }
             Instruction::PromptChoice(spec) => {
+                if let crate::toolbox::PromptDomain::Subtype {
+                    legacy_slot: Some(slot),
+                    ..
+                } = &spec.domain
+                    && self
+                        .resolution_cursor()
+                        .is_some_and(|c| c.values.contains_key(slot))
+                {
+                    return Err(EffectError::InconsistentProgram);
+                }
                 let actor = self
                     .eval_player_selector_at(
                         controller,
@@ -933,22 +1196,105 @@ impl EffectWindow {
                     .into_iter()
                     .next()
                     .unwrap_or(controller);
+                if let crate::toolbox::PromptDomain::Players {
+                    selector,
+                    random: true,
+                    ..
+                } = &spec.domain
+                {
+                    let candidates = self.eval_player_selector_at(
+                        controller,
+                        Some(entry),
+                        selector,
+                        self.resolution_cursor(),
+                    )?;
+                    match candidates.as_slice() {
+                        [] => {
+                            if let Some(cur) = self.resolution_cursor_mut() {
+                                cur.env.bind(spec.bind_to, ExecValue::Players(Vec::new()));
+                            }
+                            self.record_choice_and_emit(
+                                entry,
+                                index,
+                                prompt::ChoiceEventMeta {
+                                    chooser: actor,
+                                    category: spec.category,
+                                    option_indices: Vec::new(),
+                                    chosen_count: 0,
+                                },
+                                ctx.append,
+                            )?;
+                            self.advance_instruction()?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                        [only] => {
+                            if let Some(cur) = self.resolution_cursor_mut() {
+                                cur.chosen_opponent = Some(*only);
+                                cur.env.bind(spec.bind_to, ExecValue::Players(vec![*only]));
+                            }
+                            self.record_choice_and_emit(
+                                entry,
+                                index,
+                                prompt::ChoiceEventMeta {
+                                    chooser: actor,
+                                    category: spec.category,
+                                    option_indices: Vec::new(),
+                                    chosen_count: 1,
+                                },
+                                ctx.append,
+                            )?;
+                            self.advance_instruction()?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                        _ => {
+                            let ready = self
+                                .resolution_cursor()
+                                .is_some_and(|c| c.results.random_player_ready);
+                            if !ready {
+                                self.suspend_for_random_resolution(actor)?;
+                                return Ok(StepOutcome::Continue);
+                            }
+                            let chosen_seats: Vec<SeatId> = if let Some(cur) =
+                                self.resolution_cursor_mut()
+                            {
+                                cur.results.random_player_ready = false;
+                                let seats: Vec<SeatId> = cur.chosen_opponent.into_iter().collect();
+                                cur.env
+                                    .bind(spec.bind_to, ExecValue::Players(seats.clone()));
+                                seats
+                            } else {
+                                Vec::new()
+                            };
+                            self.record_choice_and_emit(
+                                entry,
+                                index,
+                                prompt::ChoiceEventMeta {
+                                    chooser: actor,
+                                    category: spec.category,
+                                    option_indices: Vec::new(),
+                                    chosen_count: chosen_seats.len(),
+                                },
+                                ctx.append,
+                            )?;
+                            self.advance_instruction()?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                    }
+                }
                 let resolved_domain = self.resolve_prompt_domain(entry, &spec.domain)?;
                 if let Some(reply) = self
                     .resolution_cursor_mut()
                     .and_then(|c| c.pending_prompt_reply.take())
                 {
-                    self.apply_prompt_reply(
+                    return self.finish_prompt_choice_reply(
+                        ctx,
                         entry,
                         index,
                         actor,
                         &spec,
                         &resolved_domain,
                         reply,
-                        ctx.append,
-                    )?;
-                    self.advance_instruction()?;
-                    return Ok(StepOutcome::Continue);
+                    );
                 }
                 if spec.auto_resolve_trivial
                     && let Some(auto_reply) = Self::trivial_prompt_reply(&resolved_domain)
@@ -956,25 +1302,36 @@ impl EffectWindow {
                     let constraint_ok = match (&spec.domain, &auto_reply) {
                         (
                             crate::toolbox::PromptDomain::Objects {
-                                constraint: Some(constraint),
+                                constraint,
+                                max_total_power,
                                 ..
                             },
                             crate::toolbox::PromptChoiceReply::Objects(ids),
-                        ) => self.satisfies_selection_constraint(ids, *constraint)?,
+                        ) => {
+                            let c_ok = match constraint {
+                                Some(constraint) => {
+                                    self.satisfies_selection_constraint(ids, *constraint)?
+                                }
+                                None => true,
+                            };
+                            let p_ok = match max_total_power {
+                                Some(expr) => self.satisfies_max_total_power(entry, ids, expr)?,
+                                None => true,
+                            };
+                            c_ok && p_ok
+                        }
                         _ => true,
                     };
                     if constraint_ok {
-                        self.apply_prompt_reply(
+                        return self.finish_prompt_choice_reply(
+                            ctx,
                             entry,
                             index,
                             actor,
                             &spec,
                             &resolved_domain,
                             auto_reply,
-                            ctx.append,
-                        )?;
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
+                        );
                     }
                 }
                 let frame = PromptChoiceFrame {
@@ -990,7 +1347,11 @@ impl EffectWindow {
                 }
                 Ok(StepOutcome::Pending(EffectDecision::PromptChoice(frame)))
             }
-            Instruction::ZoneOp(spec) if spec.is_delayed_special_op() => {
+            Instruction::ZoneOp(spec)
+                if spec.is_delayed_special_op()
+                    || spec.as_group_sacrifice().is_some()
+                    || spec.as_group_discard().is_some() =>
+            {
                 Ok(StepOutcome::Next(Instruction::ZoneOp(spec)))
             }
             Instruction::ZoneOp(spec) => self.execute_zone_op(ctx, entry, index, &spec),
@@ -1023,6 +1384,124 @@ impl EffectWindow {
                 self.execute_non_targeted_stack_op(ctx, entry, index, &spec)
             }
             other => Ok(StepOutcome::Next(other)),
+        }
+    }
+}
+
+fn apply_copy_exceptions(
+    copied: &mut Program,
+    exceptions: &crate::program::CopyExceptions,
+    receiver_base: Option<&Program>,
+) {
+    if exceptions.nonlegendary {
+        copied
+            .supertypes
+            .remove(&crate::program::Supertype::Legendary);
+    }
+    if let Some(orig) = receiver_base {
+        if exceptions.keep_name {
+            copied.names = orig.names.clone();
+        }
+        if exceptions.keep_types {
+            copied.card_types.extend(orig.card_types.iter().copied());
+            copied
+                .creature_subtypes
+                .extend(orig.creature_subtypes.iter().copied());
+            copied
+                .artifact_subtypes
+                .extend(orig.artifact_subtypes.iter().copied());
+            copied
+                .enchantment_subtypes
+                .extend(orig.enchantment_subtypes.iter().copied());
+            copied
+                .land_subtypes
+                .extend(orig.land_subtypes.iter().copied());
+        }
+        if exceptions.keep_abilities {
+            copied
+                .printed_keywords
+                .extend(orig.printed_keywords.iter().copied());
+            let mut next_trig = copied
+                .triggered
+                .iter()
+                .map(|t| t.id.0)
+                .max()
+                .map_or(0, |m| m.saturating_add(1));
+            for tr in &orig.triggered {
+                let mut cloned = tr.clone();
+                cloned.id = crate::program::TriggeredAbilityId(next_trig);
+                next_trig = next_trig.saturating_add(1);
+                copied.triggered.push(cloned);
+            }
+            let mut next_act = copied
+                .activated
+                .iter()
+                .map(|a| a.id.0)
+                .max()
+                .map_or(0, |m| m.saturating_add(1));
+            for act in &orig.activated {
+                let mut cloned = act.clone();
+                cloned.id = crate::activated::ActivatedAbilityId(next_act);
+                next_act = next_act.saturating_add(1);
+                copied.activated.push(cloned);
+            }
+        }
+    }
+    copied
+        .card_types
+        .extend(exceptions.extra_types.iter().copied());
+    copied
+        .artifact_subtypes
+        .extend(exceptions.extra_artifact_subtypes.iter().copied());
+    copied
+        .creature_subtypes
+        .extend(exceptions.extra_creature_subtypes.iter().copied());
+    copied
+        .printed_keywords
+        .extend(exceptions.extra_keywords.iter().copied());
+    if let Some(pt) = &exceptions.override_pt
+        && let ProgramKind::Permanent(permanent) = &mut copied.kind
+    {
+        permanent.printed_pt = Some(pt.clone().into());
+        if matches!(
+            &copied.continuous,
+            Some(crate::characteristics::StaticContinuousAbility::CharacteristicDefining {
+                parts,
+                ..
+            }) if parts
+                .0
+                .iter()
+                .any(|part| matches!(part, crate::characteristics::DefiningPart::PowerToughness { .. }))
+        ) {
+            copied.continuous = None;
+        }
+    }
+    if !exceptions.extra_triggered.is_empty() {
+        let mut next_trig = copied
+            .triggered
+            .iter()
+            .map(|t| t.id.0)
+            .max()
+            .map_or(0, |m| m.saturating_add(1));
+        for tr in &exceptions.extra_triggered {
+            let mut cloned = tr.clone();
+            cloned.id = crate::program::TriggeredAbilityId(next_trig);
+            next_trig = next_trig.saturating_add(1);
+            copied.triggered.push(cloned);
+        }
+    }
+    if !exceptions.extra_activated.is_empty() {
+        let mut next_act = copied
+            .activated
+            .iter()
+            .map(|a| a.id.0)
+            .max()
+            .map_or(0, |m| m.saturating_add(1));
+        for act in &exceptions.extra_activated {
+            let mut cloned = act.clone();
+            cloned.id = crate::activated::ActivatedAbilityId(next_act);
+            next_act = next_act.saturating_add(1);
+            copied.activated.push(cloned);
         }
     }
 }

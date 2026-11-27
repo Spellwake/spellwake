@@ -188,7 +188,7 @@ pub(super) fn compile(
                 ),
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
-                    BodyTarget::FilteredPermanent(
+                    BodyTarget::filtered_permanent(
                         ObjectFilter::planeswalker()
                             .controlled()
                             .other_than_trigger_source(),
@@ -261,60 +261,69 @@ pub(super) fn compile(
         } else {
             signed.parse::<i32>().ok()?
         };
-        if let Some((target, instructions)) = match effect {
-            "Destroy up to three target creatures and/or other planeswalkers. Return each card put into a graveyard this way to the battlefield under your control." => {
-                Some((
-                    BodyTarget::FilteredPermanent(ObjectFilter::either(
+        if effect
+            == "Destroy up to three target creatures and/or other planeswalkers. Return each card put into a graveyard this way to the battlefield under your control."
+        {
+            let id = ActivatedAbilityId(u64::try_from(index).ok()?);
+            program.loyalty_costs.insert(id, loyalty_cost);
+            program.activated.push(ActivatedAbility {
+                id,
+                mana_cost: ManaCost::free(),
+                source_cost: SourceCost::None,
+                body: ExecutableBody::new(
+                    BodyTarget::filtered_permanent(ObjectFilter::either(
                         ObjectClause::creature(),
                         ObjectClause::planeswalker().other_than_trigger_source(),
                     )),
                     vec![
-                        Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: 3,
-                            action: spellwake_engine::program::PermanentTargetAction::Destroy,
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_targets(),
                         Instruction::ZoneOp(Box::new(
                             spellwake_engine::toolbox::ZoneOpSpec::return_destroyed_this_way(),
                         )),
                     ],
-                ))
-            }
+                )
+                .with_permanent_target_bounds(0, 3),
+            });
+            continue;
+        }
+        if let Some((target, instructions)) = match effect {
             "Each player discards a card." => Some((
                 BodyTarget::None,
-                vec![Instruction::Discard {
-                    players: spellwake_engine::program::AffectedPlayers::EachPlayer,
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        spellwake_engine::program::AffectedPlayers::EachPlayer,
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
+                ))],
             )),
             "Target player sacrifices a creature." => Some((
-                BodyTarget::SinglePlayer,
-                vec![Instruction::Sacrifice {
-                    players: spellwake_engine::program::AffectedPlayers::One(
-                        ResolvingPlayer::TargetPlayer,
+                BodyTarget::SINGLE_PLAYER,
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                        spellwake_engine::program::AffectedPlayers::One(
+                            ResolvingPlayer::TargetPlayer,
+                        ),
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        spellwake_engine::program::PermanentTypeFilter {
+                            any_types: BTreeSet::new(),
+                            required_types: BTreeSet::from([CardType::Creature]),
+                            forbidden_types: BTreeSet::new(),
+                            object_filter: None,
+                        },
                     ),
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    filter: spellwake_engine::program::PermanentTypeFilter {
-                        any_types: BTreeSet::new(),
-                        required_types: BTreeSet::from([CardType::Creature]),
-                        forbidden_types: BTreeSet::new(),
-                        object_filter: None,
-                    },
-                }],
+                ))],
             )),
             "Tap target permanent. It doesn't untap during its controller's next untap step." => {
                 Some((
-                    BodyTarget::SinglePermanent,
-                    vec![Instruction::AffectPermanentTargets {
-                        minimum: 1,
-                        maximum: 1,
-                        action:
-                            spellwake_engine::program::PermanentTargetAction::TapAndSkipNextUntap,
-                    }],
+                    BodyTarget::SINGLE_PERMANENT,
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(true),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap_targets(),
+                    ],
                 ))
             }
             "Draw a card for each tapped creature target player controls." => Some((
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::count_player_battlefield(
@@ -351,7 +360,7 @@ pub(super) fn compile(
             )),
             "Tibalt deals damage equal to the number of cards in target player's hand to that player." => {
                 Some((
-                    BodyTarget::SinglePlayer,
+                    BodyTarget::SINGLE_PLAYER,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                             spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -392,7 +401,7 @@ pub(super) fn compile(
                 ))
             }
             "You and target opponent each draw a card." => Some((
-                BodyTarget::SingleOpponent,
+                BodyTarget::SINGLE_OPPONENT,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                         spellwake_engine::program::ValueExpr::Literal(1.into()),
@@ -563,12 +572,14 @@ pub(super) fn compile(
                             chooser: ResolvingPlayer::Controller,
                             instructions: 2,
                         },
-                        Instruction::Discard {
-                            players: spellwake_engine::program::AffectedPlayers::One(
-                                ResolvingPlayer::Controller,
+                        Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                                spellwake_engine::program::AffectedPlayers::One(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                spellwake_engine::program::ValueExpr::Literal(1.into()),
                             ),
-                            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
+                        )),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                             spellwake_engine::program::ValueExpr::event(
                                 spellwake_engine::program::EventValueKind::LargestDiscard,
@@ -663,10 +674,10 @@ pub(super) fn compile(
                     subtypes:SubtypeOperation::Add(InstructionSubtypeOperand::Literal([vocabulary.resolve_label("Construct")?].into())),land_subtypes:SubtypeOperation::Keep}),
                     ResolvedPartSpec::SetPT(PowerToughness {power:9.into(),toughness:9.into()}),
                     ResolvedPartSpec::Abilities(AbilityChange { grants_unblockable:true, ..AbilityChange::grant_keywords([KeywordAbility::Vigilance,KeywordAbility::Indestructible]) })]);
-                (BodyTarget::FilteredPermanent(ObjectFilter::artifact().controlled()),crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets,parts,ResolvedDuration::NoStatedDuration))
+                (BodyTarget::filtered_permanent(ObjectFilter::artifact().controlled()),crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets,parts,ResolvedDuration::NoStatedDuration))
             }
             "Scry 2." => (BodyTarget::None, Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::scry(ResolvingPlayer::Controller, spellwake_engine::program::ValueExpr::Literal(2.into()))))),
-            "Exile target enchantment, tapped artifact, or tapped creature." => (BodyTarget::FilteredPermanent(ObjectFilter::either(ObjectClause::enchantment(), ObjectClause::any().any_types(CardTypeMask::ARTIFACT.union(CardTypeMask::CREATURE)).tapped())),crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()),
+            "Exile target enchantment, tapped artifact, or tapped creature." => (BodyTarget::filtered_permanent(ObjectFilter::either(ObjectClause::enchantment(), ObjectClause::any().any_types(CardTypeMask::ARTIFACT.union(CardTypeMask::CREATURE)).tapped())),crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()),
             "Search your library for an artifact or creature card, put it onto the battlefield, then shuffle. It gains haste. Return it to your hand at the beginning of the next end step." =>
                 (BodyTarget::None, Instruction::SearchLibrary { filter: Box::new(spellwake_engine::program::LibrarySearch::to_battlefield(
                         spellwake_engine::program::SearchCardMatcher::CardTypes([CardType::Artifact, CardType::Creature].into()),
@@ -695,7 +706,7 @@ pub(super) fn compile(
                 )
             }
             "Create a 4/4 red Dragon creature token with flying." => (BodyTarget::None,super::ordinary_text::create_tokens("a 4/4 red Dragon creature token with flying",vocabulary)?),
-            "Destroy target tapped creature." => (BodyTarget::FilteredPermanent(ObjectFilter::creature().tapped()),crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
+            "Destroy target tapped creature." => (BodyTarget::filtered_permanent(ObjectFilter::creature().tapped()),crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
             "Each opponent loses 1 life. You gain life equal to the life lost this way." => (
                 BodyTarget::None,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::drain_life(
@@ -721,18 +732,45 @@ pub(super) fn compile(
                 let creation = TokenCreation::one(TokenDefinition::new(token, name, vocabulary).ok()?);
                 (BodyTarget::None, Instruction::CreateTokens { creations: vec![creation] })
             },
-            "Untap up to four target permanents." => (BodyTarget::SinglePermanent, Instruction::AffectPermanentTargets {
-                minimum: 0, maximum: 4, action: spellwake_engine::program::PermanentTargetAction::Untap,
-            }),
+            "Untap up to four target permanents." => {
+                let id = ActivatedAbilityId(u64::try_from(index).ok()?);
+                program.loyalty_costs.insert(id, loyalty_cost);
+                program.activated.push(ActivatedAbility {
+                    id,
+                    mana_cost: ManaCost::free(),
+                    source_cost: SourceCost::None,
+                    body: ExecutableBody::new(
+                        BodyTarget::SINGLE_PERMANENT,
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(false)],
+                    )
+                    .with_permanent_target_bounds(0, 4),
+                });
+                continue;
+            }
             "Until end of turn, up to one target creature gets +1/+1 and gains first strike, vigilance, and lifelink." => {
                 use spellwake_engine::characteristics::{AbilityChange, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec};
                 let parts = ResolvedPartsSpec(vec![
                     ResolvedPartSpec::ModifyPT(PowerToughness { power: 1.into(), toughness: 1.into() }),
                     ResolvedPartSpec::Abilities(AbilityChange::grant_keywords([KeywordAbility::FirstStrike, KeywordAbility::Vigilance, KeywordAbility::Lifelink])),
                 ]);
-                (BodyTarget::SingleCreature, Instruction::AffectPermanentTargets { minimum: 0, maximum: 1,
-                    action: spellwake_engine::program::PermanentTargetAction::Modify { parts, duration: ResolvedDuration::UntilEndOfTurn } })
-            },
+                let id = ActivatedAbilityId(u64::try_from(index).ok()?);
+                program.loyalty_costs.insert(id, loyalty_cost);
+                program.activated.push(ActivatedAbility {
+                    id,
+                    mana_cost: ManaCost::free(),
+                    source_cost: SourceCost::None,
+                    body: ExecutableBody::new(
+                        BodyTarget::SINGLE_CREATURE,
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            parts,
+                            ResolvedDuration::UntilEndOfTurn,
+                        )],
+                    )
+                    .with_permanent_target_bounds(0, 1),
+                });
+                continue;
+            }
             "You get an emblem with \"If a source would deal damage to you or a planeswalker you control, prevent all but 1 of that damage.\"" => (
                 BodyTarget::None,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
@@ -771,8 +809,8 @@ pub(super) fn compile(
                 let creation = TokenCreation::one(TokenDefinition::new(token, name, vocabulary).ok()?);
                 (BodyTarget::None, Instruction::CreateTokens { creations: vec![creation] })
             },
-            "Destroy target permanent that's one or more colors." => (BodyTarget::FilteredPermanent(ObjectFilter::permanent().with_color(ObjectColorFilter::Colored)), crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
-            "Destroy target artifact or enchantment." => (BodyTarget::FilteredPermanent(ObjectFilter::artifact_or_enchantment()), crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
+            "Destroy target permanent that's one or more colors." => (BodyTarget::filtered_permanent(ObjectFilter::permanent().with_color(ObjectColorFilter::Colored)), crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
+            "Destroy target artifact or enchantment." => (BodyTarget::filtered_permanent(ObjectFilter::artifact_or_enchantment()), crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
             "Draw a card for each green creature you control." => (BodyTarget::None, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::count_battlefield(spellwake_engine::program::ObjectFilter::creature().controlled().with_color(spellwake_engine::program::ObjectColorFilter::has(spellwake_engine::characteristics::Color::Green))))),
             text if text == format!("{} deals 3 damage to each non-Elemental creature.", card.name.split(',').next()?) => (
                 BodyTarget::None,
@@ -789,7 +827,7 @@ pub(super) fn compile(
                 ),
             ),
             text if variable_loyalty && text == format!("{} deals X damage to target creature or planeswalker. If a permanent dealt damage this way would die this turn, exile it instead.", card.name.split(',').next()?) => (
-                BodyTarget::FilteredPermanent(ObjectFilter::creature_or_planeswalker()),
+                BodyTarget::filtered_permanent(ObjectFilter::creature_or_planeswalker()),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::chosen_x(),
@@ -806,7 +844,7 @@ pub(super) fn compile(
                 ),
             ),
             text if text == format!("{} deals 4 damage to target creature.", card.name.split(',').next()?) || text == format!("{} deals 4 damage to target creature.", card.name) => (
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
                     spellwake_engine::toolbox::DamageTargetQuery::Targets,
                     spellwake_engine::program::ValueExpr::literal(4),
@@ -871,11 +909,11 @@ pub(super) fn compile(
                     },
                 ),
             ),
-            "Exile target creature with power 4 or greater." => (BodyTarget::FilteredPermanent(ObjectFilter::creature().with_power(PowerFilter::AtLeast(4))), crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()),
+            "Exile target creature with power 4 or greater." => (BodyTarget::filtered_permanent(ObjectFilter::creature().with_power(PowerFilter::AtLeast(4))), crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()),
             "Each player draws a card." => (BodyTarget::None, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(one())),
-            "Target player draws a card." => (BodyTarget::SinglePlayer, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(one())),
+            "Target player draws a card." => (BodyTarget::SINGLE_PLAYER, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(one())),
             "Target player mills twenty cards." => (
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::mill(
                         ResolvingPlayer::TargetPlayer,
@@ -968,7 +1006,7 @@ pub(super) fn loyalty_support(
                 spellwake_engine::program::ObjectFilter::self_object(),
             ),
             ExecutableBody::new(
-                BodyTarget::FilteredPermanent(
+                BodyTarget::filtered_permanent(
                     ObjectFilter::permanent()
                         .controlled()
                         .other_than_trigger_source(),

@@ -25,15 +25,18 @@ fn payment_outcomes(result: &NativeCandidate) -> usize {
 #[test]
 fn every_wrong_reply_kind_variant_retains_the_latest_prefix_before_its_own_valid_continuation() {
     let opened = pending(vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(3.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 4,
-            declined_destination: 1,
-        },
-        Instruction::OptionalEffect {
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(3.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                4,
+                1,
+            ),
+        )),
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         gain(1),
         gain(2),
@@ -184,13 +187,15 @@ pub(super) fn exact_total_unavailable_amount_and_required_colorless_denials_keep
                 A,
                 BodyTarget::None,
                 vec![
-                    Instruction::OfferDynamicManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        fixed: ManaCost::specific(ManaType::Colourless, 1.into()),
-                        extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                        paid_destination: 2,
-                        declined_destination: 1,
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                            ResolvingPlayer::Controller,
+                            ManaCost::specific(ManaType::Colourless, 1.into()),
+                            crate::program::ValueExpr::Literal(0.into()),
+                            2,
+                            1,
+                        ),
+                    )),
                     gain(2),
                 ],
             ),
@@ -268,15 +273,18 @@ fn record_choice(trace: &mut TypedTrace, choice: DecisionReply) {
 
 fn replay_body() -> Vec<Instruction> {
     vec![
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(2.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 1,
-            declined_destination: 4,
-        },
-        Instruction::OptionalEffect {
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(2.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                1,
+                4,
+            ),
+        )),
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         gain(1),
         gain(2),
@@ -521,12 +529,25 @@ fn optional_token_two_apnap_order_children_keep_locals_and_reject_each_bad_reply
     creation.amount = crate::program::ValueExpr::Literal(2.into());
     creation.recipients = TokenRecipients::EachPlayer;
     let state = pending(vec![
-        Instruction::ChooseCreatureType {
-            into: CreatureTypeSlot::new(0),
-            excluding: BTreeSet::new(),
-        },
-        Instruction::OptionalEffect {
+        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+            chooser: crate::toolbox::PlayerSelector::Resolving(
+                crate::program::ResolvingPlayer::Controller,
+            ),
+            domain: crate::toolbox::PromptDomain::Subtype {
+                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                excluding: BTreeSet::new(),
+                legacy_slot: Some(CreatureTypeSlot::new(0)),
+            },
+            category: crate::toolbox::ChoiceCategory::Generic,
+            bind_to: crate::toolbox::BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+            option_branches: Vec::new(),
+        })),
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
         Instruction::CreateTokens {
             creations: vec![creation],
@@ -538,7 +559,10 @@ fn optional_token_two_apnap_order_children_keep_locals_and_reject_each_bad_reply
         .creature_vocabulary()
         .resolve_label("Human")
         .unwrap();
-    let optional = reply(&state, DecisionReply::CreatureType(human));
+    let optional = reply(
+        &state,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+    );
     let declined = reply(
         optional.state(),
         DecisionReply::OptionalEffect(OptionalEffectChoice::Decline),
@@ -983,12 +1007,24 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
             hand(
                 1,
                 A,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![
-                    Instruction::ChooseCreatureType {
-                        into: CreatureTypeSlot::new(0),
-                        excluding: BTreeSet::new(),
-                    },
+                    Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                        chooser: crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        domain: crate::toolbox::PromptDomain::Subtype {
+                            kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                            excluding: BTreeSet::new(),
+                            legacy_slot: Some(CreatureTypeSlot::new(0)),
+                        },
+                        category: crate::toolbox::ChoiceCategory::Generic,
+                        bind_to: crate::toolbox::BindingId(0),
+                        bind_unchosen: None,
+                        tag_partition: None,
+                        auto_resolve_trivial: false,
+                        option_branches: Vec::new(),
+                    })),
                     Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec {
                         selector: None,
                         payload: crate::toolbox::ContinuousPayload::TargetPreventionShield {
@@ -1003,8 +1039,9 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
                     Instruction::ApplyContinuous(Box::new(
                         crate::toolbox::ApplyContinuousSpec::damage_multiplier(2.into()),
                     )),
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
                         source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -1033,7 +1070,10 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
         .creature_vocabulary()
         .resolve_label("Human")
         .unwrap();
-    let optional = reply(type_child.state(), DecisionReply::CreatureType(human));
+    let optional = reply(
+        type_child.state(),
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+    );
     let payload = projection::resolving_payload(optional.state().execution());
     let declined = reply(
         optional.state(),
@@ -1140,10 +1180,24 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
 #[test]
 fn optional_type_child_rejects_an_unexcluded_member_of_a_foreign_vocabulary_then_accepts_the_real_member()
  {
-    let state = pending(wrapped(Instruction::ChooseCreatureType {
-        into: CreatureTypeSlot::new(0),
-        excluding: BTreeSet::new(),
-    }));
+    let state = pending(wrapped(Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec {
+            chooser: crate::toolbox::PlayerSelector::Resolving(
+                crate::program::ResolvingPlayer::Controller,
+            ),
+            domain: crate::toolbox::PromptDomain::Subtype {
+                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                excluding: BTreeSet::new(),
+                legacy_slot: Some(CreatureTypeSlot::new(0)),
+            },
+            category: crate::toolbox::ChoiceCategory::Generic,
+            bind_to: crate::toolbox::BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+            option_branches: Vec::new(),
+        },
+    ))));
     let taken = reply(
         &state,
         DecisionReply::OptionalEffect(OptionalEffectChoice::Take),
@@ -1163,10 +1217,16 @@ fn optional_type_child_rejects_an_unexcluded_member_of_a_foreign_vocabulary_then
     reject(
         child,
         A,
-        command_reply(child, DecisionReply::CreatureType(foreign)),
-        GameError::Effect(EffectError::IllegalCreatureType),
+        command_reply(
+            child,
+            DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(foreign)),
+        ),
+        GameError::Effect(EffectError::SelectionOutsideDomain),
     );
-    let completed = reply(child, DecisionReply::CreatureType(real));
+    let completed = reply(
+        child,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(real)),
+    );
     assert_tail(&completed);
     assert_eq!(outcomes(&completed), 0);
     assert_eq!(occurrences(&completed).iter().filter(|row| matches!(row, RulesOccurrence::CreatureTypeChosen { value, .. } if *value == real)).count(), 1);

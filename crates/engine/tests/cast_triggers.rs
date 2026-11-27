@@ -627,7 +627,7 @@ fn copies_and_copies_of_copies_keep_self_cast_definitions_without_becoming_casts
     let copier = Program::instant(
         ManaCost::one(ManaType::Blue),
         ExecutableBody::new(
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
             vec![Instruction::StackOp(Box::new(
                 spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
             ))],
@@ -636,7 +636,7 @@ fn copies_and_copies_of_copies_keep_self_cast_definitions_without_becoming_casts
     let counter = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
             vec![Instruction::StackOp(Box::new(
                 spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                     spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -824,7 +824,7 @@ fn countering_the_original_before_its_trigger_resolves_keeps_the_owned_cast_caus
     let counter = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
             vec![Instruction::StackOp(Box::new(
                 spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                     spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -895,7 +895,7 @@ fn watcher_control_change_after_discovery_keeps_the_original_trigger_controller(
     let control = Program::instant(
         ManaCost::one(ManaType::Blue),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![tr::effect(
                 vec![ResolvedPartSpec::Control(
                     ControlRecipient::ResolvingController,
@@ -1007,7 +1007,7 @@ fn removed_watcher_ability_is_unavailable_at_the_completed_cast_cut() {
     let removal = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePermanent,
+            BodyTarget::SINGLE_PERMANENT,
             vec![tr::effect(
                 vec![ResolvedPartSpec::Abilities(AbilityChange::remove(
                     AbilityRemoval::All,

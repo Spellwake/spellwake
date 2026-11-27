@@ -30,7 +30,7 @@ fn filler(id: u64, owner: SeatId, destination: ObjectDestination) -> SeedCard {
 fn combined_exile() -> SeedCard {
     spell(
         1,
-        BodyTarget::SinglePlayer,
+        BodyTarget::SINGLE_PLAYER,
         vec![Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::Union(vec![

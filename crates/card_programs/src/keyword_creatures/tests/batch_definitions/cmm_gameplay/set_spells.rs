@@ -436,7 +436,11 @@ fn cmm_swift_response_requires_a_tapped_creature_at_announcement_and_resolution(
                 6,
                 A,
                 ObjectDestination::Hand,
-                change_one_permanent(spellwake_engine::program::PermanentTargetAction::Untap),
+                change_one_permanent(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(
+                        false,
+                    ),
+                ),
             ),
         ],
         &[],
@@ -888,15 +892,8 @@ fn cmm_exsanguinate_batches_opponent_losses_before_applying_the_linked_gain() {
     }
 }
 
-fn change_one_permanent(action: spellwake_engine::program::PermanentTargetAction) -> Program {
-    free_instant(
-        BodyTarget::SingleCreature,
-        Instruction::AffectPermanentTargets {
-            minimum: 1,
-            maximum: 1,
-            action,
-        },
-    )
+fn change_one_permanent(instruction: Instruction) -> Program {
+    free_instant(BodyTarget::SINGLE_CREATURE, instruction)
 }
 
 fn respond_to_creature(state: &GameState, spell: u64, creature: u64) -> GameState {
@@ -915,10 +912,7 @@ fn respond_to_creature(state: &GameState, spell: u64, creature: u64) -> GameStat
 #[ignore = "requires dated Oracle source and creature vocabulary"]
 fn cmm_removal_reads_target_power_control_and_flying_at_resolution() {
     use ManaType::*;
-    use spellwake_engine::{
-        characteristics::{AbilityChange, AbilityRemoval},
-        program::PermanentTargetAction,
-    };
+    use spellwake_engine::characteristics::{AbilityChange, AbilityRemoval};
     for (name, cost, destination, token_count, own_life) in [
         (
             "Generous Gift",
@@ -973,10 +967,13 @@ fn cmm_removal_reads_target_power_control_and_flying_at_resolution() {
                     3,
                     A,
                     ObjectDestination::Hand,
-                    change_one_permanent(PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(parts),
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                    }),
+                    change_one_permanent(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            ResolvedPartsSpec(parts),
+                            ResolvedDuration::UntilEndOfTurn,
+                        ),
+                    ),
                 ),
             ],
             &cost,
@@ -1037,7 +1034,7 @@ fn cmm_rise_of_the_eldrazi_survives_a_counter_destroys_draws_four_and_gives_an_e
             B,
             ObjectDestination::Hand,
             free_instant(
-                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
                 Instruction::StackOp(Box::new(
                     spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                         spellwake_engine::toolbox::CounterDestination::Graveyard,

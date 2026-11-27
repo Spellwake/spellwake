@@ -48,8 +48,7 @@ impl EffectWindow {
             return None;
         }
         let original_role = match self.optional_instruction(&work.cursor).ok()? {
-            Instruction::OptionalEffect { chooser }
-            | Instruction::OptionalSequence { chooser, .. } => *chooser,
+            Instruction::OptionalSequence { chooser, .. } => *chooser,
             _ => return None,
         };
         let entry = self

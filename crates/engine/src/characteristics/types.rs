@@ -804,11 +804,11 @@ pub enum ResolvedPartSpec {
         >,
     },
     Color(ColorOperation<BTreeSet<Color>>),
-    /// Set or add the color chosen earlier during resolution via `Instruction::ChooseValue(Color)`.
+    /// Set or add the color chosen earlier during resolution via `Instruction::PromptChoice`.
     ChosenColor {
         add: bool,
     },
-    /// Set or add the basic land type chosen earlier during resolution via `Instruction::ChooseValue(BasicLandType)`.
+    /// Set or add the basic land type chosen earlier during resolution via `Instruction::PromptChoice`.
     ChosenBasicLandType {
         add: bool,
     },

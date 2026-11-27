@@ -261,23 +261,28 @@ fn skipped_local_definition() {
             .of_chosen_slot(CreatureTypeSlot::new(0)),
     );
     for first in [
-        Instruction::OptionalEffect {
+        Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
+            instructions: 1,
         },
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(1.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 1,
-            declined_destination: 2,
-        },
-        Instruction::OfferDynamicManaPayment {
-            payer: ResolvingPlayer::Controller,
-            fixed: ManaCost::generic(1.into()),
-            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-            paid_destination: 2,
-            declined_destination: 1,
-        },
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(1.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                1,
+                2,
+            ),
+        )),
+        Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                ResolvingPlayer::Controller,
+                ManaCost::generic(1.into()),
+                crate::program::ValueExpr::Literal(0.into()),
+                2,
+                1,
+            ),
+        )),
     ] {
         let program = Program::instant(
             ManaCost::free(),
@@ -285,10 +290,22 @@ fn skipped_local_definition() {
                 BodyTarget::None,
                 vec![
                     first,
-                    Instruction::ChooseCreatureType {
-                        into: CreatureTypeSlot::new(0),
-                        excluding: BTreeSet::new(),
-                    },
+                    Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                        chooser: crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        domain: crate::toolbox::PromptDomain::Subtype {
+                            kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                            excluding: BTreeSet::new(),
+                            legacy_slot: Some(CreatureTypeSlot::new(0)),
+                        },
+                        category: crate::toolbox::ChoiceCategory::Generic,
+                        bind_to: crate::toolbox::BindingId(0),
+                        bind_unchosen: None,
+                        tag_partition: None,
+                        auto_resolve_trivial: false,
+                        option_branches: Vec::new(),
+                    })),
                     Instruction::CreateTokens {
                         creations: vec![creation.clone()],
                     },
@@ -315,22 +332,48 @@ fn skipped_local_definition() {
                 ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::OfferDynamicManaPayment {
-                            payer: ResolvingPlayer::Controller,
-                            fixed: ManaCost::generic(1.into()),
-                            extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                            paid_destination,
-                            declined_destination,
-                        },
-                        Instruction::ChooseCreatureType {
-                            into: CreatureTypeSlot::new(0),
-                            excluding: BTreeSet::new(),
-                        },
+                        Instruction::PromptChoice(Box::new(
+                            crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                                ResolvingPlayer::Controller,
+                                ManaCost::generic(1.into()),
+                                crate::program::ValueExpr::Literal(0.into()),
+                                paid_destination,
+                                declined_destination,
+                            ),
+                        )),
+                        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                            chooser: crate::toolbox::PlayerSelector::Resolving(
+                                crate::program::ResolvingPlayer::Controller,
+                            ),
+                            domain: crate::toolbox::PromptDomain::Subtype {
+                                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                                excluding: BTreeSet::new(),
+                                legacy_slot: Some(CreatureTypeSlot::new(0)),
+                            },
+                            category: crate::toolbox::ChoiceCategory::Generic,
+                            bind_to: crate::toolbox::BindingId(0),
+                            bind_unchosen: None,
+                            tag_partition: None,
+                            auto_resolve_trivial: false,
+                            option_branches: Vec::new(),
+                        })),
                         Instruction::Jump { destination: 4 },
-                        Instruction::ChooseCreatureType {
-                            into: other_slot,
-                            excluding: BTreeSet::new(),
-                        },
+                        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                            chooser: crate::toolbox::PlayerSelector::Resolving(
+                                crate::program::ResolvingPlayer::Controller,
+                            ),
+                            domain: crate::toolbox::PromptDomain::Subtype {
+                                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                                excluding: BTreeSet::new(),
+                                legacy_slot: Some(other_slot),
+                            },
+                            category: crate::toolbox::ChoiceCategory::Generic,
+                            bind_to: crate::toolbox::BindingId(0),
+                            bind_unchosen: None,
+                            tag_partition: None,
+                            auto_resolve_trivial: false,
+                            option_branches: Vec::new(),
+                        })),
                         Instruction::CreateTokens {
                             creations: vec![creation.clone()],
                         },
@@ -376,18 +419,21 @@ fn singular_related_player_definitions() {
     for condition in conditions {
         for instructions in [
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::UniqueRelatedPlayer,
+                    instructions: 1,
                 },
                 gain(1),
             ],
-            vec![Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::UniqueRelatedPlayer,
-                fixed: ManaCost::generic(1.into()),
-                extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                paid_destination: 1,
-                declined_destination: 1,
-            }],
+            vec![Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::UniqueRelatedPlayer,
+                    ManaCost::generic(1.into()),
+                    crate::program::ValueExpr::Literal(0.into()),
+                    1,
+                    1,
+                ),
+            ))],
         ] {
             for (grouping, expected) in [
                 (TriggerGrouping::EachOccurrence, Ok(())),
@@ -421,10 +467,11 @@ fn moved_donor_definition() {
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     crate::program::Instruction::ZoneOp(Box::new(
                         crate::toolbox::ZoneOpSpec::move_all(
@@ -432,15 +479,17 @@ fn moved_donor_definition() {
                             crate::toolbox::ZoneDest::Hand,
                         ),
                     )),
-                    Instruction::BecomeCopy {
-                        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
-                        donor: crate::program::MoveSubjectRef::TargetObject,
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                        exceptions: Box::new(crate::program::CopyExceptions {
-                            override_pt: None,
-                            ..Default::default()
-                        }),
-                    },
+                    Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec::become_copy(
+                            crate::toolbox::ObjectQuery::Source,
+                            crate::toolbox::ObjectQuery::Targets,
+                            ResolvedDuration::UntilEndOfTurn,
+                            crate::program::CopyExceptions {
+                                override_pt: None,
+                                ..Default::default()
+                            },
+                        ),
+                    )),
                 ],
             ),
         }],
@@ -563,15 +612,18 @@ fn saved_replay() -> Value {
     .enumerate()
     {
         let initial = initialize(vec![
-            Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::Controller,
-                fixed: ManaCost::generic(2.into()),
-                extra_generic: crate::program::ValueExpr::Literal(0.into()),
-                paid_destination: 1,
-                declined_destination: 4,
-            },
-            Instruction::OptionalEffect {
+            Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec::offer_dynamic_mana_payment(
+                    ResolvingPlayer::Controller,
+                    ManaCost::generic(2.into()),
+                    crate::program::ValueExpr::Literal(0.into()),
+                    1,
+                    4,
+                ),
+            )),
+            Instruction::OptionalSequence {
                 chooser: ResolvingPlayer::Controller,
+                instructions: 1,
             },
             gain(1),
             gain(2),

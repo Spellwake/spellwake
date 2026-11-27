@@ -52,7 +52,7 @@ fn galvanizing_sawship_and_wurmwall_sweeper_use_the_contributors_last_battlefiel
                 destination: ObjectDestination::Hand,
                 program: Program::instant(
                     ManaCost::free(),
-                    ExecutableBody::new(BodyTarget::SingleCreature, vec![op]),
+                    ExecutableBody::new(BodyTarget::SINGLE_CREATURE, vec![op]),
                 ),
             });
         }

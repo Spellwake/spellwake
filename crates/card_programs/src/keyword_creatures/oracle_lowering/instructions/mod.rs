@@ -2,10 +2,7 @@ use super::*;
 pub(super) use control_misc::lower_loop_player_sub_body;
 use spellwake_engine::characteristics::ActivationSuppression;
 use spellwake_engine::day_night::DayNight;
-use spellwake_engine::program::{
-    DynamicStatAnchor, ExchangeSpec, ExchangeZone, LinkedExileGroup, ResolutionChoiceDomain,
-    StackCopyTarget,
-};
+use spellwake_engine::program::{DynamicStatAnchor, LinkedExileGroup, StackCopyTarget};
 use spellwake_oracle_compiler::ast::ExchangeKind;
 
 mod combat_damage;
@@ -30,20 +27,20 @@ pub(super) fn lower_target_subject(
     vocabulary: &CreatureTypeVocabulary,
 ) -> Result<BodyTarget, &'static str> {
     match subject {
-        SubjectRefAst::AnyTarget => Ok(BodyTarget::SingleAnyTarget),
+        SubjectRefAst::AnyTarget => Ok(BodyTarget::SINGLE_ANY_TARGET),
         SubjectRefAst::TargetPlayerOrPlaneswalker {
             opponent_only: false,
-        } => Ok(BodyTarget::SinglePlayerOrPlaneswalker),
+        } => Ok(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER),
         SubjectRefAst::TargetPlayerOrPlaneswalker {
             opponent_only: true,
-        } => Ok(BodyTarget::SingleOpponentOrPlaneswalker),
+        } => Ok(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER),
         SubjectRefAst::TargetPlayer {
             opponent_only,
             count: TargetCountAst::Exact(1),
         } => Ok(if *opponent_only {
-            BodyTarget::SingleOpponent
+            BodyTarget::SINGLE_OPPONENT
         } else {
-            BodyTarget::SinglePlayer
+            BodyTarget::SINGLE_PLAYER
         }),
         SubjectRefAst::TargetObject {
             filter,
@@ -57,9 +54,9 @@ pub(super) fn lower_target_subject(
                     inner.zone = None;
                 }
                 return if is_unrestricted_filter(&inner) {
-                    Ok(BodyTarget::SingleStackEntry)
+                    Ok(BodyTarget::SINGLE_STACK_ENTRY)
                 } else {
-                    Ok(BodyTarget::SingleStackObject(lower_spell_filter(
+                    Ok(BodyTarget::single_stack_object(lower_spell_filter(
                         &inner, vocabulary,
                     )?))
                 };
@@ -67,7 +64,7 @@ pub(super) fn lower_target_subject(
             if filter.any_spell {
                 let mut inner = filter.as_ref().clone();
                 inner.any_spell = false;
-                return Ok(BodyTarget::SingleSpell(lower_spell_filter(
+                return Ok(BodyTarget::single_spell(lower_spell_filter(
                     &inner, vocabulary,
                 )?));
             }
@@ -77,16 +74,16 @@ pub(super) fn lower_target_subject(
                 return match zone {
                     ZoneFilter::YourGraveyard => {
                         if is_unrestricted_filter(&inner) {
-                            Ok(BodyTarget::SingleOwnGraveyardCard)
+                            Ok(BodyTarget::SINGLE_OWN_GRAVEYARD_CARD)
                         } else {
-                            Ok(BodyTarget::FilteredOwnGraveyardCard(lower_object_filter(
+                            Ok(BodyTarget::filtered_own_graveyard(lower_object_filter(
                                 &inner, vocabulary,
                             )?))
                         }
                     }
                     ZoneFilter::AnyGraveyard | ZoneFilter::SingleGraveyard => {
                         if is_unrestricted_filter(&inner) {
-                            Ok(BodyTarget::AnyGraveyardCard)
+                            Ok(BodyTarget::ANY_GRAVEYARD_CARD)
                         } else if inner.any_types == AstCardTypeMask::CREATURE
                             && filter_only_has(
                                 &inner,
@@ -96,7 +93,7 @@ pub(super) fn lower_target_subject(
                                 },
                             )
                         {
-                            Ok(BodyTarget::AnyGraveyardCreature)
+                            Ok(BodyTarget::ANY_GRAVEYARD_CREATURE)
                         } else if inner.any_types
                             == AstCardTypeMask::CREATURE.union(AstCardTypeMask::PLANESWALKER)
                             && filter_only_has(
@@ -107,12 +104,12 @@ pub(super) fn lower_target_subject(
                                 },
                             )
                         {
-                            Ok(BodyTarget::AnyGraveyardCreatureOrPlaneswalker)
+                            Ok(BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER)
                         } else {
-                            Ok(BodyTarget::FilteredAnyGraveyardCard {
-                                filter: lower_object_filter(&inner, vocabulary)?,
-                                opponents_only: false,
-                            })
+                            Ok(BodyTarget::filtered_any_graveyard(
+                                lower_object_filter(&inner, vocabulary)?,
+                                false,
+                            ))
                         }
                     }
                     ZoneFilter::OpponentGraveyard => {
@@ -121,24 +118,21 @@ pub(super) fn lower_target_subject(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        Ok(BodyTarget::FilteredAnyGraveyardCard {
-                            filter,
-                            opponents_only: true,
-                        })
+                        Ok(BodyTarget::filtered_any_graveyard(filter, true))
                     }
                     ZoneFilter::Stack => {
                         if inner.is_ability {
                             inner.is_ability = false;
                             inner.any_spell = false;
                             if is_unrestricted_filter(&inner) {
-                                Ok(BodyTarget::SingleStackEntry)
+                                Ok(BodyTarget::SINGLE_STACK_ENTRY)
                             } else {
-                                Ok(BodyTarget::SingleStackObject(lower_spell_filter(
+                                Ok(BodyTarget::single_stack_object(lower_spell_filter(
                                     &inner, vocabulary,
                                 )?))
                             }
                         } else {
-                            Ok(BodyTarget::SingleSpell(lower_spell_filter(
+                            Ok(BodyTarget::single_spell(lower_spell_filter(
                                 &inner, vocabulary,
                             )?))
                         }
@@ -266,12 +260,12 @@ fn lower_target_one_of_body_target(
             return Err("oracle:unsupported-target-subject");
         }
         return match (has_any_player, has_opponent, has_creature, has_planeswalker) {
-            (true, false, true, true) => Ok(BodyTarget::SingleAnyTarget),
-            (true, false, true, false) => Ok(BodyTarget::SingleCreatureOrPlayer),
-            (true, false, false, true) => Ok(BodyTarget::SinglePlayerOrPlaneswalker),
-            (false, true, false, true) => Ok(BodyTarget::SingleOpponentOrPlaneswalker),
-            (true, false, false, false) => Ok(BodyTarget::SinglePlayer),
-            (false, true, false, false) => Ok(BodyTarget::SingleOpponent),
+            (true, false, true, true) => Ok(BodyTarget::SINGLE_ANY_TARGET),
+            (true, false, true, false) => Ok(BodyTarget::SINGLE_CREATURE_OR_PLAYER),
+            (true, false, false, true) => Ok(BodyTarget::SINGLE_PLAYER_OR_PLANESWALKER),
+            (false, true, false, true) => Ok(BodyTarget::SINGLE_OPPONENT_OR_PLANESWALKER),
+            (true, false, false, false) => Ok(BodyTarget::SINGLE_PLAYER),
+            (false, true, false, false) => Ok(BodyTarget::SINGLE_OPPONENT),
             _ => Err("oracle:unsupported-target-subject"),
         };
     }
@@ -279,16 +273,16 @@ fn lower_target_one_of_body_target(
         1 => {
             let f = ObjectFilter::Clause(perm_clauses[0]);
             if f == ObjectFilter::creature() {
-                Ok(BodyTarget::SingleCreature)
+                Ok(BodyTarget::SINGLE_CREATURE)
             } else if f == ObjectFilter::planeswalker() {
-                Ok(BodyTarget::SinglePlaneswalker)
+                Ok(BodyTarget::SINGLE_PLANESWALKER)
             } else if f == ObjectFilter::any() {
-                Ok(BodyTarget::SinglePermanent)
+                Ok(BodyTarget::SINGLE_PERMANENT)
             } else {
-                Ok(BodyTarget::FilteredPermanent(f))
+                Ok(BodyTarget::filtered_permanent(f))
             }
         }
-        2 => Ok(BodyTarget::FilteredPermanent(ObjectFilter::Either(
+        2 => Ok(BodyTarget::filtered_permanent(ObjectFilter::Either(
             perm_clauses[0],
             perm_clauses[1],
         ))),
@@ -336,16 +330,16 @@ fn lower_target_one_of_permanent_body_target(
         1 => {
             let f = ObjectFilter::Clause(perm_clauses[0]);
             if f == ObjectFilter::creature() {
-                Ok(BodyTarget::SingleCreature)
+                Ok(BodyTarget::SINGLE_CREATURE)
             } else if f == ObjectFilter::planeswalker() {
-                Ok(BodyTarget::SinglePlaneswalker)
+                Ok(BodyTarget::SINGLE_PLANESWALKER)
             } else if f == ObjectFilter::any() {
-                Ok(BodyTarget::SinglePermanent)
+                Ok(BodyTarget::SINGLE_PERMANENT)
             } else {
-                Ok(BodyTarget::FilteredPermanent(f))
+                Ok(BodyTarget::filtered_permanent(f))
             }
         }
-        2 => Ok(BodyTarget::FilteredPermanent(ObjectFilter::Either(
+        2 => Ok(BodyTarget::filtered_permanent(ObjectFilter::Either(
             perm_clauses[0],
             perm_clauses[1],
         ))),
@@ -376,7 +370,7 @@ pub(super) fn lower_battlefield_body_target(
         && f.stat_bounds.is_empty()
         && f.flags.is_empty()
     {
-        return Ok(BodyTarget::SinglePermanent);
+        return Ok(BodyTarget::SINGLE_PERMANENT);
     }
     let mut obj = lower_object_filter(f, vocabulary)?;
     if f.controller == Some(ControllerRelation::DefendingPlayer) {
@@ -387,11 +381,11 @@ pub(super) fn lower_battlefield_body_target(
         );
     }
     if obj == ObjectFilter::creature() {
-        Ok(BodyTarget::SingleCreature)
+        Ok(BodyTarget::SINGLE_CREATURE)
     } else if obj == ObjectFilter::planeswalker() {
-        Ok(BodyTarget::SinglePlaneswalker)
+        Ok(BodyTarget::SINGLE_PLANESWALKER)
     } else {
-        Ok(BodyTarget::FilteredPermanent(obj))
+        Ok(BodyTarget::filtered_permanent(obj))
     }
 }
 
@@ -492,7 +486,7 @@ fn ensure_target_power_consumed(builder: &mut BodyBuilder, obj: &ObjectFilter) {
                     Instruction::MutateObject(spec)
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                            spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                         )
                 )
         })
@@ -518,7 +512,10 @@ fn lower_battlefield_body_target_in_context(
         && builder.target == BodyTarget::None
         && builder.instructions.is_empty()
         && f.controller == Some(ControllerRelation::ThatPlayer)
-        && let BodyTarget::FilteredPermanent(ref mut obj) = bt
+        && let BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            filter: ref mut obj,
+        } = bt
     {
         rewrite_object_filter_controller(
             obj,
@@ -624,47 +621,38 @@ pub(super) fn lower_resolving_player_in_context(
     match p {
         PlayerRefAst::You => Ok(ResolvingPlayer::Controller),
         PlayerRefAst::TargetPlayer => {
-            builder.bind_target(BodyTarget::SinglePlayer)?;
+            builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
             Ok(ResolvingPlayer::TargetPlayer)
         }
         PlayerRefAst::TargetOpponent => {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
             Ok(ResolvingPlayer::TargetPlayer)
         }
         PlayerRefAst::ThatPlayer => match builder.target {
-            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                Ok(ResolvingPlayer::TargetPlayer)
-            }
-            BodyTarget::SingleSpell(_)
-            | BodyTarget::SingleStackObject(_)
-            | BodyTarget::SingleStackEntry
-            | BodyTarget::ControlledAbility { .. }
-            | BodyTarget::StackEntryTargetingControlledPermanent => {
+            BodyTarget::Player { .. } => Ok(ResolvingPlayer::TargetPlayer),
+            BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
                 Ok(ResolvingPlayer::TargetSpellController)
             }
-            BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::SingleAnyTarget => Ok(ResolvingPlayer::TargetController),
-            BodyTarget::SinglePermanent
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_) => Ok(ResolvingPlayer::TargetController),
-            BodyTarget::SingleOwnGraveyardCard | BodyTarget::FilteredOwnGraveyardCard(_) => {
-                Ok(ResolvingPlayer::Controller)
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
             }
-            BodyTarget::FilteredAnyGraveyardCard { .. }
-            | BodyTarget::AnyGraveyardCard
-            | BodyTarget::AnyGraveyardCreature
-            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => Ok(ResolvingPlayer::TargetOwner),
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                | AnyTargetKind::CreatureOrPlayer
+                | AnyTargetKind::PlayerOrPlaneswalker
+                | AnyTargetKind::OpponentOrPlaneswalker,
+            ) => Ok(ResolvingPlayer::TargetController),
+            BodyTarget::Object {
+                zone: TargetZone::OwnGraveyard,
+                ..
+            } => Ok(ResolvingPlayer::Controller),
+            BodyTarget::Object {
+                zone: TargetZone::AnyGraveyard { .. },
+                ..
+            } => Ok(ResolvingPlayer::TargetOwner),
             _ if builder.instructions.iter().any(|op| {
                 matches!(
-                    op,
-                    Instruction::ChooseValue {
-                        domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
-                        ..
-                    }
-                ) || matches!(
                     op,
                     Instruction::MutatePlayer(spec)
                         if matches!(
@@ -684,21 +672,19 @@ pub(super) fn lower_resolving_player_in_context(
             _ => Err("oracle:unbound-that-player"),
         },
         PlayerRefAst::ItsController => match builder.target {
-            BodyTarget::SingleSpell(_)
-            | BodyTarget::SingleStackObject(_)
-            | BodyTarget::SingleStackEntry
-            | BodyTarget::ControlledAbility { .. }
-            | BodyTarget::StackEntryTargetingControlledPermanent => {
+            BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
                 Ok(ResolvingPlayer::TargetSpellController)
             }
-            BodyTarget::SinglePermanent
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
-            | BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::SingleAnyTarget => Ok(ResolvingPlayer::TargetController),
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
+            }
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                | AnyTargetKind::CreatureOrPlayer
+                | AnyTargetKind::PlayerOrPlaneswalker
+                | AnyTargetKind::OpponentOrPlaneswalker,
+            ) => Ok(ResolvingPlayer::TargetController),
             _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectController),
             BodyTarget::None
                 if !builder
@@ -715,17 +701,17 @@ pub(super) fn lower_resolving_player_in_context(
             _ => Err("oracle:unsupported-its-controller"),
         },
         PlayerRefAst::ItsOwner => match builder.target {
-            BodyTarget::SinglePermanent
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
-            | BodyTarget::SingleOwnGraveyardCard
-            | BodyTarget::FilteredOwnGraveyardCard(_)
-            | BodyTarget::FilteredAnyGraveyardCard { .. }
-            | BodyTarget::AnyGraveyardCard
-            | BodyTarget::AnyGraveyardCreature
-            | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-            | BodyTarget::SingleSpell(_) => Ok(ResolvingPlayer::TargetOwner),
+            BodyTarget::Object {
+                zone:
+                    TargetZone::Battlefield
+                    | TargetZone::OwnGraveyard
+                    | TargetZone::AnyGraveyard { .. },
+                ..
+            }
+            | BodyTarget::Spell {
+                include_abilities: false,
+                ..
+            } => Ok(ResolvingPlayer::TargetOwner),
             _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectOwner),
             BodyTarget::None if has_source => Ok(ResolvingPlayer::SourceOwner),
             _ => Err("oracle:unsupported-its-owner"),
@@ -740,21 +726,19 @@ pub(super) fn lower_resolving_player_in_context(
         }
         PlayerRefAst::DefendingPlayer => Ok(ResolvingPlayer::DefendingPlayer),
         PlayerRefAst::ThatObjectController => match builder.target {
-            BodyTarget::SingleSpell(_)
-            | BodyTarget::SingleStackObject(_)
-            | BodyTarget::SingleStackEntry
-            | BodyTarget::ControlledAbility { .. }
-            | BodyTarget::StackEntryTargetingControlledPermanent => {
+            BodyTarget::Spell { .. } | BodyTarget::StackEntry(_) => {
                 Ok(ResolvingPlayer::TargetSpellController)
             }
-            BodyTarget::SinglePermanent
-            | BodyTarget::SingleCreature
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
-            | BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::SingleAnyTarget => Ok(ResolvingPlayer::TargetController),
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
+            }
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                | AnyTargetKind::CreatureOrPlayer
+                | AnyTargetKind::PlayerOrPlaneswalker
+                | AnyTargetKind::OpponentOrPlaneswalker,
+            ) => Ok(ResolvingPlayer::TargetController),
             _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectController),
             BodyTarget::None
                 if has_source
@@ -768,33 +752,27 @@ pub(super) fn lower_resolving_player_in_context(
             _ => Err("oracle:unbound-that-player"),
         },
         PlayerRefAst::ThatPlayerOrPlaneswalkerController => match builder.target {
-            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
-                Ok(ResolvingPlayer::TargetPlayer)
+            BodyTarget::Player { .. } => Ok(ResolvingPlayer::TargetPlayer),
+            BodyTarget::Object {
+                zone: TargetZone::Battlefield,
+                ..
             }
-            BodyTarget::SinglePlayerOrPlaneswalker
-            | BodyTarget::SingleOpponentOrPlaneswalker
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::SingleCreatureOrPlayer
-            | BodyTarget::SingleAnyTarget
-            | BodyTarget::SinglePermanent
-            | BodyTarget::FilteredPermanent(_) => Ok(ResolvingPlayer::TargetController),
+            | BodyTarget::AnyTarget(
+                AnyTargetKind::Any
+                | AnyTargetKind::CreatureOrPlayer
+                | AnyTargetKind::PlayerOrPlaneswalker
+                | AnyTargetKind::OpponentOrPlaneswalker,
+            ) if builder.target != BodyTarget::SINGLE_CREATURE => {
+                Ok(ResolvingPlayer::TargetController)
+            }
             _ if in_trigger => Ok(ResolvingPlayer::TriggerSubjectController),
             _ => Err("oracle:unsupported-resolving-player"),
         },
         PlayerRefAst::ChosenPlayer => {
-            if matches!(
-                builder.target,
-                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-            ) {
+            if matches!(builder.target, BodyTarget::Player { .. }) {
                 Ok(ResolvingPlayer::TargetPlayer)
             } else if builder.instructions.iter().any(|op| {
                 matches!(
-                    op,
-                    Instruction::ChooseValue {
-                        domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
-                        ..
-                    }
-                ) || matches!(
                     op,
                     Instruction::MutatePlayer(spec)
                         if matches!(
@@ -859,15 +837,13 @@ fn has_prior_non_attached_object_op(op: &Instruction) -> bool {
                         | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
                 )
         }
-        Instruction::CreateTokens { .. }
-        | Instruction::Sacrifice { .. }
-        | Instruction::SearchLibrary { .. }
-        | Instruction::LookTopChooseExt { .. }
-        | Instruction::RevealUntilMatchExt { .. } => true,
+        Instruction::CreateTokens { .. } | Instruction::SearchLibrary { .. } => true,
         Instruction::MutateObject(spec)
             if matches!(
                 spec.op,
-                spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
+                spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                    spellwake_engine::toolbox::TokenAttachOp::CreateCopy(_)
+                )
             ) =>
         {
             true
@@ -1059,16 +1035,11 @@ pub(super) fn bind_filter_player_target(
         }
     }
     if needs_opponent {
-        if builder.target != BodyTarget::SingleOpponent {
-            builder.bind_target(BodyTarget::SingleOpponent)?;
+        if builder.target != BodyTarget::SINGLE_OPPONENT {
+            builder.bind_target(BodyTarget::SINGLE_OPPONENT)?;
         }
-    } else if needs_player
-        && !matches!(
-            builder.target,
-            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
-        )
-    {
-        builder.bind_target(BodyTarget::SinglePlayer)?;
+    } else if needs_player && !matches!(builder.target, BodyTarget::Player { .. }) {
+        builder.bind_target(BodyTarget::SINGLE_PLAYER)?;
     }
     Ok(())
 }
@@ -1076,22 +1047,15 @@ pub(super) fn bind_filter_player_target(
 fn is_permanent_body_target(target: BodyTarget) -> bool {
     matches!(
         target,
-        BodyTarget::SingleCreature
-            | BodyTarget::SinglePermanent
-            | BodyTarget::SinglePlaneswalker
-            | BodyTarget::FilteredPermanent(_)
+        BodyTarget::Object {
+            zone: TargetZone::Battlefield,
+            ..
+        }
     )
 }
 
 fn is_stack_body_target(target: BodyTarget) -> bool {
-    matches!(
-        target,
-        BodyTarget::SingleSpell(_)
-            | BodyTarget::SingleStackObject(_)
-            | BodyTarget::SingleStackEntry
-            | BodyTarget::ControlledAbility { .. }
-            | BodyTarget::StackEntryTargetingControlledPermanent
-    )
+    matches!(target, BodyTarget::Spell { .. } | BodyTarget::StackEntry(_))
 }
 
 fn has_prior_token_creation(ops: &[Instruction]) -> bool {
@@ -1102,9 +1066,9 @@ fn has_prior_token_creation(ops: &[Instruction]) -> bool {
                 Instruction::MutateObject(spec)
                     if matches!(
                         spec.op,
-                        spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
-                            | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
-                            | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                        spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(_))
+                            | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAndAttach { .. })
+                            | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAuraAttached { .. })
                     )
             )
     })
@@ -1179,31 +1143,52 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             };
             sel_x
                 || match &spec.op {
-                    spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
-                    | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
-                        amount, ..
-                    }
-                    | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Add { amount, .. },
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Remove { amount, .. },
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                        spellwake_engine::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+                    )
                     | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount }
-                    | spellwake_engine::toolbox::ObjectMutation::Connive { count: amount } => {
-                        value_expr_uses_chosen_x(amount)
-                    }
-                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
-                        value_expr_uses_chosen_x(&copy.count)
-                    }
-                    spellwake_engine::toolbox::ObjectMutation::MoveCounters { amount, .. } => {
-                        amount.as_ref().is_some_and(value_expr_uses_chosen_x)
-                    }
+                    | spellwake_engine::toolbox::ObjectMutation::Connive {
+                        count: Some(amount),
+                    } => value_expr_uses_chosen_x(amount),
+                    spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                        spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy),
+                    ) => value_expr_uses_chosen_x(&copy.count),
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Move { amount, .. },
+                    ) => amount.as_ref().is_some_and(value_expr_uses_chosen_x),
                     _ => false,
                 }
         }
-        Instruction::PromptChoice(spec) => match &spec.domain {
-            spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
-            | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
-                value_expr_uses_chosen_x(min) || value_expr_uses_chosen_x(max)
-            }
-            _ => false,
-        },
+        Instruction::PromptChoice(spec) => {
+            let domain_x = match &spec.domain {
+                spellwake_engine::toolbox::PromptDomain::Objects {
+                    min,
+                    max,
+                    max_total_power,
+                    ..
+                } => {
+                    value_expr_uses_chosen_x(min)
+                        || value_expr_uses_chosen_x(max)
+                        || max_total_power
+                            .as_deref()
+                            .is_some_and(value_expr_uses_chosen_x)
+                }
+                spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                    value_expr_uses_chosen_x(min) || value_expr_uses_chosen_x(max)
+                }
+                spellwake_engine::toolbox::PromptDomain::ManaPayment { extra_generic, .. } => {
+                    value_expr_uses_chosen_x(extra_generic)
+                }
+                _ => false,
+            };
+            domain_x || spec.option_branches.iter().any(body_uses_chosen_x)
+        }
         Instruction::ApplyContinuous(spec) => match &spec.payload {
             spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
                 power, toughness, ..
@@ -1221,7 +1206,7 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
                 value_expr_uses_chosen_x(amount)
             }
-            spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => false,
+            _ => false,
         },
         Instruction::DealDamage(spec) => {
             matches!(
@@ -1235,17 +1220,32 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             )
         }
         Instruction::MutatePlayer(spec) => match &spec.op {
-            spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-            | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
-            | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
-            | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
-            | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
-            | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
-            | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
-            | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
-            | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount }
+            spellwake_engine::toolbox::PlayerMutation::Counter { amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Scry(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Surveil(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Mill(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::ManifestTop(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::Incubate { count: amount },
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::Blight { amount },
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::CollectEvidence { minimum: amount },
+            )
             | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(amount)
-            | spellwake_engine::toolbox::PlayerMutation::RollDie { count: amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                spellwake_engine::toolbox::RandomEventOp::RollDie { count: amount, .. },
+            )
             | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles {
                 count: amount, ..
             } => value_expr_uses_chosen_x(amount),
@@ -1259,36 +1259,18 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             spellwake_engine::toolbox::StackOpKind::Discover { value: amount }
                 if value_expr_uses_chosen_x(amount)
         ),
-        Instruction::Discard { amount, .. }
-        | Instruction::Sacrifice { amount, .. }
-        | Instruction::ExileTopPlay { count: amount, .. }
-        | Instruction::LookTopChooseExt { count: amount, .. } => value_expr_uses_chosen_x(amount),
-
-        Instruction::ChooseObjects {
-            min,
-            max,
-            max_total_power,
-            ..
-        } => {
-            value_expr_uses_chosen_x(min)
-                || value_expr_uses_chosen_x(max)
-                || max_total_power
-                    .as_ref()
-                    .is_some_and(value_expr_uses_chosen_x)
-        }
         Instruction::CreateTokens { creations } => creations
             .iter()
             .any(|c| value_expr_uses_chosen_x(&c.amount)),
-        Instruction::BranchIfFalse { condition, .. } => {
-            value_expr_uses_chosen_x(&condition.left) || value_expr_uses_chosen_x(&condition.right)
-        }
+        Instruction::BranchCondition { condition, .. } => matches!(
+            condition.as_ref(),
+            spellwake_engine::toolbox::ConditionExpr::Resolution(rc)
+                if value_expr_uses_chosen_x(&rc.left) || value_expr_uses_chosen_x(&rc.right)
+        ),
         Instruction::RepeatLoop { count, body } => {
             value_expr_uses_chosen_x(count) || body_uses_chosen_x(body.as_ref())
         }
         Instruction::FixedTargetClause(body) => body_uses_chosen_x(body.as_ref()),
-        Instruction::ChooseOption { options, .. } => {
-            options.iter().any(|b| body_uses_chosen_x(&b.body))
-        }
         _ => false,
     })
 }
@@ -1343,7 +1325,7 @@ fn try_append_fixed_first_target_parts(
                             Instruction::MutateObject(spec)
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                    spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                                 )
                         )
                     })
@@ -1354,11 +1336,16 @@ fn try_append_fixed_first_target_parts(
     let is_control_flow = |op: &Instruction| {
         matches!(
             op,
-            Instruction::BranchIfFalse { .. }
+            Instruction::BranchCondition { .. }
                 | Instruction::Jump { .. }
-                | Instruction::OptionalEffect { .. }
                 | Instruction::OptionalSequence { .. }
-                | Instruction::OfferDynamicManaPayment { .. }
+        ) || matches!(
+            op,
+            Instruction::PromptChoice(spec)
+                if matches!(
+                    spec.domain,
+                    spellwake_engine::toolbox::PromptDomain::ManaPayment { .. }
+                )
         )
     };
     let rest = &builder.instructions[1..];
@@ -1377,16 +1364,20 @@ fn try_append_fixed_first_target_parts(
     }
     if !rest.is_empty()
         && !rest[..rest.len() - 1].iter().any(is_control_flow)
-        && let Some(Instruction::BranchIfFalse {
+        && let Some(Instruction::BranchCondition {
             condition,
             destination: 0,
         }) = rest.last()
-        && resolution_condition_is_spell_cast_invariant(condition)
+        && matches!(
+            condition.as_ref(),
+            spellwake_engine::toolbox::ConditionExpr::Resolution(rc)
+                if resolution_condition_is_spell_cast_invariant(rc)
+        )
     {
         let cond_clone = condition.clone();
         if let Some(Instruction::FixedTargetClause(first_body)) = builder.instructions.first_mut() {
             let next_dest = first_body.instructions.len() + 2;
-            first_body.instructions.push(Instruction::BranchIfFalse {
+            first_body.instructions.push(Instruction::BranchCondition {
                 condition: cond_clone,
                 destination: next_dest,
             });
@@ -1410,9 +1401,9 @@ fn last_instruction_created_tokens(ops: &[Instruction]) -> bool {
             Some(Instruction::MutateObject(spec))
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
-                        | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
-                        | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                    spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(_))
+                        | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAndAttach { .. })
+                        | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAuraAttached { .. })
                 ) || matches!(
                     spec.source,
                     spellwake_engine::toolbox::ObjectQuery::CreatedTokens

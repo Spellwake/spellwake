@@ -21,7 +21,7 @@ fn world_allocator_and_late_publisher_faults_drop_the_tentative_gain_and_keep_th
             tr::card(1, crate::program::Program::artifact(None, vec![]), true),
             tr::spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![tr::effect(
                     vec![ResolvedPartSpec::Type(TypeChangeSpec {
                         land_subtypes: SubtypeOperation::Keep,

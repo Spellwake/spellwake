@@ -128,7 +128,7 @@ fn prepared_staged_world(losses: bool) -> EffectWindow {
             program: Program::instant(
                 ManaCost::one(ManaType::Red),
                 ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![crate::program::Instruction::DealDamage(Box::new(
                         crate::toolbox::DealDamageSpec {
                             source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -171,7 +171,7 @@ fn prepared_staged_world(losses: bool) -> EffectWindow {
                 mana_cost: ManaCost::one(ManaType::Red),
                 source_cost: SourceCost::Sacrifice,
                 body: ExecutableBody::new(
-                    BodyTarget::SingleCreature,
+                    BodyTarget::SINGLE_CREATURE,
                     vec![crate::program::Instruction::DealDamage(Box::new(
                         crate::toolbox::DealDamageSpec {
                             source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -2075,7 +2075,7 @@ fn pending_targeted_cohort() -> (EffectWindow, TriggerTargetChoice) {
     for program in std::sync::Arc::make_mut(&mut state.programs).values_mut() {
         for ability in &mut program.triggered {
             ability.body = ExecutableBody::new(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![crate::program::Instruction::AdjustLife(Box::new(
                     crate::toolbox::AdjustLifeSpec::gain(
                         crate::toolbox::PlayerSelector::Resolving(
@@ -2167,12 +2167,12 @@ fn factored_legality_preserves_initial_fallible_evaluation_for_every_wrapper_fam
     let saved = state.clone();
     for target in [
         BodyTarget::None,
-        BodyTarget::SingleCreature,
-        BodyTarget::SinglePermanent,
-        BodyTarget::SinglePlayer,
-        BodyTarget::SingleCreatureOrPlayer,
-        BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-        BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+        BodyTarget::SINGLE_CREATURE,
+        BodyTarget::SINGLE_PERMANENT,
+        BodyTarget::SINGLE_PLAYER,
+        BodyTarget::SINGLE_CREATURE_OR_PLAYER,
+        BodyTarget::single_spell(crate::program::SpellFilter::any()),
+        BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
     ] {
         // Body instructions are irrelevant to this trusted predicate probe.
         let body = ExecutableBody::new(target, vec![]);

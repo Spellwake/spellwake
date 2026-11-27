@@ -12,7 +12,7 @@ fn player_spell() -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SinglePlayer,
+            BodyTarget::SINGLE_PLAYER,
             vec![crate::program::Instruction::AdjustLife(Box::new(
                 crate::toolbox::AdjustLifeSpec::lose(
                     crate::toolbox::PlayerSelector::Resolving(
@@ -28,7 +28,7 @@ fn copier() -> Program {
     Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
-            BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
+            BodyTarget::single_spell(crate::program::SpellFilter::any()),
             vec![Instruction::StackOp(Box::new(
                 crate::toolbox::StackOpSpec::copy_targeted_spell(),
             ))],

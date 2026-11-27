@@ -9,7 +9,7 @@
 //!   grouping and `SpellCast` triggers)
 //! - `Instruction::SetSubjectTapped` (`CreatedTokens`, `TriggerSubject`, `LastMoved`)
 //! - Multi-target `Instruction::ShuffleTargetIntoLibrary` with `graveyard_target_bounds`
-//! - `ExecutableBody::with_up_to_one_target()` with `Instruction::Fight`
+//! - `ExecutableBody::with_up_to_one_target()` with `Instruction::DealDamage` (`DealDamageSpec::fight`)
 //! - `ValueObjectRef::{RevealedCostCard, ExiledCostCreature}` (`Power` and `ManaValue`).
 #[path = "../test_support/creature_vocabulary.rs"]
 mod creature_vocabulary;
@@ -181,7 +181,7 @@ fn search_same_name_as_matches_source_target_and_dying_trigger_lki() {
     // Case 3: TargetObject (Pack Hunt-style targeted search).
     let pack_hunt = spell(
         10,
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![Instruction::SearchLibrary {
             filter: Box::new(LibrarySearch {
                 searcher: ResolvingPlayer::Controller,
@@ -201,7 +201,7 @@ fn search_same_name_as_matches_source_target_and_dying_trigger_lki() {
 
     let destroy = spell(
         11,
-        BodyTarget::SingleCreature,
+        BodyTarget::SINGLE_CREATURE,
         vec![Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::move_all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -269,7 +269,7 @@ fn multi_target_graveyard_shuffle_moves_selected_cards_and_handles_zero_targets(
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SingleOwnGraveyardCard,
+            BodyTarget::SINGLE_OWN_GRAVEYARD_CARD,
             vec![Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::move_all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -359,11 +359,17 @@ fn up_to_one_target_fight_fights_when_targeted_and_noops_when_untargeted() {
         mana_cost: ManaCost::free(),
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
-            BodyTarget::SingleCreature,
-            vec![Instruction::Fight {
-                first: Box::new(MoveSubjectRef::AbilitySource),
-                second: Box::new(MoveSubjectRef::TargetObject),
-            }],
+            BodyTarget::SINGLE_CREATURE,
+            vec![Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec::fight(
+                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                        MoveSubjectRef::AbilitySource,
+                    ),
+                    spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                        MoveSubjectRef::TargetObject,
+                    ),
+                ),
+            ))],
         )
         .with_up_to_one_target(),
     });

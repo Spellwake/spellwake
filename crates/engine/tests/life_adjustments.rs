@@ -141,7 +141,7 @@ fn direct_life_loss_is_not_damage_and_does_not_consume_a_prevention_shield() {
             ),
             spell(
                 2,
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 vec![Instruction::ApplyContinuous(Box::new(
                     spellwake_engine::toolbox::ApplyContinuousSpec {
                         selector: None,

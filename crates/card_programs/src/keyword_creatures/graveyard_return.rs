@@ -25,7 +25,7 @@ pub(super) fn compile(
             ),
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
-                BodyTarget::SinglePlayer,
+                BodyTarget::SINGLE_PLAYER,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec {
@@ -95,7 +95,7 @@ pub(super) fn compile(
                 sacrifice: None,
             },
             body: ExecutableBody::new(
-                BodyTarget::AnyGraveyardCreature,
+                BodyTarget::ANY_GRAVEYARD_CREATURE,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec {
@@ -220,8 +220,9 @@ pub(super) fn compile(
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::OptionalEffect {
+                    Instruction::OptionalSequence {
                         chooser: ResolvingPlayer::Controller,
+                        instructions: 1,
                     },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_hand(),
                 ],
@@ -260,10 +261,11 @@ pub(super) fn compile(
         condition: spellwake_engine::program::TriggerSpec::self_cast(),
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
-            BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::creature()),
+            BodyTarget::filtered_own_graveyard(ObjectFilter::creature()),
             vec![
-                Instruction::OptionalEffect {
+                Instruction::OptionalSequence {
                     chooser: ResolvingPlayer::Controller,
+                    instructions: 1,
                 },
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(false),
             ],
@@ -276,7 +278,7 @@ pub(super) fn compile(
 /// Exact target and effect of The Eldest Reborn's third chapter.
 pub(super) fn eldest_reborn_third_chapter() -> ExecutableBody {
     ExecutableBody::new(
-        BodyTarget::AnyGraveyardCreatureOrPlaneswalker,
+        BodyTarget::ANY_GRAVEYARD_CREATURE_OR_PLANESWALKER,
         vec![
             crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_battlefield(
                 false,

@@ -21,10 +21,10 @@ pub(super) fn definition_or_token_matches(
             .flat_map(|b| &b.instructions)
             .any(|op| match op {
                 Instruction::MutateObject(spec) => match &spec.op {
-                    crate::toolbox::ObjectMutation::CreateTokenAndAttach { definition }
-                    | crate::toolbox::ObjectMutation::CreateAuraTokenAttached {
-                        definition, ..
-                    } => definition_or_token_matches(definition.program(), matches),
+                    crate::toolbox::ObjectMutation::TokenAttach(
+                        crate::toolbox::TokenAttachOp::CreateAndAttach { definition }
+                        | crate::toolbox::TokenAttachOp::CreateAuraAttached { definition, .. },
+                    ) => definition_or_token_matches(definition.program(), matches),
                     _ => false,
                 },
                 Instruction::CreateTokens { creations } => creations
@@ -99,6 +99,20 @@ fn condition_uses_damage_pairs(cond: &crate::program::ResolutionCondition) -> bo
     value_expr_uses_damage_pairs(&cond.left) || value_expr_uses_damage_pairs(&cond.right)
 }
 
+fn condition_expr_uses_damage_pairs(cond: &crate::toolbox::ConditionExpr) -> bool {
+    match cond {
+        crate::toolbox::ConditionExpr::Resolution(c) => condition_uses_damage_pairs(c),
+        crate::toolbox::ConditionExpr::Compare { left, right, .. } => {
+            value_expr_uses_damage_pairs(left) || value_expr_uses_damage_pairs(right)
+        }
+        crate::toolbox::ConditionExpr::And(cs) | crate::toolbox::ConditionExpr::Or(cs) => {
+            cs.iter().any(condition_expr_uses_damage_pairs)
+        }
+        crate::toolbox::ConditionExpr::Not(c) => condition_expr_uses_damage_pairs(c),
+        _ => false,
+    }
+}
+
 fn static_cond_uses_damage_pairs(cond: &crate::characteristics::StaticSourceCondition) -> bool {
     use crate::characteristics::StaticSourceCondition;
     match cond {
@@ -134,9 +148,7 @@ fn trigger_cond_uses_damage_pairs(cond: &crate::program::TriggerCondition) -> bo
 
 fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
     let target_uses = match body.target {
-        BodyTarget::FilteredPermanent(f)
-        | BodyTarget::FilteredOwnGraveyardCard(f)
-        | BodyTarget::FilteredAnyGraveyardCard { filter: f, .. } => filter_uses_damage_pairs(f),
+        BodyTarget::Object { filter, .. } => filter_uses_damage_pairs(filter),
         _ => false,
     };
     if let Some(modes) = body.triggered_modes()
@@ -228,8 +240,8 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
                 }
                 _ => false,
             },
-            Instruction::ChooseOption { options, .. } => {
-                options.iter().any(|b| body_uses_damage_pairs(&b.body))
+            Instruction::PromptChoice(spec) => {
+                spec.option_branches.iter().any(body_uses_damage_pairs)
             }
             Instruction::ScheduleDelayedEventTrigger { trigger, body, .. } => {
                 trigger_event_uses_damage_pairs(&trigger.event)
@@ -239,7 +251,9 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
                         .is_some_and(trigger_cond_uses_damage_pairs)
                     || body_uses_damage_pairs(body)
             }
-            Instruction::BranchIfFalse { condition, .. } => condition_uses_damage_pairs(condition),
+            Instruction::BranchCondition { condition, .. } => {
+                condition_expr_uses_damage_pairs(condition)
+            }
             _ => false,
         })
 }
@@ -456,6 +470,20 @@ fn condition_uses_damage_dealt_by(cond: &crate::program::ResolutionCondition) ->
     value_expr_uses_damage_dealt_by(&cond.left) || value_expr_uses_damage_dealt_by(&cond.right)
 }
 
+fn condition_expr_uses_damage_dealt_by(cond: &crate::toolbox::ConditionExpr) -> bool {
+    match cond {
+        crate::toolbox::ConditionExpr::Resolution(c) => condition_uses_damage_dealt_by(c),
+        crate::toolbox::ConditionExpr::Compare { left, right, .. } => {
+            value_expr_uses_damage_dealt_by(left) || value_expr_uses_damage_dealt_by(right)
+        }
+        crate::toolbox::ConditionExpr::And(cs) | crate::toolbox::ConditionExpr::Or(cs) => {
+            cs.iter().any(condition_expr_uses_damage_dealt_by)
+        }
+        crate::toolbox::ConditionExpr::Not(c) => condition_expr_uses_damage_dealt_by(c),
+        _ => false,
+    }
+}
+
 fn static_cond_uses_damage_dealt_by(cond: &crate::characteristics::StaticSourceCondition) -> bool {
     use crate::characteristics::StaticSourceCondition;
     match cond {
@@ -568,14 +596,14 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
         return true;
     }
     body.instructions.iter().any(|op| match op {
-        Instruction::BranchIfFalse { condition, .. } => condition_uses_damage_dealt_by(condition),
+        Instruction::BranchCondition { condition, .. } => condition_expr_uses_damage_dealt_by(condition),
         Instruction::ForEachPlayerQuery { body, .. } => body_uses_damage_dealt_by(body),
         Instruction::ScheduleDelayedStepTrigger { body, .. }
         | Instruction::ScheduleDelayedEventTrigger { body, .. }
         | Instruction::EmitReflexiveTrigger { body, .. }
         | Instruction::FixedTargetClause(body) => body_uses_damage_dealt_by(body),
-        Instruction::ChooseOption { options, .. } => {
-            options.iter().any(|b| body_uses_damage_dealt_by(&b.body))
+        Instruction::PromptChoice(spec) => {
+            spec.option_branches.iter().any(body_uses_damage_dealt_by)
         }
         Instruction::DrawCards(spec) => value_expr_uses_damage_dealt_by(&spec.amount),
         Instruction::AdjustLife(spec) => match &spec.op {
@@ -584,7 +612,9 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
             | crate::toolbox::LifeOp::Set(v)
             | crate::toolbox::LifeOp::Pay(v)
             | crate::toolbox::LifeOp::Drain { amount: v, .. } => value_expr_uses_damage_dealt_by(v),
-            crate::toolbox::LifeOp::LoseHalf { .. } => false,
+            crate::toolbox::LifeOp::LoseHalf { .. }
+            | crate::toolbox::LifeOp::ExchangeTotals { .. }
+            | crate::toolbox::LifeOp::ExchangeWithStat { .. } => false,
         },
         Instruction::DealDamage(spec) => {
             matches!(
@@ -596,8 +626,7 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
             )
         }
         Instruction::MutatePlayer(spec) => match &spec.op {
-            crate::toolbox::PlayerMutation::AddCounter { amount, .. }
-            | crate::toolbox::PlayerMutation::PayCounter { amount, .. }
+            crate::toolbox::PlayerMutation::Counter { amount, .. }
             | crate::toolbox::PlayerMutation::BindResolutionX(amount) => {
                 value_expr_uses_damage_dealt_by(amount)
             }
@@ -615,12 +644,14 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
             _ => false,
         },
         Instruction::MutateObject(spec) => match &spec.op {
-            crate::toolbox::ObjectMutation::AddCounters { amount, .. }
-            | crate::toolbox::ObjectMutation::RemoveCounters { amount, .. }
-            | crate::toolbox::ObjectMutation::MoveCounters {
-                amount: Some(amount),
-                ..
-            } => value_expr_uses_damage_dealt_by(amount),
+            crate::toolbox::ObjectMutation::Counters(
+                crate::toolbox::CounterOp::Add { amount, .. }
+                | crate::toolbox::CounterOp::Remove { amount, .. }
+                | crate::toolbox::CounterOp::Move {
+                    amount: Some(amount),
+                    ..
+                },
+            ) => value_expr_uses_damage_dealt_by(amount),
             _ => false,
         },
         Instruction::ApplyContinuous(spec) => match &spec.payload {
@@ -1872,8 +1903,8 @@ fn body_grants_next_spell_storm(body: &crate::program::ExecutableBody) -> bool {
             crate::toolbox::ContinuousPayload::TemporaryRule(rule)
                 if matches!(
                     rule.as_ref(),
-                    crate::program::TemporaryRuleKind::NextSpellCastKeyword {
-                        keyword: crate::program::NextSpellCastKeyword::Storm,
+                    crate::program::TemporaryRuleKind::NextSpellModifier {
+                        cast_keyword: Some(crate::program::NextSpellCastKeyword::Storm),
                         ..
                     }
                 )
@@ -1884,9 +1915,10 @@ fn body_grants_next_spell_storm(body: &crate::program::ExecutableBody) -> bool {
         | Instruction::FixedTargetClause(body)
         | Instruction::ForEach { body, .. }
         | Instruction::ForEachPlayerQuery { body, .. } => body_grants_next_spell_storm(body),
-        Instruction::ChooseOption { options, .. } => options
+        Instruction::PromptChoice(spec) => spec
+            .option_branches
             .iter()
-            .any(|b| body_grants_next_spell_storm(&b.body)),
+            .any(body_grants_next_spell_storm),
         Instruction::MutatePlayer(spec) => match &spec.op {
             crate::toolbox::PlayerMutation::OfferAnyPlayer {
                 cost_body,

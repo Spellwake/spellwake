@@ -304,9 +304,14 @@ impl EffectWindow {
         let fights = body.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::Fight { first, second }
-                    if **first == crate::program::MoveSubjectRef::RememberedFirst
-                        && **second == crate::program::MoveSubjectRef::RememberedSecond
+                Instruction::DealDamage(spec)
+                    if matches!(
+                        &spec.recipients,
+                        crate::toolbox::DamageTargetQuery::Fight { first, second }
+                            if **first == crate::toolbox::ObjectQuery::LinkedTarget { index: 0 }
+                                && **second
+                                    == crate::toolbox::ObjectQuery::LinkedTarget { index: 1 }
+                    )
             )
         });
         if fights && matches!(choices, [first, second] if first == second) {
@@ -335,7 +340,10 @@ impl EffectWindow {
             if let Instruction::FixedTargetClause(clause) = op {
                 let target = *choices.next().ok_or(EffectError::TargetRequired)?;
                 let mut bound_clause = (**clause).clone();
-                if let BodyTarget::FilteredPermanent(filter) = &mut bound_clause.target
+                if let BodyTarget::Object {
+                    zone: crate::program::TargetZone::Battlefield,
+                    filter,
+                } = &mut bound_clause.target
                     && filter.uses_first_target_controller()
                 {
                     let seat = first_target_controller.ok_or(EffectError::IllegalTarget)?;
@@ -414,10 +422,12 @@ impl EffectWindow {
         for idx in outer_indices {
             match &mut instructions[idx] {
                 Instruction::MutatePlayer(spec) => match &mut spec.op {
-                    crate::toolbox::PlayerMutation::FlipCoins {
-                        lose_destination: Some(destination),
-                        ..
-                    } => remap(destination),
+                    crate::toolbox::PlayerMutation::RandomEvent(
+                        crate::toolbox::RandomEventOp::FlipCoins {
+                            lose_destination: Some(destination),
+                            ..
+                        },
+                    ) => remap(destination),
                     crate::toolbox::PlayerMutation::OfferSourceCounters {
                         placed_destination,
                         declined_destination,
@@ -428,15 +438,15 @@ impl EffectWindow {
                     }
                     _ => {}
                 },
-                Instruction::BranchIfFalse { destination, .. }
+                Instruction::BranchCondition { destination, .. }
                 | Instruction::Jump { destination } => remap(destination),
-                Instruction::OfferDynamicManaPayment {
-                    paid_destination,
-                    declined_destination,
-                    ..
-                } => {
-                    remap(paid_destination);
-                    remap(declined_destination);
+                Instruction::PromptChoice(spec) => {
+                    if let Some((_, paid_destination, declined_destination)) =
+                        spec.as_mana_payment_mut()
+                    {
+                        remap(paid_destination);
+                        remap(declined_destination);
+                    }
                 }
                 _ => {}
             }
@@ -546,7 +556,11 @@ impl EffectWindow {
             .find_map(|(id, kind)| (id == target).then_some(kind))
     }
 
-    fn instruction_mode(&self, entry: StackEntryId, instruction: usize) -> Option<&SelectedMode> {
+    pub(super) fn instruction_mode(
+        &self,
+        entry: StackEntryId,
+        instruction: usize,
+    ) -> Option<&SelectedMode> {
         self.stack_modes(entry)
             .iter()
             .find(|mode| (mode.start..mode.end).contains(&instruction))

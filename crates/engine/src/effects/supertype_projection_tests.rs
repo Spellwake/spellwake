@@ -45,7 +45,7 @@ fn populated_supertype_views_preserve_root_receipts_stack_traits_and_ability_non
             mana_cost: ManaCost::free(),
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![Instruction::ZoneOp(Box::new(
                     crate::toolbox::ZoneOpSpec::move_all(
                         crate::toolbox::ObjectQuery::Targets,
@@ -58,7 +58,7 @@ fn populated_supertype_views_preserve_root_receipts_stack_traits_and_ability_non
     source.supertypes = BTreeSet::from([Supertype::Basic]);
     let mut original = tr::spell(
         3,
-        BodyTarget::SinglePermanent,
+        BodyTarget::SINGLE_PERMANENT,
         vec![Instruction::ZoneOp(Box::new(
             crate::toolbox::ZoneOpSpec::move_all(
                 crate::toolbox::ObjectQuery::Targets,
@@ -73,7 +73,7 @@ fn populated_supertype_views_preserve_root_receipts_stack_traits_and_ability_non
             tr::card(1, source, true),
             tr::spell(
                 2,
-                BodyTarget::SinglePermanent,
+                BodyTarget::SINGLE_PERMANENT,
                 vec![tr::effect(
                     vec![ResolvedPartSpec::Type(TypeChangeSpec {
                         land_subtypes: SubtypeOperation::Keep,
@@ -87,7 +87,7 @@ fn populated_supertype_views_preserve_root_receipts_stack_traits_and_ability_non
             original,
             tr::spell(
                 4,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
+                BodyTarget::single_spell(crate::program::SpellFilter::copyable_instruction()),
                 vec![Instruction::StackOp(Box::new(
                     crate::toolbox::StackOpSpec::copy_targeted_spell(),
                 ))],

@@ -86,7 +86,7 @@ pub(crate) fn compile(
 fn turn_up_effect(text: &str) -> Option<ExecutableBody> {
     let (target, instruction) = match text {
         "return target creature to its owner's hand." => (
-            BodyTarget::SingleCreature,
+            BodyTarget::SINGLE_CREATURE,
             crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
         ),
         "target creature gains haste until end of turn."
@@ -98,7 +98,7 @@ fn turn_up_effect(text: &str) -> Option<ExecutableBody> {
                 _ => KeywordAbility::FirstStrike,
             };
             (
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
@@ -109,7 +109,7 @@ fn turn_up_effect(text: &str) -> Option<ExecutableBody> {
             )
         }
         "counter target spell." => (
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+            BodyTarget::single_spell(spellwake_engine::program::SpellFilter::any()),
             Instruction::StackOp(Box::new(
                 spellwake_engine::toolbox::StackOpSpec::counter_targeted(
                     spellwake_engine::toolbox::CounterDestination::Graveyard,
@@ -120,7 +120,7 @@ fn turn_up_effect(text: &str) -> Option<ExecutableBody> {
         | "target creature gets -3/-3 until end of turn." => {
             let delta = if text.contains("+3/+3") { 3 } else { -3 };
             (
-                BodyTarget::SingleCreature,
+                BodyTarget::SINGLE_CREATURE,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {

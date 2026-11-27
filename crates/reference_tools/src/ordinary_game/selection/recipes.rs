@@ -447,7 +447,8 @@ fn validate_source_plans(
     materialized: &crate::ordinary_game::catalogue::Materialized,
 ) -> Result<(), String> {
     use spellwake_engine::program::{
-        CardType, ExecutableBody, Instruction as NativeInstruction, Program, ProgramKind,
+        CardTypeMask, ExecutableBody, Instruction as NativeInstruction, ObjectFilter, Program,
+        ProgramKind,
     };
     let physical_program = |object: &ObjectRef| -> Result<&Program, String> {
         let alias = match object {
@@ -536,14 +537,17 @@ fn validate_source_plans(
             .and_then(|i| body(entry).ok()?.instructions.get(i))
             .ok_or("selection plan instruction absent from guarded source")?;
         let matches = match (operation, instruction) {
-            (
-                SelectionOperation::SacrificeCreature,
-                NativeInstruction::Sacrifice { filter, .. },
-            ) => {
-                filter.required_types == BTreeSet::from([CardType::Creature])
-                    && filter.forbidden_types.is_empty()
+            (SelectionOperation::SacrificeCreature, NativeInstruction::ZoneOp(spec)) => {
+                if let Some((_, _, ObjectFilter::Clause(clause), _)) = spec.as_group_sacrifice() {
+                    clause.required_types == CardTypeMask::CREATURE
+                        && clause.forbidden_types.is_empty()
+                } else {
+                    false
+                }
             }
-            (SelectionOperation::DiscardCards, NativeInstruction::Discard { .. }) => true,
+            (SelectionOperation::DiscardCards, NativeInstruction::ZoneOp(spec)) => {
+                spec.as_group_discard().is_some()
+            }
             _ => false,
         };
         if !matches {
