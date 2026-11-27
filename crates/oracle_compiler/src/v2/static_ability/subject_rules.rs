@@ -143,6 +143,8 @@ pub(super) fn parse_subject_static_ability(
                 "be",
                 "activated",
             ]) {
+                let _ = ts.eat_phrase(&["unless", "they're", "mana", "abilities"])
+                    || ts.eat_phrase(&["unless", "they", "are", "mana", "abilities"]);
                 extra_parts.push(StaticAbility::RuleRestriction {
                     subject: Some(subject.clone()),
                     rule: RuleRestrictionKind::ActivatedAbilitiesCantBeActivated,
@@ -325,6 +327,7 @@ pub(super) fn parse_subject_static_ability(
         if scale.is_none() {
             scale = opt(ts, parse_for_each_expr).map(Box::new);
         }
+        parse_static_subject_tail(ts, &subject, &condition, &mut extra_parts);
         let base = StaticAbility::ContinuousModifyPT {
             subject,
             power,
@@ -393,10 +396,26 @@ pub(super) fn parse_subject_static_ability(
         "their",
         "power",
     ]) {
-        return Ok(StaticAbility::SubjectRule {
-            subject,
+        let mut parts = vec![StaticAbility::SubjectRule {
+            subject: subject.clone(),
             rule: SubjectStaticRule::AssignDamageByToughness,
-            condition,
+            condition: condition.clone(),
+        }];
+        if ts.eat_phrase(&[
+            "and", "can", "attack", "as", "though", "it", "didn't", "have", "defender",
+        ]) || ts.eat_phrase(&[
+            "and", "can", "attack", "as", "though", "they", "didn't", "have", "defender",
+        ]) {
+            parts.push(StaticAbility::SubjectRule {
+                subject,
+                rule: SubjectStaticRule::CanAttackWithDefender,
+                condition,
+            });
+        }
+        return Ok(if parts.len() == 1 {
+            parts.remove(0)
+        } else {
+            StaticAbility::Compound(parts)
         });
     }
 
@@ -1048,6 +1067,18 @@ pub(super) fn parse_subject_static_ability(
                 continue;
             }
             ts.restore(lcp);
+            if ts.eat_phrase(&[
+                "and", "can", "attack", "as", "though", "it", "didn't", "have", "defender",
+            ]) || ts.eat_phrase(&[
+                "and", "can", "attack", "as", "though", "they", "didn't", "have", "defender",
+            ]) {
+                parts.push(StaticAbility::SubjectRule {
+                    subject: subject.clone(),
+                    rule: SubjectStaticRule::CanAttackWithDefender,
+                    condition: condition.clone(),
+                });
+                continue;
+            }
             break;
         }
         return Ok(if parts.len() == 1 {
@@ -1057,17 +1088,51 @@ pub(super) fn parse_subject_static_ability(
         });
     }
 
-    // `<subj> doesn't untap during its controller's untap step`
+    // `<subj> doesn't untap during its controller's untap step [and its activated abilities can't be activated]`
     if (ts.eat_phrase(&["doesn't", "untap", "during"])
         || ts.eat_phrase(&["don't", "untap", "during"]))
         && (ts.eat_phrase(&["its", "controller's", "untap", "step"])
             || ts.eat_phrase(&["their", "controllers'", "untap", "steps"])
             || ts.eat_phrase(&["your", "untap", "step"]))
     {
-        return Ok(StaticAbility::SubjectRule {
-            subject,
+        let mut parts = vec![StaticAbility::SubjectRule {
+            subject: subject.clone(),
             rule: SubjectStaticRule::DoesntUntap,
-            condition,
+            condition: condition.clone(),
+        }];
+        let acp = ts.checkpoint();
+        let _ = ts.eat_comma();
+        if ts.eat_phrase(&[
+            "and",
+            "its",
+            "activated",
+            "abilities",
+            "can't",
+            "be",
+            "activated",
+        ]) || ts.eat_phrase(&[
+            "and",
+            "their",
+            "activated",
+            "abilities",
+            "can't",
+            "be",
+            "activated",
+        ]) {
+            let _ = ts.eat_phrase(&["unless", "they're", "mana", "abilities"])
+                || ts.eat_phrase(&["unless", "they", "are", "mana", "abilities"]);
+            parts.push(StaticAbility::RuleRestriction {
+                subject: Some(subject),
+                rule: RuleRestrictionKind::ActivatedAbilitiesCantBeActivated,
+                condition,
+            });
+        } else {
+            ts.restore(acp);
+        }
+        return Ok(if parts.len() == 1 {
+            parts.remove(0)
+        } else {
+            StaticAbility::Compound(parts)
         });
     }
 
@@ -1360,6 +1425,8 @@ pub(super) fn parse_subject_static_ability(
                 "be",
                 "activated",
             ]) {
+                let _ = ts.eat_phrase(&["unless", "they're", "mana", "abilities"])
+                    || ts.eat_phrase(&["unless", "they", "are", "mana", "abilities"]);
                 parts.push(StaticAbility::RuleRestriction {
                     subject: Some(subject.clone()),
                     rule: RuleRestrictionKind::ActivatedAbilitiesCantBeActivated,
@@ -1441,7 +1508,7 @@ fn parse_static_subject_tail(
                     crate::FaceInput {
                         name: "~",
                         type_line: "Permanent",
-                        oracle_text: quoted,
+                        oracle_text: quoted.trim_end_matches(','),
                     },
                     ts.vocab,
                 );

@@ -118,6 +118,8 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     }
     if ts.eat_phrase(&["that", "creature's", "controller"])
         || ts.eat_phrase(&["that", "permanent's", "controller"])
+        || ts.eat_phrase(&["the", "creature's", "controller"])
+        || ts.eat_phrase(&["the", "permanent's", "controller"])
         || ts.eat_phrase(&["that", "land's", "controller"])
         || ts.eat_phrase(&["that", "artifact's", "controller"])
         || ts.eat_phrase(&["that", "source's", "controller"])
@@ -156,8 +158,29 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     if ts.eat_phrase(&["its", "owner"]) {
         return Ok(PlayerRef::ItsOwner);
     }
+    if ts.eat_phrase(&["any", "number", "of", "target", "players"])
+        || ts.eat_phrase(&["any", "number", "of", "target", "opponents"])
+    {
+        return Ok(PlayerRef::TargetPlayer);
+    }
+    {
+        let ncp = ts.checkpoint();
+        let _ = ts.eat_phrase(&["up", "to"]);
+        if ts.next_number(false).is_some()
+            && (ts.eat_phrase(&["target", "players"]) || ts.eat_phrase(&["target", "opponents"]))
+            && ts
+                .peek_word()
+                .is_some_and(|w| w.eq_ignore_ascii_case("each"))
+        {
+            return Ok(PlayerRef::TargetPlayer);
+        }
+        ts.restore(ncp);
+    }
     if ts.eat_phrase(&["the", "chosen", "player"]) {
         return Ok(PlayerRef::ChosenPlayer);
+    }
+    if ts.eat_phrase(&["your", "team"]) {
+        return Ok(PlayerRef::You);
     }
     if ts.eat_word("you") {
         return Ok(PlayerRef::You);
@@ -270,7 +293,10 @@ pub fn parse_zone_ref(ts: &mut TokenStream<'_>) -> PResult<ZoneRef> {
         ZoneOwner::TargetOpponent
     } else if ts.eat_phrase(&["target", "player's"]) {
         ZoneOwner::TargetPlayer
-    } else if ts.eat_phrase(&["that", "player's"]) || ts.eat_word("their") {
+    } else if ts.eat_phrase(&["that", "player's"])
+        || ts.eat_phrase(&["the", "chosen", "player's"])
+        || ts.eat_word("their")
+    {
         ZoneOwner::ThatPlayer
     } else if ts.eat_phrase(&["an", "opponent's"])
         || ts.eat_phrase(&["each", "opponent's"])
@@ -310,7 +336,8 @@ pub fn parse_zone_ref(ts: &mut TokenStream<'_>) -> PResult<ZoneRef> {
 /// `on the bottom of your library in a random order`, etc.) along with entry modifiers.
 pub fn parse_zone_dest(ts: &mut TokenStream<'_>) -> PResult<(ZoneDest, EntryModifiers)> {
     let cp = ts.checkpoint();
-    // Optional preposition: to / into / onto / on
+    // Optional `back` + preposition: to / into / onto / on
+    let _ = ts.eat_word("back");
     let _ = ts.eat_word("to") || ts.eat_word("into") || ts.eat_word("onto") || ts.eat_word("on");
 
     let mut modifiers = EntryModifiers::default();
@@ -425,6 +452,10 @@ pub fn parse_zone_dest(ts: &mut TokenStream<'_>) -> PResult<(ZoneDest, EntryModi
         }
         if ts.eat_phrase(&["and", "attacking"]) || ts.eat_word("attacking") {
             modifiers.attacking = true;
+            let _ = ts.eat_phrase(&["that", "opponent"])
+                || ts.eat_phrase(&["that", "player"])
+                || ts.eat_phrase(&["the", "defending", "player"])
+                || ts.eat_phrase(&["defending", "player"]);
             continue;
         }
         if ts.eat_phrase(&["face", "down"]) || ts.eat_word("face-down") {

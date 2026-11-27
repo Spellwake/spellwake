@@ -210,22 +210,21 @@ fn parse_static_core(
     ts: &mut TokenStream<'_>,
     condition: Option<ConditionExpr>,
 ) -> PResult<StaticAbility> {
-    // 0. `As an additional cost to cast this spell/~, [you may] <cost>`
-    if (ts.eat_phrase(&[
-        "as",
-        "an",
-        "additional",
-        "cost",
-        "to",
-        "cast",
-        "this",
-        "spell",
-    ]) || (ts.eat_phrase(&["as", "an", "additional", "cost", "to", "cast"]) && ts.eat_tilde()))
-        && ts.eat_comma()
+    // 0. `As an additional cost to cast this spell/~/<flt>, [you may] <cost>`
     {
-        let _ = ts.eat_phrase(&["you", "may"]);
-        let costs = parse_cost_list(ts)?;
-        return Ok(StaticAbility::AdditionalCost(costs));
+        let ac_cp = ts.checkpoint();
+        if ts.eat_phrase(&["as", "an", "additional", "cost", "to", "cast"])
+            && (ts.eat_phrase(&["this", "spell"])
+                || ts.eat_tilde()
+                || try_parse(ts, parse_object_filter).is_ok())
+            && ts.eat_comma()
+        {
+            let _ = ts.eat_phrase(&["you", "may"]);
+            if let Ok(costs) = try_parse(ts, parse_cost_list) {
+                return Ok(StaticAbility::AdditionalCost(costs));
+            }
+        }
+        ts.restore(ac_cp);
     }
 
     // 0aa00. Bare Level Up base P/T row (`3/3`, `6/6`)
@@ -647,11 +646,22 @@ fn parse_static_core(
             if (ts.eat_word("cast") || ts.eat_word("play"))
                 && let Ok(mut filter) = try_parse(ts, parse_object_filter)
             {
-                let zone = if ts.eat_word("from") {
-                    opt(ts, parse_zone_ref)
-                } else {
-                    filter.zones.pop()
-                };
+                let mut zone = filter.zones.pop();
+                if (ts.eat_phrase(&["or", "cast"]) || ts.eat_phrase(&["and", "cast"]))
+                    && let Ok(mut f2) = try_parse(ts, parse_object_filter)
+                {
+                    if zone.is_none() {
+                        zone = f2.zones.pop();
+                    }
+                    filter = ObjectFilter {
+                        predicates: vec![FilterPredicate::AnyOf(vec![filter, f2])],
+                        ..Default::default()
+                    };
+                }
+                if zone.is_none() && ts.eat_word("from") {
+                    let _ = ts.eat_phrase(&["the", "top", "of"]);
+                    zone = opt(ts, parse_zone_ref);
+                }
                 let free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
                     || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
                 let alt_cost = if !free && ts.eat_word("by") {
@@ -721,8 +731,65 @@ fn parse_static_core(
     ]) || ts.eat_phrase(&[
         "this", "effect", "can't", "reduce", "the", "mana", "in", "that", "cost", "to", "less",
         "than", "one", "mana",
-    ]) {
+    ]) || {
+        let rcp = ts.checkpoint();
+        if ts.eat_phrase(&["this", "effect", "reduces", "only", "the", "amount", "of"])
+            && ts
+                .peek_word()
+                .is_some_and(|w| crate::vocab::lookup_color(&w.to_ascii_lowercase()).is_some())
+        {
+            ts.next_word();
+            if ts.eat_phrase(&["mana", "you", "pay"]) {
+                true
+            } else {
+                ts.restore(rcp);
+                false
+            }
+        } else {
+            ts.restore(rcp);
+            false
+        }
+    } {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::CostReductionRule));
+    }
+    // `As an additional cost to cast <flt>, you may pay <cost>.` (`Defiler of Vigor` cycle)
+    {
+        let acp = ts.checkpoint();
+        if ts.eat_phrase(&["as", "an", "additional", "cost", "to", "cast"])
+            && try_parse(ts, parse_object_filter).is_ok()
+            && ts.eat_comma()
+            && ts.eat_phrase(&["you", "may"])
+            && let Ok(costs) = try_parse(ts, parse_cost_list)
+        {
+            return Ok(StaticAbility::AdditionalCost(costs));
+        }
+        ts.restore(acp);
+    }
+    // `Those spells cost {M} less/more to cast if you paid life this way.` (`Defiler of Vigor` cycle)
+    {
+        let dcp = ts.checkpoint();
+        if ts.eat_phrase(&["those", "spells", "cost"])
+            && let Some(delta) = ts.eat_mana_cost()
+            && (ts.eat_phrase(&["less", "to", "cast"]) || ts.eat_phrase(&["more", "to", "cast"]))
+            && ts.eat_phrase(&["if", "you", "paid", "life", "this", "way"])
+        {
+            return Ok(StaticAbility::CostModifier {
+                subject: ObjectFilter {
+                    any_spell: true,
+                    ..Default::default()
+                },
+                delta,
+                less: true,
+                scale: None,
+                min_mana: None,
+                condition: Some(ConditionExpr::EventCheck(
+                    crate::v2::ir::EventCheckKind::PriorObjectEvent(
+                        crate::v2::ir::PriorActionKind::LifePaidAsEntered,
+                    ),
+                )),
+            });
+        }
+        ts.restore(dcp);
     }
     if ts.eat_phrase(&["players", "can't"])
         || ts.eat_phrase(&["your", "opponents", "can't"])
@@ -1211,6 +1278,48 @@ fn parse_static_core(
                     condition,
                 });
             }
+            if ts.eat_phrase(&[
+                "play",
+                "with",
+                "the",
+                "top",
+                "card",
+                "of",
+                "their",
+                "libraries",
+                "revealed",
+            ]) || ts.eat_phrase(&[
+                "plays", "with", "the", "top", "card", "of", "their", "library", "revealed",
+            ]) || ts.eat_phrase(&[
+                "play", "with", "the", "top", "card", "of", "your", "library", "revealed",
+            ]) {
+                return Ok(StaticAbility::VisibilityRule {
+                    player,
+                    kind: VisibilityKind::PlayWithTopRevealed,
+                });
+            }
+            if ts.eat_phrase(&[
+                "can't", "cast", "more", "than", "one", "spell", "each", "turn",
+            ]) {
+                return Ok(StaticAbility::PlayerRestriction {
+                    player,
+                    restriction: PlayerRestrictionKind::CantCastMoreThanOnePerTurn,
+                    condition,
+                });
+            }
+            {
+                let ccp = ts.checkpoint();
+                if ts.eat_phrase(&["can't", "cast"])
+                    && let Ok(flt) = try_parse(ts, parse_object_filter)
+                {
+                    return Ok(StaticAbility::RuleRestriction {
+                        subject: Some(SubjectRef::Group(Box::new(flt))),
+                        rule: RuleRestrictionKind::CantBeCast,
+                        condition,
+                    });
+                }
+                ts.restore(ccp);
+            }
             if ts.eat_phrase(&["may", "look", "at", "the", "top", "card", "of"]) {
                 let library = parse_zone_ref(ts)?;
                 let _ = ts.eat_phrase(&["any", "time"]);
@@ -1382,16 +1491,23 @@ fn parse_static_core(
             {
                 let plcp = ts.checkpoint();
                 if ts.eat_phrase(&["may", "play"])
-                    && try_parse(ts, parse_object_filter).is_ok()
+                    && let Ok(mut play_flt) = try_parse(ts, parse_object_filter)
                     && ts.eat_phrase(&["and", "cast"])
-                    && try_parse(ts, parse_object_filter).is_ok()
-                    && ts.eat_word("from")
+                    && let Ok(mut cast_flt) = try_parse(ts, parse_object_filter)
                 {
-                    let top_only = ts.eat_phrase(&["the", "top", "of"]);
-                    if let Ok(zone) = try_parse(ts, parse_zone_ref) {
+                    let top_only = ts.eat_phrase(&["from", "the", "top", "of"]);
+                    let zone = if top_only {
+                        opt(ts, parse_zone_ref)
+                    } else if ts.eat_word("from") {
+                        let _ = ts.eat_phrase(&["the", "top", "of"]);
+                        opt(ts, parse_zone_ref)
+                    } else {
+                        cast_flt.zones.pop().or_else(|| play_flt.zones.pop())
+                    };
+                    if let Some(zone) = zone {
                         return Ok(StaticAbility::ZoneCastPermission {
                             player,
-                            filter: None,
+                            filter: Some(cast_flt),
                             subject: None,
                             zone: Some(zone),
                             mode: CastPermissionMode::PlayFromZone {

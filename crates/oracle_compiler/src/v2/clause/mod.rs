@@ -7,6 +7,7 @@
 //! - `subject_verbs.rs`: object/subject-initiated verb frames and trailing duration parsing.
 //! - `tokens.rs`: predefined, creature, and copy-token creation parser.
 
+mod player_actions;
 mod player_verbs;
 mod subject_verbs;
 pub(crate) mod tokens;
@@ -1104,9 +1105,14 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         if let Ok(player) = try_parse(ts, parse_player_ref)
             && ts.eat_phrase(&["may", "activate", "this", "ability"])
         {
-            return Ok(vec![Effect::Restriction(vec![
-                ActivationRestriction::AllowedPlayer(player),
-            ])]);
+            let mut restrs = vec![ActivationRestriction::AllowedPlayer(player)];
+            let _ = ts.eat_comma();
+            if ts.eat_phrase(&["but", "only", "as", "a", "sorcery"])
+                || ts.eat_phrase(&["only", "as", "a", "sorcery"])
+            {
+                restrs.push(ActivationRestriction::AsSorcery);
+            }
+            return Ok(vec![Effect::Restriction(restrs)]);
         }
         ts.restore(acp);
     }
@@ -1217,6 +1223,19 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                         && tail_ts.is_eof()
                     {
                         Some(Cost::PayLife(amt))
+                    } else if (tail_ts.eat_word("pays") || tail_ts.eat_word("pay"))
+                        && (tail_ts.eat_phrase(&["its", "mana", "cost"])
+                            || tail_ts.eat_phrase(&["that", "creature's", "mana", "cost"])
+                            || tail_ts.eat_phrase(&["that", "card's", "mana", "cost"]))
+                    {
+                        if tail_ts.eat_phrase(&["reduced", "by"]) {
+                            let _ = tail_ts.eat_mana_cost();
+                        }
+                        if tail_ts.is_eof() {
+                            Some(Cost::PayAnyAmountMana)
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -1551,6 +1570,21 @@ fn parse_single_clause(
         }
         return Err(ts.err("expected mana spend purpose after `This mana can't be spent to`"));
     }
+    if ts.eat_phrase(&[
+        "spend", "this", "mana", "only", "on", "costs", "that", "contain",
+    ]) && ts.eat_mana_cost().is_some()
+    {
+        return Ok((
+            vec![Effect::MutatePlayer {
+                player: PlayerRef::You,
+                mutation: PlayerMutation::ManaRule(ManaRuleKind::SpendOnlyColorOnX(
+                    crate::ast::ColorMask::EMPTY,
+                )),
+                duration: Duration::Instant,
+            }],
+            Some(PlayerRef::You),
+        ));
+    }
     if ts.eat_phrase(&["spend", "this", "mana", "only", "to"]) {
         if ts.eat_phrase(&["cast", "spells", "from"]) {
             let zref = parse_zone_ref(ts)?;
@@ -1697,6 +1731,27 @@ fn parse_single_clause(
         ts.restore(cp);
     }
 
+    // `Each opponent attacking <player> does the same` (`Curse of Disturbance`, `Curse of Vitality`, `Curse of Opulence`)
+    {
+        let ccp = ts.checkpoint();
+        if ts.eat_phrase(&["each", "opponent", "attacking"])
+            && let Ok(p) = try_parse(ts, parse_player_ref)
+            && ts.eat_phrase(&["does", "the", "same"])
+        {
+            return Ok((
+                vec![Effect::ForEach {
+                    over: ForEachDomain::Player(p),
+                    body: vec![Effect::IfPrevious {
+                        succeeded: true,
+                        body: Vec::new(),
+                    }],
+                }],
+                Some(PlayerRef::EachOpponent),
+            ));
+        }
+        ts.restore(ccp);
+    }
+
     // `the damage can't be prevented` as a clause (`Demonfire`, `Urza's Rage`, `Skullcrack`)
     if ts.eat_phrase(&["the", "damage", "can't", "be", "prevented"]) {
         return Ok((
@@ -1785,10 +1840,11 @@ fn parse_single_clause(
         ts.restore(p2_cp);
     }
 
-    // Explicit player prefix + optional restrictive relative (`who can't`, `who didn't`, `with no cards in hand`) + optional `may` + verb frame
+    // Explicit player prefix + optional `each` + optional restrictive relative (`who can't`, `who didn't`, `with no cards in hand`) + optional `may` + verb frame
     {
         let cp = ts.checkpoint();
         if let Ok(player) = try_parse(ts, parse_player_ref) {
+            let _ = ts.eat_word("each");
             // `<player> who can't <verb>` (`Plaguecrafter`, `Momentum Breaker`, `Skull Storm`, `Liliana, Waker of the Dead`)
             // `<player> who didn't <verb>` (`Kynaios and Tiro of Meletis`)
             if (ts.eat_phrase(&["who", "can't"]) || ts.eat_phrase(&["who", "didn't"]))
@@ -2014,8 +2070,17 @@ fn parse_activation_restrictions(ts: &mut TokenStream<'_>) -> PResult<Vec<Activa
             ));
         } else if ts.eat_phrase(&["during", "the", "end", "of", "combat", "step"]) {
             out.push(ActivationRestriction::DuringEndOfCombat);
+        } else if ts.eat_phrase(&["during", "combat", "before", "blockers", "are", "declared"]) {
+            out.push(ActivationRestriction::DuringCombat);
+            out.push(ActivationRestriction::DuringCombatStep(
+                crate::v2::ir::CombatStepKind::DeclareAttackers,
+            ));
         } else if ts.eat_phrase(&["during", "combat"]) {
             out.push(ActivationRestriction::DuringCombat);
+        } else if ts.eat_phrase(&["before", "blockers", "are", "declared"]) {
+            out.push(ActivationRestriction::DuringCombatStep(
+                crate::v2::ir::CombatStepKind::DeclareAttackers,
+            ));
         } else if ts.eat_phrase(&["before", "attackers", "are", "declared"]) {
             out.push(ActivationRestriction::BeforeAttackers);
         } else if ts.eat_phrase(&["once", "each", "turn"]) {
@@ -2049,7 +2114,11 @@ fn parse_activation_restrictions(ts: &mut TokenStream<'_>) -> PResult<Vec<Activa
                 ts.pos = ao_idx;
                 out.push(ActivationRestriction::OnlyIf(Box::new(cond)));
             } else {
-                let cond = parse_condition(ts)?;
+                let mut cond = parse_condition(ts)?;
+                if ts.eat_phrase(&["or", "if"]) {
+                    let c2 = parse_condition(ts)?;
+                    cond = crate::v2::ir::ConditionExpr::Or(Box::new(cond), Box::new(c2));
+                }
                 out.push(ActivationRestriction::OnlyIf(Box::new(cond)));
             }
         } else {

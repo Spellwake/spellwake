@@ -455,6 +455,7 @@ pub(super) fn parse_filter_post_modifiers(
         }
         if ts.eat_phrase(&["they", "control"])
             || ts.eat_phrase(&["that", "player", "controls"])
+            || ts.eat_phrase(&["the", "chosen", "player", "controls"])
             || ts.eat_phrase(&[
                 "that",
                 "player",
@@ -650,9 +651,36 @@ pub(super) fn parse_filter_post_modifiers(
                 });
                 continue;
             }
+            if ts.eat_phrase(&["greater", "power"]) {
+                flt.stat_bounds.push(StatBound {
+                    stat: StatKind::Power,
+                    op: CompareOp::Gt,
+                    value: Box::new(ValueExpr::ObjectStat {
+                        subject: Box::new(SubjectRef::SelfObject),
+                        stat: StatKind::Power,
+                    }),
+                });
+                continue;
+            }
+            if ts.eat_phrase(&["lesser", "power"]) {
+                flt.stat_bounds.push(StatBound {
+                    stat: StatKind::Power,
+                    op: CompareOp::Lt,
+                    value: Box::new(ValueExpr::ObjectStat {
+                        subject: Box::new(SubjectRef::SelfObject),
+                        stat: StatKind::Power,
+                    }),
+                });
+                continue;
+            }
             if ts.eat_phrase(&["the", "greatest"])
                 && let Some(stat) = parse_single_stat_kind(ts)
             {
+                if ts.eat_phrase(&["or", "tied", "for", "the", "greatest"])
+                    || ts.eat_phrase(&["or", "tied", "for", "greatest"])
+                {
+                    let _ = parse_single_stat_kind(ts);
+                }
                 let scope = if ts.eat_word("among") {
                     try_parse(ts, parse_object_filter).unwrap_or_default()
                 } else {
@@ -1316,6 +1344,23 @@ pub(super) fn parse_filter_post_modifiers(
             flt.predicates.push(FilterPredicate::AffectedByPriorAction(
                 PriorActionKind::CastThisWay,
             ));
+            continue;
+        }
+
+        if ts.eat_phrase(&["it's", "blocking"]) || ts.eat_phrase(&["~", "is", "blocking"]) {
+            flt.combat = Some(crate::ast::CombatState::Blocked);
+            continue;
+        }
+        if ts.eat_phrase(&["that's", "attacking", "you"])
+            || ts.eat_phrase(&["that", "are", "attacking", "you"])
+            || ts.eat_phrase(&["it's", "attacking"])
+            || ts.eat_phrase(&["~", "is", "attacking"])
+        {
+            flt.combat = Some(crate::ast::CombatState::Attacking);
+            continue;
+        }
+        if ts.eat_phrase(&["chosen", "at", "random"]) {
+            flt.flags = flt.flags.union(FilterFlags::AT_RANDOM);
             continue;
         }
 

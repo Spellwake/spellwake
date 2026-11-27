@@ -491,6 +491,66 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["the", "next", "time"]) {
+            // 2a-src-choice: `The next time a [<color> [or <color>]] source of your choice would deal damage [to <tgt>] this turn, prevent that damage.` (`Penance`)
+            {
+                let pcp = ts.checkpoint();
+                if ts.eat_word("a") || ts.eat_word("an") {
+                    let mut src_flt = ObjectFilter::default();
+                    while let Some(w) = ts.peek_word() {
+                        if let Some(c) = crate::vocab::lookup_color(&w.to_ascii_lowercase()) {
+                            ts.next_word();
+                            src_flt.any_colors = src_flt.any_colors.union(c);
+                            let _ = ts.eat_word("or") || ts.eat_word("and");
+                        } else {
+                            break;
+                        }
+                    }
+                    if ts.eat_phrase(&["source", "of", "your", "choice", "would", "deal"]) {
+                        let _ = ts.eat_word("combat") || ts.eat_word("noncombat");
+                        if ts.eat_word("damage") {
+                            let target = if ts.eat_word("to") {
+                                opt(ts, parse_subject_ref)
+                            } else {
+                                None
+                            };
+                            let _ = ts.eat_phrase(&["this", "turn"]);
+                            if ts.eat_comma() && ts.eat_phrase(&["prevent", "that", "damage"]) {
+                                let _ = ts.eat_period();
+                                if ts.is_eof() {
+                                    return Ok(Replacement::DamageRule(
+                                        DamageReplacement::PreventAll {
+                                            target: target
+                                                .unwrap_or(SubjectRef::Group(Box::new(src_flt))),
+                                        },
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                ts.restore(pcp);
+            }
+            // 2a-copy: `The next time one or more <flt> enter this turn, they enter as copies of <subj>.` (`Mystic Reflection`)
+            {
+                let ccp = ts.checkpoint();
+                if ts.eat_phrase(&["one", "or", "more"])
+                    && let Ok(filter) = try_parse(ts, parse_object_filter)
+                    && ts.eat_phrase(&["enter", "this", "turn"])
+                    && ts.eat_comma()
+                    && ts.eat_phrase(&["they", "enter", "as", "copies", "of"])
+                    && try_parse(ts, parse_subject_ref).is_ok()
+                {
+                    let _ = ts.eat_period();
+                    if ts.is_eof() {
+                        return Ok(Replacement::EnterAsCopy {
+                            optional: false,
+                            filter,
+                            exceptions: Vec::new(),
+                        });
+                    }
+                }
+                ts.restore(ccp);
+            }
             // 2a-draw: `The next time you would draw a card this turn, <instead>` (`Words of Waste`, `Words of Wind`, etc.)
             {
                 let dcp = ts.checkpoint();

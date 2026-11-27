@@ -614,6 +614,12 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
             continue;
         }
         ts.restore(fcp);
+        if ts.eat_phrase(&["or", "from", "the", "color", "of", "your", "choice"])
+            || ts.eat_phrase(&["or", "from", "a", "color", "of", "your", "choice"])
+        {
+            return Some(KeywordParam::ChosenColor);
+        }
+        ts.restore(fcp);
         break;
     }
     if filters.len() == 1 {
