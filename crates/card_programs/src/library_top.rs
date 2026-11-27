@@ -158,7 +158,17 @@ pub(super) fn definition(
             ManaCost::one(ManaType::Blue),
             ExecutableBody::new(
                 target,
-                vec![action, Instruction::DrawController { amount: one() }],
+                vec![
+                    action,
+                    Instruction::DrawCards(Box::new(
+                        spellwake_engine::toolbox::DrawCardsSpec::simple(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            one(),
+                        ),
+                    )),
+                ],
             ),
         ),
     }))

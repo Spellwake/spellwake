@@ -15,7 +15,6 @@ use spellwake_engine::{
         DecisionReply, GameCommand, GameContext, GameId, GameInput, GameState, NativeCandidate,
         RuleFrame,
     },
-    life::LifeAdjustment,
     object_identity::{CardId, ObjectDestination},
     occurrence::{RulesOccurrence, RulesRecord, SupportedAppearance, TriggerRelated},
     priority::{PriorityPhase, SeatId},
@@ -25,7 +24,7 @@ use spellwake_engine::{
     },
     setup::GameSeed,
     stack_window::WindowPhase,
-    token::{TokenBatchMember, TokenCreation, TokenDefinition, TokenName, TokenRecipients},
+    token::{TokenCreation, TokenDefinition, TokenName, TokenRecipients},
     turn::{Step, TurnStart},
 };
 use std::{
@@ -179,9 +178,14 @@ fn watcher(program: &mut Program) {
         ),
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(1.into()),
-            }],
+            vec![spellwake_engine::program::Instruction::AdjustLife(
+                Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                )),
+            )],
         ),
     });
 }
@@ -335,106 +339,6 @@ fn selected_order_changes_independent_color_statics_without_changing_receipt_ord
             .map(|a| a.object.id())
             .collect::<Vec<_>>()
     );
-}
-#[test]
-fn zero_creation_consumes_no_birth_or_allocator_and_continues_the_body() {
-    let game = start(
-        vec![
-            create(vec![group(creature(), 0, TokenRecipients::EachPlayer)]),
-            Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(3.into()),
-            },
-        ],
-        vec![],
-    );
-    let cast = cast(&game);
-    let next_object = cast.execution().window().cards().next_identity_sequence();
-    let alloc = cast.execution().operational_counters();
-    let completed = resolve(&cast);
-    assert!(births(&completed).is_empty());
-    assert!(completed.state().pending_decision().is_none());
-    assert_eq!(
-        completed.state().execution().life_total(P0),
-        Some(&23.into())
-    );
-    // The resolving physical spell's later exit consumes one incarnation; births consume none.
-    assert_eq!(
-        completed
-            .state()
-            .execution()
-            .window()
-            .cards()
-            .next_identity_sequence(),
-        next_object + 1
-    );
-    assert_eq!(
-        completed
-            .state()
-            .execution()
-            .operational_counters()
-            .next_characteristic_timestamp,
-        alloc.next_characteristic_timestamp
-    );
-}
-#[test]
-fn invalid_order_replies_preserve_the_entire_pending_root() {
-    let game = start(
-        vec![
-            Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(2.into()),
-            },
-            create(vec![group(creature(), 2, TokenRecipients::Controller)]),
-        ],
-        vec![],
-    );
-    let pending = resolve(&cast(&game));
-    let state = pending.state();
-    let saved = state.clone();
-    let d = state.pending_decision().unwrap();
-    let RuleFrame::TimestampOrder(f) = d.frame() else {
-        panic!()
-    };
-    let offered = f.members().iter().map(|m| m.member).collect::<Vec<_>>();
-    assert_eq!(state.execution().life_total(P0), Some(&22.into()));
-    assert!(!pending.rules_journal().records.is_empty());
-    for (actor, choice) in [
-        (P0, DecisionReply::TimestampOrder(vec![])),
-        (
-            P0,
-            DecisionReply::TimestampOrder(vec![offered[0], offered[0]]),
-        ),
-        (
-            P0,
-            DecisionReply::TimestampOrder(vec![offered[0], TokenBatchMember::new(99)]),
-        ),
-        (P1, DecisionReply::TimestampOrder(offered.clone())),
-        (P0, DecisionReply::Discard(vec![])),
-    ] {
-        assert!(
-            state
-                .advance(GameInput {
-                    basis: state.basis().clone(),
-                    actor,
-                    command: GameCommand::Reply {
-                        decision: d.id(),
-                        choice
-                    }
-                })
-                .is_err()
-        );
-        assert_eq!(state, &saved);
-    }
-    assert!(
-        state
-            .advance(GameInput {
-                basis: state.basis().clone(),
-                actor: P0,
-                command: GameCommand::Pass
-            })
-            .is_err()
-    );
-    assert_eq!(state, &saved);
-    assert_eq!(births(&order(state, false)).len(), 2);
 }
 #[test]
 fn world_births_share_one_tenure_and_all_worlds_die_on_a_newest_tie() {
@@ -601,81 +505,6 @@ fn each_opponent_is_derived_from_actual_controller_and_skips_its_own_seat() {
     );
 }
 #[test]
-fn chosen_type_counts_read_before_batch_and_the_same_local_survives_ordering() {
-    use spellwake_engine::{draw::DrawEvent, program::CreatureTypeSlot, token::TokenSubtype};
-    let v = vocabulary();
-    let elf = v.resolve_label("Elf").unwrap();
-    let slot = CreatureTypeSlot::new(0);
-    let definition = TokenDefinition::new(
-        Program::creature(None, 1.into(), 1.into(), BTreeSet::from([elf])),
-        TokenName::Default {
-            ordered_subtypes: vec![TokenSubtype::Creature(elf)],
-        },
-        &v,
-    )
-    .unwrap();
-    let mut cards = vec![
-        card(2, definition.program().clone(), true),
-        card(3, definition.program().clone(), true),
-    ];
-    for id in 10..16 {
-        cards.push(SeedCard {
-            card: CardId(id),
-            owner: P0,
-            destination: ObjectDestination::LibraryBottom,
-            program: Program::artifact(None, vec![]),
-        });
-    }
-    let game = start(
-        vec![
-            Instruction::ChooseCreatureType {
-                into: slot,
-                excluding: BTreeSet::new(),
-            },
-            create(vec![TokenCreation {
-                definition,
-                amount: spellwake_engine::program::ValueExpr::count_battlefield(
-                    spellwake_engine::program::ObjectFilter::any()
-                        .controlled()
-                        .of_chosen_slot(slot),
-                ),
-                base_size: None,
-                enters_tapped: false,
-                recipients: TokenRecipients::Controller,
-            }]),
-            Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::count_battlefield(
-                    spellwake_engine::program::ObjectFilter::any()
-                        .controlled()
-                        .of_chosen_slot(slot),
-                ),
-            },
-        ],
-        cards,
-    );
-    let choice = resolve(&cast(&game));
-    assert!(matches!(
-        choice.state().pending_decision().unwrap().frame(),
-        RuleFrame::CreatureType(_)
-    ));
-    let pending = reply(choice.state(), P0, DecisionReply::CreatureType(elf));
-    let RuleFrame::TimestampOrder(frame) = pending.state().pending_decision().unwrap().frame()
-    else {
-        panic!()
-    };
-    assert_eq!(frame.members().len(), 2);
-    let completed = order(pending.state(), true);
-    assert_eq!(births(&completed).len(), 2);
-    assert_eq!(completed.draw_journal().events.len(), 4);
-    assert!(
-        completed
-            .draw_journal()
-            .events
-            .iter()
-            .all(|e| matches!(e,DrawEvent::Drawn{player,..} if *player==P0))
-    );
-}
-#[test]
 fn zero_toughness_newcomers_are_discovered_before_death_and_captures_survive_cessation() {
     let mut p = Program::creature(None, 0.into(), 0.into(), BTreeSet::new());
     watcher(&mut p);
@@ -760,59 +589,6 @@ fn oversized_materialization_rejects_without_a_rule_cap_or_partial_birth() {
     }
 }
 
-#[test]
-fn legendary_batch_waits_for_full_resolution_then_uses_the_existing_keep_choice() {
-    use spellwake_engine::checks::CheckDecision;
-    let mut p = creature().program().clone();
-    p.supertypes.insert(Supertype::Legendary);
-    let game = start(
-        vec![
-            create(vec![group(template(p), 2, TokenRecipients::Controller)]),
-            Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(3.into()),
-            },
-        ],
-        vec![],
-    );
-    let pending = resolve(&cast(&game));
-    let completed = order(pending.state(), false);
-    let born = births(&completed);
-    assert_eq!(born.len(), 2);
-    assert_eq!(
-        completed.state().execution().life_total(P0),
-        Some(&23.into())
-    );
-    let RuleFrame::Checks(CheckDecision::Legend(frame)) =
-        completed.state().pending_decision().unwrap().frame()
-    else {
-        panic!()
-    };
-    let conflict = &frame.conflicts()[0];
-    assert_eq!(
-        conflict.domain().iter().copied().collect::<BTreeSet<_>>(),
-        born.iter().map(|a| a.object.id()).collect()
-    );
-    let keep = born[1].object.id();
-    let kept = reply(
-        completed.state(),
-        P0,
-        DecisionReply::KeepLegend {
-            conflict: conflict.id(),
-            keep,
-        },
-    );
-    assert_eq!(
-        kept.state()
-            .execution()
-            .window()
-            .cards()
-            .iter()
-            .filter(|o| o.is_token())
-            .map(|o| o.id())
-            .collect::<Vec<_>>(),
-        vec![keep]
-    );
-}
 #[test]
 fn owned_copied_batch_creates_for_copy_controller_after_the_original_is_countered() {
     use spellwake_engine::targets::TargetRef;

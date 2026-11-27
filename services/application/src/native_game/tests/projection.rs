@@ -937,7 +937,16 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 1.into() }],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                        exile_if_dies: false,
+                    },
+                ))],
             ),
         ),
         card(
@@ -997,9 +1006,14 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             ObjectDestination::Hand,
             instant(
                 BodyTarget::None,
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(1.into()),
-                }],
+                vec![Instruction::AdjustLife(Box::new(
+                    spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         ),
         card(
@@ -1327,9 +1341,14 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(1.into()),
-            }],
+            vec![Instruction::AdjustLife(Box::new(
+                spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+            ))],
         ),
     }];
     let copy = ActivatedAbility {
@@ -1397,7 +1416,16 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 1.into() }],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                        exile_if_dies: false,
+                    },
+                ))],
             ),
         ),
     ]);
@@ -1667,9 +1695,14 @@ fn captured_damage_sources_keep_public_provenance_after_departure() {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::None,
-                vec![Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(1.into()),
-                }],
+                vec![Instruction::AdjustLife(Box::new(
+                    spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         ),
         card(
@@ -1846,9 +1879,14 @@ fn cast_escape_from_graveyard_replays_the_alternative_and_exact_object_payment()
     use spellwake_engine::program::ConditionalCastCost;
     let mut spell = instant(
         BodyTarget::None,
-        vec![Instruction::AdjustControllerLife {
-            adjustment: LifeAdjustment::Gain(2.into()),
-        }],
+        vec![Instruction::AdjustLife(Box::new(
+            spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                ),
+                spellwake_engine::program::ValueExpr::literal(2),
+            ),
+        ))],
     );
     spell.conditional_cost = Some(ConditionalCastCost::Escape {
         mana: ManaCost::free(),
@@ -2191,9 +2229,14 @@ fn both_seats_see_player_speed_and_its_sourceless_stack_ability() {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SinglePlayer,
-                vec![Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Lose(1.into()),
-                }],
+                vec![Instruction::AdjustLife(Box::new(
+                    spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         ),
     ]);
@@ -2335,9 +2378,14 @@ fn live_priority_holder_projects_authoritative_cast_offers_and_validates_invaria
         ManaCost::one(ManaType::Red),
         ExecutableBody::new(
             BodyTarget::SinglePlayer,
-            vec![Instruction::AdjustTargetLife {
-                adjustment: LifeAdjustment::Lose(3.into()),
-            }],
+            vec![Instruction::AdjustLife(Box::new(
+                spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(3),
+                ),
+            ))],
         ),
     );
     let source = main_state(vec![

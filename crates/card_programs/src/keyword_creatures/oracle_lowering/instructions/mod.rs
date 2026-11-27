@@ -1149,22 +1149,32 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             }
             _ => false,
         },
-        Instruction::DamageAmount(amount)
-        | Instruction::DamageAmountThenExileIfDies(amount)
-        | Instruction::DamageOpponentsAmount(amount)
-        | Instruction::DamageRelatedPlayerAmount(amount)
-        | Instruction::DrainOpponents(amount)
-        | Instruction::DrainTargetAndGain(amount)
-        | Instruction::OpponentsLoseAndControllerGains(amount)
-        | Instruction::BindResolutionX(amount) => value_expr_uses_chosen_x(amount),
-        Instruction::DamageGroupAmount { amount, .. }
-        | Instruction::DealDamageToAnnouncedTargets { amount, .. }
-        | Instruction::AddPlayerCounter { amount, .. }
+        Instruction::AdjustLife(spec) => match &spec.op {
+            spellwake_engine::toolbox::LifeOp::Gain(amount)
+            | spellwake_engine::toolbox::LifeOp::Lose(amount)
+            | spellwake_engine::toolbox::LifeOp::Set(amount)
+            | spellwake_engine::toolbox::LifeOp::Pay(amount)
+            | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
+                value_expr_uses_chosen_x(amount)
+            }
+            spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => false,
+        },
+        Instruction::DealDamage(spec) => matches!(
+            &spec.amount,
+            spellwake_engine::program::DamageAmountSpec::Expr(amount)
+                if value_expr_uses_chosen_x(amount)
+        ),
+        Instruction::MutatePlayer(spec) => matches!(
+            &spec.op,
+            spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
+                | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
+                if value_expr_uses_chosen_x(amount)
+        ),
+        Instruction::BindResolutionX(amount) => value_expr_uses_chosen_x(amount),
+        Instruction::DealDamageToAnnouncedTargets { amount, .. }
         | Instruction::CreateTokenCopy { count: amount, .. }
         | Instruction::CreateTokenCopyExt { count: amount, .. }
         | Instruction::RollDie { count: amount, .. }
-        | Instruction::GainControllerLife { amount, .. }
-        | Instruction::AdjustPlayersLife { amount, .. }
         | Instruction::Mill { amount, .. }
         | Instruction::Discard { amount, .. }
         | Instruction::Scry { amount, .. }
@@ -1186,9 +1196,6 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
                 || max_total_power
                     .as_ref()
                     .is_some_and(value_expr_uses_chosen_x)
-        }
-        Instruction::MoveCounters { amount, .. } => {
-            amount.as_ref().is_some_and(value_expr_uses_chosen_x)
         }
         Instruction::CreateTokens { creations }
         | Instruction::CreateAttackingTokens { creations, .. } => creations
@@ -1322,10 +1329,6 @@ fn last_instruction_created_tokens(ops: &[Instruction]) -> bool {
                 | Instruction::CreateAuraTokenAttached { .. }
                 | Instruction::CreateAttackingTokens { .. }
         )
-    ) || matches!(
-        ops.last(),
-        Some(Instruction::ChangeGroup { group, .. })
-            if matches!(group.as_ref(), EffectSubject::CreatedTokens)
     ) || matches!(
         ops.last(),
         Some(Instruction::MutateObject(spec))

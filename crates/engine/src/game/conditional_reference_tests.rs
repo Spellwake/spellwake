@@ -5,7 +5,6 @@ use crate::{
     combat::CombatRules,
     effects::SeedCard,
     land::BasicLandType,
-    life::LifeAdjustment,
     mana::{ManaAbilityRef, ManaCost, ManaPayment, ManaSpend, ManaType},
     object_identity::{CardId, ObjectDestination, ObjectId},
     program::{Comparison, Instruction, Program, ResolutionCondition},
@@ -16,9 +15,10 @@ use std::{collections::BTreeSet, fs::OpenOptions, io::Write, sync::Arc};
 const A: SeatId = SeatId(0);
 const B: SeatId = SeatId(1);
 fn gain(amount: i64) -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(amount.into()),
-    }
+    crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::Literal(amount.into()),
+    )))
 }
 fn branch(threshold: i64, destination: usize) -> Instruction {
     Instruction::BranchIfFalse {

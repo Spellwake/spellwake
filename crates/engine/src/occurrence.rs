@@ -3777,9 +3777,16 @@ impl TriggerState {
                         crate::program::BodyTarget::FilteredPermanent(
                             crate::program::ObjectFilter::creature_or_planeswalker(),
                         ),
-                        vec![crate::program::Instruction::DamageAmount(
-                            crate::program::ValueExpr::Literal(amount.clone()),
-                        )],
+                        vec![crate::program::Instruction::DealDamage(Box::new(
+                            crate::toolbox::DealDamageSpec {
+                                source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                recipients: crate::toolbox::DamageTargetQuery::Targets,
+                                amount: crate::program::DamageAmountSpec::Expr(
+                                    crate::program::ValueExpr::Literal(amount.clone()),
+                                ),
+                                exile_if_dies: false,
+                            },
+                        ))],
                     ),
                 };
                 self.next_instance = self
@@ -4140,10 +4147,20 @@ impl TriggerState {
                         emblem: emblem.id,
                         body: ExecutableBody::new(
                             crate::program::BodyTarget::None,
-                            vec![crate::program::Instruction::DamageGroup {
-                                group: crate::program::DamageGroup::Controller,
-                                amount: amount.clone(),
-                            }],
+                            vec![crate::program::Instruction::DealDamage(Box::new(
+                                crate::toolbox::DealDamageSpec {
+                                    source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                    recipients: crate::toolbox::DamageTargetQuery::Players(
+                                        crate::toolbox::PlayerSelector::Resolving(
+                                            crate::program::ResolvingPlayer::Controller,
+                                        ),
+                                    ),
+                                    amount: crate::program::DamageAmountSpec::Expr(
+                                        crate::program::ValueExpr::Literal(amount.clone()),
+                                    ),
+                                    exile_if_dies: false,
+                                },
+                            ))],
                         ),
                         trigger: None,
                     },
@@ -4245,9 +4262,16 @@ impl TriggerState {
                         emblem: emblem.id,
                         body: ExecutableBody::new(
                             crate::program::BodyTarget::SingleAnyTarget,
-                            vec![crate::program::Instruction::Damage {
-                                amount: amount.clone(),
-                            }],
+                            vec![crate::program::Instruction::DealDamage(Box::new(
+                                crate::toolbox::DealDamageSpec {
+                                    source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                    recipients: crate::toolbox::DamageTargetQuery::Targets,
+                                    amount: crate::program::DamageAmountSpec::Expr(
+                                        crate::program::ValueExpr::Literal(amount.clone()),
+                                    ),
+                                    exile_if_dies: false,
+                                },
+                            ))],
                         ),
                         trigger: None,
                     },

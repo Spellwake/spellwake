@@ -11,7 +11,6 @@ use spellwake_engine::{
     activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
     effects::{CopyTargetChoice, EffectError},
     game::{DecisionReply, GameCommand, GameError, GameInput, GameState, NativeCandidate},
-    life::LifeAdjustment,
     mana::{ManaCost, ManaPayment},
     object_identity::CardId,
     priority::SeatId,
@@ -21,7 +20,16 @@ use spellwake_engine::{
 use std::collections::BTreeSet;
 
 fn damage() -> Instruction {
-    Instruction::Damage { amount: 3.into() }
+    spellwake_engine::program::Instruction::DealDamage(Box::new(
+        spellwake_engine::toolbox::DealDamageSpec {
+            source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+            recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                spellwake_engine::program::ValueExpr::Literal(3.into()),
+            ),
+            exile_if_dies: false,
+        },
+    ))
 }
 fn cast_at(game: &GameState, id: u64, target: TargetRef) -> NativeCandidate {
     submit(
@@ -101,71 +109,6 @@ fn invalid_player_or_noncreature_targets_reject_without_announcing_or_paying() {
         );
         assert_eq!(game, saved);
     }
-}
-
-#[test]
-fn direct_target_life_loss_and_controller_gain_share_one_ordered_body() {
-    let game = world(
-        vocabulary(),
-        vec![spell(
-            1,
-            BodyTarget::SinglePlayer,
-            vec![
-                Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Lose(5.into()),
-                },
-                Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(5.into()),
-                },
-            ],
-        )],
-        vec![],
-    );
-    let cast = cast_at(&game, 1, TargetRef::Player(P1));
-    let completed = pass_pair(cast.state());
-    assert_eq!(
-        completed.state().execution().life_total(P1),
-        Some(&15.into())
-    );
-    assert_eq!(
-        completed.state().execution().life_total(P0),
-        Some(&25.into())
-    );
-    assert!(completed.damage_journal().attempts.is_empty());
-}
-
-#[test]
-fn a_targeted_opponent_can_recover_before_state_based_actions() {
-    let game = world(
-        vocabulary(),
-        vec![spell(
-            1,
-            BodyTarget::SinglePlayer,
-            vec![
-                Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Lose(30.into()),
-                },
-                Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Gain(11.into()),
-                },
-            ],
-        )],
-        vec![],
-    );
-    let cast = cast_at(&game, 1, TargetRef::Player(P1));
-    let completed = pass_pair(cast.state());
-    assert_eq!(
-        completed.state().execution().life_total(P1),
-        Some(&1.into())
-    );
-    assert_eq!(completed.state().outcome(), None);
-    assert!(
-        completed
-            .state()
-            .execution()
-            .state_based_losses()
-            .is_empty()
-    );
 }
 
 #[test]

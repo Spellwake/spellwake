@@ -1,9 +1,6 @@
 //! Full-text binding for represented mutate costs and triggered effects.
 use super::*;
-use spellwake_engine::{
-    life::LifeAdjustment,
-    program::{BodyTarget, ConditionalCastCost, ExecutableBody, Instruction, TriggerGrouping},
-};
+use spellwake_engine::program::{BodyTarget, ConditionalCastCost, ExecutableBody, TriggerGrouping};
 
 pub(super) fn compile(
     card: &InventoryCard,
@@ -49,9 +46,12 @@ pub(super) fn compile(
                         .strip_suffix(" life.")?
                         .parse::<u16>()
                         .ok()?;
-                    Instruction::AdjustControllerLife {
-                        adjustment: LifeAdjustment::Gain(i64::from(life).into()),
-                    }
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(i64::from(life)),
+                    )
                 }
             };
             if mutate_trigger.replace(instruction).is_some() {

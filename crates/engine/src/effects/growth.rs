@@ -27,12 +27,20 @@ fn referenced(
     source: ObjectId,
     causes: &TriggerCauseSet,
 ) -> Option<ObjectId> {
-    if body.instructions.iter().any(|instruction| matches!(instruction,
-        Instruction::TapEnchantedCreature | Instruction::LookTopCreatureSharingAttachedSubtype { .. }
-    ) || matches!(instruction,
-        Instruction::SearchLibrary { filter }
-            if filter.curse_host() == Some(crate::program::AuraSearchHost::EnchantedPlayerWithDifferentCurseNames)
-    )) {
+    if body.instructions.iter().any(|instruction| {
+        matches!(
+            instruction,
+            Instruction::LookTopCreatureSharingAttachedSubtype { .. }
+        ) || matches!(
+            instruction,
+            Instruction::MutateObject(spec)
+                if matches!(spec.source, crate::toolbox::ObjectQuery::AttachedHost)
+        ) || matches!(
+            instruction,
+            Instruction::SearchLibrary { filter }
+                if filter.curse_host() == Some(crate::program::AuraSearchHost::EnchantedPlayerWithDifferentCurseNames)
+        )
+    }) {
         return Some(source);
     }
     match body.instructions.as_slice() {

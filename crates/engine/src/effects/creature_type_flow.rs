@@ -236,14 +236,20 @@ impl EffectWindow {
             .ok_or(EffectError::WrongCreatureTypeFrame)?;
         let (into, chooser, excluding, previously_named) = match self.current_instruction()? {
             Instruction::ChooseCreatureType { into, excluding } => {
-                (*into, entry.controller(), excluding.clone(), Vec::new())
+                if let Some(crate::toolbox::ExecValue::Players(seats)) =
+                    cursor.env.get(crate::toolbox::BindingId(u16::MAX))
+                    && let Some(&player) = seats.first()
+                {
+                    (
+                        *into,
+                        player,
+                        excluding.clone(),
+                        cursor.values.values().copied().collect(),
+                    )
+                } else {
+                    (*into, entry.controller(), excluding.clone(), Vec::new())
+                }
             }
-            Instruction::ChooseCreatureTypeForPlayer { player, into } => (
-                *into,
-                *player,
-                BTreeSet::new(),
-                cursor.values.values().copied().collect(),
-            ),
             _ => return Err(EffectError::WrongCreatureTypeFrame),
         };
         if cursor.entry != entry.id() || cursor.values.contains_key(&into) {
@@ -266,18 +272,22 @@ impl EffectWindow {
         entry: StackEntryId,
         instruction: usize,
     ) -> Result<(), EffectError> {
-        let mut operations = self
-            .window
-            .apnap_players()?
-            .enumerate()
-            .map(|(index, player)| {
-                let slot = u16::try_from(index).map_err(|_| EffectError::InconsistentProgram)?;
-                Ok(Instruction::ChooseCreatureTypeForPlayer {
-                    player,
-                    into: CreatureTypeSlot::new(slot),
-                })
-            })
-            .collect::<Result<Vec<_>, EffectError>>()?;
+        let mut operations = Vec::new();
+        for (index, player) in self.window.apnap_players()?.enumerate() {
+            let slot = u16::try_from(index).map_err(|_| EffectError::InconsistentProgram)?;
+            operations.push(Instruction::BindEnv {
+                binding: crate::toolbox::BindingId(u16::MAX),
+                value: Box::new(crate::toolbox::ExecValue::Players(vec![player])),
+            });
+            operations.push(Instruction::ChooseCreatureType {
+                into: CreatureTypeSlot::new(slot),
+                excluding: BTreeSet::new(),
+            });
+        }
+        operations.push(Instruction::BindEnv {
+            binding: crate::toolbox::BindingId(u16::MAX),
+            value: Box::new(crate::toolbox::ExecValue::Players(Vec::new())),
+        });
         operations.push(Instruction::ZoneOp(Box::new(
             crate::toolbox::ZoneOpSpec::move_all(
                 crate::toolbox::ObjectQuery::zone(

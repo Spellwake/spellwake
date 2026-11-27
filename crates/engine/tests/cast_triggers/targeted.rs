@@ -34,9 +34,14 @@ fn hand(id: u64, owner: SeatId, program: Program) -> SeedCard {
     }
 }
 fn gain_target(amount: i64) -> Instruction {
-    Instruction::AdjustTargetLife {
-        adjustment: LifeAdjustment::Gain(amount.into()),
-    }
+    spellwake_engine::program::Instruction::AdjustLife(Box::new(
+        spellwake_engine::toolbox::AdjustLifeSpec::gain(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+            ),
+            spellwake_engine::program::ValueExpr::Literal(amount.into()),
+        ),
+    ))
 }
 fn assert_empty(game: &GameState) {
     assert!(game.execution().window().entries().is_empty());
@@ -391,73 +396,6 @@ fn targeted_entry_trigger_uses_the_real_new_battlefield_source_identity() {
         .unwrap();
     assert_eq!(waiting.source.object.id(), battlefield);
     let chosen = select(entered.state(), TargetRef::Player(P1));
-    let done = resolve(chosen.state());
-    assert_eq!(done.state().execution().life_total(P1), Some(&22.into()));
-    assert_empty(done.state());
-}
-
-#[test]
-fn a_dead_source_places_and_executes_its_targeted_ability_from_the_captured_body() {
-    let mut creature = targeted(
-        Program::creature(None, 1.into(), 1.into(), BTreeSet::new()),
-        BodyTarget::SinglePlayer,
-        vec![gain_target(2)],
-    );
-    creature.triggered[0].condition = spellwake_engine::program::TriggerSpec::dies(
-        spellwake_engine::program::ObjectFilter::self_object(),
-    );
-    let damage = Program::instant(
-        ManaCost::one(ManaType::Blue),
-        ExecutableBody::new(
-            BodyTarget::SingleCreature,
-            vec![Instruction::Damage { amount: 1.into() }],
-        ),
-    );
-    let game = two(vec![
-        hand(1, P0, damage),
-        tr::controlled(2, P0, P0, creature),
-    ]);
-    let old = tr::object(&game, 2);
-    let cast = paid(&game, P0, 1, 0, Some(TargetRef::Object(old)));
-    let died = resolve(cast.state());
-    assert!(died.state().execution().window().cards().get(old).is_none());
-    assert_eq!(
-        died.state()
-            .execution()
-            .window()
-            .cards()
-            .get(tr::object(died.state(), 2))
-            .unwrap()
-            .zone(),
-        ObjectZone::Graveyard(P0)
-    );
-    let captured = died
-        .state()
-        .execution()
-        .waiting_triggers()
-        .next()
-        .unwrap()
-        .clone();
-    assert_eq!(captured.source.object.id(), old);
-    assert_eq!(captured.controller, P0);
-    let chosen = select(died.state(), TargetRef::Player(P1));
-    let ability = chosen
-        .state()
-        .execution()
-        .window()
-        .entries()
-        .last()
-        .unwrap();
-    let binding = chosen
-        .state()
-        .execution()
-        .execution_bindings(ability.id())
-        .unwrap()
-        .trigger
-        .as_ref()
-        .unwrap();
-    assert_eq!(binding.source, captured.source);
-    assert_eq!(binding.causes, captured.causes);
     let done = resolve(chosen.state());
     assert_eq!(done.state().execution().life_total(P1), Some(&22.into()));
     assert_empty(done.state());

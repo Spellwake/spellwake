@@ -163,11 +163,19 @@ pub(super) fn compile(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::DamageOpponentsAmount(
-                        spellwake_engine::program::ValueExpr::controlled_type(
-                            CardType::Planeswalker,
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                spellwake_engine::toolbox::PlayerSelector::Group(
+                                    spellwake_engine::program::AffectedPlayers::EachOpponent,
+                                ),
+                            ),
+                            spellwake_engine::program::ValueExpr::controlled_type(
+                                CardType::Planeswalker,
+                            ),
+                            false,
                         ),
-                    )],
+                    ],
                 ),
             });
             continue;
@@ -329,9 +337,14 @@ pub(super) fn compile(
             "You get an emblem with \"You have no maximum hand size\" and \"Whenever a card is put into your graveyard from anywhere, you may return it to your hand.\"" => {
                 Some((
                     BodyTarget::None,
-                    vec![Instruction::CreateEmblem(
-                        EmblemDefinition::UnlimitedHandWithGraveyardReturn,
-                    )],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            EmblemDefinition::UnlimitedHandWithGraveyardReturn,
+                        ),
+                    ],
                 ))
             }
 
@@ -349,11 +362,15 @@ pub(super) fn compile(
             "Tibalt deals damage equal to the number of cards in target player's hand to that player." => {
                 Some((
                     BodyTarget::SinglePlayer,
-                    vec![Instruction::DamageAmount(
-                        spellwake_engine::program::ValueExpr::count_hand(
-                            spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            spellwake_engine::program::ValueExpr::count_hand(
+                                spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                            ),
+                            false,
                         ),
-                    )],
+                    ],
                 ))
             }
             "Gain control of all creatures until end of turn. Untap them. They gain haste until end of turn." => {
@@ -386,9 +403,12 @@ pub(super) fn compile(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::AdjustControllerLife {
-                            adjustment: spellwake_engine::life::LifeAdjustment::Gain(2.into()),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(2),
+                        ),
                         Instruction::AddMana(
                             spellwake_engine::program::EffectManaYield::RestrictedChoice {
                                 colors: BTreeSet::from([
@@ -473,9 +493,12 @@ pub(super) fn compile(
                             "a 5/5 black Demon creature token with flying",
                             vocabulary,
                         )?,
-                        Instruction::AdjustControllerLife {
-                            adjustment: spellwake_engine::life::LifeAdjustment::Lose(2.into()),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(2),
+                        ),
                     ],
                 ),
             });
@@ -664,12 +687,19 @@ pub(super) fn compile(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::ChangeAbilitySource {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
                             parts,
-                            duration: ResolvedDuration::UntilEndOfTurn,
-                        },
-                        Instruction::PreventDamageThisTurn(
-                            spellwake_engine::damage::TurnPreventionFilter::ToAbilitySource,
+                            ResolvedDuration::UntilEndOfTurn,
+                        ),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
+                            spellwake_engine::damage::TurnPreventionSpec {
+                                combat_only: false,
+                                source: spellwake_engine::damage::PreventionSourceSpec::Any,
+                                recipient:
+                                    spellwake_engine::damage::PreventionRecipientSpec::AbilitySource,
+                                both_directions: false,
+                            },
                         ),
                     ],
                 ),
@@ -678,8 +708,15 @@ pub(super) fn compile(
         }
         let one = || spellwake_engine::program::ValueExpr::Literal(1.into());
         let (target, instruction) = match effect {
-            "You get an emblem with \"Whenever an artifact is put into your graveyard from the battlefield, return that card to the battlefield at the beginning of the next end step.\"" =>
-                (BodyTarget::None,Instruction::CreateEmblem(EmblemDefinition::ReturnFallenArtifacts)),
+            "You get an emblem with \"Whenever an artifact is put into your graveyard from the battlefield, return that card to the battlefield at the beginning of the next end step.\"" => (
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    EmblemDefinition::ReturnFallenArtifacts,
+                ),
+            ),
             "You may put an Equipment card from your hand or graveyard onto the battlefield." => (BodyTarget::None,Instruction::PutEquipmentFromHandOrGraveyard),
             text if text.starts_with("Create a colorless Equipment artifact token named ") => {
                 let (name,abilities)=text.strip_prefix("Create a colorless Equipment artifact token named ")?.split_once(". It has indestructible, \"Equipped creature ")?;
@@ -732,7 +769,19 @@ pub(super) fn compile(
             }
             "Create a 4/4 red Dragon creature token with flying." => (BodyTarget::None,super::ordinary_text::create_tokens("a 4/4 red Dragon creature token with flying",vocabulary)?),
             "Destroy target tapped creature." => (BodyTarget::FilteredPermanent(ObjectFilter::creature().tapped()),crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
-            "Each opponent loses 1 life. You gain life equal to the life lost this way." => (BodyTarget::None, Instruction::DrainOpponents(spellwake_engine::program::ValueExpr::Literal(1.into()))),
+            "Each opponent loses 1 life. You gain life equal to the life lost this way." => (
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::drain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Group(
+                        spellwake_engine::program::AffectedPlayers::EachOpponent,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    true,
+                ),
+            ),
             "Remove a loyalty counter from each of any number of permanents you control. Exile that many cards from the top of your library. You may play them this turn." => (BodyTarget::None, Instruction::RemoveLoyaltyExileTopForPlay),
             "Add {R} for each planeswalker you control." => (BodyTarget::None, Instruction::AddMana(spellwake_engine::program::EffectManaYield::Counted { kind: ManaType::Red, amount: spellwake_engine::program::ValueExpr::controlled_type(CardType::Planeswalker) })),
             "Add {R}{R}." => (BodyTarget::None, Instruction::AddMana(spellwake_engine::program::EffectManaYield::Fixed([(ManaType::Red, 2.into())].into()))),
@@ -762,14 +811,35 @@ pub(super) fn compile(
             },
             "Put a +1/+1 counter on each creature you control and a loyalty counter on each other planeswalker you control." =>
                 (BodyTarget::None, Instruction::PutCreatureAndOtherPlaneswalkerCounters),
-            "You get an emblem with \"If a source would deal damage to you or a planeswalker you control, prevent all but 1 of that damage.\"" =>
-                (BodyTarget::None, Instruction::CreateEmblem(EmblemDefinition::PreventAllButOne)),
+            "You get an emblem with \"If a source would deal damage to you or a planeswalker you control, prevent all but 1 of that damage.\"" => (
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    EmblemDefinition::PreventAllButOne,
+                ),
+            ),
             "Look at the top two cards of your library. Put one of them into your hand and the other on the bottom of your library." =>
                 (BodyTarget::None, Instruction::LookTopTakeOne { count: 2 }),
-            "You get an emblem with \"{1}{B}, Sacrifice a creature: You gain X life and draw X cards, where X is the sacrificed creature's power.\"" =>
-                (BodyTarget::None, Instruction::CreateEmblem(EmblemDefinition::SacrificeCreatureGainLifeDraw)),
-            "You get an emblem with \"You may activate loyalty abilities of planeswalkers you control on any player's turn any time you could cast an instant.\"" =>
-                (BodyTarget::None, Instruction::CreateEmblem(EmblemDefinition::LoyaltyAnyTurn)),
+            "You get an emblem with \"{1}{B}, Sacrifice a creature: You gain X life and draw X cards, where X is the sacrificed creature's power.\"" => (
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    EmblemDefinition::SacrificeCreatureGainLifeDraw,
+                ),
+            ),
+            "You get an emblem with \"You may activate loyalty abilities of planeswalkers you control on any player's turn any time you could cast an instant.\"" => (
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    EmblemDefinition::LoyaltyAnyTurn,
+                ),
+            ),
             text if text == format!("Exile the top card of your library. You may cast that card. If you don't, {} deals 2 damage to each opponent.", card.name.split(',').next()?) =>
                 (BodyTarget::None, Instruction::ImpulseCastOrDamage(2.into())),
             "Create a 1/1 green Elf Druid creature token with \"{T}: Add {G}.\"" => {
@@ -794,26 +864,103 @@ pub(super) fn compile(
             "Look at the top four cards of your library. You may reveal an enchantment card from among them and put it into your hand. Put the rest on the bottom of your library in a random order."
             | "Look at the top four cards of your library. You may reveal an enchantment card from among them and put that card into your hand. Put the rest on the bottom of your library in a random order." =>
                 (BodyTarget::None, Instruction::LookTopReveal { count: 4, filter: spellwake_engine::program::LookTopFilter::Enchantment }),
-            text if text == format!("{} deals 3 damage to each non-Elemental creature.", card.name.split(',').next()?) =>
-                (BodyTarget::None, Instruction::DamageGroup { group: spellwake_engine::program::DamageGroup::CreaturesExcept(vocabulary.resolve_label("Elemental")?), amount: 3.into() }),
-            text if variable_loyalty && text == format!("{} deals X damage to target creature or planeswalker. If a permanent dealt damage this way would die this turn, exile it instead.", card.name.split(',').next()?) =>
-                (BodyTarget::FilteredPermanent(ObjectFilter::creature_or_planeswalker()), Instruction::DamageAmountThenExileIfDies(spellwake_engine::program::ValueExpr::chosen_x())),
-            "Each opponent gets an emblem with \"At the beginning of your upkeep, this emblem deals 1 damage to you.\"" =>
-                (BodyTarget::None, Instruction::CreateOpponentEmblems(EmblemDefinition::UpkeepDamage { amount: 1.into() })),
-            text if text == format!("{} deals 4 damage to target creature.", card.name.split(',').next()?) || text == format!("{} deals 4 damage to target creature.", card.name) =>
-                (BodyTarget::SingleCreature, Instruction::Damage { amount: 4.into() }),
+            text if text == format!("{} deals 3 damage to each non-Elemental creature.", card.name.split(',').next()?) => (
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                        spellwake_engine::program::DamageRecipientsRef::Group(
+                            spellwake_engine::program::DamageGroup::CreaturesExcept(
+                                vocabulary.resolve_label("Elemental")?,
+                            ),
+                        ),
+                    )),
+                    spellwake_engine::program::ValueExpr::literal(3),
+                    false,
+                ),
+            ),
+            text if variable_loyalty && text == format!("{} deals X damage to target creature or planeswalker. If a permanent dealt damage this way would die this turn, exile it instead.", card.name.split(',').next()?) => (
+                BodyTarget::FilteredPermanent(ObjectFilter::creature_or_planeswalker()),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::chosen_x(),
+                    true,
+                ),
+            ),
+            "Each opponent gets an emblem with \"At the beginning of your upkeep, this emblem deals 1 damage to you.\"" => (
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                    spellwake_engine::toolbox::PlayerSelector::Group(
+                        spellwake_engine::program::AffectedPlayers::EachOpponent,
+                    ),
+                    EmblemDefinition::UpkeepDamage { amount: 1.into() },
+                ),
+            ),
+            text if text == format!("{} deals 4 damage to target creature.", card.name.split(',').next()?) || text == format!("{} deals 4 damage to target creature.", card.name) => (
+                BodyTarget::SingleCreature,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(4),
+                    false,
+                ),
+            ),
             "Create a 1/1 black Vampire creature token with lifelink." =>
                 (BodyTarget::None, super::ordinary_text::create_tokens("a 1/1 black Vampire creature token with lifelink", vocabulary)?),
-            "You get an emblem with \"Creatures you control get +1/+0.\"" => (BodyTarget::None, Instruction::CreateEmblem(EmblemDefinition::ControlledCreatureBonus {
-                power_toughness: PowerToughness { power: 1.into(), toughness: 0.into() }, keywords: BTreeSet::new(),
-            })),
+            "You get an emblem with \"Creatures you control get +1/+0.\"" => (
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    EmblemDefinition::ControlledCreatureBonus {
+                        power_toughness: PowerToughness {
+                            power: 1.into(),
+                            toughness: 0.into(),
+                        },
+                        keywords: BTreeSet::new(),
+                    },
+                ),
+            ),
             "Create three 1/1 white Soldier creature tokens." => (BodyTarget::None, super::ordinary_text::create_tokens("three 1/1 white Soldier creature tokens", vocabulary)?),
             "Destroy all creatures with power 4 or greater." => (BodyTarget::None, crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_group(ObjectFilter::creature().with_power(PowerFilter::AtLeast(4)), true)),
-            "You get an emblem with \"Whenever you cast a spell, this emblem deals 5 damage to any target.\"" => (BodyTarget::None, Instruction::CreateEmblem(EmblemDefinition::SpellcastDamage { amount: 5.into(), noncreature_only: false })),
-            "You get an emblem with \"Whenever you cast a noncreature spell, this emblem deals 2 damage to any target.\"" => (BodyTarget::None, Instruction::CreateEmblem(EmblemDefinition::SpellcastDamage { amount: 2.into(), noncreature_only: true })),
-            "You get an emblem with \"Creatures you control get +2/+2 and have flying.\"" => (BodyTarget::None, Instruction::CreateEmblem(EmblemDefinition::ControlledCreatureBonus {
-                power_toughness: PowerToughness { power: 2.into(), toughness: 2.into() }, keywords: BTreeSet::from([KeywordAbility::Flying]),
-            })),
+            "You get an emblem with \"Whenever you cast a spell, this emblem deals 5 damage to any target.\"" => (
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    EmblemDefinition::SpellcastDamage {
+                        amount: 5.into(),
+                        noncreature_only: false,
+                    },
+                ),
+            ),
+            "You get an emblem with \"Whenever you cast a noncreature spell, this emblem deals 2 damage to any target.\"" => (
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    EmblemDefinition::SpellcastDamage {
+                        amount: 2.into(),
+                        noncreature_only: true,
+                    },
+                ),
+            ),
+            "You get an emblem with \"Creatures you control get +2/+2 and have flying.\"" => (
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    EmblemDefinition::ControlledCreatureBonus {
+                        power_toughness: PowerToughness {
+                            power: 2.into(),
+                            toughness: 2.into(),
+                        },
+                        keywords: BTreeSet::from([KeywordAbility::Flying]),
+                    },
+                ),
+            ),
             "Exile target creature with power 4 or greater." => (BodyTarget::FilteredPermanent(ObjectFilter::creature().with_power(PowerFilter::AtLeast(4))), crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()),
             "Each player draws a card." => (BodyTarget::None, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(one())),
             "Target player draws a card." => (BodyTarget::SinglePlayer, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(one())),
@@ -938,9 +1085,12 @@ pub(super) fn loyalty_support(
                     Instruction::RequireCondition(
                         spellwake_engine::program::InterveningCondition::NoLoyaltyActivation,
                     ),
-                    Instruction::AdjustControllerLife {
-                        adjustment: spellwake_engine::life::LifeAdjustment::Lose(2.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(2),
+                    ),
                 ],
             ),
         )
@@ -1064,7 +1214,11 @@ pub(super) fn compile_transforming(
         0,
         BodyTarget::SingleCreature,
         vec![
-            Instruction::Damage { amount: 3.into() },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(3),
+                false,
+            ),
             Instruction::DamageFromPower(PowerDamageSource::TargetCreatureToAbilitySource),
         ],
     );

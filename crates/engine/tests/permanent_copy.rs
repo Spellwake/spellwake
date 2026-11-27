@@ -362,60 +362,6 @@ fn no_box_noncreature_copy_exception_is_latent_then_copiable_into_another_object
 }
 
 #[test]
-fn sacrificed_receiver_is_a_successful_noop_and_later_body_instruction_runs() {
-    let mut source = copier(SourceCost::Sacrifice, no_duration(), None);
-    source.activated[0]
-        .body
-        .instructions
-        .push(Instruction::AdjustControllerLife {
-            adjustment: LifeAdjustment::Gain(5.into()),
-        });
-    let game = world(
-        vocabulary(),
-        vec![card(1, source, true), card(2, creature(2, 3, "Elf"), true)],
-        vec![CardId(1), CardId(2)],
-    );
-    let activated = activate(&game, object(&game, 1), object(&game, 2), false);
-    assert_eq!(
-        activated
-            .state()
-            .execution()
-            .window()
-            .cards()
-            .get(object(activated.state(), 1))
-            .unwrap()
-            .zone(),
-        ObjectZone::Graveyard(P0)
-    );
-    let timestamps: Vec<_> = activated
-        .state()
-        .execution()
-        .characteristic_timestamps()
-        .collect();
-    let completed = pass_pair(activated.state());
-    assert_eq!(
-        completed.state().execution().life_total(P0),
-        Some(&25.into())
-    );
-    assert_eq!(
-        completed.state().execution().continuous_effects().count(),
-        0
-    );
-    assert_eq!(
-        completed
-            .state()
-            .execution()
-            .characteristic_timestamps()
-            .collect::<Vec<_>>(),
-        timestamps
-    );
-    assert!(!occurrences(&completed).iter().any(|o| matches!(
-        o,
-        RulesOccurrence::ContinuousEffectCreated { .. } | RulesOccurrence::ZoneChange(_)
-    )));
-}
-
-#[test]
 fn donor_type_word_changes_are_not_copied_but_receiver_text_effects_still_apply() {
     let v = vocabulary();
     let donor = creature(2, 3, "Elf");

@@ -450,7 +450,16 @@ pub(crate) fn n04_player_batch_fixture() -> (EffectWindow, RuleProgress) {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 1.into() }],
+                vec![crate::program::Instruction::DealDamage(Box::new(
+                    crate::toolbox::DealDamageSpec {
+                        source: crate::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: crate::toolbox::DamageTargetQuery::Targets,
+                        amount: crate::program::DamageAmountSpec::Expr(
+                            crate::program::ValueExpr::Literal(1.into()),
+                        ),
+                        exile_if_dies: false,
+                    },
+                ))],
             ),
         ),
     });

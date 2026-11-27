@@ -69,8 +69,8 @@ mod tests {
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
                 vec![
-                    crate::program::Instruction::Damage { amount: 1.into() },
-                    crate::program::Instruction::Damage { amount: 0.into() },
+                    crate::program::Instruction::CreatePreventionShield { amount: 1.into() },
+                    crate::program::Instruction::CreatePreventionShield { amount: 0.into() },
                 ],
             ),
         ));
@@ -95,9 +95,14 @@ mod tests {
             crate::mana::ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![crate::program::Instruction::DrawController {
-                    amount: crate::program::ValueExpr::Literal(0.into()),
-                }],
+                vec![crate::program::Instruction::DrawCards(Box::new(
+                    crate::toolbox::DrawCardsSpec::simple(
+                        crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        crate::program::ValueExpr::Literal(0.into()),
+                    ),
+                ))],
             ),
         ));
         let (_, witness) = run(&input).unwrap();

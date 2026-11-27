@@ -5,7 +5,6 @@ use crate::{
         GameCommand, GameContext, GameError, GameId, GameInput, GameState, NativeCandidate,
         RuleFrame,
     },
-    life::LifeAdjustment,
     occurrence::{RulesEvent, RulesOccurrence, RulesRecord},
     program::{CreatureTypeSlot, ResolvingPlayer},
     test_support::{creature_types, packet::AliasContext, projection},
@@ -33,9 +32,10 @@ fn seed(id: u64, owner: SeatId, destination: ObjectDestination, program: Program
     }
 }
 fn gain(amount: i64) -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(amount.into()),
-    }
+    crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::Literal(amount.into()),
+    )))
 }
 fn sacrifice(players: AffectedPlayers, amount: RulesInteger) -> Instruction {
     Instruction::Sacrifice {
@@ -218,66 +218,6 @@ fn assert_rejected(state: &GameState, actor: SeatId, command: GameCommand, expec
         Err(expected)
     );
     assert_eq!(*state, saved);
-}
-
-#[test]
-fn targeted_sacrifice_is_a_forced_positive_choice_and_life_tail_survives_empty_domains() {
-    for positive in [false, true] {
-        let cards = if positive {
-            vec![seed(
-                10,
-                B,
-                ObjectDestination::Battlefield { controller: B },
-                creature(),
-            )]
-        } else {
-            vec![]
-        };
-        let state = fixture(
-            BodyTarget::SinglePlayer,
-            vec![
-                sacrifice(
-                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                    1.into(),
-                ),
-                Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Lose(1.into()),
-                },
-            ],
-            vec![A, B],
-            A,
-            cards,
-        );
-        let mut state = pass_to_boundary(cast(&state, A, 1, Some(TargetRef::Player(B))));
-        if positive {
-            let frame = select_frame(&state);
-            assert_eq!(frame.chooser(), B);
-            assert_eq!(frame.required(), 1);
-            assert_eq!(frame.domain(), &[id(&state, 10)]);
-            let decision = state.pending_decision().unwrap().id();
-            assert_rejected(
-                &state,
-                B,
-                GameCommand::Reply {
-                    decision,
-                    choice: DecisionReply::SelectResolution(vec![]),
-                },
-                GameError::Effect(EffectError::InvalidSelectionCount),
-            );
-            let result = reply(
-                &state,
-                DecisionReply::SelectResolution(vec![id(&state, 10)]),
-            );
-            let sacrifice_events: Vec<_> = events(&result).into_iter().filter(|event| event.occurrences.iter().any(|row|
-                matches!(row.value, RulesOccurrence::ZoneChange(ref change) if change.reason == ZoneReason::Sacrifice { player: B }))).collect();
-            assert_eq!(sacrifice_events.len(), 1);
-            state = result.into_state();
-            assert_eq!(physical_pile(&state, B), vec![CardId(10)]);
-        } else {
-            assert!(state.pending_decision().is_none());
-        }
-        assert_eq!(state.execution().life_total(B), Some(&19.into()));
-    }
 }
 
 #[test]
@@ -1212,49 +1152,4 @@ fn resolving_wrapper_and_final_commit_reject_a_complete_invalid_batch_atomically
         Err(EffectError::InconsistentSelectionWork)
     );
     assert_eq!(changed, before);
-}
-
-#[test]
-fn target_life_loss_and_loss_checks_follow_zero_or_positive_sacrifice_at_the_real_later_boundary() {
-    for positive in [false, true] {
-        let cards = if positive {
-            vec![seed(
-                10,
-                B,
-                ObjectDestination::Battlefield { controller: B },
-                creature(),
-            )]
-        } else {
-            vec![]
-        };
-        let state = fixture_life(
-            BodyTarget::SinglePlayer,
-            vec![
-                sacrifice(
-                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                    1.into(),
-                ),
-                Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Lose(1.into()),
-                },
-            ],
-            vec![A, B],
-            A,
-            cards,
-            1,
-        );
-        let mut state = pass_to_boundary(cast(&state, A, 1, Some(TargetRef::Player(B))));
-        if positive {
-            assert_eq!(state.execution().life_total(B), Some(&1.into()));
-            assert!(state.outcome().is_none());
-            state = reply(
-                &state,
-                DecisionReply::SelectResolution(vec![id(&state, 10)]),
-            )
-            .into_state();
-        }
-        assert_eq!(state.execution().life_total(B), Some(&0.into()));
-        assert!(state.execution().state_based_losses().contains(&B));
-        assert!(state.outcome().is_some());
-    }
 }

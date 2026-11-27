@@ -60,23 +60,38 @@ fn wave12_elenda_life_thresholds_are_separate_and_cumulative() {
                 spell(
                     10,
                     BodyTarget::None,
-                    vec![Instruction::GainControllerLife {
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            ValueExpr::literal(1),
+                        ),
+                    ],
                 ),
                 spell(
                     11,
                     BodyTarget::None,
-                    vec![Instruction::GainControllerLife {
-                        amount: ValueExpr::literal(8),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            ValueExpr::literal(8),
+                        ),
+                    ],
                 ),
                 spell(
                     12,
                     BodyTarget::None,
-                    vec![Instruction::GainControllerLife {
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            ValueExpr::literal(1),
+                        ),
+                    ],
                 ),
             ],
             vec![CardId(1)],

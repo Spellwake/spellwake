@@ -325,9 +325,12 @@ fn cmm_zones_furious_rise_checks_power_at_trigger_and_resolution_and_replaces_th
                     ObjectDestination::LibraryBottom,
                     free_instant(
                         BodyTarget::None,
-                        Instruction::GainControllerLife {
-                            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
                     ),
                 ),
                 named("Forest", 4, A, ObjectDestination::LibraryBottom),
@@ -587,9 +590,14 @@ fn cmm_zones_windrider_wizard_can_draw_then_discard_for_each_instant_sorcery_and
     let vocabulary = current_catalogue().1;
     let spell = ExecutableBody::new(
         BodyTarget::None,
-        vec![Instruction::GainControllerLife {
-            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        }],
+        vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                ),
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            ),
+        ],
     );
     let initial = game(
         vec![A, B],

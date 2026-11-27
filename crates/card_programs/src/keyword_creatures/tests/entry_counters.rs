@@ -1,6 +1,6 @@
 use super::*;
 use spellwake_engine::{
-    program::{BodyTarget, ExecutableBody, Instruction},
+    program::{BodyTarget, ExecutableBody},
     targets::TargetRef,
 };
 
@@ -33,7 +33,13 @@ fn skyreach_manta_suntouched_myr_and_scab_clan_mauler_enter_with_the_paid_and_de
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SinglePlayer,
-                vec![Instruction::Damage { amount: 2.into() }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(2),
+                        false,
+                    ),
+                ],
             ),
         ),
     });

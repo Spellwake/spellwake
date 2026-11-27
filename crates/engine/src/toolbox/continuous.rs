@@ -56,6 +56,8 @@ pub enum ContinuousPayload {
     },
     /// Skip the next occurrence of `step` for each player resolved by `player`.
     SkipStep { player: PlayerSelector, step: Step },
+    /// Create a command-zone emblem for each player selected by `as_emblem` (or controller).
+    Emblem(Box<crate::emblem::EmblemDefinition>),
 }
 
 impl ContinuousPayload {
@@ -65,7 +67,8 @@ impl ContinuousPayload {
             Self::Static(_)
             | Self::ResolvedParts(_)
             | Self::DoublePt { .. }
-            | Self::CombatAction(_) => false,
+            | Self::CombatAction(_)
+            | Self::Emblem(_) => false,
             Self::TemporaryRule(rule) => rule.uses_target(),
             Self::PreventDamage(spec) => {
                 use crate::damage::{PreventionRecipientSpec, PreventionSourceSpec};
@@ -114,7 +117,8 @@ impl ContinuousPayload {
             | Self::ResolvedParts(_)
             | Self::DoublePt { .. }
             | Self::CombatAction(_)
-            | Self::PreventDamage(_) => Ok(()),
+            | Self::PreventDamage(_)
+            | Self::Emblem(_) => Ok(()),
         }
     }
 }
@@ -299,6 +303,20 @@ impl ApplyContinuousSpec {
             condition: None,
             one_shot: false,
             as_emblem: None,
+            emblem_label: None,
+        }
+    }
+
+    /// Construct a command-zone emblem creation spec for `players`.
+    #[must_use]
+    pub fn emblem(players: PlayerSelector, definition: crate::emblem::EmblemDefinition) -> Self {
+        Self {
+            selector: None,
+            payload: ContinuousPayload::Emblem(Box::new(definition)),
+            duration: ResolvedDuration::NoStatedDuration,
+            condition: None,
+            one_shot: false,
+            as_emblem: Some(players),
             emblem_label: None,
         }
     }

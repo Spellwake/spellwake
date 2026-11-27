@@ -173,9 +173,9 @@ fn stage_a_and_b_fidelity_regressions() {
         Instruction::FlipCoin {
             lose_destination: 2,
         },
-        Instruction::DrawController {
-            amount: ValueExpr::literal(1),
-        },
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+            ValueExpr::literal(1),
+        ),
         Instruction::Jump { destination: 3 },
     ];
     prepend_instruction_at(
@@ -259,10 +259,14 @@ fn stage_a_and_b_fidelity_regressions() {
         && let ProgramKind::Spell(sp) = &prog.kind
     {
         assert!(
-            !sp.body
-                .instructions
-                .iter()
-                .any(|op| matches!(op, Instruction::OpponentsLoseAndControllerGains(_))),
+            !sp.body.instructions.iter().any(|op| matches!(
+                op,
+                Instruction::AdjustLife(spec)
+                    if matches!(
+                        spec.op,
+                        spellwake_engine::toolbox::LifeOp::Drain { per_loss: false, .. }
+                    )
+            )),
             "must not miscompile total multiplayer life lost to single-opponent gain"
         );
     }

@@ -625,7 +625,11 @@ fn cmm_spiteful_sliver_uses_actual_damage_to_the_sliver_even_when_it_dies() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SingleCreature,
-                    Instruction::Damage { amount: 3.into() },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(3),
+                        false,
+                    ),
                 ),
             ),
             named("Jace Beleren", 5, A, ObjectDestination::Hand),
@@ -915,7 +919,13 @@ fn cmm_diffusion_sliver_taxes_the_opposing_spell_controller_and_accepts_its_exac
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SingleCreature,
-            vec![Instruction::Damage { amount: 3.into() }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(3),
+                    false,
+                ),
+            ],
         ),
     });
     let initial = game(
@@ -930,7 +940,11 @@ fn cmm_diffusion_sliver_taxes_the_opposing_spell_controller_and_accepts_its_exac
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SingleCreature,
-                    Instruction::Damage { amount: 3.into() },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(3),
+                        false,
+                    ),
                 ),
             ),
             named(

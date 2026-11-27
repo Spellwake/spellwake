@@ -2,11 +2,10 @@
 //! This is a unit boundary check, not a new external recipe binding or sealed reissue.
 use super::*;
 use spellwake_engine::{
-    life::LifeAdjustment,
     mana::ManaCost,
     program::{
-        BodyTarget, ExecutableBody, Instruction, PlayerRelation, Program, TriggerGrouping,
-        TriggeredAbility, TriggeredAbilityId,
+        BodyTarget, ExecutableBody, Instruction, PlayerRelation, Program, ResolvingPlayer,
+        TriggerGrouping, TriggeredAbility, TriggeredAbilityId,
     },
 };
 
@@ -14,9 +13,12 @@ fn cast_join_packet() -> Value {
     let vocabulary = crate::creature_types::selected_vocabulary().unwrap();
     let body = ExecutableBody::new(
         BodyTarget::None,
-        vec![Instruction::AdjustControllerLife {
-            adjustment: LifeAdjustment::Gain(1.into()),
-        }],
+        vec![Instruction::AdjustLife(Box::new(
+            spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::literal(1),
+            ),
+        ))],
     );
     let producer = Program::instant(ManaCost::free(), body.clone());
     let mut watcher = Program::artifact(None, vec![]);
@@ -113,9 +115,14 @@ fn actual_root_recipe_target_reply_and_frame_guard_use_existing_player_resolver(
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::SinglePlayer,
-                vec![Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Gain(1.into()),
-                }],
+                vec![Instruction::AdjustLife(Box::new(
+                    spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::TargetPlayer,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         });
         program

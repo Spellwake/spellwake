@@ -1,5 +1,76 @@
 use super::*;
 
+fn damage_source_ref_to_query(
+    src: DamageSourceRef,
+    recipients: &DamageRecipientsRef,
+) -> spellwake_engine::toolbox::DamageSourceQuery {
+    use spellwake_engine::toolbox::{DamageSourceQuery, ObjectQuery};
+    let needs_per_source_object = matches!(
+        recipients,
+        DamageRecipientsRef::OtherCreaturesAndEachPlayer
+            | DamageRecipientsRef::EachOtherPlayer
+            | DamageRecipientsRef::EachOtherOpponent
+            | DamageRecipientsRef::EachSourceToItself
+            | DamageRecipientsRef::EachSourceController
+    );
+    match src {
+        DamageSourceRef::AbilitySource => {
+            if needs_per_source_object {
+                DamageSourceQuery::Objects(ObjectQuery::Source)
+            } else {
+                DamageSourceQuery::EntrySource
+            }
+        }
+        DamageSourceRef::TargetObject | DamageSourceRef::AllPermanentTargets => {
+            DamageSourceQuery::Objects(ObjectQuery::Targets)
+        }
+        DamageSourceRef::TriggeringObject => {
+            DamageSourceQuery::Objects(ObjectQuery::TriggerSubject)
+        }
+        DamageSourceRef::AttachedHost => DamageSourceQuery::Objects(ObjectQuery::AttachedHost),
+        DamageSourceRef::Matching(filter) => DamageSourceQuery::Objects(
+            ObjectQuery::EffectSubject(Box::new(EffectSubject::Matching(filter))),
+        ),
+        DamageSourceRef::LastMoved => DamageSourceQuery::Objects(ObjectQuery::LastMoved),
+        DamageSourceRef::CreatedTokens => DamageSourceQuery::Objects(ObjectQuery::CreatedTokens),
+    }
+}
+
+fn damage_group_to_target_query(
+    group: DamageGroup,
+) -> spellwake_engine::toolbox::DamageTargetQuery {
+    use spellwake_engine::toolbox::{DamageTargetQuery, ObjectQuery, PlayerSelector};
+    match group {
+        DamageGroup::Opponents => {
+            DamageTargetQuery::Players(PlayerSelector::Group(AffectedPlayers::EachOpponent))
+        }
+        DamageGroup::Players => {
+            DamageTargetQuery::Players(PlayerSelector::Group(AffectedPlayers::EachPlayer))
+        }
+        DamageGroup::Controller => {
+            DamageTargetQuery::Players(PlayerSelector::Resolving(ResolvingPlayer::Controller))
+        }
+        DamageGroup::RelatedPlayer => DamageTargetQuery::Players(PlayerSelector::Resolving(
+            ResolvingPlayer::UniqueRelatedPlayer,
+        )),
+        DamageGroup::AffectedPlayers(players) => {
+            DamageTargetQuery::Players(PlayerSelector::Group(players))
+        }
+        DamageGroup::AbilitySource => DamageTargetQuery::Objects(ObjectQuery::Source),
+        other => DamageTargetQuery::Relative(Box::new(DamageRecipientsRef::Group(other))),
+    }
+}
+
+fn push_damage_group(instructions: &mut Vec<Instruction>, group: DamageGroup, amount: ValueExpr) {
+    instructions.push(
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+            damage_group_to_target_query(group),
+            amount,
+            false,
+        ),
+    );
+}
+
 fn rewrite_bt_related_to_first_target_controller(bt: &mut BodyTarget) {
     if let BodyTarget::FilteredPermanent(obj) = bt {
         let rewrite_clause = |c: &mut ObjectClause| {
@@ -167,33 +238,65 @@ pub(super) fn lower_combat_damage_instruction(
                             if bt_is_creature(bt) {
                                 if is_self_pronoun(target, builder, self_pronoun_valid) {
                                     builder.bind_target(bt)?;
-                                    builder.instructions.push(Instruction::DamageFromPower(
-                                        PowerDamageSource::TargetCreatureToAbilitySource,
-                                    ));
+                                    builder.instructions.push(
+                                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage_from(
+                                            spellwake_engine::toolbox::DamageSourceQuery::Objects(
+                                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                            ),
+                                            spellwake_engine::toolbox::DamageTargetQuery::Relative(
+                                                Box::new(DamageRecipientsRef::AbilitySource),
+                                            ),
+                                            DamageAmountSpec::SourcePower,
+                                            false,
+                                        ),
+                                    );
                                     return Ok(());
                                 }
                                 if matches!(target.as_ref(), SubjectRefAst::Anaphora(a) if a.eq_ignore_ascii_case("itself"))
                                 {
                                     builder.bind_target(bt)?;
-                                    builder.instructions.push(Instruction::DamageFromPower(
-                                        PowerDamageSource::TargetCreature,
-                                    ));
+                                    builder.instructions.push(
+                                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage_from(
+                                            spellwake_engine::toolbox::DamageSourceQuery::Objects(
+                                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                            ),
+                                            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                            DamageAmountSpec::SourcePower,
+                                            false,
+                                        ),
+                                    );
                                     return Ok(());
                                 }
                             }
                         }
                         SubjectRefAst::Anaphora(_) if bt_is_creature(builder.target) => {
                             if is_self_pronoun(target, builder, self_pronoun_valid) {
-                                builder.instructions.push(Instruction::DamageFromPower(
-                                    PowerDamageSource::TargetCreatureToAbilitySource,
-                                ));
+                                builder.instructions.push(
+                                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage_from(
+                                        spellwake_engine::toolbox::DamageSourceQuery::Objects(
+                                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                                        ),
+                                        spellwake_engine::toolbox::DamageTargetQuery::Relative(
+                                            Box::new(DamageRecipientsRef::AbilitySource),
+                                        ),
+                                        DamageAmountSpec::SourcePower,
+                                        false,
+                                    ),
+                                );
                                 return Ok(());
                             }
                             if matches!(target.as_ref(), SubjectRefAst::Anaphora(a) if a.eq_ignore_ascii_case("itself"))
                             {
-                                builder.instructions.push(Instruction::DamageFromPower(
-                                    PowerDamageSource::TargetCreature,
-                                ));
+                                builder.instructions.push(
+                                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage_from(
+                                        spellwake_engine::toolbox::DamageSourceQuery::Objects(
+                                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                                        ),
+                                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                        DamageAmountSpec::SourcePower,
+                                        false,
+                                    ),
+                                );
                                 return Ok(());
                             }
                         }
@@ -986,11 +1089,68 @@ pub(super) fn lower_combat_damage_instruction(
                         ))
                     };
                     if let Some(rec) = rec_ref {
-                        builder.instructions.push(Instruction::DealDamageFrom {
-                            source: Box::new(src),
-                            recipients: Box::new(rec),
-                            amount: Box::new(amt_spec),
-                        });
+                        let source_q = damage_source_ref_to_query(src, &rec);
+                        let target_q = match rec {
+                            DamageRecipientsRef::Target => {
+                                spellwake_engine::toolbox::DamageTargetQuery::Targets
+                            }
+                            DamageRecipientsRef::Group(group) => {
+                                damage_group_to_target_query(group)
+                            }
+                            other => spellwake_engine::toolbox::DamageTargetQuery::Relative(
+                                Box::new(other),
+                            ),
+                        };
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage_from(
+                                source_q, target_q, amt_spec, false,
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    if matches!(
+                        src,
+                        DamageSourceRef::TargetObject
+                            | DamageSourceRef::TriggeringObject
+                            | DamageSourceRef::AttachedHost
+                            | DamageSourceRef::AbilitySource
+                    ) && (matches!(
+                        target.as_ref(),
+                        SubjectRefAst::Player(PlayerRefAst::ItsOwner)
+                    ) || matches!(
+                        target.as_ref(),
+                        SubjectRefAst::OwnerOf(inner)
+                            if matches!(inner.as_ref(), SubjectRefAst::Anaphora(_))
+                    )) {
+                        let src_obj_q = match src {
+                            DamageSourceRef::TargetObject => {
+                                spellwake_engine::toolbox::ObjectQuery::Targets
+                            }
+                            DamageSourceRef::TriggeringObject => {
+                                spellwake_engine::toolbox::ObjectQuery::TriggerSubject
+                            }
+                            DamageSourceRef::AttachedHost => {
+                                spellwake_engine::toolbox::ObjectQuery::AttachedHost
+                            }
+                            DamageSourceRef::AbilitySource => {
+                                spellwake_engine::toolbox::ObjectQuery::Source
+                            }
+                            _ => unreachable!(),
+                        };
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage_from(
+                                spellwake_engine::toolbox::DamageSourceQuery::Objects(
+                                    src_obj_q.clone(),
+                                ),
+                                spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                    spellwake_engine::toolbox::PlayerSelector::OwnersOf(Box::new(
+                                        src_obj_q,
+                                    )),
+                                ),
+                                amt_spec,
+                                false,
+                            ),
+                        );
                         return Ok(());
                     }
                 }
@@ -1049,17 +1209,29 @@ pub(super) fn lower_combat_damage_instruction(
                 } else {
                     return Err("oracle:unsupported-damage-target");
                 };
-                let group = DamageGroup::AffectedPlayers(AffectedPlayers::One(rp));
-                if let ValueExpr::Literal(n) = amt_expr {
-                    builder
-                        .instructions
-                        .push(Instruction::DamageGroup { group, amount: n });
-                } else {
-                    builder.instructions.push(Instruction::DamageGroupAmount {
-                        group,
-                        amount: amt_expr,
-                    });
-                }
+                push_damage_group(
+                    &mut builder.instructions,
+                    DamageGroup::AffectedPlayers(AffectedPlayers::One(rp)),
+                    amt_expr,
+                );
+                return Ok(());
+            }
+            if let SubjectRefAst::OwnerOf(inner) = target.as_ref()
+                && let SubjectRefAst::TargetObject {
+                    count: TargetCountAst::Exact(1),
+                    ..
+                } = inner.as_ref()
+            {
+                let bt = lower_target_subject(inner, vocabulary)?;
+                builder.bind_target(bt)?;
+                let amt_expr = lower_amt(builder)?;
+                push_damage_group(
+                    &mut builder.instructions,
+                    DamageGroup::AffectedPlayers(AffectedPlayers::One(
+                        ResolvingPlayer::TargetOwner,
+                    )),
+                    amt_expr,
+                );
                 return Ok(());
             }
             if let SubjectRefAst::InZone {
@@ -1277,19 +1449,13 @@ pub(super) fn lower_combat_damage_instruction(
                         && matches!(builder.target, BodyTarget::SingleSpell(_)) =>
                 {
                     let amt_expr = lower_amt(builder)?;
-                    let group = DamageGroup::AffectedPlayers(AffectedPlayers::One(
-                        ResolvingPlayer::TargetSpellController,
-                    ));
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageGroup { group, amount: n });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(
+                        &mut builder.instructions,
+                        DamageGroup::AffectedPlayers(AffectedPlayers::One(
+                            ResolvingPlayer::TargetSpellController,
+                        )),
+                        amt_expr,
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(raw)
@@ -1297,19 +1463,13 @@ pub(super) fn lower_combat_damage_instruction(
                         && is_permanent_body_target(builder.target) =>
                 {
                     let amt_expr = lower_amt(builder)?;
-                    let group = DamageGroup::AffectedPlayers(AffectedPlayers::One(
-                        ResolvingPlayer::TargetController,
-                    ));
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageGroup { group, amount: n });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(
+                        &mut builder.instructions,
+                        DamageGroup::AffectedPlayers(AffectedPlayers::One(
+                            ResolvingPlayer::TargetController,
+                        )),
+                        amt_expr,
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(raw)
@@ -1326,55 +1486,113 @@ pub(super) fn lower_combat_damage_instruction(
                         builder,
                         in_trigger,
                     )?;
-                    if rp == ResolvingPlayer::UniqueRelatedPlayer {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageRelatedPlayerAmount(amt_expr));
-                    } else {
-                        let group = DamageGroup::AffectedPlayers(AffectedPlayers::One(rp));
-                        if let ValueExpr::Literal(n) = amt_expr {
-                            builder
-                                .instructions
-                                .push(Instruction::DamageGroup { group, amount: n });
-                        } else {
-                            builder.instructions.push(Instruction::DamageGroupAmount {
-                                group,
-                                amount: amt_expr,
-                            });
-                        }
-                    }
+                    push_damage_group(
+                        &mut builder.instructions,
+                        DamageGroup::AffectedPlayers(AffectedPlayers::One(rp)),
+                        amt_expr,
+                    );
                     Ok(())
                 }
                 SubjectRefAst::ControllerOf(inner) => {
                     let amt_expr = lower_amt(builder)?;
-                    let rp = match inner.as_ref() {
+                    let selector = match inner.as_ref() {
                         SubjectRefAst::Anaphora(_) if is_stack_body_target(builder.target) => {
-                            ResolvingPlayer::TargetSpellController
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetSpellController,
+                            )
                         }
                         SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
-                            ResolvingPlayer::TargetController
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetController,
+                            )
                         }
                         SubjectRefAst::TriggerSubject if in_trigger => {
-                            ResolvingPlayer::TriggerSubjectController
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TriggerSubjectController,
+                            )
                         }
                         SubjectRefAst::Anaphora(_)
                             if builder.target == BodyTarget::None && in_trigger =>
                         {
-                            ResolvingPlayer::TriggerSubjectController
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TriggerSubjectController,
+                            )
+                        }
+                        SubjectRefAst::AttachedHost(_)
+                            if self_pronoun_valid || in_trigger || builder.has_source =>
+                        {
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::AttachedHostController,
+                            )
+                        }
+                        SubjectRefAst::SelfObject => {
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            )
+                        }
+                        SubjectRefAst::Anaphora(_)
+                            if builder.target == BodyTarget::None
+                                && last_instruction_moved_object(&builder.instructions) =>
+                        {
+                            spellwake_engine::toolbox::PlayerSelector::ControllersOf(Box::new(
+                                spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                            ))
                         }
                         _ => return Err("oracle:unsupported-damage-target"),
                     };
-                    let group = DamageGroup::AffectedPlayers(AffectedPlayers::One(rp));
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageGroup { group, amount: n });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group,
-                            amount: amt_expr,
-                        });
-                    }
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Players(selector),
+                            amt_expr,
+                            false,
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::OwnerOf(inner) => {
+                    let amt_expr = lower_amt(builder)?;
+                    let selector = match inner.as_ref() {
+                        SubjectRefAst::Anaphora(_) if builder.target != BodyTarget::None => {
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetOwner,
+                            )
+                        }
+                        SubjectRefAst::TriggerSubject if in_trigger => {
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TriggerSubjectOwner,
+                            )
+                        }
+                        SubjectRefAst::Anaphora(_)
+                            if builder.target == BodyTarget::None && in_trigger =>
+                        {
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TriggerSubjectOwner,
+                            )
+                        }
+                        SubjectRefAst::SelfObject
+                            if self_pronoun_valid || in_trigger || builder.has_source =>
+                        {
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::SourceOwner,
+                            )
+                        }
+                        SubjectRefAst::Anaphora(_)
+                            if builder.target == BodyTarget::None
+                                && last_instruction_moved_object(&builder.instructions) =>
+                        {
+                            spellwake_engine::toolbox::PlayerSelector::OwnersOf(Box::new(
+                                spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                            ))
+                        }
+                        _ => return Err("oracle:unsupported-damage-target"),
+                    };
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Players(selector),
+                            amt_expr,
+                            false,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_)
@@ -1421,46 +1639,17 @@ pub(super) fn lower_combat_damage_instruction(
                 }
                 SubjectRefAst::Player(PlayerRefAst::EachOpponent) => {
                     let amt_expr = lower_amt(builder)?;
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder.instructions.push(Instruction::DamageGroup {
-                            group: DamageGroup::Opponents,
-                            amount: n,
-                        });
-                    } else {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageOpponentsAmount(amt_expr));
-                    }
+                    push_damage_group(&mut builder.instructions, DamageGroup::Opponents, amt_expr);
                     Ok(())
                 }
                 SubjectRefAst::Player(PlayerRefAst::EachPlayer) => {
                     let amt_expr = lower_amt(builder)?;
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder.instructions.push(Instruction::DamageGroup {
-                            group: DamageGroup::Players,
-                            amount: n,
-                        });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group: DamageGroup::Players,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(&mut builder.instructions, DamageGroup::Players, amt_expr);
                     Ok(())
                 }
                 SubjectRefAst::Player(PlayerRefAst::You) => {
                     let amt_expr = lower_amt(builder)?;
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder.instructions.push(Instruction::DamageGroup {
-                            group: DamageGroup::Controller,
-                            amount: n,
-                        });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group: DamageGroup::Controller,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(&mut builder.instructions, DamageGroup::Controller, amt_expr);
                     Ok(())
                 }
                 s if is_self_pronoun(s, builder, self_pronoun_valid)
@@ -1475,17 +1664,11 @@ pub(super) fn lower_combat_damage_instruction(
                     ) =>
                 {
                     let amt_expr = lower_amt(builder)?;
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder.instructions.push(Instruction::DamageGroup {
-                            group: DamageGroup::AbilitySource,
-                            amount: n,
-                        });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group: DamageGroup::AbilitySource,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(
+                        &mut builder.instructions,
+                        DamageGroup::AbilitySource,
+                        amt_expr,
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Player(PlayerRefAst::ThatPlayer) => {
@@ -1501,20 +1684,13 @@ pub(super) fn lower_combat_damage_instruction(
                             BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
                         )
                     {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageAmount(amt_expr));
-                    } else if rp == ResolvingPlayer::UniqueRelatedPlayer
-                        && builder.target == BodyTarget::None
-                    {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageRelatedPlayerAmount(amt_expr));
+                        push_damage_target(&mut builder.instructions, amt_expr);
                     } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group: DamageGroup::AffectedPlayers(AffectedPlayers::One(rp)),
-                            amount: amt_expr,
-                        });
+                        push_damage_group(
+                            &mut builder.instructions,
+                            DamageGroup::AffectedPlayers(AffectedPlayers::One(rp)),
+                            amt_expr,
+                        );
                     }
                     Ok(())
                 }
@@ -1523,16 +1699,7 @@ pub(super) fn lower_combat_damage_instruction(
                     let group = DamageGroup::Filtered(ObjectFilter::Clause(
                         ObjectClause::any().attached_to_self(),
                     ));
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageGroup { group, amount: n });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(&mut builder.instructions, group, amt_expr);
                     Ok(())
                 }
                 SubjectRefAst::Each(f) | SubjectRefAst::All(f) | SubjectRefAst::Group(f) => {
@@ -1556,34 +1723,51 @@ pub(super) fn lower_combat_damage_instruction(
                         };
                         builder.bind_target(bt)?;
                         let amt_expr = lower_amt(builder)?;
-                        builder
-                            .instructions
-                            .push(Instruction::DamageTargetControllersCreatures {
-                                amount: amt_expr,
-                                include_target: false,
-                                require_damaged_creatures_to_attack: false,
-                            });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                                spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                                    spellwake_engine::toolbox::ObjectQuery::zone(
+                                        spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(
+                                            Box::new(
+                                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                    ResolvingPlayer::TargetPlayer,
+                                                ),
+                                            ),
+                                        ),
+                                        ObjectFilter::creature(),
+                                    ),
+                                ),
+                                amt_expr,
+                                false,
+                            ),
+                        );
                         return Ok(());
                     }
                     let mut f_clean = f.as_ref().clone();
                     if f_clean.zone == Some(ZoneFilter::Battlefield) {
                         f_clean.zone = None;
                     }
-                    let group = lower_damage_group(&f_clean, vocabulary)?;
+                    let group = if f_clean.zone.is_none()
+                        && (matches!(
+                            f_clean.controller,
+                            Some(
+                                ControllerRelation::DefendingPlayer
+                                    | ControllerRelation::ThatPlayer
+                            )
+                        ) || (!in_trigger && is_permanent_body_target(builder.target)))
+                    {
+                        let obj = lower_object_filter_in_context(
+                            &f_clean, builder, in_trigger, vocabulary,
+                        )?;
+                        DamageGroup::Filtered(obj)
+                    } else {
+                        lower_damage_group(&f_clean, vocabulary)?
+                    };
                     if let DamageGroup::Filtered(obj) = group {
                         bind_filter_player_target(builder, &obj)?;
                     }
                     let amt_expr = lower_amt(builder)?;
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageGroup { group, amount: n });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(&mut builder.instructions, group, amt_expr);
                     Ok(())
                 }
                 SubjectRefAst::Compound(items) if items.len() >= 2 => {
@@ -1927,30 +2111,12 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                     };
                     let amt_expr = lower_amt(builder)?;
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageGroup { group, amount: n });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(&mut builder.instructions, group, amt_expr);
                     Ok(())
                 }
                 SubjectRefAst::Player(PlayerRefAst::EachOtherOpponent) => {
                     let amt_expr = lower_amt(builder)?;
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder.instructions.push(Instruction::DamageGroup {
-                            group: DamageGroup::Opponents,
-                            amount: n,
-                        });
-                    } else {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageOpponentsAmount(amt_expr));
-                    }
+                    push_damage_group(&mut builder.instructions, DamageGroup::Opponents, amt_expr);
                     Ok(())
                 }
                 SubjectRefAst::Player(
@@ -1963,19 +2129,13 @@ pub(super) fn lower_combat_damage_instruction(
                             opponents_only: matches!(p, PlayerRefAst::AnyOpponent),
                         },
                     });
-                    let group = DamageGroup::AffectedPlayers(AffectedPlayers::One(
-                        ResolvingPlayer::ChosenPlayer,
-                    ));
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageGroup { group, amount: n });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(
+                        &mut builder.instructions,
+                        DamageGroup::AffectedPlayers(AffectedPlayers::One(
+                            ResolvingPlayer::ChosenPlayer,
+                        )),
+                        amt_expr,
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Player(p)
@@ -1995,26 +2155,24 @@ pub(super) fn lower_combat_damage_instruction(
                 {
                     let amt_expr = lower_amt(builder)?;
                     let players = lower_affected_players_in_context(*p, builder, in_trigger)?;
-                    let group = DamageGroup::AffectedPlayers(players);
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageGroup { group, amount: n });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(
+                        &mut builder.instructions,
+                        DamageGroup::AffectedPlayers(players),
+                        amt_expr,
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TriggerSubject if in_trigger => {
                     let amt_expr = lower_amt(builder)?;
-                    builder.instructions.push(Instruction::DealDamageFrom {
-                        source: Box::new(DamageSourceRef::AbilitySource),
-                        recipients: Box::new(DamageRecipientsRef::TriggeringObject),
-                        amount: Box::new(DamageAmountSpec::Expr(amt_expr)),
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                                spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                            ),
+                            amt_expr,
+                            false,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(raw)
@@ -2023,11 +2181,47 @@ pub(super) fn lower_combat_damage_instruction(
                         && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
                 {
                     let amt_expr = lower_amt(builder)?;
-                    builder.instructions.push(Instruction::DealDamageFrom {
-                        source: Box::new(DamageSourceRef::AbilitySource),
-                        recipients: Box::new(DamageRecipientsRef::TriggeringObject),
-                        amount: Box::new(DamageAmountSpec::Expr(amt_expr)),
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                                spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                            ),
+                            amt_expr,
+                            false,
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if builder.target == BodyTarget::None
+                        && last_instruction_created_tokens(&builder.instructions) =>
+                {
+                    let amt_expr = lower_amt(builder)?;
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                                spellwake_engine::toolbox::ObjectQuery::CreatedTokens,
+                            ),
+                            amt_expr,
+                            false,
+                        ),
+                    );
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_)
+                    if builder.target == BodyTarget::None
+                        && last_instruction_moved_object(&builder.instructions) =>
+                {
+                    let amt_expr = lower_amt(builder)?;
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                                spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                            ),
+                            amt_expr,
+                            false,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_)
@@ -2038,28 +2232,26 @@ pub(super) fn lower_combat_damage_instruction(
                     let obj = builder
                         .last_group_filter
                         .ok_or("oracle:unsupported-damage-target")?;
-                    let group = DamageGroup::Filtered(obj);
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder
-                            .instructions
-                            .push(Instruction::DamageGroup { group, amount: n });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(
+                        &mut builder.instructions,
+                        DamageGroup::Filtered(obj),
+                        amt_expr,
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Player(
                     PlayerRefAst::ItsController | PlayerRefAst::ThatObjectController,
                 ) if builder.target != BodyTarget::None => {
                     let amt_expr = lower_amt(builder)?;
-                    builder.instructions.push(Instruction::DealDamageFrom {
-                        source: Box::new(DamageSourceRef::AbilitySource),
-                        recipients: Box::new(DamageRecipientsRef::TargetController),
-                        amount: Box::new(DamageAmountSpec::Expr(amt_expr)),
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                                DamageRecipientsRef::TargetController,
+                            )),
+                            amt_expr,
+                            false,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::Player(
@@ -2069,17 +2261,11 @@ pub(super) fn lower_combat_damage_instruction(
                     | PlayerRefAst::ThatObjectController,
                 ) if builder.target == BodyTarget::None => {
                     let amt_expr = lower_amt(builder)?;
-                    if let ValueExpr::Literal(n) = amt_expr {
-                        builder.instructions.push(Instruction::DamageGroup {
-                            group: DamageGroup::RelatedPlayer,
-                            amount: n,
-                        });
-                    } else {
-                        builder.instructions.push(Instruction::DamageGroupAmount {
-                            group: DamageGroup::RelatedPlayer,
-                            amount: amt_expr,
-                        });
-                    }
+                    push_damage_group(
+                        &mut builder.instructions,
+                        DamageGroup::RelatedPlayer,
+                        amt_expr,
+                    );
                     Ok(())
                 }
                 _ => Err("oracle:unsupported-damage-target"),
@@ -2439,11 +2625,16 @@ pub(super) fn lower_combat_damage_instruction(
             target: None,
             duration: DurationAst::UntilEndOfTurn,
         } => {
-            builder
-                .instructions
-                .push(Instruction::PreventDamageThisTurn(
-                    TurnPreventionFilter::Combat,
-                ));
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
+                    spellwake_engine::damage::TurnPreventionSpec {
+                        combat_only: true,
+                        source: spellwake_engine::damage::PreventionSourceSpec::Any,
+                        recipient: spellwake_engine::damage::PreventionRecipientSpec::Any,
+                        both_directions: false,
+                    },
+                ),
+            );
             Ok(())
         }
         InstructionAst::PreventAllDamage {
@@ -2451,11 +2642,16 @@ pub(super) fn lower_combat_damage_instruction(
             target: None,
             duration: DurationAst::UntilEndOfTurn,
         } => {
-            builder
-                .instructions
-                .push(Instruction::PreventDamageThisTurn(
-                    TurnPreventionFilter::All,
-                ));
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
+                    spellwake_engine::damage::TurnPreventionSpec {
+                        combat_only: false,
+                        source: spellwake_engine::damage::PreventionSourceSpec::Any,
+                        recipient: spellwake_engine::damage::PreventionRecipientSpec::Any,
+                        both_directions: false,
+                    },
+                ),
+            );
             Ok(())
         }
         InstructionAst::PreventAllDamage {
@@ -2463,11 +2659,16 @@ pub(super) fn lower_combat_damage_instruction(
             target: Some(subj),
             duration: DurationAst::UntilEndOfTurn,
         } if is_self_pronoun(subj, builder, self_pronoun_valid) => {
-            builder
-                .instructions
-                .push(Instruction::PreventDamageThisTurn(
-                    TurnPreventionFilter::CombatToOrFromAbilitySource,
-                ));
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
+                    spellwake_engine::damage::TurnPreventionSpec {
+                        combat_only: true,
+                        source: spellwake_engine::damage::PreventionSourceSpec::AbilitySource,
+                        recipient: spellwake_engine::damage::PreventionRecipientSpec::Any,
+                        both_directions: true,
+                    },
+                ),
+            );
             Ok(())
         }
         InstructionAst::PreventAllDamage {
@@ -2475,11 +2676,16 @@ pub(super) fn lower_combat_damage_instruction(
             target: Some(subj),
             duration: DurationAst::UntilEndOfTurn,
         } if is_self_pronoun(subj, builder, self_pronoun_valid) => {
-            builder
-                .instructions
-                .push(Instruction::PreventDamageThisTurn(
-                    TurnPreventionFilter::ToAbilitySource,
-                ));
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
+                    spellwake_engine::damage::TurnPreventionSpec {
+                        combat_only: false,
+                        source: spellwake_engine::damage::PreventionSourceSpec::Any,
+                        recipient: spellwake_engine::damage::PreventionRecipientSpec::AbilitySource,
+                        both_directions: false,
+                    },
+                ),
+            );
             Ok(())
         }
         InstructionAst::PreventAllDamage {
@@ -3004,13 +3210,15 @@ pub(super) fn lower_combat_damage_instruction(
                     } else {
                         ResolvedPartSpec::CannotBeTargetedByColors(target_colors)
                     };
-                    builder.instructions.push(Instruction::ChangeGroup {
-                        group: Box::new(EffectSubject::Matching(
-                            ObjectFilter::creature().controlled(),
-                        )),
-                        parts: ResolvedPartsSpec(vec![target_part]),
-                        duration: dur,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                EffectSubject::Matching(ObjectFilter::creature().controlled()),
+                            )),
+                            ResolvedPartsSpec(vec![target_part]),
+                            dur,
+                        ),
+                    );
                     return Ok(());
                 }
             }
@@ -3064,15 +3272,19 @@ pub(super) fn lower_combat_damage_instruction(
                 }
             }
             if low == "it becomes day" || low == "becomes_day" {
-                builder
-                    .instructions
-                    .push(Instruction::SetDayNight(DayNight::Day));
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::set_day_night(
+                        DayNight::Day,
+                    ),
+                );
                 return Ok(());
             }
             if low == "it becomes night" || low == "becomes_night" {
-                builder
-                    .instructions
-                    .push(Instruction::SetDayNight(DayNight::Night));
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::set_day_night(
+                        DayNight::Night,
+                    ),
+                );
                 return Ok(());
             }
             if let Some(same_tail) = low.strip_prefix("same_is_true_for:") {
@@ -3111,8 +3323,6 @@ pub(super) fn lower_combat_damage_instruction(
                 };
                 enum SameGrantShape {
                     DynamicBoost(spellwake_engine::toolbox::ObjectQuery, ResolvedDuration),
-                    ChangeAbilitySource(ResolvedDuration),
-                    ChangeGroup(Box<EffectSubject>, ResolvedDuration),
                     ResolvedParts(spellwake_engine::toolbox::ObjectQuery, ResolvedDuration),
                     AddCounters(spellwake_engine::toolbox::ObjectQuery, ValueExpr),
                 }
@@ -3176,16 +3386,6 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         _ => return Err("oracle:unsupported-combat-mod"),
                     },
-                    Instruction::ChangeAbilitySource { parts, duration }
-                        if is_single_kw_ab(&parts) =>
-                    {
-                        SameGrantShape::ChangeAbilitySource(duration)
-                    }
-                    Instruction::ChangeGroup {
-                        group,
-                        parts,
-                        duration,
-                    } if is_single_kw_ab(&parts) => SameGrantShape::ChangeGroup(group, duration),
                     Instruction::MutateObject(spec) => match spec.op {
                         spellwake_engine::toolbox::ObjectMutation::AddCounters { kind, amount }
                             if prev_kw_counter == Some(kind) =>
@@ -3229,23 +3429,6 @@ pub(super) fn lower_combat_damage_instruction(
                                     *d,
                                 ),
                             ))
-                        }
-                        SameGrantShape::ChangeAbilitySource(d) => {
-                            let mut ab = AbilityChange::default();
-                            ab.granted_keywords.insert(kw);
-                            Instruction::ChangeAbilitySource {
-                                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab)]),
-                                duration: *d,
-                            }
-                        }
-                        SameGrantShape::ChangeGroup(group, d) => {
-                            let mut ab = AbilityChange::default();
-                            ab.granted_keywords.insert(kw);
-                            Instruction::ChangeGroup {
-                                group: group.clone(),
-                                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab)]),
-                                duration: *d,
-                            }
                         }
                         SameGrantShape::ResolvedParts(sel, d) => {
                             let mut ab = AbilityChange::default();
@@ -3291,13 +3474,17 @@ pub(super) fn lower_combat_damage_instruction(
                 clause.flags = clause
                     .flags
                     .union(ObjectFilterFlags::TOUGHNESS_GREATER_THAN_POWER);
-                builder.instructions.push(Instruction::ChangeGroup {
-                    group: Box::new(EffectSubject::Matching(ObjectFilter::Clause(clause))),
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                        BlockingRestriction::AssignDamageByToughness,
-                    )]),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::Matching(ObjectFilter::Clause(clause)),
+                        )),
+                        ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                            BlockingRestriction::AssignDamageByToughness,
+                        )]),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             if low == "no_max_hand_size"
@@ -4753,12 +4940,13 @@ pub(super) fn lower_combat_damage_instruction(
             {
                 match eff_subject {
                     s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                        builder.instructions.push(Instruction::ChangeAbilitySource {
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                                br,
-                            )]),
-                            duration: br_dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Source,
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -4917,15 +5105,17 @@ pub(super) fn lower_combat_damage_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::AttachedHost(_) => {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
-                                ObjectClause::any().attached_to_self(),
-                            ))),
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                                br,
-                            )]),
-                            duration: br_dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::Matching(ObjectFilter::Clause(
+                                        ObjectClause::any().attached_to_self(),
+                                    )),
+                                )),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -4937,23 +5127,27 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         bind_filter_player_target(builder, &obj)?;
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::Matching(obj)),
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                                br,
-                            )]),
-                            duration: br_dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::Matching(obj),
+                                )),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TriggerSubject if in_trigger => {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::TriggerSubject),
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                                br,
-                            )]),
-                            duration: br_dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::TriggerSubject,
+                                )),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
@@ -5003,26 +5197,30 @@ pub(super) fn lower_combat_damage_instruction(
                         if !is_permanent_body_target(builder.target)
                             && last_instruction_created_tokens(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::CreatedTokens),
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                                br,
-                            )]),
-                            duration: br_dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::CreatedTokens,
+                                )),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
                         if !is_permanent_body_target(builder.target)
                             && last_instruction_moved_object(&builder.instructions) =>
                     {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::LastMoved),
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                                br,
-                            )]),
-                            duration: br_dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::LastMoved,
+                                )),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -5050,13 +5248,15 @@ pub(super) fn lower_combat_damage_instruction(
                             && in_trigger
                             && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
                     {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::TriggerSubject),
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                                br,
-                            )]),
-                            duration: br_dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::TriggerSubject,
+                                )),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(_)
@@ -5066,13 +5266,15 @@ pub(super) fn lower_combat_damage_instruction(
                         let obj = builder
                             .last_group_filter
                             .ok_or("oracle:unsupported-combat-mod")?;
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::Matching(obj)),
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                                br,
-                            )]),
-                            duration: br_dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::Matching(obj),
+                                )),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]),
+                                br_dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     _ => {}
@@ -5359,11 +5561,11 @@ pub(super) fn lower_combat_damage_instruction(
         }
         InstructionAst::RemoveFromCombat { subject } => match subject.as_ref() {
             SubjectRefAst::SelfObject => {
-                builder
-                    .instructions
-                    .push(Instruction::RemoveSubjectFromCombat(Box::new(
-                        EffectSubject::AbilitySource,
-                    )));
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_from_combat(
+                        spellwake_engine::toolbox::ObjectQuery::Source,
+                    ),
+                );
                 Ok(())
             }
             SubjectRefAst::Anaphora(raw)
@@ -5373,9 +5575,13 @@ pub(super) fn lower_combat_damage_instruction(
                 ) =>
             {
                 if builder.target.guarantees_creature() {
-                    builder
-                        .instructions
-                        .push(Instruction::RemoveTargetFromCombat);
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_from_combat(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                EffectSubject::TargetObject,
+                            )),
+                        ),
+                    );
                     Ok(())
                 } else if self_pronoun_valid
                     && matches!(
@@ -5383,48 +5589,56 @@ pub(super) fn lower_combat_damage_instruction(
                         "it" | "this creature"
                     )
                 {
-                    builder
-                        .instructions
-                        .push(Instruction::RemoveSubjectFromCombat(Box::new(
-                            EffectSubject::AbilitySource,
-                        )));
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_from_combat(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                        ),
+                    );
                     Ok(())
                 } else if in_trigger && builder.target == BodyTarget::None {
-                    builder
-                        .instructions
-                        .push(Instruction::RemoveSubjectFromCombat(Box::new(
-                            EffectSubject::TriggerSubject,
-                        )));
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_from_combat(
+                            spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                        ),
+                    );
                     Ok(())
                 } else {
                     Err("oracle:unsupported-target-subject")
                 }
             }
             SubjectRefAst::AttachedHost(_) if self_pronoun_valid || in_trigger => {
-                builder
-                    .instructions
-                    .push(Instruction::RemoveSubjectFromCombat(Box::new(
-                        EffectSubject::Matching(ObjectFilter::Clause(
-                            ObjectClause::any().attached_to_self(),
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_from_combat(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::Matching(ObjectFilter::Clause(
+                                ObjectClause::any().attached_to_self(),
+                            )),
                         )),
-                    )));
+                    ),
+                );
                 Ok(())
             }
             SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
                 let obj = lower_object_filter(f, vocabulary)?;
-                builder
-                    .instructions
-                    .push(Instruction::RemoveSubjectFromCombat(Box::new(
-                        EffectSubject::Matching(obj),
-                    )));
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_from_combat(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::Matching(obj),
+                        )),
+                    ),
+                );
                 Ok(())
             }
             _ => {
                 let bt = lower_target_subject(subject, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::RemoveTargetFromCombat);
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_from_combat(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::TargetObject,
+                        )),
+                    ),
+                );
                 Ok(())
             }
         },

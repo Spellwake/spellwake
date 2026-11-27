@@ -361,3 +361,7 @@ impl ObjectQuery {
         }
     }
 }
+
+pub(crate) fn filter_uses_target(f: &ObjectFilter) -> bool {
+    f.has_target_player() || f.uses_target_permanent()
+}

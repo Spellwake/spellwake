@@ -386,14 +386,77 @@ fn contract_body(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Executable
                     ),
                 )),
                 "CounterSpell" => Instruction::CounterSpell,
-                "DrawController" => Instruction::DrawController {
-                    amount: amount(&v["amount"]),
+                "DrawController" => spellwake_engine::program::Instruction::DrawCards(Box::new(
+                    spellwake_engine::toolbox::DrawCardsSpec::simple(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        amount(&v["amount"]),
+                    ),
+                )),
+                "AdjustControllerLife" => match adjustment(&v["adjustment"]) {
+                    spellwake_engine::life::LifeAdjustment::Gain(n) => {
+                        spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                            spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    spellwake_engine::program::ResolvingPlayer::Controller,
+                                ),
+                                spellwake_engine::program::ValueExpr::Literal(n),
+                            ),
+                        ))
+                    }
+                    spellwake_engine::life::LifeAdjustment::Lose(n) => {
+                        spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                            spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    spellwake_engine::program::ResolvingPlayer::Controller,
+                                ),
+                                spellwake_engine::program::ValueExpr::Literal(n),
+                            ),
+                        ))
+                    }
+                    spellwake_engine::life::LifeAdjustment::Set(n) => {
+                        spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                            spellwake_engine::toolbox::AdjustLifeSpec::set(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    spellwake_engine::program::ResolvingPlayer::Controller,
+                                ),
+                                spellwake_engine::program::ValueExpr::Literal(n),
+                            ),
+                        ))
+                    }
                 },
-                "AdjustControllerLife" => Instruction::AdjustControllerLife {
-                    adjustment: adjustment(&v["adjustment"]),
-                },
-                "AdjustTargetLife" => Instruction::AdjustTargetLife {
-                    adjustment: adjustment(&v["adjustment"]),
+                "AdjustTargetLife" => match adjustment(&v["adjustment"]) {
+                    spellwake_engine::life::LifeAdjustment::Gain(n) => {
+                        spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                            spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                                ),
+                                spellwake_engine::program::ValueExpr::Literal(n),
+                            ),
+                        ))
+                    }
+                    spellwake_engine::life::LifeAdjustment::Lose(n) => {
+                        spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                            spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                                ),
+                                spellwake_engine::program::ValueExpr::Literal(n),
+                            ),
+                        ))
+                    }
+                    spellwake_engine::life::LifeAdjustment::Set(n) => {
+                        spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                            spellwake_engine::toolbox::AdjustLifeSpec::set(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                                ),
+                                spellwake_engine::program::ValueExpr::Literal(n),
+                            ),
+                        ))
+                    }
                 },
                 "CreateTokens" => Instruction::CreateTokens {
                     creations: v["creations"]

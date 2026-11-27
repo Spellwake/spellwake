@@ -21,7 +21,38 @@ use spellwake_engine::{
 };
 
 fn adjust(adjustment: LifeAdjustment) -> Instruction {
-    Instruction::AdjustControllerLife { adjustment }
+    match adjustment {
+        spellwake_engine::life::LifeAdjustment::Gain(n) => {
+            spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(n),
+                ),
+            ))
+        }
+        spellwake_engine::life::LifeAdjustment::Lose(n) => {
+            spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(n),
+                ),
+            ))
+        }
+        spellwake_engine::life::LifeAdjustment::Set(n) => {
+            spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                spellwake_engine::toolbox::AdjustLifeSpec::set(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(n),
+                ),
+            ))
+        }
+    }
 }
 
 #[test]
@@ -178,9 +209,14 @@ fn observer(kind: LifeChangeKind) -> Program {
         ),
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
-            }],
+            vec![spellwake_engine::program::Instruction::DrawCards(Box::new(
+                spellwake_engine::toolbox::DrawCardsSpec::simple(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(0.into()),
+                ),
+            ))],
         ),
     });
     program

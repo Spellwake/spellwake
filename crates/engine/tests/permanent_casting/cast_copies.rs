@@ -11,9 +11,14 @@ fn fixture(kind: CastCopyKeyword) -> GameState {
     let mut source = spell(
         1,
         A,
-        Instruction::AdjustTargetLife {
-            adjustment: LifeAdjustment::Lose(2.into()),
-        },
+        spellwake_engine::program::Instruction::AdjustLife(Box::new(
+            spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                ),
+                spellwake_engine::program::ValueExpr::Literal(2.into()),
+            ),
+        )),
         free.clone(),
         BodyTarget::SinglePlayer,
     );
@@ -41,9 +46,14 @@ fn fixture(kind: CastCopyKeyword) -> GameState {
         cards.push(spell(
             n,
             seat,
-            Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(1.into()),
-            },
+            spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
+            )),
             free.clone(),
             BodyTarget::None,
         ));

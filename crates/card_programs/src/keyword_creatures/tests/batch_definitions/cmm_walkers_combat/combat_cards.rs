@@ -185,7 +185,11 @@ fn cmm_fog_bank_can_block_flyers_and_prevents_both_directions_of_combat_damage_b
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::Damage { amount: 2.into() },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(2),
+                    false,
+                ),
             ),
         ),
     ];
@@ -246,7 +250,11 @@ fn cmm_zilortha_uses_power_only_for_lethal_damage_to_controlled_creatures_and_re
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::Damage { amount: 3.into() },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(3),
+                    false,
+                ),
             ),
         ),
         super::super::cmm_gameplay::remove_spell(7, A),

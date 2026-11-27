@@ -184,7 +184,10 @@ impl EffectWindow {
                     return Err(EffectError::IllegalTarget);
                 }
             }
-            [Instruction::Unattach] => {
+            [Instruction::MutateObject(spec)]
+                if matches!(spec.source, crate::toolbox::ObjectQuery::Source)
+                    && matches!(spec.op, crate::toolbox::ObjectMutation::Unattach) =>
+            {
                 validate_main_phase(&self.window, turn, actor)?;
                 if !matches!(self.attached_to(source),Some(TargetRef::Object(host)) if evaluated.get(host).is_some_and(|v| v.zone==ObjectZone::Battlefield && v.is_creature()))
                 {

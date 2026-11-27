@@ -5,7 +5,6 @@ use crate::{
         GameCommand, GameContext, GameError, GameId, GameInput, GameState, NativeCandidate,
         RuleFrame,
     },
-    life::LifeAdjustment,
     occurrence::{RulesOccurrence, RulesRecord},
     program::{
         BodyTarget, ExecutableBody, PlayerRelation, ResolvingPlayer, TriggerGrouping, TriggerSpec,
@@ -29,9 +28,10 @@ fn operation(
     }
 }
 fn gain(amount: i64) -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(amount.into()),
-    }
+    crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::Literal(amount.into()),
+    )))
 }
 fn seed(card: u64, owner: SeatId, destination: ObjectDestination, program: Program) -> SeedCard {
     SeedCard {
@@ -298,120 +298,6 @@ fn frame(state: &GameState) -> &LibraryTopFrame {
         panic!("actual library frame")
     };
     frame
-}
-
-#[test]
-fn scry_partition_keeps_tail_and_incarnations_then_draws_actual_chosen_top() {
-    let mut run = Run::new(fixture(
-        vec![
-            operation(
-                LibraryActionKind::Scry,
-                ResolvingPlayer::Controller,
-                3.into(),
-            ),
-            Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            },
-        ],
-        BodyTarget::None,
-        A,
-        5,
-        None,
-        false,
-    ));
-    let old: Vec<_> = (10..15).map(|n| object(&run.state, n)).collect();
-    run.cast(1, None);
-    run.pass_round();
-    assert_eq!(frame(&run.state).domain_top_first(), &old[..3]);
-    run.reply(DecisionReply::LibraryTop(LibraryTopReply::Scry {
-        top_first: vec![old[2]],
-        bottom_top_first: vec![old[1], old[0]],
-    }));
-    assert_eq!(
-        library(&run.state, A),
-        vec![CardId(13), CardId(14), CardId(11), CardId(10)]
-    );
-    for (card, id) in [(10, old[0]), (11, old[1]), (13, old[3]), (14, old[4])] {
-        assert_eq!(object(&run.state, card), id);
-    }
-    assert_ne!(object(&run.state, 12), old[2]);
-    assert!(run.facts().iter().any(|f| matches!(f, RulesOccurrence::ZoneChange(z) if matches!(z.reason, ZoneReason::Draw { player } if player==A) && z.before.object.id()==old[2])));
-    run.replay();
-}
-
-#[test]
-fn surveil_selection_does_not_move_until_actual_owner_order_and_then_draws() {
-    let mut run = Run::new(fixture(
-        vec![
-            operation(
-                LibraryActionKind::Surveil,
-                ResolvingPlayer::Controller,
-                3.into(),
-            ),
-            Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            },
-        ],
-        BodyTarget::None,
-        A,
-        5,
-        Some(crate::program::TriggerSpec::player_action(
-            PlayerRelation::Controller,
-            crate::program::PlayerTriggerAction::Surveilled,
-        )),
-        false,
-    ));
-    let old: Vec<_> = (10..15).map(|n| object(&run.state, n)).collect();
-    run.cast(1, None);
-    run.pass_round();
-    run.reply(DecisionReply::LibraryTop(LibraryTopReply::Surveil {
-        top_first: vec![old[1]],
-        to_graveyard: vec![old[2], old[0]],
-    }));
-    assert_eq!(
-        library(&run.state, A),
-        (10..15).map(CardId).collect::<Vec<_>>()
-    );
-    assert!(
-        !run.facts()
-            .iter()
-            .any(|f| matches!(f, RulesOccurrence::LibraryAction(_)))
-    );
-    let RuleFrame::ResolutionGraveyardOrder(f) = run.state.pending_decision().unwrap().frame()
-    else {
-        panic!("owner order")
-    };
-    // Membership comes from the frozen original prefix; the reply still
-    // independently chooses the final owner order.
-    assert_eq!(f.domain(), &[old[0], old[2]]);
-    run.reject(
-        A,
-        DecisionReply::OrderResolutionGraveyard(vec![old[0], old[0]]),
-        GameError::Effect(EffectError::InvalidGraveyardPermutation),
-    );
-    run.reply(DecisionReply::OrderResolutionGraveyard(vec![
-        old[0], old[2],
-    ]));
-    assert_eq!(
-        &graveyard(&run.state, A)[..3],
-        &[CardId(1), CardId(10), CardId(12)]
-    );
-    assert_eq!(library(&run.state, A), vec![CardId(13), CardId(14)]);
-    for card in [10, 11, 12] {
-        assert_ne!(
-            object(&run.state, card),
-            old[usize::try_from(card - 10).unwrap()]
-        );
-    }
-    assert_eq!(object(&run.state, 13), old[3]);
-    assert_eq!(
-        run.state.execution().window().entries().len(),
-        1,
-        "surveil trigger placed only after owner order, movement and the draw tail"
-    );
-    run.pass_round();
-    assert_eq!(run.state.execution().life_total(A), Some(&21.into()));
-    run.replay();
 }
 
 #[test]

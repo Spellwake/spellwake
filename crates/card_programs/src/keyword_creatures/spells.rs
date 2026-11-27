@@ -149,7 +149,11 @@ pub(super) fn compile(
                             spellwake_engine::program::ValueExpr::Literal(4.into()),
                         )],
                     ))),
-                    Instruction::TakeExtraTurn,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::take_extra_turn(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                    ),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_resolving_spell(
                     ),
                 ],
@@ -521,16 +525,27 @@ pub(super) fn compile(
         }
         "You gain 4 life." if !cascades.is_empty() => ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: spellwake_engine::life::LifeAdjustment::Gain(4.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(4),
+                ),
+            ],
         ),
         text if !cascades.is_empty()
             && text.strip_prefix(&card.name) == Some(" deals 4 damage to target creature.") =>
         {
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 4.into() }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(4),
+                        false,
+                    ),
+                ],
             )
         }
 
@@ -540,12 +555,18 @@ pub(super) fn compile(
             ExecutableBody::new(
                 BodyTarget::SinglePlayer,
                 vec![
-                    Instruction::AdjustTargetLife {
-                        adjustment: spellwake_engine::life::LifeAdjustment::Lose(3.into()),
-                    },
-                    Instruction::AdjustControllerLife {
-                        adjustment: spellwake_engine::life::LifeAdjustment::Gain(3.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(3),
+                    ),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(3),
+                    ),
                     Instruction::BranchIfFalse {
                         condition: ResolutionCondition {
                             left: spellwake_engine::program::ValueExpr::event(
@@ -570,7 +591,13 @@ pub(super) fn compile(
         {
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 4.into() }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(4),
+                        false,
+                    ),
+                ],
             )
         }
         "Counter target spell [that wasn't cast from its owner's hand]." if cleave.is_some() => {
@@ -595,9 +622,14 @@ pub(super) fn compile(
         _ if cleave.is_some() => return None,
         "You gain 20 life." if exile_action.is_some() => ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: spellwake_engine::life::LifeAdjustment::Gain(20.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(20),
+                ),
+            ],
         ),
         "Target creature gets +1/+1 and gains double strike until end of turn."
             if exile_action.is_some() =>
@@ -628,14 +660,25 @@ pub(super) fn compile(
         {
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 13.into() }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(13),
+                        false,
+                    ),
+                ],
             )
         }
         "Target player loses 2 life." if escaped => ExecutableBody::new(
             BodyTarget::SinglePlayer,
-            vec![Instruction::AdjustTargetLife {
-                adjustment: spellwake_engine::life::LifeAdjustment::Lose(2.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(2),
+                ),
+            ],
         ),
         "Target player mills four cards." if escaped => ExecutableBody::new(
             BodyTarget::SinglePlayer,
@@ -713,7 +756,13 @@ pub(super) fn compile(
         {
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 4.into() }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(4),
+                        false,
+                    ),
+                ],
             )
         }
         source if !copy_triggers.is_empty() => {
@@ -862,9 +911,12 @@ fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<Executa
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand(),
                     draw(1),
                     if_kicked(kicker?, 4),
-                    Instruction::AdjustControllerLife {
-                        adjustment: spellwake_engine::life::LifeAdjustment::Gain(3.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(3),
+                    ),
                 ],
             )
         }
@@ -877,9 +929,17 @@ fn spell_effect(line: &str, name: &str, kicker: Option<usize>) -> Option<Executa
                 BodyTarget::SingleCreature,
                 vec![
                     if_kicked(kicker?, 3),
-                    Instruction::Damage { amount: 4.into() },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(4),
+                        false,
+                    ),
                     Instruction::Jump { destination: 4 },
-                    Instruction::Damage { amount: 2.into() },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(2),
+                        false,
+                    ),
                 ],
             )
         }

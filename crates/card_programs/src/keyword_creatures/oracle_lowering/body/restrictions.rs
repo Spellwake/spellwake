@@ -616,10 +616,17 @@ fn try_lower_exact_plus_upto_modes_core(
         }
         if !in_trigger {
             let saw_sacrifice = lowered.instructions.iter().any(|op| {
-                matches!(
-                    op,
-                    Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_)
-                )
+                matches!(op, Instruction::Sacrifice { .. })
+                    || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                        .is_some_and(|spec| {
+                            matches!(
+                                spec.destination,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                                }
+                            )
+                        })
             });
             if saw_sacrifice {
                 rewrite_body_anaphora_stats(&mut lowered, ValueObjectRef::LastSacrificedCreature);
@@ -795,10 +802,17 @@ fn try_lower_independent_multi_clause_modes_core(
         }
         if !in_trigger {
             let saw_sacrifice = body.instructions.iter().any(|op| {
-                matches!(
-                    op,
-                    Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_)
-                )
+                matches!(op, Instruction::Sacrifice { .. })
+                    || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                        .is_some_and(|spec| {
+                            matches!(
+                                spec.destination,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics:
+                                        spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                                }
+                            )
+                        })
             });
             if saw_sacrifice {
                 rewrite_body_anaphora_stats(&mut body, ValueObjectRef::LastSacrificedCreature);
@@ -1367,25 +1381,12 @@ pub(in super::super) fn rewrite_instruction_anaphora(
                 rewrite_value_expr_anaphora(amount, replacement);
             }
         }
-        Instruction::GainControllerLife { amount }
-        | Instruction::DrainTargetAndGain(amount)
-        | Instruction::OpponentsLoseAndControllerGains(amount)
-        | Instruction::DrawControllerAndTarget { amount }
-        | Instruction::Mill { amount, .. }
+        Instruction::Mill { amount, .. }
         | Instruction::Scry { amount, .. }
         | Instruction::Surveil { amount, .. }
-        | Instruction::DamageAmount(amount)
-        | Instruction::DamageAmountThenExileIfDies(amount)
-        | Instruction::DamageOpponentsAmount(amount)
-        | Instruction::DamageRelatedPlayerAmount(amount)
-        | Instruction::DamageGroupAmount { amount, .. }
-        | Instruction::DrainOpponents(amount)
         | Instruction::Discard { amount, .. }
         | Instruction::Earthbend { amount }
         | Instruction::Sacrifice { amount, .. }
-        | Instruction::AddPlayerCounter { amount, .. }
-        | Instruction::AdjustPlayersLife { amount, .. }
-        | Instruction::RemoveCountersFromPermanent { amount, .. }
         | Instruction::ExileTopPlay { count: amount, .. }
         | Instruction::LookTopChoose { count: amount, .. }
         | Instruction::LookTopChooseExt { count: amount, .. }
@@ -1397,8 +1398,6 @@ pub(in super::super) fn rewrite_instruction_anaphora(
         | Instruction::CollectEvidence {
             minimum: amount, ..
         }
-        | Instruction::PayLife { amount, .. }
-        | Instruction::PayEnergy { amount, .. }
         | Instruction::TapOrUntapControlled { amount, .. }
         | Instruction::CreateTokenCopy { count: amount, .. }
         | Instruction::Monstrosity { amount }
@@ -1414,13 +1413,30 @@ pub(in super::super) fn rewrite_instruction_anaphora(
         } => {
             rewrite_value_expr_anaphora(amount, replacement);
         }
-        Instruction::SearchLibrary { filter } => {
-            if let SearchCount::UpToExpr(expr) = &mut filter.count {
+        Instruction::AdjustLife(spec) => match &mut spec.op {
+            spellwake_engine::toolbox::LifeOp::Gain(amount)
+            | spellwake_engine::toolbox::LifeOp::Lose(amount)
+            | spellwake_engine::toolbox::LifeOp::Set(amount)
+            | spellwake_engine::toolbox::LifeOp::Pay(amount)
+            | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
+                rewrite_value_expr_anaphora(amount, replacement);
+            }
+            spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+        },
+        Instruction::DealDamage(spec) => {
+            if let spellwake_engine::program::DamageAmountSpec::Expr(expr) = &mut spec.amount {
                 rewrite_value_expr_anaphora(expr, replacement);
             }
         }
-        Instruction::DealDamageFrom { amount, .. } => {
-            if let spellwake_engine::program::DamageAmountSpec::Expr(expr) = amount.as_mut() {
+        Instruction::MutatePlayer(spec) => {
+            if let spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. } = &mut spec.op
+            {
+                rewrite_value_expr_anaphora(amount, replacement);
+            }
+        }
+        Instruction::SearchLibrary { filter } => {
+            if let SearchCount::UpToExpr(expr) = &mut filter.count {
                 rewrite_value_expr_anaphora(expr, replacement);
             }
         }
@@ -1489,18 +1505,6 @@ pub(in super::super) fn rewrite_instruction_anaphora(
             }
             _ => {}
         },
-        Instruction::ChangeAbilitySource { parts, .. } | Instruction::ChangeGroup { parts, .. } => {
-            for part in &mut parts.0 {
-                match part {
-                    ResolvedPartSpec::ModifyPTExpr { power, toughness }
-                    | ResolvedPartSpec::SetPTExpr { power, toughness } => {
-                        rewrite_value_expr_anaphora(power, replacement);
-                        rewrite_value_expr_anaphora(toughness, replacement);
-                    }
-                    _ => {}
-                }
-            }
-        }
         Instruction::CreateTokens { creations }
         | Instruction::CreateAttackingTokens { creations, .. } => {
             for spec in creations {
@@ -1590,31 +1594,46 @@ pub(in super::super) fn rewrite_body_prior_result(
                         rewrite_value_expr_prior_result(amount, replacement);
                     }
                 }
-                Instruction::GainControllerLife { amount }
-                | Instruction::DrainTargetAndGain(amount)
-                | Instruction::OpponentsLoseAndControllerGains(amount)
-                | Instruction::DrawControllerAndTarget { amount }
-                | Instruction::Mill { amount, .. }
+                Instruction::Mill { amount, .. }
                 | Instruction::Scry { amount, .. }
                 | Instruction::Surveil { amount, .. }
-                | Instruction::DamageAmount(amount)
-                | Instruction::DamageAmountThenExileIfDies(amount)
-                | Instruction::DamageOpponentsAmount(amount)
-                | Instruction::DamageRelatedPlayerAmount(amount)
-                | Instruction::DamageGroupAmount { amount, .. }
-                | Instruction::DrainOpponents(amount)
                 | Instruction::Discard { amount, .. }
                 | Instruction::Earthbend { amount }
                 | Instruction::Sacrifice { amount, .. }
-                | Instruction::AddPlayerCounter { amount, .. }
-                | Instruction::AdjustPlayersLife { amount, .. }
-                | Instruction::RemoveCountersFromPermanent { amount, .. }
                 | Instruction::ExileTopPlay { count: amount, .. }
                 | Instruction::LookTopChoose { count: amount, .. }
                 | Instruction::LookTopChooseExt { count: amount, .. }
                 | Instruction::RevealUntilMatchExt { count: amount, .. }
                 | Instruction::BindResolutionX(amount) => {
                     rewrite_value_expr_prior_result(amount, replacement);
+                }
+                Instruction::AdjustLife(spec) => match &mut spec.op {
+                    spellwake_engine::toolbox::LifeOp::Gain(amount)
+                    | spellwake_engine::toolbox::LifeOp::Lose(amount)
+                    | spellwake_engine::toolbox::LifeOp::Set(amount)
+                    | spellwake_engine::toolbox::LifeOp::Pay(amount)
+                    | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
+                        rewrite_value_expr_prior_result(amount, replacement);
+                    }
+                    spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+                },
+                Instruction::DealDamage(spec) => {
+                    if let spellwake_engine::program::DamageAmountSpec::Expr(expr) =
+                        &mut spec.amount
+                    {
+                        rewrite_value_expr_prior_result(expr, replacement);
+                    }
+                }
+                Instruction::MutatePlayer(spec) => {
+                    if let spellwake_engine::toolbox::PlayerMutation::AddCounter {
+                        amount, ..
+                    }
+                    | spellwake_engine::toolbox::PlayerMutation::PayCounter {
+                        amount, ..
+                    } = &mut spec.op
+                    {
+                        rewrite_value_expr_prior_result(amount, replacement);
+                    }
                 }
                 Instruction::SearchLibrary { filter } => {
                     if let SearchCount::UpToExpr(expr) = &mut filter.count {
@@ -1717,7 +1736,6 @@ pub(in super::super) fn rewrite_body_prior_result(
                 | Instruction::Discard { .. }
                 | Instruction::Mill { .. }
                 | Instruction::Sacrifice { .. }
-                | Instruction::SacrificeMatching(_)
         ) {
             saw_count_action = true;
         }
@@ -2648,25 +2666,12 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                     rewrite_value_expr_trigger_subject(amount, replacement);
                 }
             }
-            Instruction::GainControllerLife { amount }
-            | Instruction::DrainTargetAndGain(amount)
-            | Instruction::OpponentsLoseAndControllerGains(amount)
-            | Instruction::DrawControllerAndTarget { amount }
-            | Instruction::Mill { amount, .. }
+            Instruction::Mill { amount, .. }
             | Instruction::Scry { amount, .. }
             | Instruction::Surveil { amount, .. }
-            | Instruction::DamageAmount(amount)
-            | Instruction::DamageAmountThenExileIfDies(amount)
-            | Instruction::DamageOpponentsAmount(amount)
-            | Instruction::DamageRelatedPlayerAmount(amount)
-            | Instruction::DamageGroupAmount { amount, .. }
-            | Instruction::DrainOpponents(amount)
             | Instruction::Discard { amount, .. }
             | Instruction::Earthbend { amount }
             | Instruction::Sacrifice { amount, .. }
-            | Instruction::AddPlayerCounter { amount, .. }
-            | Instruction::AdjustPlayersLife { amount, .. }
-            | Instruction::RemoveCountersFromPermanent { amount, .. }
             | Instruction::ExileTopPlay { count: amount, .. }
             | Instruction::LookTopChoose { count: amount, .. }
             | Instruction::Incubate { count: amount }
@@ -2676,8 +2681,6 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             | Instruction::CollectEvidence {
                 minimum: amount, ..
             }
-            | Instruction::PayLife { amount, .. }
-            | Instruction::PayEnergy { amount, .. }
             | Instruction::TapOrUntapControlled { amount, .. }
             | Instruction::CreateTokenCopy { count: amount, .. }
             | Instruction::Monstrosity { amount }
@@ -2693,13 +2696,31 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             } => {
                 rewrite_value_expr_trigger_subject(amount, replacement);
             }
-            Instruction::SearchLibrary { filter } => {
-                if let SearchCount::UpToExpr(expr) = &mut filter.count {
+            Instruction::AdjustLife(spec) => match &mut spec.op {
+                spellwake_engine::toolbox::LifeOp::Gain(amount)
+                | spellwake_engine::toolbox::LifeOp::Lose(amount)
+                | spellwake_engine::toolbox::LifeOp::Set(amount)
+                | spellwake_engine::toolbox::LifeOp::Pay(amount)
+                | spellwake_engine::toolbox::LifeOp::Drain { amount, .. } => {
+                    rewrite_value_expr_trigger_subject(amount, replacement);
+                }
+                spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+            },
+            Instruction::DealDamage(spec) => {
+                if let spellwake_engine::program::DamageAmountSpec::Expr(expr) = &mut spec.amount {
                     rewrite_value_expr_trigger_subject(expr, replacement);
                 }
             }
-            Instruction::DealDamageFrom { amount, .. } => {
-                if let spellwake_engine::program::DamageAmountSpec::Expr(expr) = amount.as_mut() {
+            Instruction::MutatePlayer(spec) => {
+                if let spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
+                | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. } =
+                    &mut spec.op
+                {
+                    rewrite_value_expr_trigger_subject(amount, replacement);
+                }
+            }
+            Instruction::SearchLibrary { filter } => {
+                if let SearchCount::UpToExpr(expr) = &mut filter.count {
                     rewrite_value_expr_trigger_subject(expr, replacement);
                 }
             }
@@ -2770,19 +2791,6 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                 }
                 _ => {}
             },
-            Instruction::ChangeAbilitySource { parts, .. }
-            | Instruction::ChangeGroup { parts, .. } => {
-                for part in &mut parts.0 {
-                    match part {
-                        ResolvedPartSpec::ModifyPTExpr { power, toughness }
-                        | ResolvedPartSpec::SetPTExpr { power, toughness } => {
-                            rewrite_value_expr_trigger_subject(power, replacement);
-                            rewrite_value_expr_trigger_subject(toughness, replacement);
-                        }
-                        _ => {}
-                    }
-                }
-            }
             Instruction::CreateTokens { creations }
             | Instruction::CreateAttackingTokens { creations, .. } => {
                 for spec in creations {

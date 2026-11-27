@@ -647,7 +647,14 @@ pub(super) fn lower_keyword(
                 id: ids.activated(),
                 mana_cost: cost,
                 source_cost: SourceCost::None,
-                body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Unattach]),
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::unattach(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                        ),
+                    ],
+                ),
             });
             Ok(())
         }
@@ -1288,18 +1295,24 @@ pub(super) fn lower_keyword(
                 };
                 if let Some(modes) = &mut spell.modes {
                     if let Some(prefix) = &mut modes.prefix {
-                        prefix.instructions.insert(0, Instruction::Ascend);
+                        prefix.instructions.insert(
+                            0,
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::ascend(),
+                        );
                         for op in &mut prefix.instructions[1..] {
                             op.shift_jumps(1, 0);
                         }
                     } else {
                         modes.prefix = Some(Box::new(ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::Ascend],
+                            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::ascend()],
                         )));
                     }
                 } else {
-                    spell.body.instructions.insert(0, Instruction::Ascend);
+                    spell.body.instructions.insert(
+                        0,
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::ascend(),
+                    );
                     for op in &mut spell.body.instructions[1..] {
                         op.shift_jumps(1, 0);
                     }
@@ -2045,11 +2058,13 @@ pub(super) fn lower_keyword(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::RemoveCountersFromPermanent {
-                        target_self: true,
-                        kind: Some(CounterKind::Time),
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            Some(CounterKind::Time),
+                            ValueExpr::literal(1),
+                        ),
+                    ],
                 ),
             });
             Ok(())
@@ -3665,10 +3680,12 @@ fn lower_non_mana_cumulative_upkeep(
         } else {
             scale_value_expr(age_count, i64::from(n))
         };
-        vec![Instruction::PayLife {
-            player: ResolvingPlayer::Controller,
-            amount,
-        }]
+        vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_life(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                amount,
+            ),
+        ]
     } else if let Some(after_put) = low
         .strip_prefix("put a ")
         .or_else(|| low.strip_prefix("put an "))
@@ -3774,11 +3791,12 @@ fn lower_non_mana_cumulative_upkeep(
                         opponents_only: true,
                     },
                 },
-                Instruction::AdjustPlayersLife {
-                    players: AffectedPlayers::One(ResolvingPlayer::ChosenPlayer),
-                    gain: true,
-                    amount: ValueExpr::literal(i64::from(n)),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::ChosenPlayer,
+                    ),
+                    ValueExpr::literal(i64::from(n)),
+                ),
             ],
         );
         vec![Instruction::RepeatLoop {

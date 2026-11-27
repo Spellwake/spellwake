@@ -1131,11 +1131,13 @@ pub(super) fn try_rewrite_for_each_player(
 }
 
 pub(super) fn push_damage_target(instructions: &mut Vec<Instruction>, amt: ValueExpr) {
-    if let ValueExpr::Literal(n) = amt {
-        instructions.push(Instruction::Damage { amount: n });
-    } else {
-        instructions.push(Instruction::DamageAmount(amt));
-    }
+    instructions.push(
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            amt,
+            false,
+        ),
+    );
 }
 
 pub(super) fn lower_damage_group(
@@ -1303,10 +1305,6 @@ fn last_instruction_created_tokens_local(ops: &[Instruction]) -> bool {
                 | Instruction::CreateAuraTokenAttached { .. }
                 | Instruction::CreateAttackingTokens { .. }
         )
-    ) || matches!(
-        ops.last(),
-        Some(Instruction::ChangeGroup { group, .. })
-            if matches!(group.as_ref(), EffectSubject::CreatedTokens)
     ) || matches!(
         ops.last(),
         Some(Instruction::MutateObject(spec))
@@ -1749,10 +1747,13 @@ pub(super) fn lower_modify_pt_part(
             if !self_pronoun_valid && !in_trigger {
                 return Err("oracle:spell-cannot-modify-self");
             }
-            builder.instructions.push(Instruction::ChangeAbilitySource {
-                parts: ResolvedPartsSpec(vec![part]),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Source,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Compound(items) => {
@@ -1763,11 +1764,13 @@ pub(super) fn lower_modify_pt_part(
                 try_extract_compound_target_relation(items, builder, in_trigger, vocabulary)?
             {
                 builder.bind_target(bt)?;
-                builder.instructions.push(Instruction::ChangeGroup {
-                    group: Box::new(group),
-                    parts: ResolvedPartsSpec(vec![part]),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(group)),
+                        ResolvedPartsSpec(vec![part]),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             let mut trial = builder.clone();
@@ -1996,11 +1999,15 @@ pub(super) fn lower_modify_pt_part(
                 && (!is_permanent_body_target(builder.target)
                     || raw.to_ascii_lowercase().contains("token")) =>
         {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::CreatedTokens),
-                parts: ResolvedPartsSpec(vec![part]),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::CreatedTokens,
+                    )),
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
@@ -2043,19 +2050,27 @@ pub(super) fn lower_modify_pt_part(
             if !is_permanent_body_target(builder.target)
                 && let Some(group_obj) = builder.last_group_filter =>
         {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::Matching(group_obj)),
-                parts: ResolvedPartsSpec(vec![part]),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::Matching(group_obj),
+                    )),
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TriggerSubject if in_trigger => {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::TriggerSubject),
-                parts: ResolvedPartsSpec(vec![part]),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::TriggerSubject,
+                    )),
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(raw)
@@ -2063,21 +2078,29 @@ pub(super) fn lower_modify_pt_part(
                 && (!self_pronoun_valid || !is_self_anaphora_label_local(raw))
                 && builder.target == BodyTarget::None =>
         {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::TriggerSubject),
-                parts: ResolvedPartsSpec(vec![part]),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::TriggerSubject,
+                    )),
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::AttachedHost(_) => {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
-                    ObjectClause::any().attached_to_self(),
-                ))),
-                parts: ResolvedPartsSpec(vec![part]),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::Matching(ObjectFilter::Clause(
+                            ObjectClause::any().attached_to_self(),
+                        )),
+                    )),
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -2090,11 +2113,13 @@ pub(super) fn lower_modify_pt_part(
                 in_trigger,
                 self_pronoun_valid,
             )?;
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(group),
-                parts: ResolvedPartsSpec(vec![part]),
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(group)),
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         _ => Err("oracle:unsupported-modify-pt-subject"),
@@ -2484,34 +2509,29 @@ pub(super) fn lower_resolution_pay_cost_ops(
     match cost {
         CostAtomAst::PayLife(expr) => {
             let amt = lower_value_expr(resolve_x(expr, bound_x), vocabulary)?;
-            if player == ResolvingPlayer::Controller
-                && let ValueExpr::Literal(n) = &amt
-                && let Some(u) = n.to_usize().and_then(|v| u16::try_from(v).ok())
-                && u > 0
-            {
-                return Ok(vec![Instruction::PayControllerLife(u)]);
-            }
-            Ok(vec![Instruction::PayLife {
-                player,
-                amount: amt,
-            }])
+            Ok(vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(player),
+                    amt,
+                ),
+            ])
         }
-        CostAtomAst::PayEnergy(n) if *n > 0 => {
-            if player == ResolvingPlayer::Controller {
-                Ok(vec![Instruction::PayControllerEnergy(*n)])
-            } else {
-                Ok(vec![Instruction::PayEnergy {
-                    player,
-                    amount: ValueExpr::literal(i64::from(*n)),
-                }])
-            }
-        }
+        CostAtomAst::PayEnergy(n) if *n > 0 => Ok(vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_player_counter(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(player),
+                CounterKind::Energy,
+                ValueExpr::literal(i64::from(*n)),
+            ),
+        ]),
         CostAtomAst::PayEnergyExpr(expr) => {
             let amt = lower_value_expr(resolve_x(expr, bound_x), vocabulary)?;
-            Ok(vec![Instruction::PayEnergy {
-                player,
-                amount: amt,
-            }])
+            Ok(vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_player_counter(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(player),
+                    CounterKind::Energy,
+                    amt,
+                ),
+            ])
         }
         CostAtomAst::SacrificeSelf => Ok(vec![
             crate::keyword_creatures::oracle_lowering::toolbox_emit::sacrifice_subject(
@@ -4733,9 +4753,14 @@ pub(super) fn predefined_token_def(
                     source_cost: SourceCost::TapSacrifice,
                     body: ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::AdjustControllerLife {
-                            adjustment: LifeAdjustment::Gain(3.into()),
-                        }],
+                        vec![
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                ValueExpr::literal(3),
+                            ),
+                        ],
                     ),
                 }],
             );
@@ -5171,10 +5196,14 @@ pub(super) fn predefined_token_def(
                         grouping: TriggerGrouping::EachOccurrence,
                         body: ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::AdjustEachOpponentLife {
-                                adjustment: LifeAdjustment::Lose(1.into()),
-                                controller_adjustment: None,
-                            }],
+                            vec![
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                                    spellwake_engine::toolbox::PlayerSelector::Group(
+                                        AffectedPlayers::EachOpponent,
+                                    ),
+                                    ValueExpr::literal(1),
+                                ),
+                            ],
                         ),
                     });
                     "Wicked"

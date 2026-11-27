@@ -7,7 +7,11 @@ fn cmm_multiplayer_sower_links_exactly_two_seats_and_loses_life_only_once() {
     let bolt = || {
         free_instant(
             BodyTarget::SingleAnyTarget,
-            Instruction::Damage { amount: 3.into() },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(3),
+                false,
+            ),
         )
     };
     let initial = game(
@@ -1344,7 +1348,11 @@ fn cmm_heartless_hidetsugu_deals_rounded_down_damage_to_all_players_simultaneous
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SinglePlayer,
-                    Instruction::Damage { amount: 3.into() },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(3),
+                        false,
+                    ),
                 ),
             ),
         ],

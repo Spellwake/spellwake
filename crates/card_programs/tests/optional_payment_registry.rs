@@ -159,9 +159,14 @@ fn assert_selected(registry: &Registry) {
     }
 }
 fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Program {
-    let draw = Instruction::DrawController {
-        amount: ValueExpr::Literal(1.into()),
-    };
+    let draw = spellwake_engine::program::Instruction::DrawCards(Box::new(
+        spellwake_engine::toolbox::DrawCardsSpec::simple(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::Controller,
+            ),
+            ValueExpr::Literal(1.into()),
+        ),
+    ));
     let optional = Instruction::OptionalEffect {
         chooser: ResolvingPlayer::Controller,
     };
@@ -196,8 +201,37 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
                 ),
                 vec![
                     optional,
-                    Instruction::AdjustControllerLife {
-                        adjustment: LifeAdjustment::Gain(1.into()),
+                    match LifeAdjustment::Gain(1.into()) {
+                        spellwake_engine::life::LifeAdjustment::Gain(n) => {
+                            spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                                spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    ),
+                                    spellwake_engine::program::ValueExpr::Literal(n),
+                                ),
+                            ))
+                        }
+                        spellwake_engine::life::LifeAdjustment::Lose(n) => {
+                            spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                                spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    ),
+                                    spellwake_engine::program::ValueExpr::Literal(n),
+                                ),
+                            ))
+                        }
+                        spellwake_engine::life::LifeAdjustment::Set(n) => {
+                            spellwake_engine::program::Instruction::AdjustLife(Box::new(
+                                spellwake_engine::toolbox::AdjustLifeSpec::set(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        spellwake_engine::program::ResolvingPlayer::Controller,
+                                    ),
+                                    spellwake_engine::program::ValueExpr::Literal(n),
+                                ),
+                            ))
+                        }
                     },
                 ],
             ));

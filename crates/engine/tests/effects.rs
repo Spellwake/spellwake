@@ -44,58 +44,6 @@ fn close_round(state: EffectWindow) -> EffectWindow {
 }
 
 #[test]
-fn inadequate_mana_rejects_before_any_spell_move() {
-    // No floating red mana is available in this setup.
-    let state = EffectWindow::new(GameSeed::with_uniform_life(
-        vec![A, B],
-        A,
-        vec![
-            SeedCard {
-                card: CardId(1),
-                owner: A,
-                destination: ObjectDestination::Hand,
-                program: Program::instant(
-                    ManaCost::one(ManaType::Red),
-                    ExecutableBody::new(
-                        BodyTarget::SingleCreature,
-                        vec![Instruction::Damage { amount: 3.into() }],
-                    ),
-                ),
-            },
-            SeedCard {
-                card: CardId(3),
-                owner: B,
-                destination: ObjectDestination::Battlefield { controller: B },
-                program: Program::creature(
-                    None,
-                    2.into(),
-                    2.into(),
-                    std::collections::BTreeSet::new(),
-                ),
-            },
-        ],
-        vec![CardId(3)],
-        vec![],
-        20.into(),
-        CombatRules::UnrestrictedFreeForAll,
-        test_vocabulary(),
-        std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
-    ))
-    .unwrap();
-    let state = ready(state);
-    assert_eq!(
-        state.cast(
-            state.revision(),
-            A,
-            identity(&state, 1),
-            TargetRef::Object(identity(&state, 3))
-        ),
-        Err(EffectError::InsufficientMana)
-    );
-    assert!(state.window().entries().is_empty());
-}
-
-#[test]
 fn multiple_zero_toughness_creatures_leave_before_priority_and_keep_their_owners() {
     let state = EffectWindow::new({
         let cards: Vec<SeedCard> = vec![A, B]

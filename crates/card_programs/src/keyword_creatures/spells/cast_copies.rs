@@ -1,6 +1,6 @@
 //! Exact, complete effect lines on single-face spells with cast-copy triggers.
 use super::*;
-use spellwake_engine::{characteristics::Color, life::LifeAdjustment, program::ResolvingPlayer};
+use spellwake_engine::{characteristics::Color, program::ResolvingPlayer};
 pub(super) fn body(
     text: &str,
     name: &str,
@@ -20,19 +20,30 @@ pub(super) fn body(
         ),
         "You gain 3 life." => (
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(3.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(3),
+                ),
+            ],
         ),
         "Target player loses 2 life and you gain 2 life." => (
             BodyTarget::SinglePlayer,
             vec![
-                Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Lose(2.into()),
-                },
-                Instruction::AdjustControllerLife {
-                    adjustment: LifeAdjustment::Gain(2.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::TargetPlayer,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(2),
+                ),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(2),
+                ),
             ],
         ),
         "Target creature gets +1/+2 until end of turn." => {
@@ -68,7 +79,13 @@ pub(super) fn body(
         }
         source if source.strip_prefix(name) == Some(" deals 1 damage to target creature.") => (
             BodyTarget::SingleCreature,
-            vec![Instruction::Damage { amount: 1.into() }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                    false,
+                ),
+            ],
         ),
         _ => return None,
     };

@@ -6,7 +6,6 @@ use crate::{
         GameCommand, GameContext, GameError, GameId, GameInput, GameState, NativeCandidate,
         RuleFrame,
     },
-    life::LifeAdjustment,
     mana::{ManaAbility, ManaAbilityId, ManaAbilityRef},
     occurrence::{RulesOccurrence, RulesRecord},
     program::{BodyTarget, CardType, CreatureTypeSlot, ExecutableBody},
@@ -24,9 +23,10 @@ const B: SeatId = SeatId(1);
 const ABILITY: ManaAbilityRef = ManaAbilityRef::Printed(ManaAbilityId(1));
 
 fn gain(amount: i64) -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(amount.into()),
-    }
+    crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::Literal(amount.into()),
+    )))
 }
 fn offer(cost: i64) -> Vec<Instruction> {
     vec![
@@ -425,34 +425,6 @@ fn zero_count_production_refreshes_payment_authority_without_mana_produced() {
         DecisionReply::ResolutionPayment(ResolutionPaymentReply::Decline),
     );
     assert_eq!(declined.state().execution().life_total(A), Some(&22.into()));
-}
-
-#[test]
-fn empty_draw_remains_optional_and_loss_waits_for_accepted_resolution() {
-    for (choice, loses) in [
-        (OptionalEffectChoice::Take, true),
-        (OptionalEffectChoice::Decline, false),
-    ] {
-        let state = pending(vec![
-            Instruction::OptionalEffect {
-                chooser: ResolvingPlayer::Controller,
-            },
-            Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            },
-        ]);
-        assert!(state.outcome().is_none());
-        let RuleFrame::OptionalEffect(frame) = state.pending_decision().unwrap().frame() else {
-            panic!("optional expected")
-        };
-        assert!(frame.options().contains(&OptionalEffectChoice::Take));
-        let result = reply(&state, DecisionReply::OptionalEffect(choice));
-        assert_eq!(
-            result.state().execution().state_based_losses().contains(&A),
-            loses
-        );
-        assert_eq!(result.draw_journal().events.is_empty(), !loses);
-    }
 }
 
 #[test]

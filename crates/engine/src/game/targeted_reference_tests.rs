@@ -6,7 +6,6 @@ use crate::{
     combat::CombatRules,
     effects::SeedCard,
     land::BasicLandType,
-    life::LifeAdjustment,
     mana::{ManaAbilityRef, ManaCost, ManaPayment, ManaSpend, ManaType},
     object_identity::{CardId, ObjectDestination, ObjectId},
     program::{
@@ -31,14 +30,16 @@ fn object(state: &GameState, id: u64) -> ObjectId {
         .unwrap()
 }
 fn gain(amount: i64) -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(amount.into()),
-    }
+    crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::Literal(amount.into()),
+    )))
 }
 fn target_gain(amount: i64) -> Instruction {
-    Instruction::AdjustTargetLife {
-        adjustment: LifeAdjustment::Gain(amount.into()),
-    }
+    crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::TargetPlayer),
+        crate::program::ValueExpr::Literal(amount.into()),
+    )))
 }
 fn original_spell() -> Program {
     Program::instant(

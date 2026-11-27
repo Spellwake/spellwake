@@ -213,9 +213,12 @@ fn predefined_artifact(
                 ),
                 _ => (
                     SourceCost::TapSacrifice,
-                    Instruction::AdjustControllerLife {
-                        adjustment: spellwake_engine::life::LifeAdjustment::Gain(3.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(3),
+                    ),
                 ),
             };
             program.activated.push(ActivatedAbility {

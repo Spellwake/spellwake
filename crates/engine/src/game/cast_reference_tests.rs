@@ -3,7 +3,6 @@
 use super::*;
 use crate::{
     land::BasicLandType,
-    life::LifeAdjustment,
     mana::{ManaAbilityRef, ManaCost, ManaType},
     object_identity::{CardId, ObjectDestination},
     program::{
@@ -98,9 +97,14 @@ fn object(state: &GameState, card: u64) -> ObjectId {
 fn gain(n: i64) -> ExecutableBody {
     ExecutableBody::new(
         BodyTarget::None,
-        vec![crate::program::Instruction::AdjustControllerLife {
-            adjustment: LifeAdjustment::Gain(n.into()),
-        }],
+        vec![crate::program::Instruction::AdjustLife(Box::new(
+            crate::toolbox::AdjustLifeSpec::gain(
+                crate::toolbox::PlayerSelector::Resolving(
+                    crate::program::ResolvingPlayer::Controller,
+                ),
+                crate::program::ValueExpr::Literal(n.into()),
+            ),
+        ))],
     )
 }
 fn trigger(condition: TriggerSpec) -> TriggeredAbility {

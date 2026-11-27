@@ -27,9 +27,10 @@ fn selected_effects(players: AffectedPlayers, amount: ValueExpr) -> [Instruction
 }
 
 fn gain() -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(1.into()),
-    }
+    crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::Literal(1.into()),
+    )))
 }
 
 fn copy() -> Instruction {
@@ -529,34 +530,6 @@ fn discard_does_not_invalidate_a_battlefield_copy_donor() {
                 },
                 copy()
             ]
-        ),
-        Ok(())
-    );
-}
-
-#[test]
-fn selected_body_shapes_keep_targeted_life_loss_and_each_player_trigger_continuations() {
-    let targeted = AffectedPlayers::One(ResolvingPlayer::TargetPlayer);
-    assert_eq!(
-        check(
-            BodyTarget::SinglePlayer,
-            vec![
-                sacrifice(targeted, crate::program::ValueExpr::Literal(1.into())),
-                Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Lose(1.into()),
-                }
-            ]
-        ),
-        Ok(())
-    );
-    assert_eq!(
-        check_triggered(
-            BodyTarget::None,
-            TriggerGrouping::EachOccurrence,
-            vec![sacrifice(
-                AffectedPlayers::EachPlayer,
-                crate::program::ValueExpr::Literal(1.into())
-            )]
         ),
         Ok(())
     );

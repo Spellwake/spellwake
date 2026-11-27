@@ -447,10 +447,16 @@ pub(super) fn lower_spell_effects(
         Err(err) => return Err(err),
     };
     let saw_sacrifice = body.instructions.iter().any(|op| {
-        matches!(
-            op,
-            Instruction::Sacrifice { .. } | Instruction::SacrificeMatching(_)
-        )
+        matches!(op, Instruction::Sacrifice { .. })
+            || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                .is_some_and(|spec| {
+                    matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                        }
+                    )
+                })
     });
     if saw_sacrifice {
         rewrite_body_anaphora_stats(&mut body, ValueObjectRef::LastSacrificedCreature);

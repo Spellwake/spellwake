@@ -6,7 +6,6 @@ use spellwake_engine::{
         AbilityChange, Color, CombatSelector, ControllerSelector, NumericExpression, NumericPair,
         PermanentSelector, StaticPart, StaticParts,
     },
-    life::LifeAdjustment,
     program::{
         AttackRequirement, BodyTarget, CardType, DamageGroup as DamageCohort, Instruction,
         PlayerRelation, PreviousTurnCastCondition, ProgramKind, ResolvingPlayer,
@@ -166,9 +165,12 @@ fn compile_face(
                     SourceCost::Tap,
                     NoTarget,
                     vec![
-                        AdjustControllerLife {
-                            adjustment: LifeAdjustment::Gain(1.into()),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
                         BranchIfFalse {
                             condition: ResolutionCondition {
                                 left: spellwake_engine::program::ValueExpr::PlayerStat(spellwake_engine::program::PlayerStatExpr::ControllerLifeAboveStarting),
@@ -187,9 +189,14 @@ fn compile_face(
                     spellwake_engine::mana::ManaCost::free(),
                     SourceCost::Tap,
                     BodyTarget::SinglePlayer,
-                    vec![AdjustTargetLife {
-                        adjustment: LifeAdjustment::Lose(5.into()),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(5),
+                        ),
+                    ],
                 ));
                 continue;
             }
@@ -207,10 +214,15 @@ fn compile_face(
                             chooser: ResolvingPlayer::Controller,
                         },
                         DestroyTarget,
-                        DamageGroup {
-                            group: DamageCohort::DestroyedTargetController,
-                            amount: 3.into(),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                                spellwake_engine::program::DamageRecipientsRef::Group(
+                                    DamageCohort::DestroyedTargetController,
+                                ),
+                            )),
+                            spellwake_engine::program::ValueExpr::literal(3),
+                            false,
+                        ),
                     ],
                 );
                 continue;
@@ -245,8 +257,28 @@ fn compile_face(
                 (
                     upkeep.clone(),
                     vec![
-                        SacrificeMatching(spellwake_engine::program::SacrificeSelection::Subtype(
-                            vocabulary.resolve_label("Human")?,
+                        Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::simple(
+                                spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Battlefield,
+                                    spellwake_engine::program::ObjectFilter::creature()
+                                        .with_subtype(vocabulary.resolve_label("Human")?,)
+                                        .controlled(),
+                                ),
+                                spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                    chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        ResolvingPlayer::Controller,
+                                    ),
+                                    min: Box::new(spellwake_engine::program::ValueExpr::literal(1)),
+                                    max: Box::new(spellwake_engine::program::ValueExpr::literal(1)),
+                                    constraint: None,
+                                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                    hidden: false,
+                                },
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice,
+                                },
+                            ),
                         )),
                         BranchIfFalse {
                             condition: ResolutionCondition {
@@ -257,10 +289,15 @@ fn compile_face(
                             destination: 4,
                         },
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::tap_ability_source(),
-                        DamageGroup {
-                            group: DamageCohort::Controller,
-                            amount: 9.into(),
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                                spellwake_engine::program::DamageRecipientsRef::Group(
+                                    DamageCohort::Controller,
+                                ),
+                            )),
+                            spellwake_engine::program::ValueExpr::literal(9),
+                            false,
+                        ),
                     ],
                 )
             }
@@ -333,7 +370,13 @@ fn compile_face(
                         spellwake_engine::program::ObjectFilter::creature()
                             .with_keyword(spellwake_engine::characteristics::KeywordAbility::Flying),
                     ),
-                    vec![Damage { amount: 2.into() }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                            spellwake_engine::program::ValueExpr::literal(2),
+                            false,
+                        ),
+                    ],
                 );
                 program.activated.push(ability);
                 continue;
@@ -424,18 +467,20 @@ fn compile_face(
                     fixed_cost(cost)?,
                     SourceCost::None,
                     NoTarget,
-                    vec![ChangeAbilitySource {
-                        parts: spellwake_engine::characteristics::ResolvedPartsSpec(vec![
-                            spellwake_engine::characteristics::ResolvedPartSpec::ModifyPT(
-                                spellwake_engine::characteristics::PowerToughness {
-                                    power: boost.into(),
-                                    toughness: boost.into(),
-                                },
-                            ),
-                        ]),
-                        duration:
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            spellwake_engine::characteristics::ResolvedPartsSpec(vec![
+                                spellwake_engine::characteristics::ResolvedPartSpec::ModifyPT(
+                                    spellwake_engine::characteristics::PowerToughness {
+                                        power: boost.into(),
+                                        toughness: boost.into(),
+                                    },
+                                ),
+                            ]),
                             spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
-                    }],
+                        ),
+                    ],
                 );
                 program.activation_restrictions.insert(
                     ability.id,
@@ -499,9 +544,14 @@ fn compile_face(
             }
             "At the beginning of your end step, you lose 1 life." => (
                 spellwake_engine::program::TriggerSpec::step_began(Step::End, PlayerRelation::Controller),
-                vec![AdjustControllerLife {
-                    adjustment: LifeAdjustment::Lose(1.into()),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ],
             ),
             "When this creature dies, return it to the battlefield transformed under your control at the beginning of the next end step." if !reverse => {
                 transforms = true;
@@ -520,16 +570,28 @@ fn compile_face(
             ),
             "Whenever an opponent casts a spell, this creature deals 2 damage to that player." => (
                 spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Opponent, spellwake_engine::program::SpellFilter::any()),
-                vec![DamageGroup {
-                    group: DamageCohort::RelatedPlayer,
-                    amount: 2.into(),
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Relative(Box::new(
+                            spellwake_engine::program::DamageRecipientsRef::Group(
+                                DamageCohort::RelatedPlayer,
+                            ),
+                        )),
+                        spellwake_engine::program::ValueExpr::literal(2),
+                        false,
+                    ),
+                ],
             ),
             "Whenever this creature enters or transforms into Huntmaster of the Fells, create a 2/2 green Wolf creature token and you gain 2 life." if !reverse => (
                 spellwake_engine::program::TriggerSpec::any_of(vec![spellwake_engine::program::TriggerEvent::Enters { subject: spellwake_engine::program::ObjectFilter::self_object(), from_zone: spellwake_engine::program::TriggerFromZone::Any, cast_origin: None, attached_to_creature: false }, spellwake_engine::program::TriggerEvent::StatusChanged { subject: spellwake_engine::program::ObjectFilter::self_object(), kind: spellwake_engine::program::StatusTriggerKind::Transforms }]),
                 vec![
                     ordinary_text::create_tokens("a 2/2 green Wolf creature token", vocabulary)?,
-                    AdjustControllerLife { adjustment: LifeAdjustment::Gain(2.into()) },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(2),
+                    ),
                 ],
             ),
             "Whenever this creature transforms into Ravager of the Fells, it deals 2 damage to target opponent or planeswalker and 2 damage to up to one target creature that player or that planeswalker's controller controls." if reverse => {

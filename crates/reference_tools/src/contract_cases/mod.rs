@@ -325,9 +325,14 @@ fn execute(selection: &shared::Selection) -> Result<(Vec<shared::CallRecord>, Na
             spellwake_engine::mana::ManaCost::free(),
             ExecutableBody::new(
                 spellwake_engine::program::BodyTarget::None,
-                vec![spellwake_engine::program::Instruction::DrawController {
-                    amount: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                }],
+                vec![spellwake_engine::program::Instruction::DrawCards(Box::new(
+                    spellwake_engine::toolbox::DrawCardsSpec::simple(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::Literal(0.into()),
+                    ),
+                ))],
             ),
         ));
         let delta = &recipe["raw_syntax_delta"];

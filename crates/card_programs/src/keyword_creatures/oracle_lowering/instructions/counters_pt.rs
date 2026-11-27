@@ -58,11 +58,10 @@ fn value_expr_references_ability_source(expr: &ValueExpr) -> bool {
     }
 }
 
-fn prior_op_acted_on_ability_source(ops: &[Instruction]) -> bool {
+pub(super) fn prior_op_acted_on_ability_source(ops: &[Instruction]) -> bool {
     for op in ops.iter().rev() {
         match op {
-            Instruction::ChangeAbilitySource { .. }
-            | Instruction::RemoveCountersFromPermanent {
+            Instruction::RemoveCountersFromPermanent {
                 target_self: true, ..
             } => return true,
             Instruction::MutateObject(spec) => {
@@ -114,7 +113,7 @@ fn value_expr_counter_kind(expr: &ValueExpr) -> Option<CounterKind> {
     }
 }
 
-fn infer_prior_counter_kind(ops: &[Instruction]) -> Option<CounterKind> {
+pub(super) fn infer_prior_counter_kind(ops: &[Instruction]) -> Option<CounterKind> {
     for op in ops.iter().rev() {
         match op {
             Instruction::MutateObject(spec) => match &spec.op {
@@ -134,11 +133,6 @@ fn infer_prior_counter_kind(ops: &[Instruction]) -> Option<CounterKind> {
                 }
                 _ => {}
             },
-            Instruction::RemoveCountersFromPermanent { kind: Some(ck), .. }
-                if ck.is_permanent() =>
-            {
-                return Some(*ck);
-            }
             Instruction::BranchIfFalse { condition, .. } => {
                 if let Some(ck) = value_expr_counter_kind(&condition.left)
                     .or_else(|| value_expr_counter_kind(&condition.right))
@@ -150,6 +144,74 @@ fn infer_prior_counter_kind(ops: &[Instruction]) -> Option<CounterKind> {
         }
     }
     None
+}
+
+fn try_append_fixed_first_target_counters(
+    builder: &mut BodyBuilder,
+    kind: CounterKind,
+    amount: ValueExpr,
+) -> bool {
+    if builder.target != BodyTarget::None || builder.instructions.is_empty() {
+        return false;
+    }
+    let first_is_remembered_perm = matches!(
+        builder.instructions.first(),
+        Some(Instruction::FixedTargetClause(first_body))
+            if is_permanent_body_target(first_body.target)
+                && first_body
+                    .instructions
+                    .iter()
+                    .any(|op| matches!(op, Instruction::RememberPermanentTarget))
+    );
+    if !first_is_remembered_perm {
+        return false;
+    }
+    let is_control_flow = |op: &Instruction| {
+        matches!(
+            op,
+            Instruction::BranchIfFalse { .. }
+                | Instruction::Jump { .. }
+                | Instruction::OptionalEffect { .. }
+                | Instruction::OptionalSequence { .. }
+                | Instruction::OfferManaPayment { .. }
+                | Instruction::OfferDynamicManaPayment { .. }
+        )
+    };
+    let rest = &builder.instructions[1..];
+    if !rest.iter().any(is_control_flow) {
+        if let Some(Instruction::FixedTargetClause(first_body)) = builder.instructions.first_mut() {
+            first_body.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                    kind, amount,
+                ),
+            );
+            return true;
+        }
+        return false;
+    }
+    if !rest.is_empty()
+        && let Some(Instruction::BranchIfFalse {
+            condition,
+            destination: 0,
+        }) = rest.last()
+        && resolution_condition_is_spell_cast_invariant(condition)
+    {
+        let cond_clone = condition.clone();
+        if let Some(Instruction::FixedTargetClause(first_body)) = builder.instructions.first_mut() {
+            let next_dest = first_body.instructions.len() + 2;
+            first_body.instructions.push(Instruction::BranchIfFalse {
+                condition: cond_clone,
+                destination: next_dest,
+            });
+            first_body.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                    kind, amount,
+                ),
+            );
+            return true;
+        }
+    }
+    false
 }
 
 pub(super) fn lower_counters_pt_instruction(
@@ -465,22 +527,30 @@ pub(super) fn lower_counters_pt_instruction(
                     && !is_permanent_body_target(builder.target)
                     && anaphora_created
                 {
-                    builder.instructions.push(Instruction::ChangeGroup {
-                        group: Box::new(EffectSubject::CreatedTokens),
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                EffectSubject::CreatedTokens,
+                            )),
+                            ResolvedPartsSpec(vec![part]),
+                            dur,
+                        ),
+                    );
                     return Ok(());
                 }
                 if matches!(subject, SubjectRefAst::Anaphora(_))
                     && !is_permanent_body_target(builder.target)
                     && anaphora_moved
                 {
-                    builder.instructions.push(Instruction::ChangeGroup {
-                        group: Box::new(EffectSubject::LastMoved),
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                EffectSubject::LastMoved,
+                            )),
+                            ResolvedPartsSpec(vec![part]),
+                            dur,
+                        ),
+                    );
                     return Ok(());
                 }
                 return lower_modify_pt_part(
@@ -523,11 +593,15 @@ pub(super) fn lower_counters_pt_instruction(
                 && !is_permanent_body_target(builder.target)
                 && anaphora_created
             {
-                builder.instructions.push(Instruction::ChangeGroup {
-                    group: Box::new(EffectSubject::CreatedTokens),
-                    parts: ResolvedPartsSpec(vec![part]),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::CreatedTokens,
+                        )),
+                        ResolvedPartsSpec(vec![part]),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             if matches!(subject, SubjectRefAst::Anaphora(_))
@@ -559,11 +633,15 @@ pub(super) fn lower_counters_pt_instruction(
                 && !is_permanent_body_target(builder.target)
                 && anaphora_moved
             {
-                builder.instructions.push(Instruction::ChangeGroup {
-                    group: Box::new(EffectSubject::LastMoved),
-                    parts: ResolvedPartsSpec(vec![part]),
-                    duration: dur,
-                });
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::LastMoved,
+                        )),
+                        ResolvedPartsSpec(vec![part]),
+                        dur,
+                    ),
+                );
                 return Ok(());
             }
             lower_modify_pt_part(
@@ -612,11 +690,15 @@ pub(super) fn lower_counters_pt_instruction(
                                 .instructions
                                 .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(EffectSubject::CreatedTokens, ValueExpr::literal(pt.power), ValueExpr::literal(pt.toughness), BTreeSet::new(), BTreeSet::new()));
                         } else {
-                            builder.instructions.push(Instruction::ChangeGroup {
-                                group: Box::new(EffectSubject::CreatedTokens),
-                                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(pt)]),
-                                duration: dur,
-                            });
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                        EffectSubject::CreatedTokens,
+                                    )),
+                                    ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(pt)]),
+                                    dur,
+                                ),
+                            );
                         }
                         return Ok(());
                     }
@@ -657,11 +739,15 @@ pub(super) fn lower_counters_pt_instruction(
                                 .instructions
                                 .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(EffectSubject::LastMoved, ValueExpr::literal(pt.power), ValueExpr::literal(pt.toughness), BTreeSet::new(), BTreeSet::new()));
                         } else {
-                            builder.instructions.push(Instruction::ChangeGroup {
-                                group: Box::new(EffectSubject::LastMoved),
-                                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(pt)]),
-                                duration: dur,
-                            });
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                        EffectSubject::LastMoved,
+                                    )),
+                                    ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(pt)]),
+                                    dur,
+                                ),
+                            );
                         }
                         return Ok(());
                     }
@@ -688,11 +774,15 @@ pub(super) fn lower_counters_pt_instruction(
                         && !is_permanent_body_target(builder.target)
                         && anaphora_created
                     {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::CreatedTokens),
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::CreatedTokens,
+                                )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     if matches!(subject, SubjectRefAst::Anaphora(_))
@@ -727,11 +817,15 @@ pub(super) fn lower_counters_pt_instruction(
                         && !is_permanent_body_target(builder.target)
                         && anaphora_moved
                     {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::LastMoved),
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::LastMoved,
+                                )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                         return Ok(());
                     }
                     lower_modify_pt_part(
@@ -1144,6 +1238,8 @@ pub(super) fn lower_counters_pt_instruction(
                         TargetExact,
                         TargetExactN(u16),
                         TargetUpTo(u16),
+                        TargetX,
+                        TargetAnyNumber,
                         AbilitySource,
                         Group(Box<EffectSubject>),
                         Players(AffectedPlayers),
@@ -1194,6 +1290,39 @@ pub(super) fn lower_counters_pt_instruction(
                             trial.bind_target(bt)?;
                             trial_bound = true;
                             Some(ChoiceTargetKind::TargetUpTo(*max))
+                        }
+                        SubjectRefAst::TargetObject {
+                            filter,
+                            count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
+                        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                            && !in_trigger =>
+                        {
+                            let mut f_clean = filter.as_ref().clone();
+                            f_clean.zone = None;
+                            let bt = lower_battlefield_body_target_in_context(
+                                &f_clean, &trial, in_trigger, vocabulary,
+                            )?;
+                            trial.bind_target(bt)?;
+                            if *tc == TargetCountAst::UpToX {
+                                trial.up_to_x_target_count = true;
+                            } else {
+                                trial.x_target_count = true;
+                            }
+                            trial_bound = true;
+                            Some(ChoiceTargetKind::TargetX)
+                        }
+                        SubjectRefAst::TargetObject {
+                            filter,
+                            count: TargetCountAst::AnyNumber,
+                        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                            let mut f_clean = filter.as_ref().clone();
+                            f_clean.zone = None;
+                            let obj = lower_object_filter_in_context(
+                                &f_clean, &trial, in_trigger, vocabulary,
+                            )?;
+                            trial.bind_target(BodyTarget::FilteredPermanent(obj))?;
+                            trial_bound = true;
+                            Some(ChoiceTargetKind::TargetAnyNumber)
                         }
                         SubjectRefAst::TargetOneOf {
                             options,
@@ -1378,18 +1507,41 @@ pub(super) fn lower_counters_pt_instruction(
                                         },
                                     }]
                                 }
-                                ChoiceTargetKind::AbilitySource => {
-                                    vec![Instruction::ChangeAbilitySource {
+                                ChoiceTargetKind::TargetX => {
+                                    vec![Instruction::AffectPermanentTargets {
+                                        minimum: 0,
+                                        maximum: u16::MAX,
+                                        action: PermanentTargetAction::Modify {
+                                            parts,
+                                            duration: dur,
+                                        },
+                                    }]
+                                }
+                                ChoiceTargetKind::TargetAnyNumber => {
+                                    vec![Instruction::ModifyAnyNumberOfPermanents {
                                         parts,
                                         duration: dur,
                                     }]
                                 }
+                                ChoiceTargetKind::AbilitySource => {
+                                    vec![
+                                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                            spellwake_engine::toolbox::ObjectQuery::Source,
+                                            parts,
+                                            dur,
+                                        ),
+                                    ]
+                                }
                                 ChoiceTargetKind::Group(subj) => {
-                                    vec![Instruction::ChangeGroup {
-                                        group: subj.clone(),
-                                        parts,
-                                        duration: dur,
-                                    }]
+                                    vec![
+                                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(
+                                                subj.clone(),
+                                            ),
+                                            parts,
+                                            dur,
+                                        ),
+                                    ]
                                 }
                                 ChoiceTargetKind::Players(players) => {
                                     vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::PlayerGrantKeyword {
@@ -1404,13 +1556,15 @@ pub(super) fn lower_counters_pt_instruction(
                                             ),
                                             keywords: BTreeSet::from([kw]),
                                         }, dur),
-                                    Instruction::ChangeGroup {
-                                        group: Box::new(EffectSubject::Matching(
-                                            ObjectFilter::Clause(ObjectClause::any().controlled()),
-                                        )),
+                                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(
+                                            Box::new(EffectSubject::Matching(ObjectFilter::Clause(
+                                                ObjectClause::any().controlled(),
+                                            ))),
+                                        ),
                                         parts,
-                                        duration: dur,
-                                    },
+                                        dur,
+                                    ),
                                 ],
                             };
                             branches.push(ChooseOptionBranch {
@@ -1639,19 +1793,25 @@ pub(super) fn lower_counters_pt_instruction(
                         );
                         return Ok(());
                     }
-                    builder.instructions.push(Instruction::ChangeAbilitySource {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                        duration: dur,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                            dur,
+                        ),
+                    );
                     Ok(())
                 }
                 s if (self_pronoun_valid || in_trigger)
                     && is_self_pronoun(s, builder, self_pronoun_valid) =>
                 {
-                    builder.instructions.push(Instruction::ChangeAbilitySource {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                        duration: dur,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                            dur,
+                        ),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -1705,6 +1865,32 @@ pub(super) fn lower_counters_pt_instruction(
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
+                    if let Some((minimum, maximum)) =
+                        builder.instructions.iter().rev().find_map(|op| {
+                            if let Instruction::AffectPermanentTargets {
+                                minimum, maximum, ..
+                            } = op
+                            {
+                                Some((*minimum, *maximum))
+                            } else {
+                                None
+                            }
+                        })
+                    {
+                        builder
+                            .instructions
+                            .push(Instruction::AffectPermanentTargets {
+                                minimum,
+                                maximum,
+                                action: PermanentTargetAction::Modify {
+                                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
+                                        ab_change,
+                                    )]),
+                                    duration: dur,
+                                },
+                            });
+                        return Ok(());
+                    }
                     if let Some(Instruction::ApplyContinuous(spec)) =
                         builder.instructions.last_mut()
                         && matches!(
@@ -1913,11 +2099,13 @@ pub(super) fn lower_counters_pt_instruction(
                             .instructions
                             .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(*group, ValueExpr::literal(0), ValueExpr::literal(0), kws, BTreeSet::new()));
                     } else {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group,
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(group),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -1933,11 +2121,13 @@ pub(super) fn lower_counters_pt_instruction(
                             .instructions
                             .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(*group, ValueExpr::literal(0), ValueExpr::literal(0), kws, BTreeSet::new()));
                     } else {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group,
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(group),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -1952,11 +2142,37 @@ pub(super) fn lower_counters_pt_instruction(
                             .instructions
                             .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(EffectSubject::Matching(group_obj), ValueExpr::literal(0), ValueExpr::literal(0), kws, BTreeSet::new()));
                     } else {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::Matching(group_obj)),
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::Matching(group_obj),
+                                )),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                                dur,
+                            ),
+                        );
+                    }
+                    Ok(())
+                }
+                SubjectRefAst::Anaphora(_) | SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+                    if !is_permanent_body_target(builder.target)
+                        && has_prior_moved_object(&builder.instructions) =>
+                {
+                    let group = Box::new(EffectSubject::LastMoved);
+                    if dur == ResolvedDuration::UntilEndOfTurn
+                        && let Some(kws) = pure_kws
+                    {
+                        builder
+                            .instructions
+                            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(*group, ValueExpr::literal(0), ValueExpr::literal(0), kws, BTreeSet::new()));
+                    } else {
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(group),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -1978,11 +2194,13 @@ pub(super) fn lower_counters_pt_instruction(
                             .instructions
                             .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(*group, ValueExpr::literal(0), ValueExpr::literal(0), kws, BTreeSet::new()));
                     } else {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group,
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(group),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -1999,11 +2217,13 @@ pub(super) fn lower_counters_pt_instruction(
                             .instructions
                             .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(*group, ValueExpr::literal(0), ValueExpr::literal(0), kws, BTreeSet::new()));
                     } else {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group,
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(group),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -2018,11 +2238,13 @@ pub(super) fn lower_counters_pt_instruction(
                             .instructions
                             .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(*group, ValueExpr::literal(0), ValueExpr::literal(0), kws, BTreeSet::new()));
                     } else {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group,
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(group),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -2037,11 +2259,13 @@ pub(super) fn lower_counters_pt_instruction(
                             .instructions
                             .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(*group, ValueExpr::literal(0), ValueExpr::literal(0), kws, BTreeSet::new()));
                     } else {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group,
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(group),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -2063,11 +2287,13 @@ pub(super) fn lower_counters_pt_instruction(
                             .instructions
                             .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(*group, ValueExpr::literal(0), ValueExpr::literal(0), kws, BTreeSet::new()));
                     } else {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group,
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(group),
+                                ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -2175,10 +2401,13 @@ pub(super) fn lower_counters_pt_instruction(
                     Ok(())
                 }
                 SubjectRefAst::SelfObject => {
-                    builder.instructions.push(Instruction::ChangeAbilitySource {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::SwitchPT]),
-                        duration: dur,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Source,
+                            ResolvedPartsSpec(vec![ResolvedPartSpec::SwitchPT]),
+                            dur,
+                        ),
+                    );
                     Ok(())
                 }
                 _ => Err("oracle:unsupported-switch-pt"),
@@ -2548,16 +2777,24 @@ pub(super) fn lower_counters_pt_instruction(
                 .or_else(|| {
                     kind_low_full
                         .strip_prefix("your choice of a counter from among ")
+                        .or_else(|| {
+                            kind_low_full.strip_prefix("a counter of your choice from among ")
+                        })
+                        .or_else(|| {
+                            kind_low_full.strip_prefix("counter of your choice from among ")
+                        })
+                        .or_else(|| kind_low_full.strip_prefix("one counter from among "))
                         .or_else(|| kind_low_full.strip_prefix("your choice of a "))
                         .and_then(|rest| {
                             if rest.starts_with("counter from among ") {
                                 rest.strip_prefix("counter from among ")
-                            } else if kind_low_full
-                                .starts_with("your choice of a counter from among ")
+                            } else if kind_low_full.starts_with("your choice of a ")
+                                && !kind_low_full
+                                    .starts_with("your choice of a counter from among ")
                             {
-                                Some(rest)
+                                rest.contains(" or ").then_some(rest)
                             } else {
-                                None
+                                Some(rest)
                             }
                         })
                 })
@@ -2919,11 +3156,13 @@ pub(super) fn lower_counters_pt_instruction(
                 }
                 if let SubjectRefAst::Player(p) = subject.as_ref() {
                     let players = lower_affected_players_in_context(*p, builder, in_trigger)?;
-                    builder.instructions.push(Instruction::AddPlayerCounter {
-                        players,
-                        kind: ck,
-                        amount: amt,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::add_player_counter(
+                            spellwake_engine::toolbox::PlayerSelector::Group(players),
+                            ck,
+                            amt,
+                        ),
+                    );
                     return Ok(());
                 }
                 if let SubjectRefAst::Anaphora(raw) = subject.as_ref()
@@ -2934,11 +3173,13 @@ pub(super) fn lower_counters_pt_instruction(
                         builder,
                         in_trigger,
                     )?;
-                    builder.instructions.push(Instruction::AddPlayerCounter {
-                        players,
-                        kind: ck,
-                        amount: amt,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::add_player_counter(
+                            spellwake_engine::toolbox::PlayerSelector::Group(players),
+                            ck,
+                            amt,
+                        ),
+                    );
                     return Ok(());
                 }
                 if let SubjectRefAst::TargetPlayer {
@@ -2954,11 +3195,15 @@ pub(super) fn lower_counters_pt_instruction(
                     if *tc == TargetCountAst::UpTo(1) {
                         builder.up_to_one_target = true;
                     }
-                    builder.instructions.push(Instruction::AddPlayerCounter {
-                        players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                        kind: ck,
-                        amount: amt,
-                    });
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::add_player_counter(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::TargetPlayer,
+                            ),
+                            ck,
+                            amt,
+                        ),
+                    );
                     return Ok(());
                 }
                 return Err("oracle:put-counter-kind");
@@ -3260,7 +3505,15 @@ pub(super) fn lower_counters_pt_instruction(
                     if last_instruction_moved_object(&builder.instructions)
                         || matches!(
                             builder.instructions.last(),
-                            Some(Instruction::ManifestTop { .. })
+                            Some(Instruction::ManifestTop { .. } | Instruction::ManifestDread)
+                        )
+                        || matches!(
+                            builder.instructions.last(),
+                            Some(Instruction::RepeatLoop { body, .. })
+                                if body.instructions.iter().any(|op| matches!(
+                                    op,
+                                    Instruction::ManifestTop { .. } | Instruction::ManifestDread
+                                ))
                         ) =>
                 {
                     builder
@@ -3341,12 +3594,18 @@ pub(super) fn lower_counters_pt_instruction(
                         .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(EffectSubject::TriggerSubject, ck, amt));
                     Ok(())
                 }
+                SubjectRefAst::Anaphora(_)
+                    if try_append_fixed_first_target_counters(builder, ck, amt.clone()) =>
+                {
+                    Ok(())
+                }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
                     if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
                 {
                     let mut f_clean = f.as_ref().clone();
                     f_clean.zone = None;
-                    let obj = lower_object_filter(&f_clean, vocabulary)?;
+                    let obj =
+                        lower_object_filter_in_context(&f_clean, builder, in_trigger, vocabulary)?;
                     bind_filter_player_target(builder, &obj)?;
                     builder.last_group_filter = Some(obj);
                     // All matching permanent groups lower uniformly via MutateObject below.
@@ -3486,20 +3745,31 @@ pub(super) fn lower_counters_pt_instruction(
             };
             match subject.as_ref() {
                 s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-                    let amt = match amt_opt {
-                        Some(v) => v,
-                        None => ValueExpr::CounterCount {
-                            subject: spellwake_engine::program::CounterSubjectRef::AbilitySource,
-                            kind,
-                        },
-                    };
-                    builder
-                        .instructions
-                        .push(Instruction::RemoveCountersFromPermanent {
-                            target_self: true,
-                            kind,
-                            amount: amt,
-                        });
+                    match (amt_opt, kind) {
+                        (None, _) => {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::clear_source_counters(kind),
+                            );
+                        }
+                        (Some(amt), Some(_)) => {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters(
+                                    spellwake_engine::toolbox::ObjectQuery::Source,
+                                    kind,
+                                    amt,
+                                ),
+                            );
+                        }
+                        (Some(amt), None) => {
+                            builder
+                                .instructions
+                                .push(Instruction::RemoveCountersFromPermanent {
+                                    target_self: true,
+                                    kind: None,
+                                    amount: amt,
+                                });
+                        }
+                    }
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -3510,20 +3780,36 @@ pub(super) fn lower_counters_pt_instruction(
                         filter, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
-                    let amt = match amt_opt {
-                        Some(v) => v,
-                        None => ValueExpr::CounterCount {
-                            subject: spellwake_engine::program::CounterSubjectRef::TargetObject,
-                            kind,
-                        },
-                    };
-                    builder
-                        .instructions
-                        .push(Instruction::RemoveCountersFromPermanent {
-                            target_self: false,
-                            kind,
-                            amount: amt,
-                        });
+                    match (amt_opt, kind) {
+                        (None, _) => {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ObjectMutation::ClearCounters {
+                                        kind,
+                                    },
+                                ),
+                            );
+                        }
+                        (Some(amt), Some(_)) => {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    kind,
+                                    amt,
+                                ),
+                            );
+                        }
+                        (Some(amt), None) => {
+                            builder
+                                .instructions
+                                .push(Instruction::RemoveCountersFromPermanent {
+                                    target_self: false,
+                                    kind: None,
+                                    amount: amt,
+                                });
+                        }
+                    }
                     Ok(())
                 }
                 SubjectRefAst::TargetObject { filter, count }
@@ -3780,19 +4066,14 @@ pub(super) fn lower_counters_pt_instruction(
                 in_trigger,
                 vocabulary,
             )?;
-            if matches!(player, PlayerRefAst::You)
-                && ck == CounterKind::Experience
-                && amt == ValueExpr::literal(1)
-            {
-                builder.instructions.push(Instruction::AddExperienceCounter);
-                return Ok(());
-            }
             let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::AddPlayerCounter {
-                players,
-                kind: ck,
-                amount: amt,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::add_player_counter(
+                    spellwake_engine::toolbox::PlayerSelector::Group(players),
+                    ck,
+                    amt,
+                ),
+            );
             Ok(())
         }
         InstructionAst::Blight { player, count } => {
@@ -3966,17 +4247,17 @@ pub(super) fn lower_counters_pt_instruction(
             if matches!(low.as_str(), "life" | "life total" | "life_total") {
                 let rp = extract_resolving_player_from_subject(subject, builder, in_trigger)
                     .map_err(|_| "oracle:unsupported-double-stat")?;
-                if rp == ResolvingPlayer::Controller {
-                    builder.instructions.push(Instruction::GainControllerLife {
-                        amount: ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife),
-                    });
+                let amount = if rp == ResolvingPlayer::Controller {
+                    ValueExpr::PlayerStat(PlayerStatExpr::ControllerLife)
                 } else {
-                    builder.instructions.push(Instruction::AdjustPlayersLife {
-                        players: AffectedPlayers::One(rp),
-                        gain: true,
-                        amount: ValueExpr::PlayerStat(PlayerStatExpr::PlayerLife(rp)),
-                    });
-                }
+                    ValueExpr::PlayerStat(PlayerStatExpr::PlayerLife(rp))
+                };
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                        amount,
+                    ),
+                );
                 return Ok(());
             }
             let counter_double_kind: Option<Option<CounterKind>> = if matches!(
@@ -4405,9 +4686,7 @@ pub(super) fn lower_counters_pt_instruction(
                     }
                     _ => None,
                 },
-                Instruction::ChangeAbilitySource { parts, .. }
-                | Instruction::ChangeGroup { parts, .. }
-                | Instruction::ModifyAnyNumberOfPermanents { parts, .. }
+                Instruction::ModifyAnyNumberOfPermanents { parts, .. }
                 | Instruction::AffectPermanentTargets {
                     action: PermanentTargetAction::Modify { parts, .. },
                     ..
@@ -4798,14 +5077,25 @@ pub(super) fn lower_counters_pt_instruction(
                     .push(Instruction::FixedTargetClause(Box::new(
                         ExecutableBody::new(to_bt, vec![Instruction::RememberPermanentTarget]),
                     )));
-                trial.instructions.push(Instruction::MoveCounters {
-                    from: MoveSubjectRef::RememberedFirst,
-                    to: MoveSubjectRef::RememberedSecond,
-                    kind,
-                    all: effective_all,
-                    any_number: effective_any_number,
-                    amount,
-                });
+                if !effective_any_number && (effective_all || kind.is_some()) {
+                    trial.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_counters(
+                            spellwake_engine::toolbox::ObjectQuery::LinkedTarget { index: 0 },
+                            spellwake_engine::toolbox::ObjectQuery::LinkedTarget { index: 1 },
+                            kind,
+                            amount,
+                        ),
+                    );
+                } else {
+                    trial.instructions.push(Instruction::MoveCounters {
+                        from: MoveSubjectRef::RememberedFirst,
+                        to: MoveSubjectRef::RememberedSecond,
+                        kind,
+                        all: effective_all,
+                        any_number: effective_any_number,
+                        amount,
+                    });
+                }
                 *builder = trial;
                 return Ok(());
             }
@@ -4872,14 +5162,29 @@ pub(super) fn lower_counters_pt_instruction(
             };
             let from_ref = resolve_side(&eff_from, &mut trial)?;
             let to_ref = resolve_side(&eff_to, &mut trial)?;
-            trial.instructions.push(Instruction::MoveCounters {
-                from: from_ref,
-                to: to_ref,
-                kind,
-                all: effective_all,
-                any_number: effective_any_number,
-                amount,
-            });
+            if !effective_any_number && (effective_all || kind.is_some()) {
+                trial.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::move_counters(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject_to_query(
+                            from_ref,
+                        ),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject_to_query(
+                            to_ref,
+                        ),
+                        kind,
+                        amount,
+                    ),
+                );
+            } else {
+                trial.instructions.push(Instruction::MoveCounters {
+                    from: from_ref,
+                    to: to_ref,
+                    kind,
+                    all: effective_all,
+                    any_number: effective_any_number,
+                    amount,
+                });
+            }
             *builder = trial;
             Ok(())
         }
@@ -4943,10 +5248,13 @@ pub(super) fn emit_resolved_parts_for_subject(
         s if (self_pronoun_valid || in_trigger)
             && is_self_pronoun(s, builder, self_pronoun_valid) =>
         {
-            builder.instructions.push(Instruction::ChangeAbilitySource {
-                parts,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Source,
+                    parts,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -5008,9 +5316,12 @@ pub(super) fn emit_resolved_parts_for_subject(
         SubjectRefAst::TargetObject {
             filter,
             count: TargetCountAst::Exact(n),
-        } if filter.zone.is_none() && *n >= 2 => {
-            let bt =
-                lower_battlefield_body_target_in_context(filter, builder, in_trigger, vocabulary)?;
+        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) && *n >= 2 => {
+            let mut f_clean = filter.as_ref().clone();
+            f_clean.zone = None;
+            let bt = lower_battlefield_body_target_in_context(
+                &f_clean, builder, in_trigger, vocabulary,
+            )?;
             builder.bind_target(bt)?;
             builder
                 .instructions
@@ -5027,9 +5338,12 @@ pub(super) fn emit_resolved_parts_for_subject(
         SubjectRefAst::TargetObject {
             filter,
             count: TargetCountAst::UpTo(max),
-        } if filter.zone.is_none() && *max > 0 => {
-            let bt =
-                lower_battlefield_body_target_in_context(filter, builder, in_trigger, vocabulary)?;
+        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) && *max > 0 => {
+            let mut f_clean = filter.as_ref().clone();
+            f_clean.zone = None;
+            let bt = lower_battlefield_body_target_in_context(
+                &f_clean, builder, in_trigger, vocabulary,
+            )?;
             builder.bind_target(bt)?;
             builder
                 .instructions
@@ -5046,9 +5360,12 @@ pub(super) fn emit_resolved_parts_for_subject(
         SubjectRefAst::TargetObject {
             filter,
             count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
-        } if filter.zone.is_none() && !in_trigger => {
-            let bt =
-                lower_battlefield_body_target_in_context(filter, builder, in_trigger, vocabulary)?;
+        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) && !in_trigger => {
+            let mut f_clean = filter.as_ref().clone();
+            f_clean.zone = None;
+            let bt = lower_battlefield_body_target_in_context(
+                &f_clean, builder, in_trigger, vocabulary,
+            )?;
             builder.bind_target(bt)?;
             if *tc == TargetCountAst::UpToX {
                 builder.up_to_x_target_count = true;
@@ -5070,8 +5387,10 @@ pub(super) fn emit_resolved_parts_for_subject(
         SubjectRefAst::TargetObject {
             filter,
             count: TargetCountAst::AnyNumber,
-        } if filter.zone.is_none() => {
-            let obj = lower_object_filter_in_context(filter, builder, in_trigger, vocabulary)?;
+        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+            let mut f_clean = filter.as_ref().clone();
+            f_clean.zone = None;
+            let obj = lower_object_filter_in_context(&f_clean, builder, in_trigger, vocabulary)?;
             builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
             builder
                 .instructions
@@ -5082,13 +5401,17 @@ pub(super) fn emit_resolved_parts_for_subject(
             Ok(())
         }
         SubjectRefAst::AttachedHost(_) if self_pronoun_valid || in_trigger => {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
-                    ObjectClause::any().attached_to_self(),
-                ))),
-                parts,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::Matching(ObjectFilter::Clause(
+                            ObjectClause::any().attached_to_self(),
+                        )),
+                    )),
+                    parts,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
@@ -5124,38 +5447,69 @@ pub(super) fn emit_resolved_parts_for_subject(
             Ok(())
         }
         SubjectRefAst::Anaphora(_) if last_instruction_created_tokens(&builder.instructions) => {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::CreatedTokens),
-                parts,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::CreatedTokens,
+                    )),
+                    parts,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(_) if last_instruction_moved_object(&builder.instructions) => {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::LastMoved),
-                parts,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::LastMoved,
+                    )),
+                    parts,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(_)
             if builder.target == BodyTarget::None
                 && let Some(group_obj) = builder.last_group_filter =>
         {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::Matching(group_obj)),
-                parts,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::Matching(group_obj),
+                    )),
+                    parts,
+                    dur,
+                ),
+            );
+            Ok(())
+        }
+        SubjectRefAst::Anaphora(_)
+            if !is_permanent_body_target(builder.target)
+                && has_prior_moved_object(&builder.instructions) =>
+        {
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::LastMoved,
+                    )),
+                    parts,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TriggerSubject if in_trigger => {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::TriggerSubject),
-                parts,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::TriggerSubject,
+                    )),
+                    parts,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(raw)
@@ -5163,11 +5517,15 @@ pub(super) fn emit_resolved_parts_for_subject(
                 && in_trigger
                 && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
         {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::TriggerSubject),
-                parts,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::TriggerSubject,
+                    )),
+                    parts,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -5179,11 +5537,15 @@ pub(super) fn emit_resolved_parts_for_subject(
             bind_filter_player_target(builder, &obj)?;
             ensure_target_power_consumed(builder, &obj);
             builder.last_group_filter = Some(obj);
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::Matching(obj)),
-                parts,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::Matching(obj),
+                    )),
+                    parts,
+                    dur,
+                ),
+            );
             Ok(())
         }
         _ => Err("oracle:unsupported-temp-static"),
@@ -5818,10 +6180,11 @@ fn lower_animate_or_set_pt_extended(
                                     subtypes: SubtypeOperation::Keep,
                                 })]);
                             let op = if is_self {
-                                Instruction::ChangeAbilitySource {
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Source,
                                     parts,
-                                    duration: dur,
-                                }
+                                    dur,
+                                )
                             } else {
                                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, parts, dur)
                             };
@@ -5992,9 +6355,7 @@ fn lower_animate_or_set_pt_extended(
                 spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) => &mut parts.0,
                 _ => return Err("oracle:unsupported-animate-desc"),
             },
-            Instruction::ChangeAbilitySource { parts, .. }
-            | Instruction::ChangeGroup { parts, .. }
-            | Instruction::ModifyAnyNumberOfPermanents { parts, .. }
+            Instruction::ModifyAnyNumberOfPermanents { parts, .. }
             | Instruction::AffectPermanentTargets {
                 action: PermanentTargetAction::Modify { parts, .. },
                 ..

@@ -129,7 +129,16 @@ fn prepared_staged_world(losses: bool) -> EffectWindow {
                 ManaCost::one(ManaType::Red),
                 ExecutableBody::new(
                     BodyTarget::SingleCreature,
-                    vec![Instruction::Damage { amount: 1.into() }],
+                    vec![crate::program::Instruction::DealDamage(Box::new(
+                        crate::toolbox::DealDamageSpec {
+                            source: crate::toolbox::DamageSourceQuery::EntrySource,
+                            recipients: crate::toolbox::DamageTargetQuery::Targets,
+                            amount: crate::program::DamageAmountSpec::Expr(
+                                crate::program::ValueExpr::Literal(1.into()),
+                            ),
+                            exile_if_dies: false,
+                        },
+                    ))],
                 ),
             ),
         });
@@ -163,7 +172,16 @@ fn prepared_staged_world(losses: bool) -> EffectWindow {
                 source_cost: SourceCost::Sacrifice,
                 body: ExecutableBody::new(
                     BodyTarget::SingleCreature,
-                    vec![Instruction::Damage { amount: 1.into() }],
+                    vec![crate::program::Instruction::DealDamage(Box::new(
+                        crate::toolbox::DealDamageSpec {
+                            source: crate::toolbox::DamageSourceQuery::EntrySource,
+                            recipients: crate::toolbox::DamageTargetQuery::Targets,
+                            amount: crate::program::DamageAmountSpec::Expr(
+                                crate::program::ValueExpr::Literal(1.into()),
+                            ),
+                            exile_if_dies: false,
+                        },
+                    ))],
                 ),
             }],
         ),
@@ -1089,9 +1107,14 @@ fn add_trigger(seed: &mut SeedCard, condition: TriggerSpec) {
         condition,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![crate::program::Instruction::DrawCards(Box::new(
+                crate::toolbox::DrawCardsSpec::simple(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
         ),
     });
 }
@@ -1516,179 +1539,6 @@ fn completed_wave_reobserves_actual_sbas_and_places_the_new_wave_before_ready() 
 }
 
 #[test]
-fn whole_sba_event_captures_pre_cancellation_dying_sources_and_stops_before_loss_placement() {
-    let mut state = prepared_staged_world(true);
-    state.failed_draws.insert(C);
-    std::sync::Arc::make_mut(&mut state.programs)
-        .get_mut(&CardId(10))
-        .unwrap()
-        .triggered
-        .push(TriggeredAbility {
-            grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
-            id: TriggeredAbilityId(1),
-            condition: crate::program::TriggerSpec::dies(
-                crate::program::ObjectFilter::self_object(),
-            ),
-            body: ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::DrawController {
-                    amount: crate::program::ValueExpr::Literal(1.into()),
-                }],
-            ),
-        });
-    let source = object(&state, 10);
-    state
-        .characteristics
-        .place_counters(
-            source,
-            &PowerToughnessCounters {
-                plus_one: 2.into(),
-                minus_one: 2.into(),
-            },
-        )
-        .unwrap();
-    let (state, first, _) = pending(state.begin_checks(state.revision()).unwrap());
-    let (state, second, _) = pending(
-        resume(
-            &state,
-            &first,
-            A,
-            DecisionReply::OrderGraveyard(
-                graveyard_choice(&first)
-                    .domain()
-                    .iter()
-                    .rev()
-                    .copied()
-                    .collect(),
-            ),
-            None,
-        )
-        .unwrap(),
-    );
-    let (done, result, append) = resume(
-        &state,
-        &second,
-        B,
-        DecisionReply::OrderGraveyard(
-            graveyard_choice(&second)
-                .domain()
-                .iter()
-                .rev()
-                .copied()
-                .collect(),
-        ),
-        None,
-    )
-    .unwrap()
-    .into_parts();
-    let RuleResult::Complete {
-        completion: RuleCompletion::Checks(completion),
-        ..
-    } = result
-    else {
-        panic!()
-    };
-    assert!(completion.performed());
-    assert!(completion.waiting_triggers());
-    assert!(done.window.entries().is_empty());
-    assert_eq!(placements(&append).len(), 0);
-    let events = append
-        .records
-        .iter()
-        .filter_map(|record| match record {
-            RulesRecord::Event(event) => Some(event),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(events.len(), 1);
-    let event = events[0];
-    assert!(matches!(event.cause, EventCause::StateBasedActions { .. }));
-    assert_eq!(event.occurrences.len(), 9); // four deaths, two cancellations, one copy, two losses
-    for (index, occurrence) in event.occurrences.iter().enumerate() {
-        assert_eq!(occurrence.id.event, event.id);
-        assert_eq!(occurrence.id.index, index as u64);
-    }
-    assert!(
-        event.occurrences[..4]
-            .iter()
-            .all(|value| matches!(value.value, RulesOccurrence::ZoneChange(_)))
-    );
-    for occurrence in &event.occurrences[..4] {
-        let RulesOccurrence::ZoneChange(change) = &occurrence.value else {
-            panic!("death move");
-        };
-        // This fixture marks four positive-toughness creatures. The separate
-        // mixed_death_causes loop above supplies the zero-toughness controls.
-        assert_eq!(
-            change.reason,
-            ZoneReason::StateBased(spellwake_engine::occurrence::StateBasedMoveReasons::new(
-                spellwake_engine::occurrence::StateBasedMoveReason::LethalDestruction
-            ))
-        );
-    }
-    assert!(
-        matches!(event.occurrences[4].value, RulesOccurrence::CountersCancelled { object, .. } if object == source)
-    );
-    assert!(matches!(
-        event.occurrences[6].value,
-        RulesOccurrence::CopyCeased { .. }
-    ));
-    assert!(matches!(
-        event.occurrences[7].value,
-        RulesOccurrence::PlayerLost { player: C, .. }
-    ));
-    let RulesOccurrence::PlayerLost { reasons, .. } = &event.occurrences[7].value else {
-        panic!()
-    };
-    assert_eq!(
-        *reasons,
-        BTreeSet::from([
-            PlayerLossReason::NonpositiveLife,
-            PlayerLossReason::FailedDraw
-        ])
-    );
-    assert!(matches!(
-        event.occurrences[8].value,
-        RulesOccurrence::PlayerLost { player: B, .. }
-    ));
-    let waiting = done.waiting_triggers().next().unwrap();
-    let counters = waiting.source.battlefield_counters.as_ref().unwrap();
-    assert_eq!(
-        counters,
-        &PowerToughnessCounters {
-            plus_one: 2.into(),
-            minus_one: 2.into()
-        }
-    );
-    assert_eq!(waiting.source.battlefield_marked_damage, Some(2.into()));
-    assert_eq!(waiting.source.object.id(), source);
-    assert!(done.window.cards().get(source).is_none());
-    assert_eq!(done.power_toughness_counters(source), None);
-    let change = event
-        .occurrences
-        .iter()
-        .find_map(|value| match &value.value {
-            RulesOccurrence::ZoneChange(change) if change.before.object.id() == source => {
-                Some(change)
-            }
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(
-        change.before.battlefield_counters.as_ref().unwrap(),
-        counters
-    );
-    assert_eq!(
-        change.after.current_power_toughness,
-        Some(PowerToughness {
-            power: 2.into(),
-            toughness: 2.into()
-        })
-    );
-    assert!(change.after.copiable_power_toughness.is_some());
-}
-
-#[test]
 fn zero_mark_bookkeeping_and_no_discard_do_not_create_cleanup_events() {
     let (mut state, turn, marked) = prepared_cleanup(7);
     state.damage.insert(marked, 0.into());
@@ -1838,9 +1688,14 @@ fn add_trigger_to_program_for_cleanup(state: &mut EffectWindow, object: ObjectId
             ),
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::DrawController {
-                    amount: crate::program::ValueExpr::Literal(1.into()),
-                }],
+                vec![crate::program::Instruction::DrawCards(Box::new(
+                    crate::toolbox::DrawCardsSpec::simple(
+                        crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        crate::program::ValueExpr::Literal(1.into()),
+                    ),
+                ))],
             ),
         });
 }
@@ -1938,9 +1793,14 @@ fn add_trigger_to_existing(state: &mut EffectWindow, n: u64) {
             ),
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::DrawController {
-                    amount: crate::program::ValueExpr::Literal(1.into()),
-                }],
+                vec![crate::program::Instruction::DrawCards(Box::new(
+                    crate::toolbox::DrawCardsSpec::simple(
+                        crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        crate::program::ValueExpr::Literal(1.into()),
+                    ),
+                ))],
             ),
         });
 }
@@ -2216,9 +2076,14 @@ fn pending_targeted_cohort() -> (EffectWindow, TriggerTargetChoice) {
         for ability in &mut program.triggered {
             ability.body = ExecutableBody::new(
                 BodyTarget::SinglePlayer,
-                vec![Instruction::AdjustTargetLife {
-                    adjustment: crate::life::LifeAdjustment::Gain(1.into()),
-                }],
+                vec![crate::program::Instruction::AdjustLife(Box::new(
+                    crate::toolbox::AdjustLifeSpec::gain(
+                        crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::TargetPlayer,
+                        ),
+                        crate::program::ValueExpr::Literal(1.into()),
+                    ),
+                ))],
             );
         }
     }

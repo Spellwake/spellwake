@@ -132,9 +132,14 @@ pub(super) fn forsaken_monument(card: &InventoryCard, profile: Profile) -> Optio
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: spellwake_engine::life::LifeAdjustment::Gain(2.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(2),
+                ),
+            ],
         ),
     });
     Some(program)

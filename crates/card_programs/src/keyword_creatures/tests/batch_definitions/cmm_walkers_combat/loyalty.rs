@@ -279,7 +279,11 @@ fn cmm_the_wanderer_prevents_noncombat_damage_to_its_controller_and_other_perman
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SingleAnyTarget,
-                    Instruction::Damage { amount: 2.into() },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        spellwake_engine::program::ValueExpr::literal(2),
+                        false,
+                    ),
                 ),
             ),
             named("Jace Beleren", 5, A, ObjectDestination::Hand),
@@ -799,7 +803,11 @@ fn cmm_ajani_steadfast_grants_combat_abilities_distributes_counters_and_prevents
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleAnyTarget,
-                Instruction::Damage { amount: 3.into() },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(3),
+                    false,
+                ),
             ),
         ));
     }

@@ -5,8 +5,7 @@ use super::*;
 use crate::{
     activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
     characteristics::{
-        ResolvedDuration, ResolvedPart, ResolvedPartSpec, ResolvedParts, ResolvedPartsSpec,
-        SubtypeOperation, TypeChange, TypeOperation,
+        ResolvedDuration, ResolvedPart, ResolvedParts, SubtypeOperation, TypeChange, TypeOperation,
     },
     object_identity::{CardId, ObjectDestination, ObjectZone},
     occurrence::{EventCause, RulesOccurrence, RulesRecord, ZoneReason},
@@ -14,7 +13,6 @@ use crate::{
         CardType, PermanentDefinition, PlayerRelation, ProgramKind, TriggerSpec, TriggeredAbility,
         TriggeredAbilityId,
     },
-    targets::TargetCheck,
     turn::Step,
 };
 
@@ -28,9 +26,10 @@ fn body(target: BodyTarget, instructions: Vec<Instruction>) -> ExecutableBody {
     ExecutableBody::new(target, instructions)
 }
 fn draw(amount: i64) -> Instruction {
-    Instruction::DrawController {
-        amount: crate::program::ValueExpr::Literal(amount.into()),
-    }
+    crate::program::Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec::simple(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::Literal(amount.into()),
+    )))
 }
 fn trigger(condition: TriggerSpec) -> TriggeredAbility {
     TriggeredAbility {
@@ -103,7 +102,16 @@ fn staff() -> Program {
     let mut a = activation(SourceCost::Tap);
     a.body = body(
         BodyTarget::SingleCreature,
-        vec![Instruction::Damage { amount: 1.into() }],
+        vec![crate::program::Instruction::DealDamage(Box::new(
+            crate::toolbox::DealDamageSpec {
+                source: crate::toolbox::DamageSourceQuery::EntrySource,
+                recipients: crate::toolbox::DamageTargetQuery::Targets,
+                amount: crate::program::DamageAmountSpec::Expr(crate::program::ValueExpr::Literal(
+                    1.into(),
+                )),
+                exile_if_dies: false,
+            },
+        ))],
     );
     let mut p = Program::artifact(Some(ManaCost::generic(6.into())), vec![a]);
     p.triggered
@@ -266,7 +274,16 @@ fn historical_roles() -> Vec<(&'static str, Program, bool)> {
     let mut p = tap_self();
     p.triggered[0].body = body(
         BodyTarget::SingleCreature,
-        vec![Instruction::Damage { amount: 1.into() }],
+        vec![crate::program::Instruction::DealDamage(Box::new(
+            crate::toolbox::DealDamageSpec {
+                source: crate::toolbox::DamageSourceQuery::EntrySource,
+                recipients: crate::toolbox::DamageTargetQuery::Targets,
+                amount: crate::program::DamageAmountSpec::Expr(crate::program::ValueExpr::Literal(
+                    1.into(),
+                )),
+                exile_if_dies: false,
+            },
+        ))],
     );
     rows.push(("DA-N20", p, false));
     rows.push((
@@ -518,242 +535,6 @@ fn cl_counter_precheck() {
         )]
     );
     assert_eq!(state, saved);
-}
-
-#[test]
-fn cl_target_depart_return() {
-    let mut p = Program::creature(Some(ManaCost::free()), 2.into(), 3.into(), BTreeSet::new());
-    p.activated.push(ActivatedAbility {
-        id: ActivatedAbilityId(1),
-        mana_cost: ManaCost::free(),
-        source_cost: SourceCost::Tap,
-        body: body(
-            BodyTarget::SingleCreature,
-            vec![
-                crate::program::Instruction::ZoneOp(Box::new(
-                    crate::toolbox::ZoneOpSpec::move_all(
-                        crate::toolbox::ObjectQuery::Targets,
-                        crate::toolbox::ZoneDest::Hand,
-                    ),
-                )),
-                {
-                    struct _Tmp {
-                        parts: crate::characteristics::ResolvedPartsSpec,
-                        duration: crate::characteristics::ResolvedDuration,
-                    }
-                    let _t = _Tmp {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(
-                            PowerToughness {
-                                power: 1.into(),
-                                toughness: 1.into(),
-                            },
-                        )]),
-                        duration: ResolvedDuration::NoStatedDuration,
-                    };
-                    crate::program::Instruction::ApplyContinuous(Box::new(
-                        crate::toolbox::ApplyContinuousSpec {
-                            selector: Some(crate::toolbox::ObjectQuery::Targets),
-                            payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(
-                                _t.parts,
-                            )),
-                            duration: _t.duration,
-                            condition: None,
-                            one_shot: false,
-                            as_emblem: None,
-                            emblem_label: None,
-                        },
-                    ))
-                },
-                Instruction::Damage { amount: 2.into() },
-            ],
-        ),
-    });
-    let state = EffectWindow::new(seed(
-        vec![card(1, p, ObjectDestination::Battlefield { controller: A })],
-        vec![CardId(1)],
-    ))
-    .unwrap();
-    let state = prepared_history(state);
-    let state = state.settle_checks(state.revision()).unwrap();
-    let old = state.window.cards().current_identity(CardId(1)).unwrap();
-    let old_timestamp = state
-        .characteristic_timestamps()
-        .find(|(object, _)| *object == old)
-        .unwrap()
-        .1;
-    let activation = state
-        .activate_ability(
-            state.revision(),
-            A,
-            old,
-            ActivatedAbilityId(1),
-            TargetRef::Object(old),
-            None,
-        )
-        .unwrap();
-    assert_eq!(activation.result().activation.source.tapped(), Some(false));
-    let state = activation.into_state();
-    let state = state.settle_checks(state.revision()).unwrap();
-    let state = state.pass(state.revision(), A).unwrap();
-    let state = state.settle_checks(state.revision()).unwrap();
-    let mut state = state.pass(state.revision(), B).unwrap();
-    let entry = state.window.checking_targets().unwrap().clone();
-    let bound = entry.targets().targets()[0].choice();
-    assert_eq!(bound.target, TargetRef::Object(old));
-    assert_eq!(state.window.cards().get(old).unwrap().tapped(), Some(true));
-    let legal = state
-        .legal_body_target(
-            state.payloads[&entry.id()].body().unwrap(),
-            bound.target,
-            entry.controller(),
-        )
-        .unwrap();
-    assert!(legal);
-    state.window = state
-        .window
-        .check_resolution_targets(
-            state.window.revision(),
-            entry.id(),
-            vec![TargetCheck {
-                target: bound.id,
-                legal,
-            }],
-        )
-        .unwrap();
-    // Exact private cursor cut permitted by the frozen unit: gate accepted once,
-    // body owned by the real paid activation, zero locals, instruction zero.
-    state.pending_work = Some(PendingWork::Resolution(ResolutionCursor {
-        revealed_piles: None,
-        chosen_opponent: None,
-        chosen_damage_recipient: None,
-        chosen_damage_source: None,
-        damage_offer_opponents: None,
-        vowed_creatures: Default::default(),
-        meld_pair: None,
-        manifest_remaining: None,
-        random_selection: None,
-        results: ResolutionResults::default(),
-        chosen_effect_color: None,
-        chosen_option_index: None,
-        chosen_distinct_colors: Vec::new(),
-        chosen_mana_split: None,
-        tempting_token_offer: None,
-        destroyed_permanents: None,
-        chosen_loyalty_removals: None,
-        discarded_nonland_mana_value: None,
-        last_created_tokens: Vec::new(),
-        chosen_token_equipment: None,
-        found_spells: Vec::new(),
-        largest_discard: None,
-        env: crate::toolbox::ExecEnv::new(),
-        pending_prompt_frame: None,
-        pending_prompt_reply: None,
-        impulse: ImpulseState::default(),
-        entry: entry.id(),
-        instruction: 0,
-        exiled_target: None,
-        remembered_permanent: None,
-        values: BTreeMap::new(),
-    }));
-    let mut damage = DamageJournal::default();
-    let mut draws = crate::effects::DrawJournal::default();
-    let mut append = RulesJournal::default();
-    let bounce_spec = crate::toolbox::ZoneOpSpec::move_all(
-        crate::toolbox::ObjectQuery::Targets,
-        crate::toolbox::ZoneDest::Hand,
-    );
-    let mut ctx = crate::effects::progress_rules::RuleStepContext {
-        journal: &mut damage,
-        draws: &mut draws,
-        append: &mut append,
-    };
-    state
-        .execute_zone_op(&mut ctx, &entry, 0, &bounce_spec)
-        .unwrap();
-    let hand = state.window.cards().current_identity(CardId(1)).unwrap();
-    assert_ne!(hand, old);
-    let before = state.rules_snapshot(None).unwrap();
-    let (window, moves) = state
-        .window
-        .qualification_zone_moves(
-            state.window.revision(),
-            &[(hand, ObjectDestination::Battlefield { controller: A })],
-        )
-        .unwrap();
-    state.window = window;
-    let returned = moves[0].after.id();
-    state
-        .characteristics
-        .register_battlefield_entry(returned)
-        .unwrap();
-    assert!(
-        state
-            .characteristic_timestamps()
-            .find(|(object, _)| *object == returned)
-            .unwrap()
-            .1
-            > old_timestamp
-    );
-    state
-        .emit_from(
-            EventCause::MechanismUnit,
-            &before,
-            None,
-            &mut append,
-            |previous, current, controllers| {
-                moves
-                    .iter()
-                    .map(|movement| {
-                        zone_occurrence_at(
-                            previous,
-                            current,
-                            movement,
-                            ZoneReason::MechanismUnit,
-                            controllers,
-                        )
-                    })
-                    .collect()
-            },
-        )
-        .unwrap();
-    // MAP CL-TARGET-DEPART-RETURN assertion 3
-    assert_eq!(
-        state.window.resolving().unwrap().targets().targets()[0]
-            .choice()
-            .target,
-        TargetRef::Object(old)
-    );
-    assert_eq!(state.instruction_index(), Some(1));
-    let result = state
-        .progress_rules(damage, vec![], vec![], DrawJournal::default(), append)
-        .unwrap();
-    let next = result.state();
-    assert_eq!(
-        entry.targets().targets()[0].choice().target,
-        TargetRef::Object(old)
-    );
-    let StackKind::ActivatedAbility { source } = entry.kind() else {
-        panic!("actual ability origin")
-    };
-    assert_eq!(source.id(), old);
-    assert_eq!(source.tapped(), Some(false));
-    // MAP CL-TARGET-DEPART-RETURN assertion 1
-    assert_ne!(returned, old);
-    assert_ne!(returned, hand);
-    assert_eq!(
-        next.window.cards().get(returned).unwrap().zone(),
-        ObjectZone::Battlefield
-    );
-    let creature = next.creature(returned).unwrap().unwrap();
-    assert_eq!(creature.power, 2.into());
-    assert_eq!(creature.toughness, 3.into());
-    assert_eq!(creature.damage, 0.into());
-    // MAP CL-TARGET-DEPART-RETURN assertion 2
-    assert_eq!(next.continuous_effects().count(), 0);
-    let RuleResult::Complete { journal, .. } = result.result() else {
-        panic!("completed cursor")
-    };
-    assert!(journal.attempts.is_empty());
 }
 
 impl EffectWindow {

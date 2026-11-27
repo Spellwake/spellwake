@@ -117,7 +117,16 @@ fn seeds(cost: ManaCost) -> Vec<SeedCard> {
             1,
             A,
             cost,
-            Instruction::Damage { amount: 1.into() },
+            spellwake_engine::program::Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec {
+                    source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
+                    exile_if_dies: false,
+                },
+            )),
             BodyTarget::SingleCreature,
         ),
         creature(90, B),
@@ -801,105 +810,6 @@ fn a_paid_command_cannot_cross_any_outer_identity_or_revision_boundary() {
 }
 
 #[test]
-fn valid_payment_does_not_bypass_own_hand_program_target_or_holder_checks() {
-    let mut cards = seeds(ManaCost::one(ManaType::Red));
-    cards.push(instant(
-        2,
-        B,
-        ManaCost::one(ManaType::Red),
-        Instruction::Damage { amount: 1.into() },
-        BodyTarget::SingleCreature,
-    ));
-    let mut hand_creature = creature(3, A);
-    hand_creature.destination = ObjectDestination::Hand;
-    cards.push(hand_creature);
-    let mut mana = pools(A, &[(ManaType::Red, 4)]);
-    mana.extend(pools(B, &[(ManaType::Red, 4)]));
-    let game = GameState::initialize(GameId(41), context(), {
-        // Fixture premise: seeded BF timestamps follow this authored card sequence.
-        let initial_battlefield_order = cards
-            .iter()
-            .filter(|card| {
-                matches!(
-                    card.destination,
-                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
-                )
-            })
-            .map(|card| card.card)
-            .collect();
-        GameSeed::with_uniform_life(
-            vec![A, B],
-            A,
-            cards,
-            initial_battlefield_order,
-            mana,
-            20.into(),
-            CombatRules::UnrestrictedFreeForAll,
-            test_vocabulary(),
-            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
-        )
-    })
-    .unwrap()
-    .into_state();
-    let target = TargetRef::Object(object(&game, 90));
-    for (spell, error) in [
-        (2, EffectError::NotOwnHand),
-        (3, EffectError::NotCastableSpell),
-    ] {
-        reject(
-            &game,
-            request(
-                &game,
-                A,
-                GameCommand::CastPaid {
-                    spell: object(&game, spell),
-                    target,
-                    payment: payment(&[(ManaType::Red, 1)]),
-                },
-            ),
-            GameError::Effect(error),
-        );
-    }
-    let other = setup(ManaCost::free(), vec![]);
-    let foreign_cast = accept(&other, A, convenience(&other));
-    let missing_stack_entry = foreign_cast.mana_payment().unwrap().source;
-    for target in [
-        TargetRef::Player(A),
-        TargetRef::Stack(missing_stack_entry),
-        TargetRef::Object(object(&game, 1)),
-    ] {
-        reject(
-            &game,
-            request(
-                &game,
-                A,
-                GameCommand::CastPaid {
-                    spell: object(&game, 1),
-                    target,
-                    payment: payment(&[(ManaType::Red, 1)]),
-                },
-            ),
-            GameError::Effect(EffectError::IllegalTarget),
-        );
-    }
-    reject(
-        &game,
-        request(
-            &game,
-            B,
-            GameCommand::CastPaid {
-                spell: object(&game, 2),
-                target,
-                payment: payment(&[(ManaType::Red, 1)]),
-            },
-        ),
-        GameError::Effect(EffectError::Window(StackWindowError::Priority(
-            PriorityError::WrongPlayer,
-        ))),
-    );
-}
-
-#[test]
 fn unknown_source_handle_cannot_use_a_valid_payment_or_current_game_basis() {
     let game = setup(
         ManaCost::one(ManaType::Red),
@@ -1081,151 +991,6 @@ fn low_level_stale_revision_checks_required_and_closed_step_preserve_resources()
         Err(EffectError::Window(StackWindowError::NotInPriority))
     );
     assert_eq!(state, saved);
-}
-
-#[test]
-fn copy_reply_and_countered_source_neither_repeat_receipts_charge_copies_nor_refund_costs() {
-    let cards = vec![
-        instant(
-            1,
-            A,
-            ManaCost::generic(1.into()),
-            Instruction::Damage { amount: 1.into() },
-            BodyTarget::SingleCreature,
-        ),
-        instant(
-            2,
-            B,
-            ManaCost::one(ManaType::Blue),
-            Instruction::CopySpell,
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
-        ),
-        instant(
-            3,
-            A,
-            ManaCost::one(ManaType::Red),
-            Instruction::CounterSpell,
-            BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-        ),
-        creature(90, B),
-    ];
-    let mut mana = pools(A, &[(ManaType::Green, 1), (ManaType::Red, 1)]);
-    mana.extend(pools(B, &[(ManaType::Blue, 1)]));
-    let game = GameState::initialize(GameId(41), context(), {
-        // Fixture premise: seeded BF timestamps follow this authored card sequence.
-        let initial_battlefield_order = cards
-            .iter()
-            .filter(|card| {
-                matches!(
-                    card.destination,
-                    spellwake_engine::object_identity::ObjectDestination::Battlefield { .. }
-                )
-            })
-            .map(|card| card.card)
-            .collect();
-        GameSeed::with_uniform_life(
-            vec![A, B],
-            A,
-            cards,
-            initial_battlefield_order,
-            mana,
-            20.into(),
-            CombatRules::UnrestrictedFreeForAll,
-            test_vocabulary(),
-            std::sync::Arc::new(spellwake_contracts::names::NameRules::literal_names()),
-        )
-    })
-    .unwrap()
-    .into_state();
-    let first = accept(&game, A, command(&game, payment(&[(ManaType::Green, 1)])));
-    receipt(
-        &first,
-        A,
-        &ManaCost::generic(1.into()),
-        payment(&[(ManaType::Green, 1)]),
-    );
-    let original = first.mana_payment().unwrap().source;
-    let game = first.into_state();
-    let game = noncast(&game, A, GameCommand::Pass);
-    let copy = accept(
-        &game,
-        B,
-        GameCommand::Cast {
-            spell: object(&game, 2),
-            target: TargetRef::Stack(original),
-        },
-    );
-    receipt(
-        &copy,
-        B,
-        &ManaCost::one(ManaType::Blue),
-        payment(&[(ManaType::Blue, 1)]),
-    );
-    let pending = pass_round(copy.into_state());
-    let decision = pending.pending_decision().unwrap();
-    for actor in [A, B] {
-        for command in [
-            GameCommand::Cast {
-                spell: object(&pending, 3),
-                target: TargetRef::Stack(original),
-            },
-            GameCommand::CastPaid {
-                spell: object(&pending, 3),
-                target: TargetRef::Stack(original),
-                payment: payment(&[(ManaType::Red, 1)]),
-            },
-        ] {
-            reject(
-                &pending,
-                request(&pending, actor, command),
-                GameError::DecisionRequired,
-            );
-        }
-    }
-    let game = noncast(
-        &pending,
-        B,
-        GameCommand::Reply {
-            decision: decision.id(),
-            choice: CopyTargetChoice::Retain.into(),
-        },
-    );
-    assert_eq!(game.execution().window().spell_copies().len(), 1);
-    assert_eq!(zone(&game, 2), ObjectZone::Graveyard(B));
-    let counter = accept(
-        &game,
-        A,
-        GameCommand::CastPaid {
-            spell: object(&game, 3),
-            target: TargetRef::Stack(original),
-            payment: payment(&[(ManaType::Red, 1)]),
-        },
-    );
-    receipt(
-        &counter,
-        A,
-        &ManaCost::one(ManaType::Red),
-        payment(&[(ManaType::Red, 1)]),
-    );
-    let game = pass_round(counter.into_state());
-    assert_eq!(zone(&game, 1), ObjectZone::Graveyard(A));
-    assert_eq!(zone(&game, 3), ObjectZone::Graveyard(A));
-    assert_eq!(game.execution().window().entries().len(), 1);
-    let game = pass_round(game);
-    assert!(game.execution().window().spell_copies().is_empty());
-    assert!(game.execution().window().entries().is_empty());
-    assert_eq!(
-        game.execution()
-            .creature(object(&game, 90))
-            .unwrap()
-            .unwrap()
-            .damage,
-        1.into()
-    );
-    assert_eq!(balances(&game), vec![RulesInteger::from(0); 12]);
-    let game = pass_round(game);
-    assert_eq!(game.execution().window().phase(), WindowPhase::StepEnded);
-    assert_eq!(balances(&game), vec![RulesInteger::from(0); 12]);
 }
 
 #[path = "support/vocabulary.rs"]

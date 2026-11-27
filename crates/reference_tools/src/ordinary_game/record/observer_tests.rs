@@ -213,7 +213,14 @@ fn fixture() -> Fixture {
         ),
         (
             BodyTarget::SingleCreature,
-            Instruction::Damage { amount: 1.into() },
+            Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+                exile_if_dies: false,
+            })),
         ),
         (
             BodyTarget::SingleCreature,

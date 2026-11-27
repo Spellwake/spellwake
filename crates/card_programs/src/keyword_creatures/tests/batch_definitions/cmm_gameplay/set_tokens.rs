@@ -738,7 +738,6 @@ fn cmm_yahenni_attacks_immediately_grows_on_opponent_deaths_and_sacrifices_to_su
 #[ignore = "requires dated Oracle source and creature vocabulary"]
 fn cmm_archfiend_prevents_opponent_gains_and_counts_each_opponents_actual_loss() {
     use ManaType::*;
-    use spellwake_engine::life::LifeAdjustment;
     let price = [(Colourless, 6), (Black, 2)];
     let create_spell = |id, instruction| {
         seed(
@@ -752,24 +751,40 @@ fn cmm_archfiend_prevents_opponent_gains_and_counts_each_opponents_actual_loss()
         vec![A, B, C],
         vec![
             hand("Archfiend of Despair"),
-            create_spell(2, Instruction::Damage { amount: 3.into() }),
+            create_spell(
+                2,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(3),
+                    false,
+                ),
+            ),
             create_spell(
                 3,
-                Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Lose(2.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(2),
+                ),
             ),
             create_spell(
                 4,
-                Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Gain(7.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(7),
+                ),
             ),
             create_spell(
                 5,
-                Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Gain(1.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
             ),
         ],
         &price,
@@ -829,7 +844,11 @@ fn cmm_gisela_doubles_opponent_damage_and_prevents_the_rounded_up_half_of_friend
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleAnyTarget,
-                Instruction::Damage { amount: 3.into() },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(3),
+                    false,
+                ),
             ),
         )
     }));

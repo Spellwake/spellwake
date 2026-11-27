@@ -967,9 +967,16 @@ fn damage(
         card: CardId(card),
         alias,
         checkpoint,
-        instructions: vec![Instruction::Damage {
-            amount: amount.into(),
-        }],
+        instructions: vec![Instruction::DealDamage(Box::new(
+            spellwake_engine::toolbox::DealDamageSpec {
+                source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                    spellwake_engine::program::ValueExpr::Literal(amount.into()),
+                ),
+                exile_if_dies: false,
+            },
+        ))],
         creation_aliases: vec![],
         prepared: false,
         choices,
@@ -1044,7 +1051,14 @@ fn sequence_scenarios() -> Vec<(&'static str, Vec<Source>)> {
             vec![sequence(
                 2,
                 vec![
-                    Instruction::Damage { amount: 3.into() },
+                    Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::literal(3),
+                        ),
+                        exile_if_dies: false,
+                    })),
                     Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Hand,
@@ -1059,7 +1073,14 @@ fn sequence_scenarios() -> Vec<(&'static str, Vec<Source>)> {
                 2,
                 vec![
                     Instruction::CreatePreventionShield { amount: 4.into() },
-                    Instruction::Damage { amount: 3.into() },
+                    Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::literal(3),
+                        ),
+                        exile_if_dies: false,
+                    })),
                 ],
                 &[],
             )],
@@ -1072,8 +1093,26 @@ fn sequence_scenarios() -> Vec<(&'static str, Vec<Source>)> {
                 sequence(
                     4,
                     vec![
-                        Instruction::Damage { amount: 5.into() },
-                        Instruction::Damage { amount: 3.into() },
+                        Instruction::DealDamage(Box::new(
+                            spellwake_engine::toolbox::DealDamageSpec {
+                                source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                                recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                                    spellwake_engine::program::ValueExpr::literal(5),
+                                ),
+                                exile_if_dies: false,
+                            },
+                        )),
+                        Instruction::DealDamage(Box::new(
+                            spellwake_engine::toolbox::DealDamageSpec {
+                                source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                                recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                                amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                                    spellwake_engine::program::ValueExpr::literal(3),
+                                ),
+                                exile_if_dies: false,
+                            },
+                        )),
                     ],
                     &["blessing"],
                 ),
@@ -1088,7 +1127,14 @@ fn sequence_scenarios() -> Vec<(&'static str, Vec<Source>)> {
                         spellwake_engine::toolbox::ObjectQuery::Targets,
                         spellwake_engine::toolbox::ZoneDest::Hand,
                     ))),
-                    Instruction::Damage { amount: 3.into() },
+                    Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::literal(3),
+                        ),
+                        exile_if_dies: false,
+                    })),
                 ],
                 &[],
             )],
@@ -1328,7 +1374,14 @@ mod tests {
             instructions: vec![
                 Instruction::CreatePreventionShield { amount: 1.into() },
                 Instruction::CreatePreventionShield { amount: 2.into() },
-                Instruction::Damage { amount: 3.into() },
+                Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                    source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                        spellwake_engine::program::ValueExpr::literal(3),
+                    ),
+                    exile_if_dies: false,
+                })),
             ],
             creation_aliases: vec![(0, "first"), (1, "second")],
             prepared: false,
@@ -1369,7 +1422,16 @@ mod tests {
     #[test]
     fn application_projection_orders_ten_real_attempts_numerically() {
         let mut instructions = vec![Instruction::CreateDamageMultiplier { factor: 1.into() }];
-        instructions.extend((0..10).map(|_| Instruction::Damage { amount: 1.into() }));
+        instructions.extend((0..10).map(|_| {
+            Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+                exile_if_dies: false,
+            }))
+        }));
         let source = Source {
             card: CardId(2),
             alias: "probe",

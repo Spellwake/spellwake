@@ -1718,3 +1718,273 @@ pub(crate) fn mill_players(players: AffectedPlayers, amount: ValueExpr) -> Instr
         body: Box::new(ExecutableBody::new(BodyTarget::None, vec![inner])),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4 Universal Builders: AdjustLife, DealDamage, MutatePlayer, Emblems, Combat
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)]
+#[must_use]
+pub(crate) fn adjust_life(
+    players: PlayerSelector,
+    op: spellwake_engine::toolbox::LifeOp,
+) -> Instruction {
+    Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec {
+        players,
+        op,
+        bind_amount: None,
+    }))
+}
+
+#[must_use]
+pub(crate) fn gain_life(players: PlayerSelector, amount: ValueExpr) -> Instruction {
+    Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
+        players, amount,
+    )))
+}
+
+#[must_use]
+pub(crate) fn lose_life(players: PlayerSelector, amount: ValueExpr) -> Instruction {
+    Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::lose(
+        players, amount,
+    )))
+}
+
+#[must_use]
+pub(crate) fn set_life(players: PlayerSelector, amount: ValueExpr) -> Instruction {
+    Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::set(
+        players, amount,
+    )))
+}
+
+#[must_use]
+pub(crate) fn pay_life(players: PlayerSelector, amount: ValueExpr) -> Instruction {
+    Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::pay(
+        players, amount,
+    )))
+}
+
+#[must_use]
+pub(crate) fn drain_life(
+    losers: PlayerSelector,
+    amount: ValueExpr,
+    gain_to: PlayerSelector,
+    per_loss: bool,
+) -> Instruction {
+    Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::drain(
+        losers, amount, gain_to, per_loss,
+    )))
+}
+
+#[must_use]
+pub(crate) fn lose_half_life(players: PlayerSelector, round_up: bool) -> Instruction {
+    Instruction::AdjustLife(Box::new(
+        spellwake_engine::toolbox::AdjustLifeSpec::lose_half(players, round_up),
+    ))
+}
+
+#[must_use]
+pub(crate) fn deal_damage(
+    recipients: spellwake_engine::toolbox::DamageTargetQuery,
+    amount: ValueExpr,
+    exile_if_dies: bool,
+) -> Instruction {
+    Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
+        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+        recipients,
+        amount: spellwake_engine::program::DamageAmountSpec::Expr(amount),
+        exile_if_dies,
+    }))
+}
+
+#[must_use]
+pub(crate) fn deal_damage_from(
+    source: spellwake_engine::toolbox::DamageSourceQuery,
+    recipients: spellwake_engine::toolbox::DamageTargetQuery,
+    amount: spellwake_engine::program::DamageAmountSpec,
+    exile_if_dies: bool,
+) -> Instruction {
+    Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
+        source,
+        recipients,
+        amount,
+        exile_if_dies,
+    }))
+}
+
+#[must_use]
+pub(crate) fn add_player_counter(
+    players: PlayerSelector,
+    kind: spellwake_engine::effects::CounterKind,
+    amount: ValueExpr,
+) -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::add_counter(players, kind, amount),
+    ))
+}
+
+#[must_use]
+pub(crate) fn pay_player_counter(
+    players: PlayerSelector,
+    kind: spellwake_engine::effects::CounterKind,
+    amount: ValueExpr,
+) -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::pay_counter(players, kind, amount),
+    ))
+}
+
+#[must_use]
+pub(crate) fn win_game(players: PlayerSelector) -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::win_game(players),
+    ))
+}
+
+#[must_use]
+pub(crate) fn lose_game(players: PlayerSelector) -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::lose_game(players),
+    ))
+}
+
+#[must_use]
+pub(crate) fn draw_game() -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::draw_game(),
+    ))
+}
+
+#[must_use]
+pub(crate) fn take_extra_turn(players: PlayerSelector) -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::take_extra_turn(players),
+    ))
+}
+
+#[must_use]
+pub(crate) fn end_turn() -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::end_turn(),
+    ))
+}
+
+#[must_use]
+pub(crate) fn become_monarch(players: PlayerSelector) -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::become_monarch(players),
+    ))
+}
+
+#[must_use]
+pub(crate) fn ascend() -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::ascend(),
+    ))
+}
+
+#[allow(dead_code)]
+#[must_use]
+pub(crate) fn increase_speed() -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::increase_speed(),
+    ))
+}
+
+#[must_use]
+pub(crate) fn set_day_night(clock: spellwake_engine::day_night::DayNight) -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::set_day_night(clock),
+    ))
+}
+
+#[must_use]
+pub(crate) fn disallow_damage_prevention() -> Instruction {
+    Instruction::MutatePlayer(Box::new(
+        spellwake_engine::toolbox::MutatePlayerSpec::disallow_damage_prevention(),
+    ))
+}
+
+#[must_use]
+pub(crate) fn create_emblem(
+    players: PlayerSelector,
+    definition: spellwake_engine::emblem::EmblemDefinition,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::emblem(players, definition),
+    ))
+}
+
+#[must_use]
+pub(crate) fn remove_from_combat(source: ObjectQuery) -> Instruction {
+    Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
+        source,
+        spellwake_engine::toolbox::ObjectMutation::RemoveFromCombat,
+    )))
+}
+
+#[must_use]
+pub(crate) fn remove_counters(
+    source: ObjectQuery,
+    kind: Option<spellwake_engine::effects::CounterKind>,
+    amount: ValueExpr,
+) -> Instruction {
+    Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
+        source,
+        spellwake_engine::toolbox::ObjectMutation::RemoveCounters { kind, amount },
+    )))
+}
+
+#[must_use]
+pub(crate) fn move_counters(
+    source: ObjectQuery,
+    to: ObjectQuery,
+    kind: Option<spellwake_engine::effects::CounterKind>,
+    amount: Option<ValueExpr>,
+) -> Instruction {
+    Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
+        source,
+        spellwake_engine::toolbox::ObjectMutation::MoveCounters { to, kind, amount },
+    )))
+}
+
+#[must_use]
+pub(crate) fn unattach(source: ObjectQuery) -> Instruction {
+    Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
+        source,
+        spellwake_engine::toolbox::ObjectMutation::Unattach,
+    )))
+}
+
+#[allow(dead_code)]
+#[must_use]
+pub(crate) fn phase_out(source: ObjectQuery) -> Instruction {
+    Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
+        source,
+        spellwake_engine::toolbox::ObjectMutation::PhaseOut,
+    )))
+}
+
+#[allow(dead_code)]
+#[must_use]
+pub(crate) fn transform_objects(source: ObjectQuery) -> Instruction {
+    Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
+        source,
+        spellwake_engine::toolbox::ObjectMutation::Transform,
+    )))
+}
+
+#[must_use]
+pub(crate) fn gain_control(
+    source: ObjectQuery,
+    controller: PlayerSelector,
+    duration: spellwake_engine::characteristics::ResolvedDuration,
+) -> Instruction {
+    Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
+        source,
+        spellwake_engine::toolbox::ObjectMutation::GainControl {
+            controller,
+            duration,
+        },
+    )))
+}

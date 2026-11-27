@@ -148,7 +148,13 @@ fn cmm_repeated_reverberation_copies_the_next_instant_sorcery_or_loyalty_twice_w
     use spellwake_engine::effects::CopyTargetChoice;
     let bolt = ExecutableBody::new(
         BodyTarget::SinglePlayer,
-        vec![Instruction::Damage { amount: 1.into() }],
+        vec![
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                spellwake_engine::program::ValueExpr::literal(1),
+                false,
+            ),
+        ],
     );
     let start = game(
         vec![A, B, C],

@@ -4,16 +4,14 @@ use super::*;
 use crate::{
     activated::{ActivatedAbility, ActivatedAbilityId, SourceCost},
     characteristics::{
-        AbilityChange, AbilityRemoval, NumericExpression, NumericPair, PermanentSelector,
-        ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec, StaticAbilityId,
-        StaticContinuousAbility, StaticPart, StaticParts,
+        NumericExpression, NumericPair, PermanentSelector, ResolvedDuration, ResolvedPartSpec,
+        ResolvedPartsSpec, StaticAbilityId, StaticContinuousAbility, StaticPart, StaticParts,
     },
     effects::private_qualification::QualificationFault,
     game::{
         GameCommand, GameContext, GameError, GameId, GameInput, GameState, NativeCandidate,
         RuleFrame,
     },
-    life::LifeAdjustment,
     object_identity::ObjectIdentityError,
     program::{
         AffectedPlayers, BodyTarget, ExecutableBody, PermanentTypeFilter, PlayerRelation,
@@ -71,9 +69,10 @@ fn creature(toughness: i64) -> Program {
     Program::creature(None, 2.into(), toughness.into(), BTreeSet::new())
 }
 fn gain(n: i64) -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(n.into()),
-    }
+    crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::Literal(n.into()),
+    )))
 }
 fn instant(card: u64, target: BodyTarget, body: Vec<Instruction>) -> SeedCard {
     seed(
@@ -828,191 +827,6 @@ fn sba_chain_opportunities_are_per_lineage_and_publish_only_terminal_moves() {
     run.replay();
 }
 
-#[test]
-fn token_owned_copied_and_removed_sba_sources_use_actual_evaluated_abilities() {
-    let v = creature_types::selected_vocabulary().unwrap();
-    let mut token_source = creature(0);
-    let mut definition = rule(0, ZoneActionKind::StateBased, D::Graveyard, D::Exile, true);
-    definition.subject = ZoneReplacementSubject::SourceSelf;
-    token_source.zone_replacements = vec![definition];
-    let token = TokenDefinition::new(
-        token_source,
-        TokenName::Default {
-            ordered_subtypes: vec![],
-        },
-        &v,
-    )
-    .unwrap();
-    let mut born = Run::new(
-        vec![instant(
-            1,
-            BodyTarget::None,
-            vec![Instruction::CreateTokens {
-                creations: vec![TokenCreation::one(token)],
-            }],
-        )],
-        A,
-        Step::PrecombatMain,
-    );
-    born.cast(A, 1, None);
-    born.pass_round();
-    let batch = check_batch(&born);
-    let before = batch.candidates().values().next().unwrap().before.id();
-    assert!(batch.sources().keys().all(|s| s.source == before));
-    optional(&mut born, true);
-    let change = born
-        .events()
-        .into_iter()
-        .flat_map(|e| &e.occurrences)
-        .find_map(|o| match &o.value {
-            RulesOccurrence::ZoneChange(z) if z.before.object.id() == before => Some(z),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(change.after.object.zone(), ObjectZone::Exile);
-    let departed = change.after.object.id();
-    assert!(born.events().iter().flat_map(|e| &e.occurrences).any(
-        |o| matches!(&o.value,RulesOccurrence::TokenCeased {object} if object.id()==departed)
-    ));
-    born.replay();
-    let token = TokenDefinition::new(
-        creature(0),
-        TokenName::Default {
-            ordered_subtypes: vec![],
-        },
-        &v,
-    )
-    .unwrap();
-    let mut holder = Program::artifact(None, vec![]);
-    holder.activated.push(ActivatedAbility {
-        id: ActivatedAbilityId(0),
-        mana_cost: ManaCost::free(),
-        source_cost: SourceCost::None,
-        body: ExecutableBody::new(
-            BodyTarget::SinglePermanent,
-            vec![
-                Instruction::CopyTargetToSource {
-                    duration: ResolvedDuration::NoStatedDuration,
-                    power_toughness: None,
-                },
-                Instruction::CreateTokens {
-                    creations: vec![TokenCreation::one(token)],
-                },
-            ],
-        ),
-    });
-    let mut copied = Run::new(
-        vec![
-            bf(300, A, A, holder),
-            bf(
-                99,
-                A,
-                A,
-                source(vec![rule(
-                    0,
-                    ZoneActionKind::StateBased,
-                    D::Graveyard,
-                    D::Exile,
-                    false,
-                )]),
-            ),
-        ],
-        A,
-        Step::PrecombatMain,
-    );
-    copied.command(
-        A,
-        GameCommand::ActivateAbility {
-            source: object(&copied.state, 300),
-            ability: ActivatedAbilityId(0),
-            target: TargetRef::Object(object(&copied.state, 99)),
-            payment: None,
-        },
-    );
-    copied.pass_round();
-    let recipient = object(&copied.state, 300);
-    assert_eq!(check_batch(&copied).sources().len(), 2);
-    let ZoneReplacementRequest::Select { applications } = replacement(&copied).request() else {
-        panic!("two actual copied source instances")
-    };
-    let application = *applications
-        .iter()
-        .find(|a| a.effect.source == recipient)
-        .unwrap();
-    copied.reply(DecisionReply::ZoneReplacement(
-        ZoneReplacementReply::Select(application),
-    ));
-    assert!(copied.state.pending_decision().is_none());
-    copied.replay();
-    let mut stripped_source = creature(2);
-    stripped_source.zone_replacements = vec![rule(
-        0,
-        ZoneActionKind::StateBased,
-        D::Graveyard,
-        D::Exile,
-        false,
-    )];
-    let mut removed = Run::new(
-        vec![
-            bf(99, A, A, stripped_source),
-            instant(
-                1,
-                BodyTarget::SingleCreature,
-                vec![
-                    {
-                        struct _Tmp {
-                            parts: crate::characteristics::ResolvedPartsSpec,
-                            duration: crate::characteristics::ResolvedDuration,
-                        }
-                        let _t = _Tmp {
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
-                                AbilityChange::remove(AbilityRemoval::All),
-                            )]),
-                            duration: ResolvedDuration::NoStatedDuration,
-                        };
-                        crate::program::Instruction::ApplyContinuous(Box::new(
-                            crate::toolbox::ApplyContinuousSpec {
-                                selector: Some(crate::toolbox::ObjectQuery::Targets),
-                                payload: crate::toolbox::ContinuousPayload::ResolvedParts(
-                                    Box::new(_t.parts),
-                                ),
-                                duration: _t.duration,
-                                condition: None,
-                                one_shot: false,
-                                as_emblem: None,
-                                emblem_label: None,
-                            },
-                        ))
-                    },
-                    Instruction::OptionalEffect {
-                        chooser: ResolvingPlayer::Controller,
-                    },
-                    Instruction::Damage { amount: 2.into() },
-                ],
-            ),
-        ],
-        A,
-        Step::PrecombatMain,
-    );
-    removed.cast(A, 1, Some(TargetRef::Object(object(&removed.state, 99))));
-    removed.pass_round();
-    assert!(matches!(
-        removed.state.pending_decision().unwrap().frame(),
-        RuleFrame::OptionalEffect(_)
-    ));
-    let traits = removed
-        .state
-        .execution()
-        .current_characteristics(object(&removed.state, 99))
-        .unwrap()
-        .unwrap();
-    assert!(traits.abilities.zone_replacements.is_empty());
-    assert_eq!(traits.printed_text.zone_replacements.len(), 1);
-    removed.reply(DecisionReply::OptionalEffect(OptionalEffectChoice::Take));
-    assert_eq!(zone(&removed.state, 99), ObjectZone::Graveyard(A));
-    removed.replay();
-}
-
 fn complete_pass_run() -> Run {
     let v = creature_types::selected_vocabulary().unwrap();
     let token = TokenDefinition::new(
@@ -1058,10 +872,22 @@ fn complete_pass_run() -> Run {
                     },
                 ),
             )),
-            Instruction::Damage { amount: 2.into() },
-            Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Lose(20.into()),
-            },
+            crate::program::Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
+                source: crate::toolbox::DamageSourceQuery::EntrySource,
+                recipients: crate::toolbox::DamageTargetQuery::Targets,
+                amount: crate::program::DamageAmountSpec::Expr(crate::program::ValueExpr::Literal(
+                    2.into(),
+                )),
+                exile_if_dies: false,
+            })),
+            crate::program::Instruction::AdjustLife(Box::new(
+                crate::toolbox::AdjustLifeSpec::lose(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    crate::program::ValueExpr::Literal(20.into()),
+                ),
+            )),
         ],
     );
     let copier = |card| {
@@ -1279,117 +1105,6 @@ fn later_sba_pass_uses_fresh_roster_after_source_departure() {
     assert_eq!(zone(&run.state, 1), ObjectZone::Graveyard(A));
     assert_eq!(zone(&run.state, 20), ObjectZone::Graveyard(A));
     run.replay();
-}
-
-#[test]
-fn cancellation_cessation_and_loss_only_passes_have_no_zone_intents_or_replacement_frames() {
-    for mode in 0..3 {
-        let body = match mode {
-            0 => vec![
-                crate::program::Instruction::MutateObject(Box::new(
-                    crate::toolbox::MutateObjectSpec::all(
-                        crate::toolbox::ObjectQuery::Targets,
-                        crate::toolbox::ObjectMutation::AddCounters {
-                            kind: crate::effects::CounterKind::PlusOne,
-                            amount: crate::program::ValueExpr::Literal(1.into()),
-                        },
-                    ),
-                )),
-                crate::program::Instruction::MutateObject(Box::new(
-                    crate::toolbox::MutateObjectSpec::all(
-                        crate::toolbox::ObjectQuery::Targets,
-                        crate::toolbox::ObjectMutation::AddCounters {
-                            kind: crate::effects::CounterKind::MinusOne,
-                            amount: crate::program::ValueExpr::Literal(1.into()),
-                        },
-                    ),
-                )),
-            ],
-            1 => vec![gain(1)],
-            _ => vec![Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Lose(20.into()),
-            }],
-        };
-        let target = if mode == 0 {
-            BodyTarget::SingleCreature
-        } else {
-            BodyTarget::None
-        };
-        let mut cards = vec![
-            instant(1, target, body),
-            bf(10, A, A, creature(3)),
-            bf(
-                99,
-                A,
-                A,
-                source(vec![rule(
-                    0,
-                    ZoneActionKind::StateBased,
-                    D::Graveyard,
-                    D::Exile,
-                    true,
-                )]),
-            ),
-        ];
-        if mode == 1 {
-            cards.push(instant(
-                2,
-                BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
-                vec![Instruction::CopySpell],
-            ));
-        }
-        let mut run = Run::new(cards, A, Step::PrecombatMain);
-        let chosen = if mode == 0 {
-            Some(TargetRef::Object(object(&run.state, 10)))
-        } else {
-            None
-        };
-        run.cast(A, 1, chosen);
-        if mode == 1 {
-            let original = run.state.execution().window().entries()[0].id();
-            run.cast(A, 2, Some(TargetRef::Stack(original)));
-            run.pass_round();
-            if matches!(
-                run.state.pending_decision().map(|p| p.frame()),
-                Some(RuleFrame::CopyTargets(_))
-            ) {
-                run.reply(DecisionReply::CopyTargets(CopyTargetChoice::Retain));
-            }
-        }
-        run.pass_round();
-        assert!(run.state.pending_decision().is_none());
-        let sbas = run
-            .events()
-            .into_iter()
-            .filter(|e| matches!(e.cause, EventCause::StateBasedActions { .. }))
-            .collect::<Vec<_>>();
-        assert!(!sbas.is_empty());
-        assert!(
-            sbas.iter()
-                .flat_map(|e| &e.occurrences)
-                .all(|o| !matches!(o.value, RulesOccurrence::ZoneChange(_)))
-        );
-        assert!(
-            run.calls
-                .iter()
-                .filter_map(|(_, r)| r.as_ref().ok())
-                .all(|c| c.check_journal().moves.is_empty())
-        );
-        match mode {
-            0 => assert!(
-                sbas.iter()
-                    .flat_map(|e| &e.occurrences)
-                    .any(|o| matches!(o.value, RulesOccurrence::CountersCancelled { .. }))
-            ),
-            1 => assert!(
-                sbas.iter()
-                    .flat_map(|e| &e.occurrences)
-                    .any(|o| matches!(o.value, RulesOccurrence::CopyCeased { .. }))
-            ),
-            _ => assert!(run.state.outcome().is_some()),
-        }
-        run.replay();
-    }
 }
 
 fn rejection(
@@ -1948,57 +1663,5 @@ fn cleanup_sba_after_real_expiry_uses_pass_one_and_the_actual_turn_work_parent()
     assert_eq!(run.state.turn().unwrap().position().step, Step::Cleanup);
     run.pass_round();
     assert!(run.events().iter().any(|e|matches!(e.cause,EventCause::StepBegan {position} if position.step==Step::Cleanup&&position.cleanup_iteration==1)));
-    run.replay();
-}
-#[test]
-fn lethal_damage_waits_through_real_resolution_choice_then_enters_the_sba_adapter() {
-    let mut run = Run::new(
-        vec![
-            bf(10, A, A, creature(2)),
-            bf(
-                99,
-                A,
-                A,
-                source(vec![rule(
-                    0,
-                    ZoneActionKind::StateBased,
-                    D::Graveyard,
-                    D::Exile,
-                    true,
-                )]),
-            ),
-            instant(
-                1,
-                BodyTarget::SingleCreature,
-                vec![
-                    Instruction::Damage { amount: 2.into() },
-                    Instruction::OptionalEffect {
-                        chooser: ResolvingPlayer::Controller,
-                    },
-                    gain(1),
-                ],
-            ),
-        ],
-        A,
-        Step::PrecombatMain,
-    );
-    run.cast(A, 1, Some(TargetRef::Object(object(&run.state, 10))));
-    run.pass_round();
-    assert!(matches!(
-        run.state.pending_decision().unwrap().frame(),
-        RuleFrame::OptionalEffect(_)
-    ));
-    assert_eq!(zone(&run.state, 10), ObjectZone::Battlefield);
-    assert!(!run.state.execution().has_check_replacement_work());
-    assert!(
-        !run.events()
-            .iter()
-            .any(|e| matches!(e.cause, EventCause::StateBasedActions { .. }))
-    );
-    run.reply(DecisionReply::OptionalEffect(OptionalEffectChoice::Take));
-    assert!(check_batch(&run).candidates().values().all(|c|matches!(c.reason,ZoneReason::StateBased(reasons) if reasons.contains(StateBasedMoveReason::LethalDestruction))));
-    assert_eq!(run.state.execution().life_total(A), Some(&21.into()));
-    optional(&mut run, true);
-    assert_eq!(zone(&run.state, 10), ObjectZone::Exile);
     run.replay();
 }

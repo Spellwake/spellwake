@@ -73,10 +73,20 @@ impl EffectWindow {
         let body = ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::GainControllerLife {
-                    amount: power.clone(),
-                },
-                Instruction::DrawController { amount: power },
+                Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    power.clone(),
+                ))),
+                crate::program::Instruction::DrawCards(Box::new(
+                    crate::toolbox::DrawCardsSpec::simple(
+                        crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        power,
+                    ),
+                )),
             ],
         );
         next.payloads
@@ -130,41 +140,6 @@ impl EffectWindow {
     /// All emblems in this game, including those whose creating permanent has left.
     pub fn emblems(&self) -> impl Iterator<Item = &crate::emblem::Emblem> {
         self.characteristics.emblems.values()
-    }
-
-    pub(super) fn resolve_create_opponent_emblems(
-        &mut self,
-        entry: &crate::stack_window::StackEntry,
-        instruction: usize,
-        definition: crate::emblem::EmblemDefinition,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let players = self
-            .combat_rules
-            .opponents(self.window.participants(), entry.controller())?;
-        let before = self.rules_snapshot(None)?;
-        let mut emblems = Vec::with_capacity(players.len());
-        for player in players {
-            emblems.push(
-                self.characteristics
-                    .create_emblem(player, definition.clone())?,
-            );
-        }
-        self.emit_from(
-            EventCause::Instruction {
-                entry: entry.id(),
-                instruction,
-            },
-            &before,
-            None,
-            append,
-            |_, _, _| {
-                Ok(emblems
-                    .into_iter()
-                    .map(|emblem| RulesOccurrence::EmblemCreated { emblem })
-                    .collect())
-            },
-        )
     }
 
     pub(super) fn resolve_create_emblem(

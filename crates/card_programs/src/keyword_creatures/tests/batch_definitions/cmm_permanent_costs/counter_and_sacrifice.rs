@@ -570,9 +570,12 @@ fn cmm_transmogrifying_wand_spends_a_charge_at_sorcery_speed_and_gives_the_contr
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    Instruction::AdjustControllerLife {
-                        adjustment: spellwake_engine::life::LifeAdjustment::Gain(1.into()),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
                 ),
             ),
         ],

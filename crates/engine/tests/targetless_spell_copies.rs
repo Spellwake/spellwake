@@ -15,7 +15,6 @@ use spellwake_engine::{
         RuleFrame,
     },
     land::BasicLandType,
-    life::LifeAdjustment,
     mana::{ManaAbilityRef, ManaCost, ManaType},
     object_identity::{CardId, ObjectDestination, ObjectZone},
     occurrence::{
@@ -29,14 +28,24 @@ use spellwake_engine::{
 use std::collections::BTreeSet;
 
 fn gain() -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(3.into()),
-    }
+    spellwake_engine::program::Instruction::AdjustLife(Box::new(
+        spellwake_engine::toolbox::AdjustLifeSpec::gain(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::Controller,
+            ),
+            spellwake_engine::program::ValueExpr::Literal(3.into()),
+        ),
+    ))
 }
 fn draw() -> Instruction {
-    Instruction::DrawController {
-        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-    }
+    spellwake_engine::program::Instruction::DrawCards(Box::new(
+        spellwake_engine::toolbox::DrawCardsSpec::simple(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::Controller,
+            ),
+            spellwake_engine::program::ValueExpr::Literal(1.into()),
+        ),
+    ))
 }
 fn hand(id: u64, actor: SeatId, body: ExecutableBody, paid: bool) -> SeedCard {
     SeedCard {

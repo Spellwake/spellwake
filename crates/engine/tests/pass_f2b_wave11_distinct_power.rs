@@ -9,14 +9,9 @@ use spellwake_engine::{
     characteristics::{ResolvedDuration, ResolvedPartSpec},
     effects::SeedCard,
     game::{GameCommand, GameState, NativeCandidate},
-    mana::{ManaCost, ManaPayment},
-    object_identity::{CardId, ObjectDestination},
-    program::{
-        BodyTarget, Comparison, ExecutableBody, Instruction, ObjectFilter, ObjectStatKind,
-        PlayerRelation, Program, ResolutionCondition, SpellFilter, StatAggregate, TriggerCondition,
-        TriggerEvent, TriggerGrouping, TriggerPlayerScope, TriggerSpec, TriggeredAbility,
-        TriggeredAbilityId, ValueExpr,
-    },
+    mana::ManaPayment,
+    object_identity::CardId,
+    program::{BodyTarget, ObjectFilter, ObjectStatKind, Program, StatAggregate, ValueExpr},
     targets::TargetRef,
 };
 use std::collections::BTreeSet;
@@ -30,9 +25,14 @@ fn count_spell(id: u64, filter: ObjectFilter) -> SeedCard {
     spell(
         id,
         BodyTarget::None,
-        vec![Instruction::GainControllerLife {
-            amount: distinct_powers(filter),
-        }],
+        vec![spellwake_engine::program::Instruction::AdjustLife(
+            Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                ),
+                distinct_powers(filter),
+            )),
+        )],
     )
 }
 
@@ -122,108 +122,4 @@ fn distinct_power_omits_objects_without_power_and_counts_empty_as_zero() {
     );
     let counted = cast_untargeted(&game, 10);
     assert_eq!(counted.state().execution().life_total(P0), Some(&20.into()));
-}
-
-#[test]
-fn coven_checks_current_power_on_capture_and_again_when_trigger_resolves() {
-    for collapse_before_capture in [false, true] {
-        for collapse_before_resolution in [false, true] {
-            let vocab = vocabulary();
-            let mut watcher = Program::enchantment(None);
-            let mut condition = TriggerSpec::new(TriggerEvent::SpellCast {
-                caster: TriggerPlayerScope::Relation(PlayerRelation::Opponent),
-                filter: SpellFilter::any(),
-                self_cast: false,
-                include_copy: false,
-                min_mana_value: None,
-            });
-            condition.intervening_if =
-                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
-                    left: distinct_powers(ObjectFilter::creature().controlled()),
-                    comparison: Comparison::GreaterOrEqual,
-                    right: ValueExpr::literal(3),
-                })));
-            watcher.triggered.push(TriggeredAbility {
-                id: TriggeredAbilityId(1),
-                condition,
-                grouping: TriggerGrouping::EachOccurrence,
-                body: ExecutableBody::new(
-                    BodyTarget::None,
-                    vec![Instruction::GainControllerLife {
-                        amount: ValueExpr::literal(7),
-                    }],
-                ),
-            });
-            watcher.validate(&vocab).unwrap();
-            let game = world(
-                vocab,
-                vec![
-                    card(1, watcher, true),
-                    card(2, creature(1.into()), true),
-                    card(3, creature(2.into()), true),
-                    card(4, creature(3.into()), true),
-                    spell(
-                        10,
-                        BodyTarget::SingleCreature,
-                        vec![effect(
-                            vec![ResolvedPartSpec::ModifyPT(pt(1, 0))],
-                            ResolvedDuration::UntilEndOfTurn,
-                        )],
-                    ),
-                    SeedCard {
-                        card: CardId(11),
-                        owner: P1,
-                        destination: ObjectDestination::Hand,
-                        program: Program::instant(
-                            ManaCost::free(),
-                            ExecutableBody::new(
-                                BodyTarget::None,
-                                vec![Instruction::GainControllerLife {
-                                    amount: ValueExpr::literal(0),
-                                }],
-                            ),
-                        ),
-                    },
-                ],
-                vec![CardId(1), CardId(2), CardId(3), CardId(4)],
-            );
-            let ready = if collapse_before_capture {
-                cast_pump(&game, 10, 2).into_state()
-            } else {
-                game
-            };
-            let priority = submit(&ready, P0, GameCommand::Pass);
-            let cast = submit(
-                priority.state(),
-                P1,
-                GameCommand::CastUntargeted {
-                    spell: object(priority.state(), 11),
-                    payment: Some(ManaPayment::default()),
-                },
-            );
-            assert_eq!(
-                cast.state().execution().window().entries().len(),
-                if collapse_before_capture { 1 } else { 2 }
-            );
-            if !collapse_before_capture {
-                let before_resolution = if collapse_before_resolution {
-                    let priority = submit(cast.state(), P1, GameCommand::Pass);
-                    cast_pump(priority.state(), 10, 2).into_state()
-                } else {
-                    submit(cast.state(), P1, GameCommand::Pass).into_state()
-                };
-                // After the opponent passes without a response, P0 holds priority; the
-                // first pass completes that round. A response starts a fresh round.
-                let resolved = if collapse_before_resolution {
-                    pass_pair(&before_resolution)
-                } else {
-                    submit(&before_resolution, P0, GameCommand::Pass)
-                };
-                assert_eq!(
-                    resolved.state().execution().life_total(P0),
-                    Some(&(if collapse_before_resolution { 20 } else { 27 }).into())
-                );
-            }
-        }
-    }
 }

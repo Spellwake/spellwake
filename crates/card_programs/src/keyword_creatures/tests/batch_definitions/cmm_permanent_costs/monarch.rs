@@ -24,7 +24,14 @@ fn monarch_game(name: &str, price: &[(ManaType, i64)]) -> (GameState, GameState)
             6,
             B,
             ObjectDestination::Hand,
-            free_instant(BodyTarget::None, Instruction::BecomeMonarch(None)),
+            free_instant(
+                BodyTarget::None,
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                ),
+            ),
         ),
     ]);
     cards.extend((20..25).map(|n| {

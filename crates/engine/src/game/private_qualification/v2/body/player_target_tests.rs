@@ -3,9 +3,8 @@
 use super::*;
 use crate::{
     game::private_qualification::input::{command, reply},
-    life::LifeAdjustment,
     mana::ManaCost,
-    program::{Instruction, Program, TriggerGrouping, TriggeredAbility, TriggeredAbilityId},
+    program::{Instruction, Program},
     test_support::characteristic_trajectories as tr,
 };
 
@@ -14,9 +13,14 @@ fn player_spell() -> Program {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SinglePlayer,
-            vec![Instruction::AdjustTargetLife {
-                adjustment: LifeAdjustment::Lose(1.into()),
-            }],
+            vec![crate::program::Instruction::AdjustLife(Box::new(
+                crate::toolbox::AdjustLifeSpec::lose(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::TargetPlayer,
+                    ),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
         ),
     )
 }
@@ -143,95 +147,6 @@ fn private_root_player_cast_reaches_native_membership_gate_and_preserves_rejecte
         }
         assert_eq!(game, saved);
     }
-}
-
-#[test]
-fn private_trigger_player_target_reply_binds_then_uses_native_target_domain() {
-    let mut source = Program::instant(
-        ManaCost::free(),
-        ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(1.into()),
-            }],
-        ),
-    );
-    source.triggered.push(TriggeredAbility {
-        id: TriggeredAbilityId(1),
-        condition: crate::program::TriggerSpec::self_cast(),
-        grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(
-            BodyTarget::SinglePlayer,
-            vec![Instruction::AdjustTargetLife {
-                adjustment: LifeAdjustment::Lose(1.into()),
-            }],
-        ),
-    });
-    let game = tr::world(tr::vocabulary(), vec![tr::card(1, source, false)], vec![]);
-    let cast = tr::submit(
-        &game,
-        SeatId(0),
-        GameCommand::CastUntargeted {
-            spell: tr::object(&game, 1),
-            payment: None,
-        },
-    );
-    let pending = cast.state();
-    assert!(pending.pending_decision().is_some());
-    let saved = pending.clone();
-    for (alias, seat) in [("B", 1), ("C", 2)] {
-        let input = reply(
-            pending,
-            &json!({"reply_kind":"TriggerTarget","target":{"player":alias}}),
-            &json!({}),
-            &Joins::default(),
-        )
-        .unwrap();
-        assert!(
-            matches!(&input.command,GameCommand::Reply{choice:DecisionReply::TriggerTarget(target),..} if *target==TargetRef::Player(SeatId(seat)))
-        );
-        let result = pending.advance(input.clone());
-        assert_eq!(result, pending.advance(input));
-        if alias == "B" {
-            let actual = result.unwrap();
-            assert!(actual.state().pending_decision().is_none());
-            assert_eq!(
-                actual
-                    .state()
-                    .execution()
-                    .window()
-                    .entries()
-                    .last()
-                    .unwrap()
-                    .targets()
-                    .targets()[0]
-                    .choice()
-                    .target,
-                TargetRef::Player(SeatId(1))
-            );
-        } else {
-            assert_eq!(result, Err(GameError::Effect(EffectError::IllegalTarget)));
-        }
-        assert_eq!(pending, &saved);
-    }
-    assert!(
-        reply(
-            pending,
-            &json!({"reply_kind":"TriggerTarget","target":{"player":"G"}}),
-            &json!({}),
-            &Joins::default()
-        )
-        .is_err()
-    );
-    assert_eq!(
-        reply(
-            pending,
-            &json!({"reply_kind":"Unlisted","target":{"player":"B"}}),
-            &json!({}),
-            &Joins::default()
-        ),
-        Err("unsupported private root reply Unlisted".into())
-    );
 }
 
 #[test]

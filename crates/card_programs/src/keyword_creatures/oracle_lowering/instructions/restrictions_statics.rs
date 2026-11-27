@@ -10,14 +10,37 @@ pub(super) fn lower_restrictions_statics_instruction(
     bound_x: Option<&ValueExprAst>,
 ) -> Result<(), &'static str> {
     match ins {
-        InstructionAst::ExtraTurn {
-            player: PlayerRefAst::You,
-        } => {
-            builder.instructions.push(Instruction::TakeExtraTurn);
+        InstructionAst::ExtraTurn { player } => {
+            let selector = match player {
+                PlayerRefAst::You => spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    ResolvingPlayer::Controller,
+                ),
+                PlayerRefAst::TargetPlayer => {
+                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::TargetPlayer,
+                    )
+                }
+                PlayerRefAst::TargetOpponent => {
+                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::TargetPlayer,
+                    )
+                }
+                other => {
+                    let players = lower_affected_players_in_context(*other, builder, in_trigger)?;
+                    spellwake_engine::toolbox::PlayerSelector::Group(players)
+                }
+            };
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::take_extra_turn(selector),
+            );
             Ok(())
         }
         InstructionAst::EndTurn => {
-            builder.instructions.push(Instruction::EndControllerTurn);
+            builder
+                .instructions
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::end_turn());
             Ok(())
         }
         InstructionAst::DelayedTrigger { step, scope, body } => {
@@ -76,6 +99,11 @@ pub(super) fn lower_restrictions_statics_instruction(
             static_ability,
             duration,
         } => {
+            let normalized_duration_owned = match duration {
+                DurationAst::ForAsLongAs(cond) => condition_to_for_as_long_as_duration(cond),
+                _ => None,
+            };
+            let duration = normalized_duration_owned.as_ref().unwrap_or(duration);
             match static_ability.as_ref() {
                 StaticAbilityAst::NextSpellModifier { filter, effect } => {
                     let dur = lower_duration(duration)?;
@@ -2062,10 +2090,13 @@ pub(super) fn lower_restrictions_statics_instruction(
                         if let Some(parts) = opt_parts {
                             match subject.as_deref() {
                                 None if self_pronoun_valid => {
-                                    builder.instructions.push(Instruction::ChangeAbilitySource {
-                                        parts,
-                                        duration: eff_dur,
-                                    });
+                                    builder.instructions.push(
+                                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                            spellwake_engine::toolbox::ObjectQuery::Source,
+                                            parts,
+                                            eff_dur,
+                                        ),
+                                    );
                                     return Ok(());
                                 }
                                 Some(subj) => {
@@ -2089,10 +2120,13 @@ pub(super) fn lower_restrictions_statics_instruction(
                         let parts = ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab)]);
                         match subject.as_deref() {
                             None if self_pronoun_valid => {
-                                builder.instructions.push(Instruction::ChangeAbilitySource {
-                                    parts,
-                                    duration: dur,
-                                });
+                                builder.instructions.push(
+                                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                        spellwake_engine::toolbox::ObjectQuery::Source,
+                                        parts,
+                                        dur,
+                                    ),
+                                );
                                 return Ok(());
                             }
                             Some(subj) => {
@@ -2366,10 +2400,13 @@ pub(super) fn lower_restrictions_statics_instruction(
                     let parts = ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(br)]);
                     match subject.as_deref() {
                         None if self_pronoun_valid => {
-                            builder.instructions.push(Instruction::ChangeAbilitySource {
-                                parts,
-                                duration: eff_br_dur,
-                            });
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Source,
+                                    parts,
+                                    eff_br_dur,
+                                ),
+                            );
                             return Ok(());
                         }
                         Some(subj) => {
@@ -2454,10 +2491,13 @@ pub(super) fn lower_restrictions_statics_instruction(
                 {
                     match subject.as_deref() {
                         None if self_pronoun_valid => {
-                            builder.instructions.push(Instruction::ChangeAbilitySource {
-                                parts: conj_parts,
-                                duration: eff_br_dur,
-                            });
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Source,
+                                    conj_parts,
+                                    eff_br_dur,
+                                ),
+                            );
                             return Ok(());
                         }
                         Some(subj) => {
@@ -3055,9 +3095,10 @@ pub(super) fn lower_restrictions_statics_instruction(
             "DamageCantBePreventedThisTurn" | "DamageCantBePrevented"
         ) =>
         {
-            builder
-                .instructions
-                .push(Instruction::DisallowDamagePreventionThisTurn);
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::disallow_damage_prevention(
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3552,11 +3593,16 @@ pub(super) fn lower_restrictions_statics_instruction(
             .trim_end_matches('.')
             .eq_ignore_ascii_case("skip the untap step of that turn") =>
         {
-            if builder
-                .instructions
-                .iter()
-                .any(|op| matches!(op, Instruction::TakeExtraTurn))
-            {
+            if builder.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::MutatePlayer(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::PlayerMutation::TakeExtraTurn
+                        )
+                )
+            }) {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_step(
                         ResolvingPlayer::Controller,
@@ -3823,7 +3869,9 @@ pub(super) fn lower_restrictions_statics_instruction(
             .trim_end_matches('.')
             .eq_ignore_ascii_case("the game is a draw") =>
         {
-            builder.instructions.push(Instruction::DrawGame);
+            builder
+                .instructions
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_game());
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3872,21 +3920,24 @@ pub(super) fn lower_restrictions_statics_instruction(
                     | "it is no longer an equipment"
             ) =>
         {
-            builder.instructions.push(Instruction::ChangeAbilitySource {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::TypeWithSubtypes {
-                    base: TypeChangeSpec {
-                        supertypes: TypeOperation::Keep,
-                        types: TypeOperation::Keep,
-                        subtypes: SubtypeOperation::Keep,
-                        land_subtypes: SubtypeOperation::Keep,
-                    },
-                    artifact_subtypes: SubtypeOperation::Remove(BTreeSet::from([
-                        ArtifactSubtype::Equipment,
-                    ])),
-                    enchantment_subtypes: SubtypeOperation::Keep,
-                }]),
-                duration: ResolvedDuration::NoStatedDuration,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Source,
+                    ResolvedPartsSpec(vec![ResolvedPartSpec::TypeWithSubtypes {
+                        base: TypeChangeSpec {
+                            supertypes: TypeOperation::Keep,
+                            types: TypeOperation::Keep,
+                            subtypes: SubtypeOperation::Keep,
+                            land_subtypes: SubtypeOperation::Keep,
+                        },
+                        artifact_subtypes: SubtypeOperation::Remove(BTreeSet::from([
+                            ArtifactSubtype::Equipment,
+                        ])),
+                        enchantment_subtypes: SubtypeOperation::Keep,
+                    }]),
+                    ResolvedDuration::NoStatedDuration,
+                ),
+            );
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -4133,8 +4184,6 @@ pub(super) fn lower_restrictions_statics_instruction(
         {
             if let Some(op) = builder.instructions.last_mut() {
                 let parts = match op {
-                    Instruction::ChangeAbilitySource { parts, .. }
-                    | Instruction::ChangeGroup { parts, .. } => Some(parts),
                     Instruction::ApplyContinuous(spec) => match &mut spec.payload {
                         spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) => {
                             Some(parts.as_mut())
@@ -4170,6 +4219,218 @@ pub(super) fn lower_restrictions_statics_instruction(
                 }
             }
             Err("oracle:unsupported-instruction")
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if restriction
+            .trim()
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case("reveal a card from your hand") =>
+        {
+            let ctrl =
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller);
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::simple(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Hand(Box::new(ctrl.clone())),
+                            ObjectFilter::any(),
+                        ),
+                        spellwake_engine::toolbox::ZoneSelection::Prompt {
+                            chooser: ctrl,
+                            min: Box::new(ValueExpr::literal(1)),
+                            max: Box::new(ValueExpr::literal(1)),
+                            constraint: None,
+                            category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                            hidden: true,
+                        },
+                        spellwake_engine::toolbox::ZoneDest::RevealOnly,
+                    ),
+                ),
+            );
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if restriction
+            .trim()
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case("choose a creature at random") =>
+        {
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::simple(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                            ObjectFilter::creature(),
+                        ),
+                        spellwake_engine::toolbox::ZoneSelection::Random {
+                            count: Box::new(ValueExpr::literal(1)),
+                            chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                        },
+                        spellwake_engine::toolbox::ZoneDest::None,
+                    ),
+                ),
+            );
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if restriction
+            .trim()
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case("remove all of them") =>
+        {
+            if let Some(ck) = super::counters_pt::infer_prior_counter_kind(&builder.instructions) {
+                if (self_pronoun_valid || in_trigger || builder.has_source)
+                    && (super::counters_pt::prior_op_acted_on_ability_source(&builder.instructions)
+                        || builder.target == BodyTarget::None)
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::clear_source_counters(
+                            Some(ck),
+                        ),
+                    );
+                    return Ok(());
+                }
+                if is_permanent_body_target(builder.target) {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            spellwake_engine::toolbox::ObjectMutation::ClearCounters {
+                                kind: Some(ck),
+                            },
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+            Err("oracle:unsupported-instruction")
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if matches!(
+            restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .as_str(),
+            "they're an artifact" | "it's an artifact"
+        ) =>
+        {
+            let selector = if last_instruction_created_tokens(&builder.instructions) {
+                Some(spellwake_engine::toolbox::ObjectQuery::EffectSubject(
+                    Box::new(EffectSubject::CreatedTokens),
+                ))
+            } else if last_instruction_moved_object(&builder.instructions) {
+                Some(spellwake_engine::toolbox::ObjectQuery::EffectSubject(
+                    Box::new(EffectSubject::LastMoved),
+                ))
+            } else if is_permanent_body_target(builder.target) {
+                Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+            } else if (self_pronoun_valid || in_trigger) && builder.target == BodyTarget::None {
+                Some(spellwake_engine::toolbox::ObjectQuery::Source)
+            } else {
+                None
+            };
+            if let Some(sel) = selector {
+                let parts = ResolvedPartsSpec(vec![ResolvedPartSpec::Type(TypeChangeSpec {
+                    supertypes: TypeOperation::Keep,
+                    types: TypeOperation::Add(BTreeSet::from([CardType::Artifact])),
+                    subtypes: SubtypeOperation::Keep,
+                    land_subtypes: SubtypeOperation::Keep,
+                })]);
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        sel,
+                        parts,
+                        ResolvedDuration::NoStatedDuration,
+                    ),
+                );
+                return Ok(());
+            }
+            Err("oracle:unsupported-instruction")
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            matches!(
+                r_low.as_str(),
+                "target player can't gain life this turn"
+                    | "target player can't gain life for the rest of the game"
+                    | "target opponent can't gain life this turn"
+                    | "target opponent can't gain life for the rest of the game"
+                    | "target player can't cast spells this turn"
+                    | "target opponent can't cast spells this turn"
+                    | "target player can't play lands this turn"
+                    | "target opponent can't play lands this turn"
+                    | "until your next turn, you can't lose the game"
+                    | "until your next turn, you can't lose the game and your opponents can't win the game"
+            )
+        } =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            if r_low.starts_with("until your next turn, ") {
+                let rule = if r_low.contains("opponents can't win") {
+                    StaticRestriction::ControllerCantLoseOpponentsCantWin
+                } else {
+                    StaticRestriction::ControllerCantLoseGame
+                };
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                        TemporaryRuleKind::TemporaryStatic(Box::new(
+                            StaticContinuousAbility::Restriction {
+                                id: ids.static_id(),
+                                rule,
+                            },
+                        )),
+                        ResolvedDuration::UntilControllerNextTurn,
+                    ),
+                );
+                return Ok(());
+            }
+            let target = if r_low.starts_with("target opponent ") {
+                BodyTarget::SingleOpponent
+            } else {
+                BodyTarget::SinglePlayer
+            };
+            builder.bind_target(target)?;
+            let players = AffectedPlayers::One(ResolvingPlayer::TargetPlayer);
+            let dur = if r_low.ends_with(" for the rest of the game") {
+                ResolvedDuration::NoStatedDuration
+            } else {
+                ResolvedDuration::UntilEndOfTurn
+            };
+            let rule = if r_low.contains("gain life") {
+                TemporaryRuleKind::PlayerCantGainLife { players }
+            } else if r_low.contains("cast spells") {
+                TemporaryRuleKind::CantCastSpells {
+                    players,
+                    filter: None,
+                }
+            } else {
+                TemporaryRuleKind::CantPlayLands { players }
+            };
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    rule, dur,
+                ),
+            );
+            Ok(())
         }
         InstructionAst::GrantAbilityText {
             subject,
@@ -4280,10 +4541,13 @@ pub(super) fn lower_restrictions_statics_instruction(
                     && is_self_pronoun(s, builder, self_pronoun_valid) =>
                 {
                     for part in parts {
-                        builder.instructions.push(Instruction::ChangeAbilitySource {
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::Source,
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4441,11 +4705,15 @@ pub(super) fn lower_restrictions_statics_instruction(
                             || !is_permanent_body_target(builder.target)) =>
                 {
                     for part in parts {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::CreatedTokens),
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::CreatedTokens,
+                                )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4468,11 +4736,15 @@ pub(super) fn lower_restrictions_statics_instruction(
                         && last_instruction_moved_object(&builder.instructions) =>
                 {
                     for part in parts {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::LastMoved),
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::LastMoved,
+                                )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4481,11 +4753,15 @@ pub(super) fn lower_restrictions_statics_instruction(
                         && has_prior_token_creation(&builder.instructions) =>
                 {
                     for part in parts {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::CreatedTokens),
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::CreatedTokens,
+                                )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4494,11 +4770,15 @@ pub(super) fn lower_restrictions_statics_instruction(
                         && let Some(group_obj) = builder.last_group_filter =>
                 {
                     for part in parts {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::Matching(group_obj)),
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::Matching(group_obj),
+                                )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4513,23 +4793,31 @@ pub(super) fn lower_restrictions_statics_instruction(
                 }
                 SubjectRefAst::AttachedHost(_) => {
                     for part in parts {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
-                                ObjectClause::any().attached_to_self(),
-                            ))),
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::Matching(ObjectFilter::Clause(
+                                        ObjectClause::any().attached_to_self(),
+                                    )),
+                                )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
                 SubjectRefAst::TriggerSubject if in_trigger => {
                     for part in parts {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::TriggerSubject),
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::TriggerSubject,
+                                )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4539,11 +4827,15 @@ pub(super) fn lower_restrictions_statics_instruction(
                         && (!self_pronoun_valid || !is_self_anaphora_label(raw)) =>
                 {
                     for part in parts {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::TriggerSubject),
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::TriggerSubject,
+                                )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4551,11 +4843,15 @@ pub(super) fn lower_restrictions_statics_instruction(
                     if builder.target == BodyTarget::None && in_trigger =>
                 {
                     for part in parts {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::TriggerSubject),
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::TriggerSubject,
+                                )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4569,11 +4865,15 @@ pub(super) fn lower_restrictions_statics_instruction(
                     bind_filter_player_target(builder, &obj)?;
                     builder.last_group_filter = Some(obj);
                     for part in parts {
-                        builder.instructions.push(Instruction::ChangeGroup {
-                            group: Box::new(EffectSubject::Matching(obj)),
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        });
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    EffectSubject::Matching(obj),
+                                )),
+                                ResolvedPartsSpec(vec![part]),
+                                dur,
+                            ),
+                        );
                     }
                     Ok(())
                 }
@@ -4647,21 +4947,18 @@ pub(super) fn lower_restrictions_statics_instruction(
             {
                 if (subj_low.contains("dealt damage this way")
                     || ev_low.contains("dealt damage this way"))
-                    && let Some(last) = builder.instructions.last_mut()
+                    && let Some(Instruction::DealDamage(spec)) = builder.instructions.last_mut()
+                    && matches!(
+                        spec.source,
+                        spellwake_engine::toolbox::DamageSourceQuery::EntrySource
+                    )
+                    && matches!(
+                        spec.recipients,
+                        spellwake_engine::toolbox::DamageTargetQuery::Targets
+                    )
                 {
-                    match last.clone() {
-                        Instruction::Damage { amount } => {
-                            *last = Instruction::DamageAmountThenExileIfDies(ValueExpr::Literal(
-                                amount,
-                            ));
-                            return Ok(());
-                        }
-                        Instruction::DamageAmount(expr) => {
-                            *last = Instruction::DamageAmountThenExileIfDies(expr);
-                            return Ok(());
-                        }
-                        _ => {}
-                    }
+                    spec.exile_if_dies = true;
+                    return Ok(());
                 }
                 let has_damage_op = ((self_pronoun_valid || in_trigger)
                     && (subj_low.contains("dealt damage by ~")
@@ -4670,13 +4967,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                     || builder.instructions.iter().any(|op| {
                         matches!(
                             op,
-                            Instruction::Damage { .. }
-                                | Instruction::DamageAmount(_)
-                                | Instruction::DamageAmountThenExileIfDies(_)
-                                | Instruction::DamageGroup { .. }
-                                | Instruction::DamageGroupAmount { .. }
-                                | Instruction::DamageOpponentsAmount(_)
-                                | Instruction::DamageRelatedPlayerAmount(_)
+                            Instruction::DealDamage(_)
                                 | Instruction::DamageOrderedTargets { .. }
                                 | Instruction::DamageFromPower(_)
                                 | Instruction::DamageFromGrantingPermanent { .. }
@@ -4684,7 +4975,6 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 | Instruction::DamageTargetControllersCreatures { .. }
                                 | Instruction::DamageCapturedBlocker(_)
                                 | Instruction::DamageCreatureAtSpellMastery { .. }
-                                | Instruction::DealDamageFrom { .. }
                                 | Instruction::DealDamageToAnnouncedTargets { .. }
                                 | Instruction::AffectPermanentTargets {
                                     action: PermanentTargetAction::Damage(_),
@@ -5461,18 +5751,32 @@ pub(super) fn lower_restrictions_statics_instruction(
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::WinGame(ResolvingPlayer::LoopPlayer)],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::win_game(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::LoopPlayer,
+                            ),
+                        ),
+                    ],
                     builder,
                 );
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::WinGame(rp));
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::win_game(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                ),
+            );
             Ok(())
         }
         InstructionAst::LoseGame { player } => {
             let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::LoseGame(players));
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_game(
+                    spellwake_engine::toolbox::PlayerSelector::Group(players),
+                ),
+            );
             Ok(())
         }
         InstructionAst::EntersTappedRule {
@@ -6422,19 +6726,18 @@ fn try_lower_temp_exile_replacement(
         if dur == ResolvedDuration::UntilEndOfTurn
             && (subj_low.contains("dealt damage this way")
                 || ev_low.contains("dealt damage this way"))
-            && let Some(last) = builder.instructions.last_mut()
+            && let Some(Instruction::DealDamage(spec)) = builder.instructions.last_mut()
+            && matches!(
+                spec.source,
+                spellwake_engine::toolbox::DamageSourceQuery::EntrySource
+            )
+            && matches!(
+                spec.recipients,
+                spellwake_engine::toolbox::DamageTargetQuery::Targets
+            )
         {
-            match last.clone() {
-                Instruction::Damage { amount } => {
-                    *last = Instruction::DamageAmountThenExileIfDies(ValueExpr::Literal(amount));
-                    return true;
-                }
-                Instruction::DamageAmount(expr) => {
-                    *last = Instruction::DamageAmountThenExileIfDies(expr);
-                    return true;
-                }
-                _ => {}
-            }
+            spec.exile_if_dies = true;
+            return true;
         }
         let has_damage_op = ((self_pronoun_valid || in_trigger)
             && (subj_low.contains("dealt damage by ~")
@@ -6443,13 +6746,7 @@ fn try_lower_temp_exile_replacement(
             || builder.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::Damage { .. }
-                        | Instruction::DamageAmount(_)
-                        | Instruction::DamageAmountThenExileIfDies(_)
-                        | Instruction::DamageGroup { .. }
-                        | Instruction::DamageGroupAmount { .. }
-                        | Instruction::DamageOpponentsAmount(_)
-                        | Instruction::DamageRelatedPlayerAmount(_)
+                    Instruction::DealDamage(_)
                         | Instruction::DamageOrderedTargets { .. }
                         | Instruction::DamageFromPower(_)
                         | Instruction::DamageFromGrantingPermanent { .. }
@@ -6457,7 +6754,6 @@ fn try_lower_temp_exile_replacement(
                         | Instruction::DamageTargetControllersCreatures { .. }
                         | Instruction::DamageCapturedBlocker(_)
                         | Instruction::DamageCreatureAtSpellMastery { .. }
-                        | Instruction::DealDamageFrom { .. }
                         | Instruction::DealDamageToAnnouncedTargets { .. }
                         | Instruction::AffectPermanentTargets {
                             action: PermanentTargetAction::Damage(_),
@@ -6613,6 +6909,26 @@ pub(super) fn has_unconditional_mill_one(ops: &[Instruction]) -> bool {
                 if !in_conditional && *amount == ValueExpr::literal(1) =>
             {
                 return true;
+            }
+            other if !in_conditional => {
+                if let Some(spec) =
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(other)
+                    && matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Mill,
+                        }
+                    )
+                    && matches!(
+                        &spec.source,
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            slice: spellwake_engine::toolbox::QuerySlice::Top(v),
+                            ..
+                        } if **v == ValueExpr::literal(1)
+                    )
+                {
+                    return true;
+                }
             }
             _ => {}
         }
@@ -7466,17 +7782,24 @@ pub(super) fn try_lower_temp_battlefield_static(
         {
             return None;
         }
-        return Some(Instruction::ChangeAbilitySource {
-            parts: ResolvedPartsSpec(resolved),
-            duration,
-        });
+        return Some(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                spellwake_engine::toolbox::ObjectQuery::Source,
+                ResolvedPartsSpec(resolved),
+                duration,
+            ),
+        );
     }
     let clause = temp_static_selector_to_clause(selector, self_pronoun_valid)?;
-    Some(Instruction::ChangeGroup {
-        group: Box::new(EffectSubject::Matching(ObjectFilter::Clause(clause))),
-        parts: ResolvedPartsSpec(resolved),
-        duration,
-    })
+    Some(
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                EffectSubject::Matching(ObjectFilter::Clause(clause)),
+            )),
+            ResolvedPartsSpec(resolved),
+            duration,
+        ),
+    )
 }
 
 pub(super) fn parse_temp_permanent_lock_parts(rule_body: &str) -> Option<Vec<ResolvedPartSpec>> {

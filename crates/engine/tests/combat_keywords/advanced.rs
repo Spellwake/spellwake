@@ -23,9 +23,14 @@ fn lose_life(id: u64) -> SeedCard {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SinglePlayer,
-            vec![Instruction::AdjustTargetLife {
-                adjustment: LifeAdjustment::Lose(1.into()),
-            }],
+            vec![spellwake_engine::program::Instruction::AdjustLife(
+                Box::new(spellwake_engine::toolbox::AdjustLifeSpec::lose(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                )),
+            )],
         ),
     );
     spell

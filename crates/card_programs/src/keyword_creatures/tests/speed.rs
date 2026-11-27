@@ -44,9 +44,14 @@ fn swiftwing_assailant_walking_sarcophagus_and_streaking_oilgorger_reach_max_spe
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::SinglePlayer,
-                    vec![Instruction::AdjustTargetLife {
-                        adjustment: spellwake_engine::life::LifeAdjustment::Lose(1.into()),
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                    ],
                 ),
             ),
         });

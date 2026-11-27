@@ -24,9 +24,14 @@ fn cmm_zones_narset_exiles_four_restricts_free_casts_and_survives_by_first_strik
                     ManaCost::generic(7.into()),
                     ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::GainControllerLife {
-                            amount: spellwake_engine::program::ValueExpr::Literal(3.into()),
-                        }],
+                        vec![
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    spellwake_engine::program::ResolvingPlayer::Controller,
+                                ),
+                                spellwake_engine::program::ValueExpr::Literal(3.into()),
+                            ),
+                        ],
                     ),
                 ),
             ),
@@ -386,9 +391,14 @@ fn cmm_zones_grenzo_chooses_a_creature_of_the_damaged_player_or_casts_their_top_
         },
         ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::GainControllerLife {
-                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-            }],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(2.into()),
+                ),
+            ],
         ),
     );
     let initial = game(

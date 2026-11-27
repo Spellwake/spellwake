@@ -34,10 +34,11 @@ use spellwake_engine::{
     },
     targets::TargetRef,
     toolbox::{
-        ApplyContinuousSpec, BindingId, ChoiceCategory, ConditionExpr, ContinuousPayload,
-        DrawCardsSpec, GraveyardSemantics, MutateObjectSpec, ObjectMutation, ObjectQuery,
-        PlayerSelector, PromptChoiceReply, PromptChoiceSpec, PromptDomain, QuerySlice, QueryZone,
-        ResolvedPromptDomain, SideDeck, SideDeckKind, SideDeckOpKind, SideDeckOpSpec,
+        AdjustLifeSpec, ApplyContinuousSpec, BindingId, ChoiceCategory, ConditionExpr,
+        ContinuousPayload, DamageSourceQuery, DamageTargetQuery, DealDamageSpec, DrawCardsSpec,
+        GraveyardSemantics, LifeOp, MutateObjectSpec, MutatePlayerSpec, ObjectMutation,
+        ObjectQuery, PlayerSelector, PromptChoiceReply, PromptChoiceSpec, PromptDomain, QuerySlice,
+        QueryZone, ResolvedPromptDomain, SideDeck, SideDeckKind, SideDeckOpKind, SideDeckOpSpec,
         StateTrackKey, StateTrackKeySpec, StateTrackOp, StateTrackScope, TagKey, TagValue,
         ZoneController, ZoneDest, ZoneOpSpec, ZoneSelection,
     },
@@ -940,7 +941,12 @@ fn pinger_creature(vocab: &CreatureTypeVocabulary) -> Program {
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SingleAnyTarget,
-            vec![Instruction::Damage { amount: 3.into() }],
+            vec![Instruction::DealDamage(Box::new(DealDamageSpec {
+                source: DamageSourceQuery::EntrySource,
+                recipients: DamageTargetQuery::Targets,
+                amount: spellwake_engine::program::DamageAmountSpec::Expr(ValueExpr::literal(3)),
+                exile_if_dies: false,
+            }))],
         ),
     });
     validated(p, vocab)
@@ -2011,4 +2017,133 @@ fn apply_continuous_skip_turns_and_skip_step() {
     assert_eq!(turn4.turn().unwrap().position().number, 4);
     assert_eq!(turn4.execution().window().active_player(), P0);
     assert_eq!(hand_count(&turn4, P0), 1);
+}
+
+#[test]
+fn adjust_life_gain_lose_set_pay_drain_half_and_bind() {
+    let vocab = vocabulary();
+    let spell = sorcery(
+        vec![
+            Instruction::AdjustLife(Box::new(AdjustLifeSpec {
+                players: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                op: LifeOp::Gain(ValueExpr::literal(4)),
+                bind_amount: Some(BindingId(1)),
+            })),
+            Instruction::AdjustLife(Box::new(AdjustLifeSpec::drain(
+                PlayerSelector::Group(AffectedPlayers::EachOpponent),
+                ValueExpr::literal(3),
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                true,
+            ))),
+            Instruction::AdjustLife(Box::new(AdjustLifeSpec::lose_half(
+                PlayerSelector::Group(AffectedPlayers::EachOpponent),
+                true,
+            ))),
+        ],
+        &vocab,
+    );
+    let game = init_world(vocab, vec![in_hand(1, P0, spell)]);
+    let after = cast_untargeted(&game, 1).into_state();
+    // P0: 20 + 4 + 3 = 27
+    assert_eq!(
+        after.execution().life_total(P0),
+        Some(&RulesInteger::from(27))
+    );
+    // P1: 20 - 3 = 17, then lose half rounded up (9) -> 8
+    assert_eq!(
+        after.execution().life_total(P1),
+        Some(&RulesInteger::from(8))
+    );
+}
+
+#[test]
+fn deal_damage_sources_targets_and_exile_if_dies() {
+    let vocab = vocabulary();
+    let bolt = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![Instruction::DealDamage(Box::new(DealDamageSpec {
+                    source: DamageSourceQuery::EntrySource,
+                    recipients: DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(ValueExpr::literal(
+                        3,
+                    )),
+                    exile_if_dies: true,
+                }))],
+            ),
+        ),
+        &vocab,
+    );
+    let target_bear = bear(2, 2, BTreeSet::new(), &vocab);
+    let game = init_world(vocab, vec![in_hand(1, P0, bolt), bf(2, P1, target_bear)]);
+    let bear_id = object(&game, 2);
+    let cast = submit(
+        &game,
+        P0,
+        GameCommand::Cast {
+            spell: object(&game, 1),
+            target: TargetRef::Object(bear_id),
+        },
+    );
+    let after = pass_pair(cast.state()).into_state();
+    // 2/2 took 3 lethal damage with exile_if_dies -> exiled instead of graveyard!
+    assert_eq!(
+        after
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Exile
+    );
+}
+
+#[test]
+fn mutate_player_counters_monarch_extra_turn_and_emblem() {
+    let vocab = vocabulary();
+    let spell = sorcery(
+        vec![
+            Instruction::MutatePlayer(Box::new(MutatePlayerSpec::add_counter(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                CounterKind::Energy,
+                ValueExpr::literal(3),
+            ))),
+            Instruction::MutatePlayer(Box::new(MutatePlayerSpec::pay_counter(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                CounterKind::Energy,
+                ValueExpr::literal(1),
+            ))),
+            Instruction::MutatePlayer(Box::new(MutatePlayerSpec::become_monarch(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            ))),
+            Instruction::MutatePlayer(Box::new(MutatePlayerSpec::take_extra_turn(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            ))),
+            Instruction::ApplyContinuous(Box::new(ApplyContinuousSpec::emblem(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                spellwake_engine::emblem::EmblemDefinition::PreventAllButOne,
+            ))),
+        ],
+        &vocab,
+    );
+    let mut seeds = vec![in_hand(1, P0, spell)];
+    for i in 0..4 {
+        seeds.push(in_library(100 + i, P0, bear(1, 1, BTreeSet::new(), &vocab)));
+        seeds.push(in_library(200 + i, P1, bear(1, 1, BTreeSet::new(), &vocab)));
+    }
+    let game = init_world(vocab, seeds);
+    let s1 = cast_untargeted(&game, 1).into_state();
+    assert_eq!(
+        s1.execution()
+            .player_counters_of_kind(P0, CounterKind::Energy),
+        RulesInteger::from(2)
+    );
+    assert_eq!(s1.execution().monarch(), Some(P0));
+    assert_eq!(s1.execution().emblems().count(), 1);
+    let turn2 = advance_to_next_turn_main(s1);
+    // P0 took the extra turn!
+    assert_eq!(turn2.execution().window().active_player(), P0);
 }

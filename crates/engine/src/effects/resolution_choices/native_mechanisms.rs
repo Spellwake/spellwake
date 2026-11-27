@@ -614,9 +614,10 @@ fn assert_tail(result: &NativeCandidate) {
 fn optional_target_life_runs_once_or_skips_before_the_shared_tail() {
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
         let state = targeted(
-            Instruction::AdjustTargetLife {
-                adjustment: LifeAdjustment::Lose(3.into()),
-            },
+            Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::lose(
+                crate::toolbox::PlayerSelector::Resolving(ResolvingPlayer::TargetPlayer),
+                crate::program::ValueExpr::Literal(3.into()),
+            ))),
             BodyTarget::SinglePlayer,
             TargetRef::Player(B),
         );
@@ -639,7 +640,16 @@ fn optional_target_life_runs_once_or_skips_before_the_shared_tail() {
 #[test]
 fn optional_damage_uses_real_damage_owner_and_decline_leaves_no_damage() {
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
-        let state = creature_optional(Instruction::Damage { amount: 3.into() });
+        let state = creature_optional(Instruction::DealDamage(Box::new(
+            crate::toolbox::DealDamageSpec {
+                source: crate::toolbox::DamageSourceQuery::EntrySource,
+                recipients: crate::toolbox::DamageTargetQuery::Targets,
+                amount: crate::program::DamageAmountSpec::Expr(crate::program::ValueExpr::Literal(
+                    3.into(),
+                )),
+                exile_if_dies: false,
+            },
+        )));
         let target = object(&state, 2);
         let result = take_or_decline(&state, choice);
         assert_tail(&result);
@@ -943,9 +953,14 @@ fn optional_nonempty_draw_moves_library_top_once_or_skips_all_draw_work() {
                     1,
                     A,
                     BodyTarget::None,
-                    wrapped(Instruction::DrawController {
-                        amount: crate::program::ValueExpr::Literal(1.into()),
-                    }),
+                    wrapped(crate::program::Instruction::DrawCards(Box::new(
+                        crate::toolbox::DrawCardsSpec::simple(
+                            crate::toolbox::PlayerSelector::Resolving(
+                                crate::program::ResolvingPlayer::Controller,
+                            ),
+                            crate::program::ValueExpr::Literal(1.into()),
+                        ),
+                    ))),
                 ),
                 seed(2, A, ObjectDestination::LibraryBottom, creature()),
             ],
@@ -1265,9 +1280,10 @@ fn captured_offer_body() -> Vec<Instruction> {
         Instruction::OptionalEffect {
             chooser: ResolvingPlayer::Controller,
         },
-        Instruction::DrawController {
-            amount: crate::program::ValueExpr::Literal(1.into()),
-        },
+        crate::program::Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec::simple(
+            crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+            crate::program::ValueExpr::Literal(1.into()),
+        ))),
         gain(0),
     ]
 }
@@ -1354,9 +1370,14 @@ fn died_source_owner_graveyard_and_captured_controller_draw_are_independent() {
             Instruction::OptionalEffect {
                 chooser: ResolvingPlayer::Controller,
             },
-            Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            },
+            crate::program::Instruction::DrawCards(Box::new(
+                crate::toolbox::DrawCardsSpec::simple(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            )),
         ],
     );
     let state = world(
@@ -2344,7 +2365,14 @@ fn optional_damage_preserves_the_real_order_child_and_consumes_the_offer_once() 
         Instruction::OptionalEffect {
             chooser: ResolvingPlayer::Controller,
         },
-        Instruction::Damage { amount: 3.into() },
+        Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
+            source: crate::toolbox::DamageSourceQuery::EntrySource,
+            recipients: crate::toolbox::DamageTargetQuery::Targets,
+            amount: crate::program::DamageAmountSpec::Expr(crate::program::ValueExpr::Literal(
+                3.into(),
+            )),
+            exile_if_dies: false,
+        })),
         gain(2),
     ];
     let initial = world(
@@ -2581,9 +2609,14 @@ fn optional_type_literal_zero_draw_continuation_assigns_only_on_take() {
                 into: CreatureTypeSlot::new(0),
                 excluding: BTreeSet::new(),
             },
-            Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(0.into()),
-            },
+            crate::program::Instruction::DrawCards(Box::new(
+                crate::toolbox::DrawCardsSpec::simple(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    crate::program::ValueExpr::Literal(0.into()),
+                ),
+            )),
         ]);
         let result = take_or_decline(&state, choice);
         if choice == OptionalEffectChoice::Decline {

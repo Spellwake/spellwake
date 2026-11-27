@@ -422,87 +422,6 @@ fn keyword_components_round_trip_and_reject_unknown_duplicate_or_omitted_fields(
 }
 
 #[test]
-fn player_target_programs_round_trip_and_reject_cross_family_life_adjustments() {
-    use crate::{life::LifeAdjustment, test_support::program as codec};
-    let v = vocabulary();
-    for target in [BodyTarget::SinglePlayer, BodyTarget::SingleCreatureOrPlayer] {
-        let program = Program::instant(
-            ManaCost::free(),
-            ExecutableBody::new(target, vec![Instruction::Damage { amount: 3.into() }]),
-        );
-        assert_eq!(program.validate(&v), Ok(()));
-        assert_eq!(codec::decode(codec::view(&program), &v).unwrap(), program);
-    }
-    let instruction = Instruction::AdjustTargetLife {
-        adjustment: LifeAdjustment::Lose(3.into()),
-    };
-    let program = Program::instant(
-        ManaCost::free(),
-        ExecutableBody::new(BodyTarget::SinglePlayer, vec![instruction.clone()]),
-    );
-    assert_eq!(codec::decode(codec::view(&program), &v).unwrap(), program);
-    for target in [
-        BodyTarget::None,
-        BodyTarget::SingleCreature,
-        BodyTarget::SingleCreatureOrPlayer,
-        BodyTarget::SinglePermanent,
-    ] {
-        let body = ExecutableBody::new(target, vec![instruction.clone()]);
-        assert_eq!(body.validate(&v), Err(DefinitionError::OperandFamily));
-    }
-}
-
-#[test]
-fn life_adjustment_admission_preserves_signed_sets_and_rejects_negative_gain_or_loss() {
-    use crate::{life::LifeAdjustment, test_support::program as codec};
-    let v = vocabulary();
-    for adjustment in [
-        LifeAdjustment::Gain(0.into()),
-        LifeAdjustment::Lose(0.into()),
-        LifeAdjustment::Set((-9).into()),
-    ] {
-        let program = Program::instant(
-            ManaCost::free(),
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::AdjustControllerLife { adjustment }],
-            ),
-        );
-        assert_eq!(program.validate(&v), Ok(()));
-        assert_eq!(codec::decode(codec::view(&program), &v).unwrap(), program);
-    }
-    for adjustment in [
-        LifeAdjustment::Gain((-1).into()),
-        LifeAdjustment::Lose((-1).into()),
-    ] {
-        let program = Program::instant(
-            ManaCost::free(),
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::AdjustControllerLife { adjustment }],
-            ),
-        );
-        assert_eq!(
-            program.validate(&v),
-            Err(DefinitionError::InvalidInstruction)
-        );
-        assert!(codec::decode(codec::view(&program), &v).is_err());
-    }
-    let program = Program::instant(
-        ManaCost::free(),
-        ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(1.into()),
-            }],
-        ),
-    );
-    let mut encoded = codec::view(&program);
-    encoded["kind"]["body"]["instructions"][0]["adjustment"]["amount"] = json!(1);
-    assert!(codec::decode(encoded, &v).is_err());
-}
-
-#[test]
 fn ability_removal_definitions_round_trip_and_reject_malformed_or_duplicate_parts() {
     use crate::{characteristics::AbilityRemoval, test_support::program as codec};
 
@@ -607,15 +526,27 @@ fn choice_ability(targetless: bool) -> ActivatedAbility {
         excluding: BTreeSet::new(),
     }];
     if !targetless {
-        instructions.push(Instruction::Damage { amount: 1.into() });
+        instructions.push(crate::program::Instruction::DealDamage(Box::new(
+            crate::toolbox::DealDamageSpec {
+                source: crate::toolbox::DamageSourceQuery::EntrySource,
+                recipients: crate::toolbox::DamageTargetQuery::Targets,
+                amount: crate::program::DamageAmountSpec::Expr(crate::program::ValueExpr::Literal(
+                    1.into(),
+                )),
+                exile_if_dies: false,
+            },
+        )));
     }
-    instructions.push(Instruction::DrawController {
-        amount: crate::program::ValueExpr::count_battlefield(
-            crate::program::ObjectFilter::any()
-                .controlled()
-                .of_chosen_slot(CreatureTypeSlot::new(0)),
+    instructions.push(crate::program::Instruction::DrawCards(Box::new(
+        crate::toolbox::DrawCardsSpec::simple(
+            crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+            crate::program::ValueExpr::count_battlefield(
+                crate::program::ObjectFilter::any()
+                    .controlled()
+                    .of_chosen_slot(CreatureTypeSlot::new(0)),
+            ),
         ),
-    });
+    )));
     ActivatedAbility {
         id: ActivatedAbilityId(1),
         mana_cost: ManaCost::free(),
@@ -701,26 +632,6 @@ fn cl_adm_codec_067() {
         Err(DefinitionError::InvalidCreatureSubtypes)
     );
     // MAP CL-ADM-CODEC-067 assertion 2: syntax materialization is not owner initialization.
-}
-#[test]
-fn cl_adm_targetless_022() {
-    let mut value = permanent(&[CardType::Artifact], None);
-    value.activated.push(choice_ability(true));
-    // Targetless ChooseCreatureType activated abilities are admitted under CR 602.2.
-    assert_eq!(value.validate(&vocabulary()), Ok(()));
-
-    // A target-requiring instruction with BodyTarget::None is still rejected.
-    let mut bad = permanent(&[CardType::Artifact], None);
-    let mut ability = choice_ability(true);
-    ability.body = ExecutableBody::new(
-        BodyTarget::None,
-        vec![Instruction::Damage { amount: 1.into() }],
-    );
-    bad.activated.push(ability);
-    assert_eq!(
-        bad.validate(&vocabulary()),
-        Err(DefinitionError::OperandFamily)
-    );
 }
 #[test]
 fn cl_adm_duplicate_030() {

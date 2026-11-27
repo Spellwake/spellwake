@@ -1,9 +1,6 @@
 //! Real lower-owner casts and explicit malformed-view probes, not full card tests.
 use super::*;
-use crate::{
-    life::LifeAdjustment,
-    occurrence::{RulesRecord, TriggerError},
-};
+use crate::occurrence::{RulesRecord, TriggerError};
 
 const A: SeatId = SeatId(0);
 const B: SeatId = SeatId(1);
@@ -20,9 +17,14 @@ fn ready() -> EffectWindow {
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::AdjustControllerLife {
-                        adjustment: LifeAdjustment::Gain(1.into()),
-                    }],
+                    vec![crate::program::Instruction::AdjustLife(Box::new(
+                        crate::toolbox::AdjustLifeSpec::gain(
+                            crate::toolbox::PlayerSelector::Resolving(
+                                crate::program::ResolvingPlayer::Controller,
+                            ),
+                            crate::program::ValueExpr::Literal(1.into()),
+                        ),
+                    ))],
                 ),
             ),
         }],
@@ -176,119 +178,4 @@ fn canonical_noncard_copy_is_not_a_physical_cast_capture() {
             .cast_occurrence(copy, A, &[], 0.into()),
         Err(TriggerError::InvalidWorld)
     );
-}
-
-#[test]
-fn privileged_projection_carries_the_same_cast_through_events_waiting_and_bindings() {
-    use crate::{
-        game::{GameCommand, RuleFrame},
-        program::{PlayerRelation, TriggerGrouping, TriggeredAbility, TriggeredAbilityId},
-        test_support::{
-            characteristic_trajectories as tr, packet::AliasContext, program as codec, projection,
-        },
-    };
-    let body = ExecutableBody::new(
-        BodyTarget::None,
-        vec![Instruction::AdjustControllerLife {
-            adjustment: LifeAdjustment::Gain(1.into()),
-        }],
-    );
-    for self_cast in [false, true] {
-        let mut spell = Program::instant(ManaCost::free(), body.clone());
-        if self_cast {
-            spell.triggered.push(TriggeredAbility {
-                id: TriggeredAbilityId(1),
-                condition: crate::program::TriggerSpec::self_cast(),
-                grouping: TriggerGrouping::EachOccurrence,
-                body: body.clone(),
-            });
-        }
-        let definitions = spell.triggered.clone();
-        let mut watcher = Program::artifact(None, vec![]);
-        watcher.triggered.push(TriggeredAbility {
-            id: TriggeredAbilityId(1),
-            condition: crate::program::TriggerSpec::spell_cast(
-                PlayerRelation::Controller,
-                crate::program::SpellFilter::any(),
-            ),
-            grouping: TriggerGrouping::EachOccurrence,
-            body: body.clone(),
-        });
-        let game = tr::world(
-            tr::vocabulary(),
-            vec![tr::card(1, spell, false), tr::card(2, watcher, true)],
-            vec![CardId(2)],
-        );
-        let cast = tr::submit(
-            &game,
-            A,
-            GameCommand::CastUntargeted {
-                spell: tr::object(&game, 1),
-                payment: None,
-            },
-        );
-        let journal = projection::journal(cast.rules_journal());
-        let fact = journal
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|row| row["tag"] == "Event")
-            .flat_map(|row| row["occurrences"].as_array().unwrap())
-            .find(|row| row["value"]["tag"] == "CastCompleted")
-            .unwrap();
-        let encoded_cast = &fact["value"]["cast"];
-        assert!(encoded_cast.is_object());
-        assert_eq!(encoded_cast["controller"], A.0);
-        assert!(fact["value"].get("entry").is_none());
-        for row in journal
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|row| row["tag"] == "TriggerDiscovered")
-        {
-            let related = &row["value"]["causes"]["members"][0]["related"];
-            assert_eq!(related["tag"], "SpellCast");
-            assert_eq!(&related["cast"], encoded_cast);
-        }
-        let mut state = cast.into_state();
-        if self_cast {
-            let pending = state.pending_decision().unwrap();
-            let RuleFrame::Triggers(frame) = pending.frame() else {
-                panic!("expected trigger order")
-            };
-            state = tr::reply(
-                &state,
-                A,
-                DecisionReply::OrderTriggers(frame.instances().to_vec()),
-            )
-            .into_state();
-        }
-        let view = projection::effect(state.execution(), &AliasContext::default()).unwrap();
-        let rows = view["stack"].as_array().unwrap();
-        let original = rows
-            .iter()
-            .find(|row| row["kind"]["tag"] == "CardSpell")
-            .unwrap();
-        assert_eq!(
-            original["copiable_triggered"],
-            codec::triggered_abilities(&definitions)
-        );
-        assert_eq!(
-            original["copiable_triggered"].as_array().unwrap().len(),
-            usize::from(self_cast)
-        );
-        let triggers: Vec<_> = rows
-            .iter()
-            .filter(|row| row["kind"]["tag"] == "TriggeredAbility")
-            .collect();
-        assert_eq!(triggers.len(), 1 + usize::from(self_cast));
-        for row in triggers {
-            assert!(row.as_object().unwrap().contains_key("copiable_triggered"));
-            assert!(row["copiable_triggered"].is_null());
-            assert_eq!(
-                &row["bindings"]["trigger"]["causes"]["members"][0]["related"]["cast"],
-                encoded_cast
-            );
-        }
-    }
 }

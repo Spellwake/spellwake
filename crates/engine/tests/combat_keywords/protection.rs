@@ -162,7 +162,16 @@ fn body() -> ExecutableBody {
         BodyTarget::SingleCreature,
         vec![
             change(AbilityChange::grant_keywords([ProtectionFromRed])),
-            Instruction::Damage { amount: 3.into() },
+            spellwake_engine::program::Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec {
+                    source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                        spellwake_engine::program::ValueExpr::Literal(3.into()),
+                    ),
+                    exile_if_dies: false,
+                },
+            )),
         ],
     )
 }

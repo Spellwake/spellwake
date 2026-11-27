@@ -44,9 +44,14 @@ fn library(card: u64, owner: SeatId) -> SeedCard {
     )
 }
 fn draw() -> Instruction {
-    Instruction::DrawController {
-        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-    }
+    spellwake_engine::program::Instruction::DrawCards(Box::new(
+        spellwake_engine::toolbox::DrawCardsSpec::simple(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::Controller,
+            ),
+            spellwake_engine::program::ValueExpr::Literal(1.into()),
+        ),
+    ))
 }
 fn context() -> GameContext {
     GameContext::new(

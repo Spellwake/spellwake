@@ -246,7 +246,11 @@ fn cmm_mirrorpool_enters_tapped_produces_colorless_and_sacrifices_to_copy_an_own
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::Damage { amount: 2.into() },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(2),
+                    false,
+                ),
             ),
         ),
         seed(
@@ -255,7 +259,11 @@ fn cmm_mirrorpool_enters_tapped_produces_colorless_and_sacrifices_to_copy_an_own
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::Damage { amount: 1.into() },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                    false,
+                ),
             ),
         ),
         super::super::loyalty::mana_source(6, &[(Colourless, 5)]),

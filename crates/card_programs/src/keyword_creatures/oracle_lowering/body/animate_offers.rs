@@ -502,21 +502,110 @@ pub(super) fn rewrite_offer_chosen_to_loop_rule(rule: &mut TemporaryRuleKind) {
 pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
     for op in ops {
         match op {
-            Instruction::AdjustPlayersLife {
-                players, amount, ..
-            }
-            | Instruction::Discard { players, amount }
+            Instruction::Discard { players, amount }
             | Instruction::Sacrifice {
                 players, amount, ..
             }
             | Instruction::TapOrUntapControlled {
                 players, amount, ..
-            }
-            | Instruction::AddPlayerCounter {
-                players, amount, ..
             } => {
                 rewrite_offer_chosen_to_loop_ap(players);
                 rewrite_offer_chosen_to_loop_ve(amount);
+            }
+            Instruction::AdjustLife(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.players,
+                    &rewrite_offer_chosen_to_loop_rp,
+                    &rewrite_offer_chosen_to_loop_ap,
+                    &rewrite_offer_chosen_to_loop_ve,
+                );
+                match &mut spec.op {
+                    spellwake_engine::toolbox::LifeOp::Gain(amount)
+                    | spellwake_engine::toolbox::LifeOp::Lose(amount)
+                    | spellwake_engine::toolbox::LifeOp::Set(amount)
+                    | spellwake_engine::toolbox::LifeOp::Pay(amount) => {
+                        rewrite_offer_chosen_to_loop_ve(amount);
+                    }
+                    spellwake_engine::toolbox::LifeOp::Drain {
+                        amount, gain_to, ..
+                    } => {
+                        rewrite_offer_chosen_to_loop_ve(amount);
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            gain_to,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => {}
+                }
+            }
+            Instruction::DealDamage(spec) => {
+                if let spellwake_engine::toolbox::DamageSourceQuery::Objects(q) = &mut spec.source {
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                        q,
+                        &rewrite_offer_chosen_to_loop_rp,
+                        &rewrite_offer_chosen_to_loop_ap,
+                        &rewrite_offer_chosen_to_loop_ve,
+                    );
+                }
+                match &mut spec.recipients {
+                    spellwake_engine::toolbox::DamageTargetQuery::Objects(q) => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            q,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Players(p) => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            p,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Both { objects, players } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            objects,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            players,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Relative(rel) => {
+                        if let spellwake_engine::program::DamageRecipientsRef::Group(g) =
+                            rel.as_mut()
+                        {
+                            rewrite_offer_chosen_to_loop_dg(g);
+                        }
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets => {}
+                }
+                if let spellwake_engine::program::DamageAmountSpec::Expr(e) = &mut spec.amount {
+                    rewrite_offer_chosen_to_loop_ve(e);
+                }
+            }
+            Instruction::MutatePlayer(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.players,
+                    &rewrite_offer_chosen_to_loop_rp,
+                    &rewrite_offer_chosen_to_loop_ap,
+                    &rewrite_offer_chosen_to_loop_ve,
+                );
+                if let spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
+                | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. } =
+                    &mut spec.op
+                {
+                    rewrite_offer_chosen_to_loop_ve(amount);
+                }
             }
             Instruction::ExileTopPlay {
                 count,
@@ -525,9 +614,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             } => {
                 rewrite_offer_chosen_to_loop_ve(count);
                 rewrite_offer_chosen_to_loop_ap(library_owner);
-            }
-            Instruction::LoseGame(players) => {
-                rewrite_offer_chosen_to_loop_ap(players);
             }
             Instruction::ZoneOp(spec) => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
@@ -555,8 +641,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             Instruction::Scry { player, amount }
             | Instruction::Surveil { player, amount }
             | Instruction::Mill { player, amount }
-            | Instruction::PayLife { player, amount }
-            | Instruction::PayEnergy { player, amount }
             | Instruction::ManifestTop { player, amount }
             | Instruction::Blight { player, amount } => {
                 rewrite_offer_chosen_to_loop_rp(player);
@@ -630,8 +714,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_offer_chosen_to_loop_ve(amount);
                 }
             }
-            Instruction::WinGame(rp)
-            | Instruction::PutHandPermanentsOntoBattlefield { player: rp, .. }
+            Instruction::PutHandPermanentsOntoBattlefield { player: rp, .. }
             | Instruction::VentureIntoDungeon { player: rp, .. }
             | Instruction::TakeInitiative { player: rp } => {
                 rewrite_offer_chosen_to_loop_rp(rp);
@@ -656,26 +739,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_offer_chosen_to_loop_rp(rp);
                 }
             }
-            Instruction::DamageGroup { group, .. } => {
-                rewrite_offer_chosen_to_loop_dg(group);
-            }
-            Instruction::DamageGroupAmount { group, amount } => {
-                rewrite_offer_chosen_to_loop_dg(group);
-                rewrite_offer_chosen_to_loop_ve(amount);
-            }
-            Instruction::DealDamageFrom {
-                recipients, amount, ..
-            } => {
-                if let spellwake_engine::program::DamageRecipientsRef::Group(g) =
-                    recipients.as_mut()
-                {
-                    rewrite_offer_chosen_to_loop_dg(g);
-                }
-                if let spellwake_engine::program::DamageAmountSpec::Expr(e) = amount.as_mut() {
-                    rewrite_offer_chosen_to_loop_ve(e);
-                }
-            }
-
             Instruction::DrawCards(spec) => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                     &mut spec.players,
@@ -898,16 +961,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_offer_chosen_to_loop_ops(&mut lb.instructions);
                 }
             }
-            Instruction::DrawControllerAndTarget { amount }
-            | Instruction::GainControllerLife { amount }
-            | Instruction::DamageAmount(amount)
-            | Instruction::DamageOpponentsAmount(amount)
-            | Instruction::DamageRelatedPlayerAmount(amount)
-            | Instruction::DrainOpponents(amount)
-            | Instruction::DrainTargetAndGain(amount)
-            | Instruction::OpponentsLoseAndControllerGains(amount)
-            | Instruction::RemoveCountersFromPermanent { amount, .. }
-            | Instruction::DealDamageToAnnouncedTargets { amount, .. }
+            Instruction::DealDamageToAnnouncedTargets { amount, .. }
             | Instruction::Earthbend { amount }
             | Instruction::BindResolutionX(amount) => {
                 rewrite_offer_chosen_to_loop_ve(amount);
@@ -1937,48 +1991,66 @@ pub(in super::super) fn lower_animate_or_set_pt(
     });
     match subject {
         SubjectRefAst::SelfObject => {
-            builder.instructions.push(Instruction::ChangeAbilitySource {
-                parts: spec,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Source,
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(a)
             if has_created_tokens
                 && (a.to_ascii_lowercase().contains("token") || !has_perm_target) =>
         {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::CreatedTokens),
-                parts: spec,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::CreatedTokens,
+                    )),
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         s if is_self_pronoun(s, builder, self_pronoun_valid) => {
-            builder.instructions.push(Instruction::ChangeAbilitySource {
-                parts: spec,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Source,
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::AttachedHost(_) => {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::Matching(ObjectFilter::Clause(
-                    ObjectClause::any().attached_to_self(),
-                ))),
-                parts: spec,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::Matching(ObjectFilter::Clause(
+                            ObjectClause::any().attached_to_self(),
+                        )),
+                    )),
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f) => {
             let obj = lower_object_filter(f, vocabulary)?;
             bind_filter_player_target(builder, &obj)?;
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::Matching(obj)),
-                parts: spec,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::Matching(obj),
+                    )),
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -2086,11 +2158,15 @@ pub(in super::super) fn lower_animate_or_set_pt(
             Ok(())
         }
         SubjectRefAst::TriggerSubject if in_trigger => {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::TriggerSubject),
-                parts: spec,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::TriggerSubject,
+                    )),
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(raw)
@@ -2098,11 +2174,15 @@ pub(in super::super) fn lower_animate_or_set_pt(
                 && in_trigger
                 && (!self_pronoun_valid || !is_self_anaphora(raw)) =>
         {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::TriggerSubject),
-                parts: spec,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::TriggerSubject,
+                    )),
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(_)
@@ -2111,19 +2191,27 @@ pub(in super::super) fn lower_animate_or_set_pt(
             let obj = builder
                 .last_group_filter
                 .ok_or("oracle:unsupported-animate-subject")?;
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::Matching(obj)),
-                parts: spec,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::Matching(obj),
+                    )),
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(_) if !has_perm_target && has_last_moved => {
-            builder.instructions.push(Instruction::ChangeGroup {
-                group: Box::new(EffectSubject::LastMoved),
-                parts: spec,
-                duration: dur,
-            });
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                        EffectSubject::LastMoved,
+                    )),
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         _ => Err("oracle:unsupported-animate-subject"),
@@ -2293,8 +2381,16 @@ mod wave11_animation_tests {
         )
         .expect("compound animation lowers");
         assert_eq!(builder.instructions.len(), 2);
-        let Instruction::ChangeAbilitySource { parts, .. } = &builder.instructions[0] else {
+        let Instruction::ApplyContinuous(spec0) = &builder.instructions[0] else {
             panic!("animation must affect the source");
+        };
+        assert_eq!(
+            spec0.selector,
+            Some(spellwake_engine::toolbox::ObjectQuery::Source)
+        );
+        let spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) = &spec0.payload
+        else {
+            panic!("animation must use resolved parts");
         };
         assert!(parts.0.iter().any(|part| matches!(part,
             ResolvedPartSpec::Type(change) if matches!(&change.types,
@@ -2307,8 +2403,16 @@ mod wave11_animation_tests {
             ResolvedPartSpec::Color(ColorOperation::Set(colors)) if colors.len() == 2)));
         assert!(parts.0.iter().any(|part| matches!(part,
             ResolvedPartSpec::SetPT(pt) if pt.power == 2.into() && pt.toughness == 2.into())));
-        let Instruction::ChangeAbilitySource { parts, .. } = &builder.instructions[1] else {
+        let Instruction::ApplyContinuous(spec1) = &builder.instructions[1] else {
             panic!("grant must affect the same source");
+        };
+        assert_eq!(
+            spec1.selector,
+            Some(spellwake_engine::toolbox::ObjectQuery::Source)
+        );
+        let spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) = &spec1.payload
+        else {
+            panic!("grant must use resolved parts");
         };
         let [ResolvedPartSpec::GrantActivated(ability)] = parts.0.as_slice() else {
             panic!("expected the granted activated ability");
@@ -2320,18 +2424,24 @@ mod wave11_animation_tests {
                 tap_source: false
             }
         ));
-        assert!(
-            ability
-                .body
-                .instructions
-                .iter()
-                .any(|instruction| matches!(instruction,
-            Instruction::ChangeAbilitySource { parts, duration: ResolvedDuration::UntilEndOfTurn }
-                if parts.0.iter().any(|part| matches!(part,
-                    ResolvedPartSpec::ModifyPTExpr { power, toughness }
-                        if power.as_ref() == &ValueExpr::chosen_x()
-                            && toughness.as_ref() == &ValueExpr::literal(0)))))
-        );
+        assert!(ability.body.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::ApplyContinuous(spec)
+                    if spec.selector == Some(spellwake_engine::toolbox::ObjectQuery::Source)
+                        && spec.duration == ResolvedDuration::UntilEndOfTurn
+                        && matches!(
+                            &spec.payload,
+                            spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts)
+                                if parts.0.iter().any(|part| matches!(
+                                    part,
+                                    ResolvedPartSpec::ModifyPTExpr { power, toughness }
+                                        if power.as_ref() == &ValueExpr::chosen_x()
+                                            && toughness.as_ref() == &ValueExpr::literal(0)
+                                ))
+                        )
+            )
+        }));
     }
 
     #[test]

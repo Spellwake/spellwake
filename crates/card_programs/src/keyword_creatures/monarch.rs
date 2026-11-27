@@ -33,8 +33,15 @@ pub(super) fn fall_from_favor(card: &InventoryCard, profile: Profile) -> Option<
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::TapEnchantedCreature,
-                Instruction::BecomeMonarch(None),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
+                    spellwake_engine::toolbox::ObjectQuery::AttachedHost,
+                    spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                ),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                ),
             ],
         ),
     });
@@ -74,7 +81,16 @@ pub(super) fn entourage(
             spellwake_engine::program::ObjectFilter::self_object(),
         ),
         grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(BodyTarget::None, vec![Instruction::BecomeMonarch(None)]),
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                ),
+            ],
+        ),
     });
     Some(program)
 }
@@ -111,7 +127,16 @@ pub(super) fn behemoth(
             spellwake_engine::program::ObjectFilter::self_object(),
         ),
         grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(BodyTarget::None, vec![Instruction::BecomeMonarch(None)]),
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                ),
+            ],
+        ),
     });
     Some(program)
 }
@@ -135,7 +160,13 @@ pub(super) fn feast(card: &InventoryCard, profile: Profile) -> Option<Program> {
         "All creatures get -4/-4 until end of turn.",
         &card.name,
     )?;
-    body.instructions.push(Instruction::BecomeMonarch(None));
+    body.instructions.push(
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::Controller,
+            ),
+        ),
+    );
     Some(Program::sorcery(fixed_cost("{4}{B}{B}")?, body))
 }
 
@@ -166,7 +197,16 @@ pub(super) fn jailer(
         id: TriggeredAbilityId(0),
         condition: condition.clone(),
         grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(BodyTarget::None, vec![Instruction::BecomeMonarch(None)]),
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                ),
+            ],
+        ),
     });
     program.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
@@ -240,7 +280,16 @@ pub(super) fn upkeep(
             spellwake_engine::program::ObjectFilter::self_object(),
         ),
         grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(BodyTarget::None, vec![Instruction::BecomeMonarch(None)]),
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                ),
+            ],
+        ),
     });
     program.triggered.push(TriggeredAbility {
         id: TriggeredAbilityId(1),
@@ -312,7 +361,11 @@ pub(super) fn regal_sliver(
                 BTreeSet::new(),
             ),
             Instruction::Jump { destination: 4 },
-            Instruction::BecomeMonarch(None),
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                ),
+            ),
         ],
     );
     program.continuous = Some(StaticContinuousAbility::Battlefield {
@@ -361,7 +414,16 @@ pub(super) fn compile(
             spellwake_engine::program::ObjectFilter::self_object(),
         ),
         grouping: TriggerGrouping::EachOccurrence,
-        body: ExecutableBody::new(BodyTarget::None, vec![Instruction::BecomeMonarch(None)]),
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                ),
+            ],
+        ),
     });
     Some(program)
 }

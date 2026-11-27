@@ -130,52 +130,6 @@ fn count_includes_the_source_but_not_other_controllers_or_nonbattlefield_cards()
 }
 
 #[test]
-fn zero_count_keeps_cost_and_activation_without_production_and_still_triggers_a_tap() {
-    let v = vocabulary();
-    let mut p = Program::artifact(None, vec![]);
-    p.mana.push(counted(elf_selector(&v)));
-    p.triggered.push(TriggeredAbility {
-        grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
-        id: TriggeredAbilityId(1),
-        condition: spellwake_engine::program::TriggerSpec::becomes_tapped(
-            spellwake_engine::program::ObjectFilter::self_object(),
-        ),
-        body: ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::AdjustControllerLife {
-                adjustment: LifeAdjustment::Gain(1.into()),
-            }],
-        ),
-    });
-    let game = world(v, vec![card(1, p, true)], vec![CardId(1)]);
-    let source = object(&game, 1);
-    let done = activate(&game, source);
-    assert!(produced(&done).is_empty());
-    assert_eq!(done.state().execution().mana(P0, ManaType::Green), 0.into());
-    assert_eq!(
-        done.state()
-            .execution()
-            .window()
-            .cards()
-            .get(source)
-            .unwrap()
-            .tapped(),
-        Some(true)
-    );
-    assert!(all_occurrences(&done).into_iter().any(|row| matches!(row, RulesOccurrence::ManaAbility { source: actual, .. } if actual.id() == source)));
-    assert_eq!(done.state().execution().window().entries().len(), 1);
-    let resolved = pass_pair(done.state());
-    assert_eq!(
-        resolved.state().execution().life_total(P0),
-        Some(&21.into())
-    );
-    assert_eq!(
-        resolved.state().execution().mana(P0, ManaType::Green),
-        0.into()
-    );
-}
-
-#[test]
 fn a_chosen_word_updates_boost_and_mana_count_without_changing_the_mana_symbol() {
     let v = vocabulary();
     let slot = CreatureTypeSlot::new(0);

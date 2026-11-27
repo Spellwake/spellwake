@@ -10,7 +10,7 @@ use crate::{
     mana::ManaCost,
     object_identity::{CardId, ObjectDestination},
     occurrence::{RulesOccurrence, RulesRecord},
-    program::{CardType, Instruction, Program, ProgramKind, TriggeredAbility, TriggeredAbilityId},
+    program::{CardType, Program, ProgramKind, TriggeredAbility, TriggeredAbilityId},
 };
 
 const A: SeatId = SeatId(0);
@@ -361,9 +361,14 @@ fn cleanup_repeat_prefix() -> (
         condition: crate::program::TriggerSpec::dies(crate::program::ObjectFilter::self_object()),
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![crate::program::Instruction::DrawCards(Box::new(
+                crate::toolbox::DrawCardsSpec::simple(
+                    crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
         ),
     });
     let cards = vec![

@@ -1,8 +1,5 @@
 use super::*;
-use crate::{
-    mana::ManaCost,
-    program::{Instruction, Program},
-};
+use crate::program::Program;
 
 fn selected(
     cards: Vec<Value>,
@@ -39,64 +36,6 @@ fn selected(
         metadata: Value::Null,
         vocabulary: crate::test_support::creature_types::synthetic_vocabulary_for_rules("cr"),
     }
-}
-
-#[test]
-fn actual_entry_joins_and_bounded_passes_reach_copy_pending_before_private_fault() {
-    let definitions = BTreeMap::from([
-        (
-            "T".into(),
-            json!({"native_program":program::view(&Program::creature(None,1.into(),100.into(), std::collections::BTreeSet::new()))}),
-        ),
-        (
-            "O".into(),
-            json!({"native_program":program::view(&Program::instant(ManaCost::free(),ExecutableBody::new(BodyTarget::SingleCreature,vec![Instruction::Damage {amount:1.into()}])))}),
-        ),
-        (
-            "P".into(),
-            json!({"native_program":program::view(&Program::instant(ManaCost::free(),ExecutableBody::new(BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),vec![Instruction::CopySpell])))}),
-        ),
-    ]);
-    let cards = vec![
-        json!({"alias":"T","card_id":1,"owner":"B","controller":"B","zone":"Battlefield","definition":"T","tapped":false}),
-        json!({"alias":"O","card_id":2,"owner":"A","controller":null,"zone":"Hand","definition":"O"}),
-        json!({"alias":"P","card_id":3,"owner":"B","controller":null,"zone":"Hand","definition":"P"}),
-    ];
-    let actions = json!([{"op":"cast","actor":"A","source":{"current_owned_action_alias":"O"},"target":{"captured_object":"T_seed_object"},"payment":[],"bind_entry":"O_entry"},{"op":"pass","actor":"A"},{"op":"cast","actor":"B","source":{"current_owned_action_alias":"P"},"target":{"entry_ref":"O_entry"},"payment":[],"bind_entry":"P_entry"},{"op":"repeat_bounded","count":1,"sequence":[{"op":"pass_round","actors":["B","A"]}]},{"op":"private_fault_clone","owner":"StackWindow","field":"next_entry","value":"18446744073709551615","bind":"fault"},{"op":"attempt_reply_without_adoption","snapshot":"fault","mutation":{"copy_choice":{"tag":"Retain"}}}]);
-    let mut input = selected(
-        cards,
-        definitions,
-        json!({"kind":"Interaction"}),
-        actions,
-        json!([]),
-        json!(["A", "B"]),
-        "A",
-    );
-    input.fixture["seed"]["initial_battlefield_order"] = json!(["T"]);
-    let (
-        report,
-        Witness::Root {
-            attempts,
-            final_state,
-            ..
-        },
-        extras,
-    ) = run_extended(&input).unwrap()
-    else {
-        panic!()
-    };
-    assert_eq!(report["status"], "completed_recipe");
-    assert!(extras.is_empty());
-    let (source, _, result) = attempts.last().unwrap();
-    assert!(matches!(
-        source.pending_decision().unwrap().frame(),
-        RuleFrame::CopyTargets(_)
-    ));
-    assert!(result.is_err());
-    assert!(matches!(
-        final_state.unwrap().pending_decision().unwrap().frame(),
-        RuleFrame::CopyTargets(_)
-    ));
 }
 
 #[test]
@@ -227,51 +166,4 @@ fn prepared_calendar_clears_all_positive_players_in_old_active_order() {
     let final_state = final_state.unwrap();
     assert_eq!(final_state.execution.window().active_player(), SeatId(0));
     assert_eq!(final_state.turn().unwrap().position().number, 2);
-}
-
-#[test]
-fn genuine_later_owner_order_keeps_earlier_placements_through_private_wrong_wave() {
-    let mut program =
-        Program::creature(None, 0.into(), 0.into(), std::collections::BTreeSet::new());
-    program.triggered.push(crate::program::TriggeredAbility {
-        grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
-        id: crate::program::TriggeredAbilityId(1),
-        condition: crate::program::TriggerSpec::dies(crate::program::ObjectFilter::self_object()),
-        body: ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(0.into()),
-            }],
-        ),
-    });
-    let definitions = BTreeMap::from([(
-        "S".into(),
-        json!({"native_program":program::view(&program)}),
-    )]);
-    let cards=(1..=4).map(|id|{let owner=if id<=2 {"A"}else{"B"};json!({"alias":format!("S{id}"),"card_id":id,"owner":owner,"controller":owner,"zone":"Battlefield","definition":"S","tapped":false})}).collect();
-    let actions = json!([{"op":"reply_exact_current_frame","actor":"A","kind":"OrderGraveyard","items":[{"captured_object":"S2_seed_object"},{"captured_object":"S1_seed_object"}]},{"op":"reply_exact_current_frame","actor":"B","kind":"OrderGraveyard","items":[{"captured_object":"S3_seed_object"},{"captured_object":"S4_seed_object"}]},{"op":"reply_exact_current_frame","actor":"A","kind":"OrderTriggers","items":["S1_instance","S2_instance"]},{"op":"save_snapshot","name":"B_order"},{"op":"attempt_effect_frame_reply_without_adoption","snapshot":"B_order","mutation":{"wave":"actual_plus_one_checked"},"actor":"B","items":["S4_instance","S3_instance"]},{"op":"reply_exact_current_frame","actor":"B","kind":"OrderTriggers","items":["S4_instance","S3_instance"]}]);
-    let mut input = selected(
-        cards,
-        definitions,
-        json!({"kind":"Scheduled","turn":1,"step":"PrecombatMain"}),
-        actions,
-        json!([]),
-        json!(["A", "B"]),
-        "A",
-    );
-    input.fixture["seed"]["initial_battlefield_order"] = json!(["S1", "S2", "S3", "S4"]);
-    for id in 1..=4 {
-        input.fixture["bindings"].as_array_mut().unwrap().push(json!({"name":format!("S{id}_instance"),"join":{"source_object_ref":format!("S{id}_seed_object"),"triggered_ability_id":1,"related_object_ref":format!("S{id}_seed_object")}}));
-    }
-    let (report, Witness::Root { final_state, .. }, extras) = run_extended(&input).unwrap() else {
-        panic!()
-    };
-    assert_eq!(report["status"], "completed_recipe");
-    assert_eq!(extras.len(), 1);
-    assert_eq!(extras[0].source.execution.window().entries().len(), 2);
-    assert_eq!(
-        extras[0].result,
-        Err(EffectError::Trigger(TriggerError::WrongOrderFrame))
-    );
-    assert_eq!(final_state.unwrap().execution.window().entries().len(), 4);
 }

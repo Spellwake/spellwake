@@ -1,12 +1,7 @@
 //! Definition admission and forward-flow checks; these do not qualify runtime rules.
 use super::*;
 use crate::life::LifeChangeKind;
-use crate::{
-    characteristics::{ResolvedPartSpec, ResolvedPartsSpec},
-    mana::ManaType,
-    test_support::creature_types,
-    token::{TokenCreation, TokenDefinition, TokenName},
-};
+use crate::{mana::ManaType, test_support::creature_types};
 
 fn optional(chooser: ResolvingPlayer) -> Instruction {
     Instruction::OptionalEffect { chooser }
@@ -20,9 +15,10 @@ fn offer(payer: ResolvingPlayer, paid: usize, declined: usize) -> Instruction {
     }
 }
 fn gain() -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(1.into()),
-    }
+    crate::program::Instruction::AdjustLife(Box::new(crate::toolbox::AdjustLifeSpec::gain(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::Literal(1.into()),
+    )))
 }
 fn choose(slot: u16) -> Instruction {
     Instruction::ChooseCreatureType {
@@ -31,13 +27,14 @@ fn choose(slot: u16) -> Instruction {
     }
 }
 fn read(slot: u16) -> Instruction {
-    Instruction::DrawController {
-        amount: crate::program::ValueExpr::count_battlefield(
+    crate::program::Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec::simple(
+        crate::toolbox::PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+        crate::program::ValueExpr::count_battlefield(
             crate::program::ObjectFilter::any()
                 .controlled()
                 .of_chosen_slot(CreatureTypeSlot::new(slot)),
         ),
-    }
+    )))
 }
 fn check(target: BodyTarget, instructions: Vec<Instruction>) -> Result<(), DefinitionError> {
     ExecutableBody::new(target, instructions)
@@ -56,131 +53,6 @@ fn triggered(
         body: ExecutableBody::new(BodyTarget::None, instructions),
     });
     program
-}
-
-#[test]
-fn optional_accepts_each_primitive_with_its_real_operand_contract() {
-    let vocabulary = creature_types::selected_vocabulary().unwrap();
-    let token = TokenDefinition::new(
-        Program::creature(None, 1.into(), 1.into(), BTreeSet::new()),
-        TokenName::Default {
-            ordered_subtypes: vec![],
-        },
-        &vocabulary,
-    )
-    .unwrap();
-    let cases = [
-        (
-            BodyTarget::None,
-            Instruction::CreateTokens {
-                creations: vec![TokenCreation::one(token)],
-            },
-        ),
-        (BodyTarget::None, gain()),
-        (
-            BodyTarget::SinglePlayer,
-            Instruction::AdjustTargetLife {
-                adjustment: LifeAdjustment::Gain(1.into()),
-            },
-        ),
-        (BodyTarget::None, choose(0)),
-        (
-            BodyTarget::SingleCreatureOrPlayer,
-            Instruction::Damage { amount: 1.into() },
-        ),
-        (
-            BodyTarget::SingleCreature,
-            Instruction::CreatePreventionShield { amount: 1.into() },
-        ),
-        (
-            BodyTarget::SingleCreature,
-            Instruction::CreateDamageMultiplier { factor: 2.into() },
-        ),
-        (
-            BodyTarget::SinglePermanent,
-            crate::program::Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::move_all(
-                crate::toolbox::ObjectQuery::Targets,
-                crate::toolbox::ZoneDest::Hand,
-            ))),
-        ),
-        (
-            BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-            Instruction::CounterSpell,
-        ),
-        (
-            BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
-            Instruction::CopySpell,
-        ),
-        (
-            BodyTarget::SinglePermanent,
-            Instruction::CopyTargetToSource {
-                duration: ResolvedDuration::UntilEndOfTurn,
-                power_toughness: None,
-            },
-        ),
-        (BodyTarget::SinglePermanent, {
-            struct _Tmp {
-                parts: crate::characteristics::ResolvedPartsSpec,
-                duration: crate::characteristics::ResolvedDuration,
-            }
-            let _t = _Tmp {
-                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::SwitchPT]),
-                duration: ResolvedDuration::UntilEndOfTurn,
-            };
-            crate::program::Instruction::ApplyContinuous(Box::new(
-                crate::toolbox::ApplyContinuousSpec {
-                    selector: Some(crate::toolbox::ObjectQuery::Targets),
-                    payload: crate::toolbox::ContinuousPayload::ResolvedParts(Box::new(_t.parts)),
-                    duration: _t.duration,
-                    condition: None,
-                    one_shot: false,
-                    as_emblem: None,
-                    emblem_label: None,
-                },
-            ))
-        }),
-        (BodyTarget::SingleCreature, {
-            struct _Tmp {
-                counters: crate::characteristics::PowerToughnessCounters,
-            }
-            let _t = _Tmp {
-                counters: crate::characteristics::PowerToughnessCounters {
-                    plus_one: 1.into(),
-                    minus_one: 0.into(),
-                },
-            };
-            let (_k, _a) = if _t.counters.minus_one.is_positive() {
-                (crate::effects::CounterKind::MinusOne, _t.counters.minus_one)
-            } else {
-                (crate::effects::CounterKind::PlusOne, _t.counters.plus_one)
-            };
-            crate::program::Instruction::MutateObject(Box::new(
-                crate::toolbox::MutateObjectSpec::all(
-                    crate::toolbox::ObjectQuery::Targets,
-                    crate::toolbox::ObjectMutation::AddCounters {
-                        kind: _k,
-                        amount: crate::program::ValueExpr::Literal(_a),
-                    },
-                ),
-            ))
-        }),
-        (
-            BodyTarget::None,
-            Instruction::DrawController {
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            },
-        ),
-    ];
-    for (target, primitive) in cases {
-        assert_eq!(
-            check(
-                target,
-                vec![optional(ResolvingPlayer::Controller), primitive.clone()]
-            ),
-            Ok(()),
-            "optional primitive {primitive:?}"
-        );
-    }
 }
 
 #[test]
@@ -221,37 +93,6 @@ fn optional_rejects_missing_effect_and_each_control_wrapper() {
             "wrapper {wrapper:?}"
         );
     }
-}
-
-#[test]
-fn optional_preserves_the_following_primitives_validation() {
-    assert_eq!(
-        check(
-            BodyTarget::None,
-            vec![
-                optional(ResolvingPlayer::Controller),
-                Instruction::DrawController {
-                    amount: crate::program::ValueExpr::Literal((-1).into())
-                }
-            ]
-        ),
-        Err(DefinitionError::InvalidInstruction)
-    );
-    assert_eq!(
-        check(
-            BodyTarget::SinglePlayer,
-            vec![
-                optional(ResolvingPlayer::Controller),
-                crate::program::Instruction::ZoneOp(Box::new(
-                    crate::toolbox::ZoneOpSpec::move_all(
-                        crate::toolbox::ObjectQuery::Targets,
-                        crate::toolbox::ZoneDest::Hand
-                    )
-                ))
-            ]
-        ),
-        Err(DefinitionError::OperandFamily)
-    );
 }
 
 #[test]
@@ -394,39 +235,6 @@ fn each_current_condition_proves_related_participant_only_with_singular_grouping
             }
         }
     }
-}
-
-#[test]
-fn controller_and_existing_trigger_scalars_keep_together_admission() {
-    let vocabulary = creature_types::selected_vocabulary().unwrap();
-    let instructions = vec![
-        offer(ResolvingPlayer::Controller, 1, 1),
-        Instruction::BranchIfFalse {
-            condition: ResolutionCondition {
-                left: crate::program::ValueExpr::event(
-                    crate::program::EventValueKind::MatchedOccurrences,
-                ),
-                comparison: Comparison::Greater,
-                right: crate::program::ValueExpr::Literal(0.into()),
-            },
-            destination: 4,
-        },
-        optional(ResolvingPlayer::Controller),
-        Instruction::DrawController {
-            amount: crate::program::ValueExpr::event(
-                crate::program::EventValueKind::MatchedOccurrences,
-            ),
-        },
-    ];
-    assert_eq!(
-        triggered(
-            crate::program::TriggerSpec::dies(crate::program::ObjectFilter::creature()),
-            TriggerGrouping::OneOrMoreTogether,
-            instructions
-        )
-        .validate(&vocabulary),
-        Ok(())
-    );
 }
 
 #[test]

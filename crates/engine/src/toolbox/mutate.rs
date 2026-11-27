@@ -108,6 +108,8 @@ pub enum ObjectMutation {
     },
     /// Mark each selected permanent not to untap during its controller's next untap step.
     SkipNextUntap,
+    /// Remove each selected permanent from combat (CR 506.4).
+    RemoveFromCombat,
 }
 
 impl ObjectMutation {
@@ -133,6 +135,7 @@ impl ObjectMutation {
             | Self::PhaseOut
             | Self::Exert
             | Self::SkipNextUntap
+            | Self::RemoveFromCombat
             | Self::Unattach
             | Self::ClearCounters { .. }
             | Self::DoubleCounters { .. }
@@ -169,6 +172,7 @@ impl ObjectMutation {
             | Self::PhaseOut
             | Self::Exert
             | Self::SkipNextUntap
+            | Self::RemoveFromCombat
             | Self::Unattach
             | Self::ClearCounters { .. }
             | Self::DoubleCounters { .. }

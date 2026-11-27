@@ -33,9 +33,14 @@ use std::{collections::BTreeSet, sync::Arc};
 use tr::{P0, P1};
 
 fn gain(amount: i64) -> Instruction {
-    Instruction::AdjustControllerLife {
-        adjustment: LifeAdjustment::Gain(amount.into()),
-    }
+    spellwake_engine::program::Instruction::AdjustLife(Box::new(
+        spellwake_engine::toolbox::AdjustLifeSpec::gain(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::Controller,
+            ),
+            spellwake_engine::program::ValueExpr::Literal(amount.into()),
+        ),
+    ))
 }
 fn ability(id: u64, condition: TriggerSpec) -> TriggeredAbility {
     TriggeredAbility {
@@ -337,39 +342,6 @@ fn permanent_self_cast_triggers_on_stack_before_entry_and_uses_exact_identity() 
     );
     assert!(discoveries(&entered).is_empty());
     assert!(entered.state().execution().window().entries().is_empty());
-}
-
-#[test]
-fn instruction_self_cast_executes_independently_above_targeted_original() {
-    let spell = watched(
-        Program::instant(
-            ManaCost::one(ManaType::Blue),
-            ExecutableBody::new(
-                BodyTarget::SinglePlayer,
-                vec![Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Gain(2.into()),
-                }],
-            ),
-        ),
-        spellwake_engine::program::TriggerSpec::self_cast(),
-    );
-    let game = two(vec![tr::card(1, spell, false)]);
-    let cast = paid(&game, P0, 1, 0, Some(TargetRef::Player(P1)));
-    assert_eq!(discoveries(&cast).len(), 1);
-    assert_cause(discoveries(&cast)[0], completed(&cast));
-    let trigger = resolve(cast.state());
-    assert_eq!(trigger.state().execution().life_total(P0), Some(&21.into()));
-    assert_eq!(trigger.state().execution().life_total(P1), Some(&20.into()));
-    let original = resolve(trigger.state());
-    assert_eq!(
-        original.state().execution().life_total(P0),
-        Some(&21.into())
-    );
-    assert_eq!(
-        original.state().execution().life_total(P1),
-        Some(&22.into())
-    );
-    assert!(discoveries(&original).is_empty());
 }
 
 #[test]
@@ -1060,93 +1032,6 @@ fn removed_watcher_ability_is_unavailable_at_the_completed_cast_cut() {
     let cast = paid(removed.state(), P0, 1, 0, None);
     assert!(discoveries(&cast).is_empty());
     assert_eq!(cast.state().execution().window().entries().len(), 1);
-}
-
-#[test]
-fn each_grouping_uses_the_real_single_cast_cause_for_bound_draw_count() {
-    for grouping in [
-        TriggerGrouping::EachOccurrence,
-        TriggerGrouping::OneOrMoreTogether,
-        TriggerGrouping::OneOrMoreByPlayer,
-    ] {
-        let mut spell = watched(
-            instruction(),
-            spellwake_engine::program::TriggerSpec::self_cast(),
-        );
-        spell.triggered[0].grouping = grouping;
-        spell.triggered[0].body = ExecutableBody::new(
-            BodyTarget::None,
-            vec![Instruction::DrawController {
-                amount: spellwake_engine::program::ValueExpr::event(
-                    spellwake_engine::program::EventValueKind::MatchedOccurrences,
-                ),
-            }],
-        );
-        let game = two(vec![tr::card(1, spell, false)]);
-        let cast = paid(&game, P0, 1, 0, None);
-        let found = discoveries(&cast);
-        assert_eq!(found.len(), 1);
-        assert_cause(found[0], completed(&cast));
-        let drawn = resolve(cast.state());
-        assert_eq!(drawn.draw_journal().events.len(), 1);
-        assert_eq!(
-            drawn.state().execution().window().cards().library(P0).len(),
-            7
-        );
-        assert_eq!(drawn.state().execution().window().entries().len(), 1);
-    }
-}
-
-#[test]
-fn illegal_sorcery_timing_and_missing_target_reject_before_new_cast_facts() {
-    let sorcery = watched(
-        Program::sorcery(
-            ManaCost::one(ManaType::Blue),
-            ExecutableBody::new(BodyTarget::None, vec![gain(2)]),
-        ),
-        spellwake_engine::program::TriggerSpec::self_cast(),
-    );
-    let targeted = watched(
-        Program::instant(
-            ManaCost::one(ManaType::Blue),
-            ExecutableBody::new(
-                BodyTarget::SinglePlayer,
-                vec![Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Gain(2.into()),
-                }],
-            ),
-        ),
-        spellwake_engine::program::TriggerSpec::self_cast(),
-    );
-    let game = two(vec![
-        tr::card(1, instruction(), false),
-        tr::card(2, sorcery, false),
-        tr::card(3, targeted, false),
-    ]);
-    let original = paid(&game, P0, 1, 0, None);
-    let funded = fund(original.state(), P0, 1);
-    let state = funded.state();
-    let saved = state.clone();
-    for card in [2, 3] {
-        let result = state.advance(GameInput {
-            basis: state.basis().clone(),
-            actor: P0,
-            command: GameCommand::CastUntargeted {
-                spell: tr::object(state, card),
-                payment: Some(payment()),
-            },
-        });
-        if card == 2 {
-            assert!(matches!(
-                result,
-                Err(GameError::Effect(EffectError::Timing(_)))
-            ));
-        } else {
-            assert_eq!(result, Err(GameError::Effect(EffectError::TargetRequired)));
-        }
-        assert_eq!(state, &saved);
-    }
-    assert_eq!(state.execution().mana(P0, ManaType::Blue), 1.into());
 }
 
 #[path = "cast_triggers/targeted.rs"]

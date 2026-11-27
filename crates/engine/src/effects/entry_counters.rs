@@ -169,28 +169,48 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
             Instruction::EmpowerJace { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. } => false,
-            Instruction::DamageGroupAmount { group, amount } => {
-                value_expr_uses_damage_pairs(amount)
-                    || matches!(
-                        group,
-                        crate::program::DamageGroup::Filtered(f)
-                            | crate::program::DamageGroup::FilteredAndPlayers { filter: f, .. }
-                            if filter_uses_damage_pairs(*f)
-                    )
-            }
-            Instruction::DealDamageFrom {
-                source, recipients, ..
-            } => {
-                matches!(
-                    source.as_ref(),
-                    crate::program::DamageSourceRef::Matching(f) if filter_uses_damage_pairs(*f)
-                ) || matches!(
-                    recipients.as_ref(),
-                    crate::program::DamageRecipientsRef::Group(
-                        crate::program::DamageGroup::Filtered(f)
-                            | crate::program::DamageGroup::FilteredAndPlayers { filter: f, .. }
-                    ) if filter_uses_damage_pairs(*f)
-                )
+            Instruction::DealDamage(spec) => {
+                let amount_uses = matches!(
+                    &spec.amount,
+                    crate::program::DamageAmountSpec::Expr(e) if value_expr_uses_damage_pairs(e)
+                );
+                let source_uses = match &spec.source {
+                    crate::toolbox::DamageSourceQuery::Objects(q) => match q {
+                        crate::toolbox::ObjectQuery::ZoneScan { filter, .. }
+                        | crate::toolbox::ObjectQuery::Filtered { filter, .. }
+                        | crate::toolbox::ObjectQuery::BoundFiltered { filter, .. } => {
+                            filter_uses_damage_pairs(**filter)
+                        }
+                        crate::toolbox::ObjectQuery::EffectSubject(subject) => {
+                            subject_uses_damage_pairs(subject)
+                        }
+                        _ => false,
+                    },
+                    crate::toolbox::DamageSourceQuery::EntrySource => false,
+                };
+                let recipient_uses = match &spec.recipients {
+                    crate::toolbox::DamageTargetQuery::Objects(q)
+                    | crate::toolbox::DamageTargetQuery::Both { objects: q, .. } => match q {
+                        crate::toolbox::ObjectQuery::ZoneScan { filter, .. }
+                        | crate::toolbox::ObjectQuery::Filtered { filter, .. }
+                        | crate::toolbox::ObjectQuery::BoundFiltered { filter, .. } => {
+                            filter_uses_damage_pairs(**filter)
+                        }
+                        crate::toolbox::ObjectQuery::EffectSubject(subject) => {
+                            subject_uses_damage_pairs(subject)
+                        }
+                        _ => false,
+                    },
+                    crate::toolbox::DamageTargetQuery::Relative(rel) => matches!(
+                        rel.as_ref(),
+                        crate::program::DamageRecipientsRef::Group(
+                            crate::program::DamageGroup::Filtered(f)
+                                | crate::program::DamageGroup::FilteredAndPlayers { filter: f, .. }
+                        ) if filter_uses_damage_pairs(*f)
+                    ),
+                    _ => false,
+                };
+                amount_uses || source_uses || recipient_uses
             }
             Instruction::ScheduleDelayedStepTrigger { body, .. }
             | Instruction::EmitReflexiveTrigger { body, .. }
@@ -568,6 +588,25 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
             options.iter().any(|b| body_uses_damage_dealt_by(&b.body))
         }
         Instruction::DrawCards(spec) => value_expr_uses_damage_dealt_by(&spec.amount),
+        Instruction::AdjustLife(spec) => match &spec.op {
+            crate::toolbox::LifeOp::Gain(v)
+            | crate::toolbox::LifeOp::Lose(v)
+            | crate::toolbox::LifeOp::Set(v)
+            | crate::toolbox::LifeOp::Pay(v)
+            | crate::toolbox::LifeOp::Drain { amount: v, .. } => value_expr_uses_damage_dealt_by(v),
+            crate::toolbox::LifeOp::LoseHalf { .. } => false,
+        },
+        Instruction::DealDamage(spec) => matches!(
+            &spec.amount,
+            crate::program::DamageAmountSpec::Expr(v) if value_expr_uses_damage_dealt_by(v)
+        ),
+        Instruction::MutatePlayer(spec) => match &spec.op {
+            crate::toolbox::PlayerMutation::AddCounter { amount, .. }
+            | crate::toolbox::PlayerMutation::PayCounter { amount, .. } => {
+                value_expr_uses_damage_dealt_by(amount)
+            }
+            _ => false,
+        },
         Instruction::MutateObject(spec) => match &spec.op {
             crate::toolbox::ObjectMutation::AddCounters { amount, .. }
             | crate::toolbox::ObjectMutation::RemoveCounters { amount, .. }
@@ -585,21 +624,8 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
             }
             _ => false,
         },
-        Instruction::GainControllerLife { amount }
-        | Instruction::DrawController { amount }
-        | Instruction::DamageAmount(amount)
-        | Instruction::DamageGroupAmount { amount, .. }
-        | Instruction::DealDamageToAnnouncedTargets { amount, .. }
-        | Instruction::AdjustPlayersLife { amount, .. }
-        | Instruction::SetPlayersLife { amount, .. }
-        | Instruction::DrainOpponents(amount)
-        | Instruction::DamageOpponentsAmount(amount)
-        | Instruction::DamageRelatedPlayerAmount(amount)
+        Instruction::DealDamageToAnnouncedTargets { amount, .. }
         | Instruction::BindResolutionX(amount) => value_expr_uses_damage_dealt_by(amount),
-        Instruction::DealDamageFrom { amount, .. } => matches!(
-            amount.as_ref(),
-            crate::program::DamageAmountSpec::Expr(e) if value_expr_uses_damage_dealt_by(e)
-        ),
         Instruction::CreateTokens { creations }
         | Instruction::CreateAttackingTokens { creations, .. } => creations
             .iter()

@@ -151,7 +151,7 @@ impl EffectWindow {
     }
 
     /// Evaluate a [`PlayerSelector`] into an ordered, deduplicated list of seats.
-    pub(super) fn eval_player_selector_at(
+    pub(in crate::effects) fn eval_player_selector_at(
         &self,
         controller: SeatId,
         entry: Option<&StackEntry>,

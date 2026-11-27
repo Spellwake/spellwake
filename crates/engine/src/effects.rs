@@ -221,9 +221,7 @@ use token_entry_flow::TokenEntryWork;
 pub use crate::program::{
     BodyTarget, ExecutableBody, Instruction, Program, ProgramKind, SpellFilter,
 };
-use crate::program::{
-    CardType, CreatureTypeSlot, EventValueKind, ObjectFilter, PlayerStatExpr, ValueExpr,
-};
+use crate::program::{CardType, CreatureTypeSlot, EventValueKind, ObjectFilter, ValueExpr};
 /// One trusted resolution-time choice: retaining is distinct from fresh capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyTargetChoice {
@@ -10566,7 +10564,6 @@ impl EffectWindow {
         let evaluated = self.evaluated_characteristics()?;
         Ok(match instruction {
             Instruction::AffectPermanentTargets { .. }
-            | Instruction::MillEachPlayer(_)
             | Instruction::PutLibraryCohortIntoGraveyard(_)
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
             | Instruction::AttachControlledToSource { .. }
@@ -10600,12 +10597,10 @@ impl EffectWindow {
             | Instruction::Sacrifice { .. }
             | Instruction::SacrificeRandomUntilLand
             | Instruction::SacrificeToContinue { .. }
-            | Instruction::SacrificeMatching(_)
             | Instruction::Discard { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
-            Instruction::AdjustTargetLife { .. }
-            | Instruction::DivideTargetPermanentsAndSacrificePile => match target {
+            Instruction::DivideTargetPermanentsAndSacrificePile => match target {
                 TargetRef::Player(player) => self.window.participants().contains(&player),
                 TargetRef::Object(_) | TargetRef::Stack(_) => false,
             },
@@ -10645,22 +10640,17 @@ impl EffectWindow {
                 }
                 TargetRef::Object(_) | TargetRef::Player(_) => false,
             },
-            Instruction::DamageFromPower(_)
-            | Instruction::DamageAmount(_)
-            | Instruction::DamageAmountThenExileIfDies(_)
-            | Instruction::DamageCreatureAtSpellMastery { .. }
-            | Instruction::Damage { .. } => match target {
-                TargetRef::Player(player) => self.window.participants().contains(&player),
-                TargetRef::Object(card) => evaluated
-                    .get(card)
-                    .and_then(ObjectCharacteristics::damage_recipient)
-                    .is_some(),
-                TargetRef::Stack(_) => false,
-            },
+            Instruction::DamageFromPower(_) | Instruction::DamageCreatureAtSpellMastery { .. } => {
+                match target {
+                    TargetRef::Player(player) => self.window.participants().contains(&player),
+                    TargetRef::Object(card) => evaluated
+                        .get(card)
+                        .and_then(ObjectCharacteristics::damage_recipient)
+                        .is_some(),
+                    TargetRef::Stack(_) => false,
+                }
+            }
             Instruction::Attach(_) => true,
-            Instruction::RemoveTargetFromCombat => matches!(target, TargetRef::Object(id)
-                if self.combat.as_ref().is_some_and(|combat| combat.attacker(id).is_some() || combat.blocker(id).is_some())),
-            Instruction::RemoveSubjectFromCombat(_) => true,
             Instruction::DestroyTarget => {
                 matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|view| view.zone == ObjectZone::Battlefield && !view.has_keyword(KeywordAbility::Indestructible)))
             }
@@ -10712,20 +10702,15 @@ impl EffectWindow {
             | Instruction::Jump { .. }
             | Instruction::BoostSaddledAttacker { .. }
             | Instruction::SetControlledCreatureSizeToHand
-            | Instruction::AddExperienceCounter
-            | Instruction::AddPlayerCounter { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::DealDamageFrom { .. }
             | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
             | Instruction::BecomeCopyFixedTargets { .. }
-            | Instruction::WinGame(_)
-            | Instruction::LoseGame(_)
             | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
@@ -10753,6 +10738,9 @@ impl EffectWindow {
             | Instruction::Enlist
             | Instruction::ChooseOneLastMoved { .. }
             | Instruction::ZoneOp(_)
+            | Instruction::AdjustLife(_)
+            | Instruction::DealDamage(_)
+            | Instruction::MutatePlayer(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
             | Instruction::BranchCondition { .. }
@@ -10764,7 +10752,6 @@ impl EffectWindow {
             | Instruction::SideDeckOp(_)
             | Instruction::CreateTokenCopy { .. }
             | Instruction::BindResolutionX(_)
-            | Instruction::SetDayNight(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
@@ -10774,7 +10761,6 @@ impl EffectWindow {
             | Instruction::ResolvePowerAbility(_)
             | Instruction::Adapt(_)
             | Instruction::UnattachEquipmentAndProtectHost
-            | Instruction::Unattach
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokensToFight(_)
             | Instruction::FightPairedCreatures(_)
@@ -10788,9 +10774,7 @@ impl EffectWindow {
             | Instruction::OfferSourceCounters { .. }
             | Instruction::IncreaseSpeed
             | Instruction::BecomeMonarch(_)
-            | Instruction::TapEnchantedCreature
             | Instruction::RequireCondition(_)
-            | Instruction::PayControllerLife(_)
             | Instruction::PutEquipmentFromHandOrGraveyard
             | Instruction::EquipNewToken
             | Instruction::Encore
@@ -10801,8 +10785,6 @@ impl EffectWindow {
             | Instruction::SetBlockDeclarations(_)
             | Instruction::AdditionalLoyaltyActivation
             | Instruction::MoveLoyaltyCounterToEnteringPermanent
-            | Instruction::CreateEmblem(_)
-            | Instruction::CreateOpponentEmblems(_)
             | Instruction::ImpulseCastOrDamage(_)
             | Instruction::RevealCreatureOfSacrificedType
             | Instruction::SacrificeCombatContributor
@@ -10860,9 +10842,6 @@ impl EffectWindow {
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::DamageDamagedPlayersCreatures
-            | Instruction::DamageOpponentsAmount(_)
-            | Instruction::DamageRelatedPlayerAmount(_)
-            | Instruction::DamageGroupAmount { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -10895,7 +10874,6 @@ impl EffectWindow {
             | Instruction::ReturnDelayedExile(_)
             | Instruction::ExileUnearthed(_)
             | Instruction::ResolveTransfer(_)
-            | Instruction::DrainOpponents(_)
             | Instruction::ExtortDrain
             | Instruction::ResolveGrowth(_)
             | Instruction::ResolveCounterKeyword(_)
@@ -10906,14 +10884,12 @@ impl EffectWindow {
             | Instruction::CounterTriggeringStackObject
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::BoostSourceByCastManaValue
-            | Instruction::BoostLoneAttacker
             | Instruction::DrawHighestEntrantController
             | Instruction::DrawRelatedPlayer
             | Instruction::DrawCombatDamageSourceController
             | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
             | Instruction::DrawControllerAndTarget { .. }
             | Instruction::DrawPlayersControllingName(_)
-            | Instruction::DrawController { .. }
             | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::ReturnCapturedDyingCreature
             | Instruction::ReturnCapturedDyingCreatureWithTypeAndColor { .. }
@@ -10925,7 +10901,6 @@ impl EffectWindow {
             | Instruction::ExileUntilOtherTargetLeaves
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
-            | Instruction::Ascend
             | Instruction::DestroyFixedTargets
             | Instruction::DestroyTargetAndAttachedEquipment
             | Instruction::ReturnFixedTargets
@@ -10975,23 +10950,15 @@ impl EffectWindow {
             | Instruction::SearchLibrary { .. }
             | Instruction::ChooseTypeThenDestroyUnchosen
             | Instruction::OrderArtifactCreatureLandSacrifices
-            | Instruction::ChooseCreatureTypeForPlayer { .. }
             | Instruction::ChooseCreatureType { .. }
             | Instruction::RepeatOpponentLifeLoss
-            | Instruction::OpponentsLoseAndControllerGains(_)
-            | Instruction::AdjustEachOpponentLife { .. }
-            | Instruction::AdjustPlayersLife { .. }
-            | Instruction::SetPlayersLife { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::ControllerLosesRememberedManaValue
             | Instruction::ExiledTargetControllerGainsPower
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
-            | Instruction::TakeExtraTurn
-            | Instruction::DisallowDamagePreventionThisTurn
             | Instruction::PreventDamageThisTurn(_)
             | Instruction::PreventDamageSpec(_)
-            | Instruction::PutOwnHandCardOnLibraryBottom
             | Instruction::ExileCapturedGraveyardCard
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
@@ -11003,7 +10970,6 @@ impl EffectWindow {
             | Instruction::ExileTopForFreePlay
             | Instruction::ExileTargetUntilNonlandForFreeCast
             | Instruction::ExileTopRepeatOnPermanentEntry
-            | Instruction::EndControllerTurn
             | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
             | Instruction::CastLinkedSpellMatchingX
@@ -11011,23 +10977,18 @@ impl EffectWindow {
             | Instruction::PutChosenXChargeCounters
             | Instruction::DestroyNonlandsAtSourceChargeCount
             | Instruction::AddCounterAndDischargeOnResolution(_)
-            | Instruction::PayControllerEnergy(_)
             | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::ExileSourceAndGainLife(_)
             | Instruction::PutCounterOnRelatedPermanent
             | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
             | Instruction::PutCreatureAndOtherPlaneswalkerCounters
-            | Instruction::AbilitySourceControllerLosesLife(_)
-            | Instruction::RelatedPlayerLosesLife(_)
             | Instruction::LinkedPlayerLosesDamageAmount
-            | Instruction::RelatedPlayerLosesHalfLife
             | Instruction::FightSourceWithTarget
             | Instruction::TransformSourceAndAttachToTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
-            | Instruction::TransformSubtype(_)
             | Instruction::ExileCombatDamagedCreature
             | Instruction::DestroyCapturedDamageSource
             | Instruction::RemoveCreatureCounters { .. }
@@ -11037,19 +10998,10 @@ impl EffectWindow {
             | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::DamageCapturedBlocker(_)
             | Instruction::ChangeControlledPlaneswalkers { .. }
-            | Instruction::ChangeGroup { .. }
-            | Instruction::ChangeAbilitySource { .. }
-            | Instruction::GiveControlOfAbilitySource
             | Instruction::UntapAndControlCreatures
             | Instruction::Proliferate
             | Instruction::DamagePlayersHalfLife
-            | Instruction::DamageGroup { .. }
             | Instruction::DrawAndDamageOpponents { .. }
-            | Instruction::GainControllerLife { .. }
-            | Instruction::DrainTargetAndGain(_)
-            | Instruction::AdjustControllerLife { .. }
-            | Instruction::PayLife { .. }
-            | Instruction::PayEnergy { .. }
             | Instruction::TapOrUntapControlled { .. }
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
@@ -11065,7 +11017,6 @@ impl EffectWindow {
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
-            | Instruction::DrawGame
             | Instruction::EmpowerJace { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
@@ -11238,7 +11189,16 @@ mod revision_tests {
                         ManaCost::free(),
                         ExecutableBody::new(
                             BodyTarget::SingleCreature,
-                            vec![Instruction::Damage { amount: 1.into() }],
+                            vec![Instruction::DealDamage(Box::new(
+                                crate::toolbox::DealDamageSpec {
+                                    source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                    recipients: crate::toolbox::DamageTargetQuery::Targets,
+                                    amount: crate::program::DamageAmountSpec::Expr(
+                                        crate::program::ValueExpr::Literal(1.into()),
+                                    ),
+                                    exile_if_dies: false,
+                                },
+                            ))],
                         ),
                     ),
                 },
@@ -11464,7 +11424,16 @@ mod revision_tests {
                             source_cost,
                             body: ExecutableBody::new(
                                 BodyTarget::SingleCreature,
-                                vec![Instruction::Damage { amount: 1.into() }],
+                                vec![Instruction::DealDamage(Box::new(
+                                    crate::toolbox::DealDamageSpec {
+                                        source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                        recipients: crate::toolbox::DamageTargetQuery::Targets,
+                                        amount: crate::program::DamageAmountSpec::Expr(
+                                            crate::program::ValueExpr::Literal(1.into()),
+                                        ),
+                                        exile_if_dies: false,
+                                    },
+                                ))],
                             ),
                         }],
                     ),
@@ -11919,7 +11888,16 @@ mod revision_tests {
                         ManaCost::one(ManaType::Red),
                         ExecutableBody::new(
                             BodyTarget::SingleCreature,
-                            vec![Instruction::Damage { amount: 1.into() }],
+                            vec![Instruction::DealDamage(Box::new(
+                                crate::toolbox::DealDamageSpec {
+                                    source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                    recipients: crate::toolbox::DamageTargetQuery::Targets,
+                                    amount: crate::program::DamageAmountSpec::Expr(
+                                        crate::program::ValueExpr::Literal(1.into()),
+                                    ),
+                                    exile_if_dies: false,
+                                },
+                            ))],
                         ),
                     ),
                 },
@@ -12024,7 +12002,16 @@ mod revision_tests {
                     instant(
                         1,
                         a,
-                        vec![Instruction::Damage { amount: 1.into() }],
+                        vec![Instruction::DealDamage(Box::new(
+                            crate::toolbox::DealDamageSpec {
+                                source: crate::toolbox::DamageSourceQuery::EntrySource,
+                                recipients: crate::toolbox::DamageTargetQuery::Targets,
+                                amount: crate::program::DamageAmountSpec::Expr(
+                                    crate::program::ValueExpr::Literal(1.into()),
+                                ),
+                                exile_if_dies: false,
+                            },
+                        ))],
                         BodyTarget::SingleCreature,
                     ),
                     instant(

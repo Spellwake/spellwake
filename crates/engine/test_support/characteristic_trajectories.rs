@@ -1019,13 +1019,18 @@ pub(crate) fn type_choice_body() -> Instruction {
 }
 
 pub(crate) fn chosen_draw() -> Instruction {
-    Instruction::DrawController {
-        amount: spellwake_engine::program::ValueExpr::count_battlefield(
-            spellwake_engine::program::ObjectFilter::any()
-                .controlled()
-                .of_chosen_slot(CreatureTypeSlot::new(0)),
+    spellwake_engine::program::Instruction::DrawCards(Box::new(
+        spellwake_engine::toolbox::DrawCardsSpec::simple(
+            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                spellwake_engine::program::ResolvingPlayer::Controller,
+            ),
+            spellwake_engine::program::ValueExpr::count_battlefield(
+                spellwake_engine::program::ObjectFilter::any()
+                    .controlled()
+                    .of_chosen_slot(CreatureTypeSlot::new(0)),
+            ),
         ),
-    }
+    ))
 }
 
 pub(crate) fn assert_type_frame(game: &GameState, entry: StackEntryId) {
@@ -1076,7 +1081,16 @@ pub(crate) fn cleanup_simultaneous() {
         spell(
             12,
             BodyTarget::SingleCreature,
-            vec![Instruction::Damage { amount: 2.into() }],
+            vec![spellwake_engine::program::Instruction::DealDamage(
+                Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                    source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                    recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                        spellwake_engine::program::ValueExpr::Literal(2.into()),
+                    ),
+                    exile_if_dies: false,
+                }),
+            )],
         ),
     ]);
     let game = world(v.clone(), cards, vec![CardId(1)]);
@@ -1625,11 +1639,29 @@ pub(crate) fn latent_damage(shield: bool, multiplier: bool, shield_first: bool) 
     }
     let inactive_index = if shield && multiplier { 4 } else { 3 };
     assert_eq!(body.len(), inactive_index);
-    body.push(Instruction::Damage { amount: 3.into() });
+    body.push(spellwake_engine::program::Instruction::DealDamage(
+        Box::new(spellwake_engine::toolbox::DealDamageSpec {
+            source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+            recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                spellwake_engine::program::ValueExpr::Literal(3.into()),
+            ),
+            exile_if_dies: false,
+        }),
+    ));
     body.push(add_creature(ResolvedDuration::NoStatedDuration));
     let active_index = if shield && multiplier { 6 } else { 5 };
     assert_eq!(body.len(), active_index);
-    body.push(Instruction::Damage { amount: 3.into() });
+    body.push(spellwake_engine::program::Instruction::DealDamage(
+        Box::new(spellwake_engine::toolbox::DealDamageSpec {
+            source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+            recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+            amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                spellwake_engine::program::ValueExpr::Literal(3.into()),
+            ),
+            exile_if_dies: false,
+        }),
+    ));
     let game = world(
         v.clone(),
         vec![
@@ -1872,7 +1904,16 @@ pub(crate) fn cleanup_noncreature_marks() {
             spell(
                 2,
                 BodyTarget::SingleCreature,
-                vec![Instruction::Damage { amount: 2.into() }],
+                vec![spellwake_engine::program::Instruction::DealDamage(
+                    Box::new(spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            spellwake_engine::program::ValueExpr::Literal(2.into()),
+                        ),
+                        exile_if_dies: false,
+                    }),
+                )],
             ),
             spell(
                 3,

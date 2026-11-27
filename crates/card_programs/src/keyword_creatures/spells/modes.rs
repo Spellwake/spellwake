@@ -1,9 +1,6 @@
 //! Fixed-count modal spells. Each bullet must compile as its own complete body.
 use super::*;
-use spellwake_engine::{
-    life::LifeAdjustment,
-    program::{ProgramKind, ResolvingPlayer, SpellModes},
-};
+use spellwake_engine::program::{ProgramKind, ResolvingPlayer, SpellModes};
 
 pub(super) fn compile(
     rules: &str,
@@ -142,9 +139,12 @@ fn mode_body(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),
-                Instruction::AdjustTargetLife {
-                    adjustment: LifeAdjustment::Lose(1.into()),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::TargetPlayer,
+                    ),
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
             ],
         ));
     }

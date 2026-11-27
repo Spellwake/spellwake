@@ -736,9 +736,14 @@ impl EffectWindow {
                     ctx.append,
                 )?;
                 let draw_op = if subj_ctrl == entry.controller() {
-                    Instruction::DrawController {
-                        amount: ValueExpr::Literal(amount.clone()),
-                    }
+                    crate::program::Instruction::DrawCards(Box::new(
+                        crate::toolbox::DrawCardsSpec::simple(
+                            crate::toolbox::PlayerSelector::Resolving(
+                                crate::program::ResolvingPlayer::Controller,
+                            ),
+                            ValueExpr::Literal(amount.clone()),
+                        ),
+                    ))
                 } else {
                     Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec {
                         players: crate::toolbox::PlayerSelector::Resolving(
