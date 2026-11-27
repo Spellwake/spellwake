@@ -3,7 +3,9 @@
 use crate::ast::{
     CompareOp, CostAtomAst, ObjectFilterFlags, SubjectRefAst, ValueExprAst, ZoneFilter,
 };
-use crate::combinators::trim_punct;
+use crate::combinators::{
+    anaphora, split_once_any, strip_prefix_any, strip_suffix_any, trim_punct, vconst,
+};
 use crate::filter::{
     parse_for_each_value_expr, parse_keyword_list, parse_object_filter, parse_subject_or_target,
     parse_value_expr,
@@ -111,10 +113,7 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
         });
     }
     // Scaled mana cost: "[Pay] {1} for each <filter>" / "{2} plus an additional {1} for each <filter>"
-    let a_nopay = a
-        .strip_prefix("Pay ")
-        .or_else(|| a.strip_prefix("pay "))
-        .unwrap_or(a);
+    let a_nopay = strip_prefix_any(&a, &["Pay ", "pay "]).unwrap_or(a);
     if let Some(expr_raw) = a_nopay.to_ascii_lowercase().strip_prefix("mana equal to ")
         && let Ok(expr) = parse_value_expr(expr_raw.trim(), vocab)
     {
@@ -202,7 +201,7 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
         || low.starts_with("discard a legendary card with the same name as ")
     {
         return Ok(CostAtomAst::Discard {
-            count: Box::new(ValueExprAst::Const(1)),
+            count: vconst(1),
             filter: Box::new(crate::ast::ObjectFilterAst {
                 any_card: true,
                 ..Default::default()
@@ -255,7 +254,7 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
         return Ok(CostAtomAst::Exile {
-            count: Box::new(ValueExprAst::Const(1)),
+            count: vconst(1),
             filter: Box::new(flt),
             face_down: false,
             face_up: false,
@@ -323,9 +322,9 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
         }
     }
     if low == "put a card from your hand on top of your library" {
-        return Ok(CostAtomAst::BounceToHand(Box::new(
-            SubjectRefAst::Anaphora("card_from_hand_to_top_library".to_string()),
-        )));
+        return Ok(CostAtomAst::BounceToHand(Box::new(anaphora(
+            "card_from_hand_to_top_library",
+        ))));
     }
     if low == "put a card an opponent owns from exile into that player's graveyard" {
         return Ok(CostAtomAst::ProcessExiledCard);
@@ -348,9 +347,7 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
     {
         return Ok(CostAtomAst::Blight(Box::new(val)));
     }
-    if let Some(after) = a
-        .strip_prefix("Waterbend ")
-        .or_else(|| a.strip_prefix("waterbend "))
+    if let Some(after) = strip_prefix_any(&a, &["Waterbend ", "waterbend "])
         && is_mana_sequence(after.trim())
     {
         return Ok(CostAtomAst::Waterbend(after.trim().to_string()));
@@ -622,7 +619,7 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
             };
             if top_core == "card of your library" {
                 return Ok(CostAtomAst::ExileTopLibrary {
-                    count: Box::new(ValueExprAst::Const(1)),
+                    count: vconst(1),
                     face_down,
                 });
             }
@@ -640,7 +637,7 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
                     return Ok(CostAtomAst::ExileTopZone {
                         zone: ZoneFilter::YourGraveyard,
                         filter: None,
-                        count: Box::new(ValueExprAst::Const(1)),
+                        count: vconst(1),
                         face_down,
                     });
                 }
@@ -716,9 +713,8 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
     }
 
     if let Some(rest) = low.strip_prefix("remove ")
-        && let Some((left, subj_raw)) = rest
-            .split_once(" counters from ")
-            .or_else(|| rest.split_once(" counter from "))
+        && let Some((left, subj_raw)) =
+            split_once_any(&rest, &[" counters from ", " counter from "])
     {
         if let Some(among_raw) = subj_raw.strip_prefix("among ") {
             let flt = parse_object_filter(among_raw.trim(), vocab)?;
@@ -776,9 +772,7 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
     }
 
     if let Some(rest) = low.strip_prefix("put ")
-        && let Some((left, subj_raw)) = rest
-            .split_once(" counters on ")
-            .or_else(|| rest.split_once(" counter on "))
+        && let Some((left, subj_raw)) = split_once_any(&rest, &[" counters on ", " counter on "])
     {
         let subj = parse_subject_or_target(subj_raw, vocab)?;
         let (cnt, kind) = peel_leading_count(left, vocab);
@@ -827,9 +821,10 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
         return Ok(CostAtomAst::BounceToHand(Box::new(subj)));
     }
     if let Some(rest) = low.strip_prefix("put ")
-        && let Some(subj_raw) = rest
-            .strip_suffix(" into its owner's graveyard")
-            .or_else(|| rest.strip_suffix(" into your graveyard"))
+        && let Some(subj_raw) = strip_suffix_any(
+            &rest,
+            &[" into its owner's graveyard", " into your graveyard"],
+        )
     {
         let (_, subj_nocnt) = peel_leading_count(subj_raw, vocab);
         let subj = parse_subject_or_target(subj_raw, vocab)
@@ -845,9 +840,7 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
     }
 
     if let Some(rest) = low.strip_prefix("mill ")
-        && let Some(cnt_raw) = rest
-            .strip_suffix(" cards")
-            .or_else(|| rest.strip_suffix(" card"))
+        && let Some(cnt_raw) = strip_suffix_any(&rest, &[" cards", " card"])
         && let Ok(cnt) = parse_value_expr(cnt_raw, vocab)
     {
         return Ok(CostAtomAst::Mill(Box::new(cnt)));
@@ -884,12 +877,11 @@ pub fn parse_cost_atom(atom: &str, vocab: &Vocabulary) -> Result<CostAtomAst, St
 }
 
 pub(crate) fn peel_leading_count<'a>(s: &'a str, vocab: &Vocabulary) -> (ValueExprAst, &'a str) {
-    let s = s
-        .strip_prefix("another ")
-        .or_else(|| s.strip_prefix("an additional "))
-        .or_else(|| s.strip_prefix("a number of "))
-        .or_else(|| s.strip_prefix("number of "))
-        .unwrap_or(s);
+    let s = strip_prefix_any(
+        s,
+        &["another ", "an additional ", "a number of ", "number of "],
+    )
+    .unwrap_or(s);
     if let Some(rest) = s.strip_prefix("that many ") {
         return (ValueExprAst::PriorResult, rest.trim());
     }

@@ -7,7 +7,9 @@ use crate::ast::{
     CardTypeMask, ColorMask, ControllerRelation, ManaSpecAst, PlayerRefAst, Rounding,
     SubjectRefAst, SupertypeMask, TokenSpecAst, ValueExprAst,
 };
-use crate::combinators::trim_punct;
+use crate::combinators::{
+    split_once_any, strip_prefix_any, strip_suffix_any, trim_punct, val_div, vconst,
+};
 use crate::preprocess::{is_mana_sequence, parse_base_pt, split_top_level};
 use crate::vocab::{Vocabulary, lookup_card_type, lookup_color, lookup_supertype};
 
@@ -100,10 +102,10 @@ pub fn parse_mana_spec(phrase: &str, vocab: &Vocabulary) -> Result<ManaSpecAst, 
             source: Box::new(subj),
         });
     }
-    if let Some(subj_raw) = low.strip_prefix("one mana of any of ").and_then(|r| {
-        r.strip_suffix("'s colors")
-            .or_else(|| r.strip_suffix("' colors"))
-    }) && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
+    if let Some(subj_raw) = low
+        .strip_prefix("one mana of any of ")
+        .and_then(|r| strip_suffix_any(r, &["'s colors", "' colors"]))
+        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
         return Ok(ManaSpecAst::AnyColorAmong {
             source: Box::new(subj),
@@ -159,9 +161,7 @@ pub fn parse_mana_spec(phrase: &str, vocab: &Vocabulary) -> Result<ManaSpecAst, 
             single_color,
         });
     }
-    if let Some(amt_str) = low
-        .strip_suffix(" mana of any one color")
-        .or_else(|| low.strip_suffix(" mana of any color"))
+    if let Some(amt_str) = strip_suffix_any(&low, &[" mana of any one color", " mana of any color"])
         && let Ok(amt) = parse_value_expr(amt_str, vocab)
     {
         return Ok(ManaSpecAst::AnyColor {
@@ -307,10 +307,13 @@ pub fn parse_token_creation_rich(
         parse_subject_or_target(t, vocab).ok()
     };
 
-    if let Some((before, after)) = low
-        .split_once(" that's tapped and attacking")
-        .or_else(|| low.split_once(" that are tapped and attacking"))
-    {
+    if let Some((before, after)) = split_once_any(
+        &low,
+        &[
+            " that's tapped and attacking",
+            " that are tapped and attacking",
+        ],
+    ) {
         tapped = true;
         attacking = true;
         attacking_target = parse_atk_target(after);
@@ -351,9 +354,8 @@ pub fn parse_token_creation_rich(
             low = low.replace(" tapped and attacking", "");
         }
     }
-    if let Some((before, after)) = low
-        .split_once(" that's attacking")
-        .or_else(|| low.split_once(" that are attacking"))
+    if let Some((before, after)) =
+        split_once_any(&low, &[" that's attacking", " that are attacking"])
     {
         attacking = true;
         if attacking_target.is_none() {
@@ -400,10 +402,7 @@ pub fn parse_token_creation_rich(
         chosen_type: false,
         attacking_target: attacking_target.clone(),
     };
-    if let Some((before, _)) = low
-        .split_once(" that's blocking")
-        .or_else(|| low.split_once(" that are blocking"))
-    {
+    if let Some((before, _)) = split_once_any(&low, &[" that's blocking", " that are blocking"]) {
         blocking = true;
         low = before.to_string();
     }
@@ -421,7 +420,7 @@ pub fn parse_token_creation_rich(
         return Ok(wrap_plain(
             TokenSpecAst::Predefined {
                 name: "those_tokens".to_string(),
-                count: Box::new(ValueExprAst::Const(1)),
+                count: vconst(1),
                 tapped,
             },
             blocking,
@@ -466,19 +465,20 @@ pub fn parse_token_creation_rich(
     }
 
     // Copy token: "a token that's a copy of <subject> [tapped and attacking ...][, except <exception>]"
-    if let Some((cnt_part, rest)) = low
-        .split_once(" token that's a copy of ")
-        .or_else(|| low.split_once(" tokens that are copies of "))
-    {
+    if let Some((cnt_part, rest)) = split_once_any(
+        &low,
+        &[" token that's a copy of ", " tokens that are copies of "],
+    ) {
         let (src_raw_full, exception) = match rest.split_once(", except ") {
             Some((s, exc)) => (s, Some(exc.trim().to_string())),
             None => (rest, None),
         };
-        let src_raw = src_raw_full
-            .split_once(" tapped and attacking")
-            .or_else(|| src_raw_full.split_once(" and that's blocking"))
-            .map_or(src_raw_full, |(s, _)| s)
-            .trim();
+        let src_raw = split_once_any(
+            &src_raw_full,
+            &[" tapped and attacking", " and that's blocking"],
+        )
+        .map_or(src_raw_full, |(s, _)| s)
+        .trim();
         if let (Ok(cnt), Ok(subj)) = (
             parse_value_expr(cnt_part, vocab),
             parse_subject_or_target(src_raw, vocab),
@@ -532,16 +532,14 @@ pub fn parse_token_creation_rich(
                 subtypes.push(tok.to_string());
             }
         }
-        let (rhs_clean, extra_kws) = if let Some((expr_part, kw_part)) = rhs
-            .split_once(" that has ")
-            .or_else(|| rhs.split_once(" with "))
-        {
-            let kws = parse_keyword_list(kw_part.trim(), vocab)
-                .unwrap_or_else(|| vec![kw_part.trim().to_string()]);
-            (expr_part.trim(), kws)
-        } else {
-            (rhs.trim(), Vec::new())
-        };
+        let (rhs_clean, extra_kws) =
+            if let Some((expr_part, kw_part)) = split_once_any(&rhs, &[" that has ", " with "]) {
+                let kws = parse_keyword_list(kw_part.trim(), vocab)
+                    .unwrap_or_else(|| vec![kw_part.trim().to_string()]);
+                (expr_part.trim(), kws)
+            } else {
+                (rhs.trim(), Vec::new())
+            };
         let (dyn_p, dyn_t, dyn_text) = if is_each_equal {
             match parse_value_expr(rhs_clean, vocab) {
                 Ok(v) => (Some(v.clone()), Some(v), None),
@@ -587,35 +585,33 @@ pub fn parse_token_creation_rich(
     }
 
     // Peel optional trailing "that's all colors" or "that's <colors>" (Godsire)
-    let (low, all_colors, extra_colors) =
-        if let Some(stripped) = low.strip_suffix(" that's all colors") {
-            (stripped.trim(), true, ColorMask::EMPTY)
-        } else if let Some((before, color_list)) = low
-            .split_once(" that's ")
-            .or_else(|| low.split_once(" that are "))
-        {
-            let mut parsed_c = ColorMask::EMPTY;
-            let mut all_valid = true;
-            for w in color_list.split_whitespace() {
-                let tok = w.trim_matches(',');
-                if tok == "and" {
-                    continue;
-                }
-                if let Some(c) = lookup_color(tok) {
-                    parsed_c = parsed_c.union(c);
-                } else {
-                    all_valid = false;
-                    break;
-                }
+    let (low, all_colors, extra_colors) = if let Some(stripped) =
+        low.strip_suffix(" that's all colors")
+    {
+        (stripped.trim(), true, ColorMask::EMPTY)
+    } else if let Some((before, color_list)) = split_once_any(&low, &[" that's ", " that are "]) {
+        let mut parsed_c = ColorMask::EMPTY;
+        let mut all_valid = true;
+        for w in color_list.split_whitespace() {
+            let tok = w.trim_matches(',');
+            if tok == "and" {
+                continue;
             }
-            if all_valid && !parsed_c.is_empty() {
-                (before.trim(), false, parsed_c)
+            if let Some(c) = lookup_color(tok) {
+                parsed_c = parsed_c.union(c);
             } else {
-                (low, false, ColorMask::EMPTY)
+                all_valid = false;
+                break;
             }
+        }
+        if all_valid && !parsed_c.is_empty() {
+            (before.trim(), false, parsed_c)
         } else {
             (low, false, ColorMask::EMPTY)
-        };
+        }
+    } else {
+        (low, false, ColorMask::EMPTY)
+    };
 
     // Peel optional trailing "for each ..." ONLY when not inside a quoted token ability
     let (body, for_each_expr) = if !low.contains('"')
@@ -631,9 +627,7 @@ pub fn parse_token_creation_rich(
     if let Some((role_part, att_raw)) = low.split_once(" role token attached to ")
         && let Ok(attached_to) = parse_subject_or_target(att_raw, vocab)
     {
-        let role_name = role_part
-            .strip_prefix("a ")
-            .or_else(|| role_part.strip_prefix("an "))
+        let role_name = strip_prefix_any(&role_part, &["a ", "an "])
             .unwrap_or(role_part)
             .trim()
             .to_string();
@@ -727,9 +721,8 @@ pub fn parse_token_creation_rich(
     }
 
     // Standard creature or noncreature token: "<count> [legendary] [<P>/<T>] <desc> token(s) [named <Name>] [with <kws>] [named <Name>]"
-    let (core, mut named, mut kw_tail) = if let Some((before, after)) = body
-        .split_once(" token named ")
-        .or_else(|| body.split_once(" tokens named "))
+    let (core, mut named, mut kw_tail) = if let Some((before, after)) =
+        split_once_any(&body, &[" token named ", " tokens named "])
     {
         match after.split_once(" with ") {
             Some((n, kw)) => (before, Some(n.trim().to_string()), Some(kw)),
@@ -739,10 +732,7 @@ pub fn parse_token_creation_rich(
         (before, None, Some(after))
     } else if let Some((before, after)) = body.split_once(" tokens with ") {
         (before, None, Some(after))
-    } else if let Some(before) = body
-        .strip_suffix(" tokens")
-        .or_else(|| body.strip_suffix(" token"))
-    {
+    } else if let Some(before) = strip_suffix_any(&body, &[" tokens", " token"]) {
         (before, None, None)
     } else {
         return Err(format!("unparsed_token:{raw}"));
@@ -768,30 +758,17 @@ pub fn parse_token_creation_rich(
     let (count_expr, mut cursor) =
         if words.len() >= 4 && words[0] == "twice" && words[1] == "that" && words[2] == "many" {
             (
-                ValueExprAst::Mul(
-                    Box::new(ValueExprAst::Const(2)),
-                    Box::new(ValueExprAst::PriorResult),
-                ),
+                ValueExprAst::Mul(vconst(2), Box::new(ValueExprAst::PriorResult)),
                 3,
             )
         } else if words.len() >= 4 && words[0] == "half" && words[1] == "that" && words[2] == "many"
         {
-            (
-                ValueExprAst::DivConst {
-                    expr: Box::new(ValueExprAst::PriorResult),
-                    denom: 2,
-                    rounding: Rounding::Down,
-                },
-                3,
-            )
+            (val_div(ValueExprAst::PriorResult, 2, Rounding::Down), 3)
         } else if words.len() >= 3 && words[0] == "that" && words[1] == "many" {
             (ValueExprAst::PriorResult, 2)
         } else if words.len() >= 3 && words[0] == "twice" && words[1] == "x" {
             (
-                ValueExprAst::Mul(
-                    Box::new(ValueExprAst::Const(2)),
-                    Box::new(ValueExprAst::ChosenX),
-                ),
+                ValueExprAst::Mul(vconst(2), Box::new(ValueExprAst::ChosenX)),
                 2,
             )
         } else {
