@@ -5,12 +5,16 @@ use super::parse_atomic_effect;
 use crate::ast::{
     AltCastCostAst, ColorArity, CompareOp, ControllerRelation, CostAtomAst, CountLimitAst,
     DurationAst, FilterPredicateAst, InstructionAst, ManaSpecAst, ModifiedCastPermissionAst,
-    NameFilterAst, ObjectFilterAst, ObjectFilterFlags, PlayerRefAst, ReplacementEffectAst,
-    StatBoundAst, StatKind, StaticAbilityAst, SubjectRefAst, TargetCountAst, TurnStepAst,
-    ValueExprAst, ZoneFilter,
+    ObjectFilterAst, ObjectFilterFlags, PlayerRefAst, StatBoundAst, StatKind, StaticAbilityAst,
+    SubjectRefAst, TargetCountAst, TurnStepAst, ValueExprAst, ZoneFilter,
 };
 use crate::clauses::costs::parse_cost_atom;
-use crate::combinators::parse_player_ref_or_the_player;
+use crate::combinators::{
+    anaphora, any_card_flt, any_spell_flt, box_anaphora, grp, ins_add_mana, ins_choose_group,
+    ins_counters, ins_dmg, ins_for_each_count, ins_grant_cast, ins_if, ins_move, ins_opt1,
+    ins_temp_static, parse_player_ref_or_the_player, self_obj, some1, split_once_any,
+    strip_prefix_any, strip_suffix_any, vconst,
+};
 use crate::filter::{
     parse_condition, parse_keyword_list, parse_object_filter, parse_player_ref,
     parse_subject_or_target, parse_value_expr,
@@ -201,9 +205,8 @@ pub(super) fn try_parse_cast_permission(low: &str, vocab: &Vocabulary) -> Option
             .or_else(|| obj_trim.strip_suffix(" from among cards exiled this way"))
         {
             (p, Some("exiled_this_way"), false)
-        } else if let Some(p) = obj_trim
-            .strip_suffix(" from among them")
-            .or_else(|| obj_trim.strip_suffix(" from among those cards"))
+        } else if let Some(p) =
+            strip_suffix_any(&obj_trim, &[" from among them", " from among those cards"])
         {
             (p, Some("from_among_those"), false)
         } else if let Some(p) = obj_trim.strip_suffix(" from among the copies") {
@@ -237,82 +240,23 @@ pub(super) fn parse_mana_riders_and_alt_costs(
     low: &str,
     vocab: &Vocabulary,
 ) -> Option<Vec<InstructionAst>> {
-    // Compositional mana-spend enters-with-counters rider:
-    // "if you spend this mana to cast <filter>, it enters with [a number of ][additional ]<kind> counters on it [equal to <val>]"
-    if let Some(after) = low.strip_prefix("if you spend this mana to cast ")
-        && let Some((cast_raw, rider_raw)) = after.split_once(", it enters with ")
-        && let Ok(mut cast_filter) = parse_object_filter(cast_raw.trim(), vocab)
-    {
-        if cast_raw.trim() == "your commander" {
-            cast_filter.flags = cast_filter.flags.union(ObjectFilterFlags::IS_COMMANDER);
-            cast_filter.owner = Some(ControllerRelation::You);
-        }
-        let (cnt_expr, kind_str, additional) = if let Some((mid, val_raw)) =
-            rider_raw.split_once(" on it equal to ")
-            && let Ok(val) = parse_value_expr(val_raw.trim(), vocab)
-        {
-            let m = mid
-                .trim()
-                .strip_prefix("a number of ")
-                .unwrap_or(mid.trim());
-            let (additional, k_tail) = match m.strip_prefix("additional ") {
-                Some(r) => (true, r),
-                None => (false, m),
-            };
-            let kind = k_tail
-                .strip_suffix(" counters")
-                .or_else(|| k_tail.strip_suffix(" counter"))?
-                .trim();
-            (val, kind.to_string(), additional)
-        } else {
-            let mid = rider_raw
-                .strip_suffix(" counters on it")
-                .or_else(|| rider_raw.strip_suffix(" counter on it"))?;
-            let (additional, rest) = match mid.strip_prefix("an additional ") {
-                Some(r) => (true, r),
-                None => match mid.strip_prefix("additional ") {
-                    Some(r) => (true, r),
-                    None => (false, mid),
-                },
-            };
-            let (cnt, k) = crate::clauses::costs::peel_leading_count(rest.trim(), vocab);
-            (cnt, k.trim().to_string(), additional)
-        };
-        return Some(vec![InstructionAst::ManaSpendRider {
-            cast_filter: Box::new(cast_filter),
-            rider: vec![InstructionAst::TemporaryReplacement {
-                replacement: Box::new(ReplacementEffectAst::OthersEnterWithCounters {
-                    subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                    counter_kind: kind_str,
-                    count: Box::new(cnt_expr),
-                    additional,
-                    per: None,
-                }),
-                duration: DurationAst::Instant,
-            }],
-        }]);
-    }
-
     // Compositional next-spell alternative cast cost:
     // "rather than pay the mana cost of the next <spell_filter> you cast this turn, you may <cost>"
     if let Some(after) = low.strip_prefix("rather than pay the mana cost of the next ")
         && let Some((spell_raw, cost_raw)) = after.split_once(" you cast this turn, you may ")
         && let Ok(cost_atom) = crate::clauses::parse_cost_atom(cost_raw.trim(), vocab)
     {
-        let mut flt = parse_object_filter(spell_raw.trim(), vocab).unwrap_or(ObjectFilterAst {
-            any_spell: true,
-            ..Default::default()
-        });
+        let mut flt = parse_object_filter(spell_raw.trim(), vocab).unwrap_or(any_spell_flt());
         flt.controller = Some(ControllerRelation::You);
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::AlternativeCastCost {
+        return some1(ins_temp_static(
+            StaticAbilityAst::AlternativeCastCost {
                 cost: vec![cost_atom],
                 condition: None,
                 for_spells: Some(Box::new(flt)),
                 next_only: true,
-            }),
-            duration: DurationAst::UntilEndOfTurn,
-        }]);
+            },
+            DurationAst::UntilEndOfTurn,
+        ));
     }
 
     // Compositional temporary mana-as-any-type/color rule for one spell this turn
@@ -321,31 +265,13 @@ pub(super) fn parse_mana_riders_and_alt_costs(
         && let Some((kind_word, _)) = after.split_once(" to pay ")
         && matches!(kind_word.trim(), "type" | "color")
     {
-        return Some(vec![InstructionAst::TemporaryManaSpendRule {
+        return some1(InstructionAst::TemporaryManaSpendRule {
             mana_kind: None,
             as_though: format!("mana_of_any_{}", kind_word.trim()),
             purpose: Some("pay_spell_mana_cost".to_string()),
             duration: DurationAst::UntilEndOfTurn,
             next_only: true,
-        }]);
-    }
-
-    // Alternative cast cost trap lines: "if <cond>, you may pay <cost> rather than pay ~'s mana cost"
-    if let Some(after_if) = low.strip_prefix("if ")
-        && let Some((cond_raw, rest)) = after_if.split_once(", you may pay ")
-        && let Some(cost_raw) = rest.strip_suffix(" rather than pay ~'s mana cost")
-        && let Ok(cond) = parse_condition(cond_raw.trim(), vocab)
-        && let Ok(cost_atom) = crate::clauses::parse_cost_atom(cost_raw.trim(), vocab)
-    {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::AlternativeCastCost {
-                cost: vec![cost_atom],
-                condition: Some(Box::new(cond)),
-                for_spells: None,
-                next_only: false,
-            }),
-            duration: DurationAst::Instant,
-        }]);
+        });
     }
 
     // Compositional bonus die-roll: "roll a <sides>-sided die plus an additional <sides>-sided die for each <expr>"
@@ -358,36 +284,20 @@ pub(super) fn parse_mana_riders_and_alt_costs(
     {
         return Some(vec![
             InstructionAst::RollDie { sides },
-            InstructionAst::ForEachCount {
-                count: Box::new(count),
-                body: vec![InstructionAst::RollDie { sides }],
-            },
+            ins_for_each_count(count, vec![InstructionAst::RollDie { sides }]),
         ]);
     }
 
-    // Conditional "instead" wrappers (Caravan Vigil, Celestial Reunion, Dragon's Fire, Yidaro, etc.)
-    if let Some((before_instead, cond_raw)) =
-        low.split_once(" instead of putting it into your hand if ")
-        && let Ok(cond) = parse_condition(cond_raw.trim(), vocab)
-        && let Ok(inner) = parse_atomic_effect(before_instead.trim(), vocab)
-    {
-        return Some(vec![InstructionAst::IfCondition {
-            condition: Box::new(cond),
-            then_body: vec![InstructionAst::ReplaceEffect(inner)],
-        }]);
-    }
     if let Some(after_if) = low.strip_prefix("if ")
         && let Some((cond_raw, rest)) = after_if.split_once(", ")
         && let Ok(cond) = parse_condition(cond_raw.trim(), vocab)
-        && let Some(action_raw) = rest
-            .strip_suffix(" instead of putting it into your hand")
-            .or_else(|| rest.strip_suffix(" instead"))
+        && let Some(action_raw) = strip_suffix_any(
+            &rest,
+            &[" instead of putting it into your hand", " instead"],
+        )
     {
         if let Ok(inner) = parse_atomic_effect(action_raw.trim(), vocab) {
-            return Some(vec![InstructionAst::IfCondition {
-                condition: Box::new(cond),
-                then_body: vec![InstructionAst::ReplaceEffect(inner)],
-            }]);
+            return some1(ins_if(cond, vec![InstructionAst::ReplaceEffect(inner)]));
         }
         // Implicit-target damage replacement: "<src> deals damage equal to <val>"
         if let Some((src_raw, val_raw)) = action_raw.split_once(" deals damage equal to ")
@@ -396,16 +306,14 @@ pub(super) fn parse_mana_riders_and_alt_costs(
                 parse_value_expr(val_raw.trim(), vocab),
             )
         {
-            return Some(vec![InstructionAst::IfCondition {
-                condition: Box::new(cond),
-                then_body: vec![InstructionAst::ReplaceEffect(vec![
-                    InstructionAst::DealDamage {
-                        source: Box::new(source),
-                        target: Box::new(SubjectRefAst::Anaphora("previous_target".to_string())),
-                        amount: Box::new(amount),
-                    },
-                ])],
-            }]);
+            return some1(ins_if(
+                cond,
+                vec![InstructionAst::ReplaceEffect(vec![ins_dmg(
+                    source,
+                    anaphora("previous_target"),
+                    amount,
+                )])],
+            ));
         }
     }
 
@@ -422,10 +330,10 @@ pub(super) fn parse_forced_mana_abilities(
         Some(r) => (true, r),
         None => (false, low),
     };
-    let (core_act, lose_unspent) = match core
-        .strip_suffix(" and lose all unspent mana")
-        .or_else(|| core.strip_suffix(" and loses all unspent mana"))
-    {
+    let (core_act, lose_unspent) = match strip_suffix_any(
+        &core,
+        &[" and lose all unspent mana", " and loses all unspent mana"],
+    ) {
         Some(r) => (r, true),
         None => (core, false),
     };
@@ -473,10 +381,10 @@ pub(super) fn parse_extra_turns_steps_and_mana(
         .unwrap_or(low)
         .strip_suffix(" after this one")
         .unwrap_or_else(|| low.strip_prefix("after that turn, ").unwrap_or(low));
-    if let Some(cnt_raw) = turn_clean.strip_prefix("take ").and_then(|r| {
-        r.strip_suffix(" extra turns")
-            .or_else(|| r.strip_suffix(" extra turn"))
-    }) {
+    if let Some(cnt_raw) = turn_clean
+        .strip_prefix("take ")
+        .and_then(|r| strip_suffix_any(r, &[" extra turns", " extra turn"]))
+    {
         let n = if cnt_raw == "an" {
             1
         } else {
@@ -492,12 +400,8 @@ pub(super) fn parse_extra_turns_steps_and_mana(
             );
         }
     }
-    if let Some((who_raw, rest)) = turn_clean
-        .split_once(" takes ")
-        .or_else(|| turn_clean.split_once(" take "))
-        && let Some(cnt_raw) = rest
-            .strip_suffix(" extra turns")
-            .or_else(|| rest.strip_suffix(" extra turn"))
+    if let Some((who_raw, rest)) = split_once_any(&turn_clean, &[" takes ", " take "])
+        && let Some(cnt_raw) = strip_suffix_any(&rest, &[" extra turns", " extra turn"])
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
         let n = if cnt_raw == "an" {
@@ -516,10 +420,9 @@ pub(super) fn parse_extra_turns_steps_and_mana(
 
     // 2. Additional step ("you get an additional <step> step after this step" / "there is an additional <step> step after this step")
     // (The Ninth Doctor, Y'shtola Rhul)
-    if let Some(step_raw) = low
-        .strip_prefix("you get an additional ")
-        .or_else(|| low.strip_prefix("there is an additional "))
-        .and_then(|r| r.strip_suffix(" step after this step"))
+    if let Some(step_raw) =
+        strip_prefix_any(&low, &["you get an additional ", "there is an additional "])
+            .and_then(|r| r.strip_suffix(" step after this step"))
     {
         let step = match step_raw.trim() {
             "upkeep" => TurnStepAst::Upkeep,
@@ -528,11 +431,11 @@ pub(super) fn parse_extra_turns_steps_and_mana(
             "end" => TurnStepAst::EndStep,
             _ => return None,
         };
-        return Some(vec![InstructionAst::AdditionalStep {
+        return some1(InstructionAst::AdditionalStep {
             player: PlayerRefAst::You,
             step,
             count: 1,
-        }]);
+        });
     }
 
     // 3. Skip chosen step or phase this turn (Fatespinner)
@@ -540,10 +443,10 @@ pub(super) fn parse_extra_turns_steps_and_mana(
         low.split_once(" skips each instance of the chosen step or phase this turn")
     {
         let player = parse_player_ref(who_raw.trim()).unwrap_or(PlayerRefAst::ThatPlayer);
-        return Some(vec![InstructionAst::SkipAllPhasesNextTurn {
+        return some1(InstructionAst::SkipAllPhasesNextTurn {
             player,
             phase: "chosen_step_or_phase_this_turn".to_string(),
-        }]);
+        });
     }
 
     // 4. Control opponent during their next combat/turn phase (Secret of Bloodbending)
@@ -556,17 +459,17 @@ pub(super) fn parse_extra_turns_steps_and_mana(
         } else {
             DurationAst::UntilEndOfNextTurn
         };
-        return Some(vec![InstructionAst::ControlPlayerTurn {
+        return some1(InstructionAst::ControlPlayerTurn {
             player,
             duration: phase_dur,
-        }]);
+        });
     }
 
     // 5. Double each type of unspent mana (Doubling Cube)
     if low == "double the amount of each type of unspent mana you have" {
-        return Some(vec![InstructionAst::DoubleUnspentMana {
+        return some1(InstructionAst::DoubleUnspentMana {
             player: PlayerRefAst::You,
-        }]);
+        });
     }
 
     // 6. Drain unspent mana ("<player> loses all unspent mana and you add the mana lost this way") (Drain Power)
@@ -593,13 +496,13 @@ pub(super) fn parse_extra_turns_steps_and_mana(
         && (tail == "color they choose" || tail == "one color they choose")
         && let Ok(amount) = parse_value_expr(amt_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::AddMana {
+        return some1(ins_add_mana(
             player,
-            mana: ManaSpecAst::AnyColor {
+            ManaSpecAst::AnyColor {
                 amount: Box::new(amount),
                 single_color: tail.starts_with("one "),
             },
-        }]);
+        ));
     }
 
     // 8. "add <N> mana of that type [instead]" (Incubation Druid)
@@ -629,7 +532,7 @@ pub(super) fn parse_extra_turns_steps_and_mana(
         .and_then(|r| r.strip_suffix("'s mana cost"))
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::AddQualifiedMana(Box::new(
+        return some1(InstructionAst::AddQualifiedMana(Box::new(
             crate::ast::QualifiedManaAst {
                 player: PlayerRefAst::You,
                 kind: "equal_to_mana_cost".to_string(),
@@ -637,40 +540,40 @@ pub(super) fn parse_extra_turns_steps_and_mana(
                 source: Some(Box::new(subj)),
                 choices: Vec::new(),
             },
-        ))]);
+        )));
     }
     if low == "add one mana of either of the circled colors" {
-        return Some(vec![InstructionAst::AddQualifiedMana(Box::new(
+        return some1(InstructionAst::AddQualifiedMana(Box::new(
             crate::ast::QualifiedManaAst {
                 player: PlayerRefAst::You,
                 kind: "circled_colors".to_string(),
-                amount: Some(Box::new(ValueExprAst::Const(1))),
-                source: Some(Box::new(SubjectRefAst::SelfObject)),
+                amount: Some(vconst(1)),
+                source: Some(self_obj()),
                 choices: Vec::new(),
             },
-        ))]);
+        )));
     }
     if low == "add one mana of ~'s last noted type" {
-        return Some(vec![InstructionAst::AddQualifiedMana(Box::new(
+        return some1(InstructionAst::AddQualifiedMana(Box::new(
             crate::ast::QualifiedManaAst {
                 player: PlayerRefAst::You,
                 kind: "last_noted_type".to_string(),
-                amount: Some(Box::new(ValueExprAst::Const(1))),
-                source: Some(Box::new(SubjectRefAst::SelfObject)),
+                amount: Some(vconst(1)),
+                source: Some(self_obj()),
                 choices: Vec::new(),
             },
-        ))]);
+        )));
     }
     if low == "add ~'s last noted type and amount of mana" {
-        return Some(vec![InstructionAst::AddQualifiedMana(Box::new(
+        return some1(InstructionAst::AddQualifiedMana(Box::new(
             crate::ast::QualifiedManaAst {
                 player: PlayerRefAst::You,
                 kind: "last_noted_type_and_amount".to_string(),
                 amount: None,
-                source: Some(Box::new(SubjectRefAst::SelfObject)),
+                source: Some(self_obj()),
                 choices: Vec::new(),
             },
-        ))]);
+        )));
     }
 
     // 10. Temporary mana color replacement ("spells and abilities you control that would add colored mana instead add that much <color> mana") (False Dawn)
@@ -687,47 +590,45 @@ pub(super) fn parse_extra_turns_steps_and_mana(
             "colorless" => "{C}",
             _ => return None,
         };
-        return Some(vec![InstructionAst::ReplaceManaProduction {
-            subject: Box::new(SubjectRefAst::Anaphora(
-                "spells and abilities you control".to_string(),
-            )),
+        return some1(InstructionAst::ReplaceManaProduction {
+            subject: box_anaphora("spells and abilities you control"),
             replace_with: ManaSpecAst::ScaledSymbol {
                 symbol: sym.to_string(),
                 amount: Box::new(ValueExprAst::PriorResult),
             },
             duration: dur.clone(),
-        }]);
+        });
     }
 
     // 11. Foretell / Flashback / Suspend derived costs (Ethereal Valkyrie, Sphinx of Forgotten Lore, The Face of Boe)
     if let Some(delta_raw) = low.strip_prefix("its foretell cost is its mana cost reduced by ") {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::FlashbackCostModifier {
+        return some1(ins_temp_static(
+            StaticAbilityAst::FlashbackCostModifier {
                 cost: "foretell_mana_cost".to_string(),
                 delta: delta_raw.trim().to_ascii_uppercase(),
-            }),
-            duration: DurationAst::Permanent,
-        }]);
+            },
+            DurationAst::Permanent,
+        ));
     }
     if low == "the flashback cost is equal to that card's mana cost" {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::FlashbackCostModifier {
+        return some1(ins_temp_static(
+            StaticAbilityAst::FlashbackCostModifier {
                 cost: "mana_cost".to_string(),
                 delta: "{0}".to_string(),
-            }),
-            duration: dur.clone(),
-        }]);
+            },
+            dur.clone(),
+        ));
     }
     if low == "pay its suspend cost rather than its mana cost" {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::AlternativeCastCost {
+        return some1(ins_temp_static(
+            StaticAbilityAst::AlternativeCastCost {
                 cost: vec![CostAtomAst::PayMana("suspend_cost".to_string())],
                 condition: None,
                 for_spells: None,
                 next_only: true,
-            }),
-            duration: DurationAst::Instant,
-        }]);
+            },
+            DurationAst::Instant,
+        ));
     }
 
     None
@@ -741,38 +642,24 @@ pub(super) fn parse_cast_copy_and_zone_actions(
     _dur: &DurationAst,
     vocab: &Vocabulary,
 ) -> Option<Vec<InstructionAst>> {
-    // 1. Cast as though it had flash (Primal Prayers, Elsha of the Infinite, Scout's Warning)
-    if low == "you may cast it as though it had flash" {
-        return Some(vec![InstructionAst::Optional(vec![
-            InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::GrantKeywords {
-                    subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                    keywords: vec!["flash".to_string()],
-                    condition: None,
-                    paired_rule: None,
-                }),
-                duration: DurationAst::Instant,
-            },
-        ])]);
-    }
     if let Some(after) = low.strip_prefix("the next ")
         && let Some((flt_raw, _)) = after
             .split_once(" you play this turn can be played as though it had flash")
             .or_else(|| after.split_once(" you cast this turn can be cast as though it had flash"))
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::NextSpellModifier {
+        return some1(ins_temp_static(
+            StaticAbilityAst::NextSpellModifier {
                 filter: Box::new(flt.clone()),
                 effect: Box::new(StaticAbilityAst::GrantKeywords {
-                    subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                    subject: Box::new(grp(flt)),
                     keywords: vec!["flash".to_string()],
                     condition: None,
                     paired_rule: None,
                 }),
-            }),
-            duration: DurationAst::UntilEndOfTurn,
-        }]);
+            },
+            DurationAst::UntilEndOfTurn,
+        ));
     }
 
     // 2. "the next <flt1> and the next <flt2> you cast this turn each have <kw>" (Smoldering Stagecoach)
@@ -786,30 +673,30 @@ pub(super) fn parse_cast_copy_and_zone_actions(
         && let Some(kws) = parse_keyword_list(kw_raw.trim(), vocab)
     {
         return Some(vec![
-            InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::NextSpellModifier {
+            ins_temp_static(
+                StaticAbilityAst::NextSpellModifier {
                     filter: Box::new(f1.clone()),
                     effect: Box::new(StaticAbilityAst::GrantKeywords {
-                        subject: Box::new(SubjectRefAst::Group(Box::new(f1))),
+                        subject: Box::new(grp(f1)),
                         keywords: kws.clone(),
                         condition: None,
                         paired_rule: None,
                     }),
-                }),
-                duration: DurationAst::UntilEndOfTurn,
-            },
-            InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::NextSpellModifier {
+                },
+                DurationAst::UntilEndOfTurn,
+            ),
+            ins_temp_static(
+                StaticAbilityAst::NextSpellModifier {
                     filter: Box::new(f2.clone()),
                     effect: Box::new(StaticAbilityAst::GrantKeywords {
-                        subject: Box::new(SubjectRefAst::Group(Box::new(f2))),
+                        subject: Box::new(grp(f2)),
                         keywords: kws,
                         condition: None,
                         paired_rule: None,
                     }),
-                }),
-                duration: DurationAst::UntilEndOfTurn,
-            },
+                },
+                DurationAst::UntilEndOfTurn,
+            ),
         ]);
     }
 
@@ -823,42 +710,36 @@ pub(super) fn parse_cast_copy_and_zone_actions(
     {
         flt.zone = Some(ZoneFilter::OutsideTheGame);
         flt.owner = Some(ControllerRelation::You);
-        return Some(vec![InstructionAst::GrantCastPermission {
+        return some1(InstructionAst::GrantCastPermission {
             player: PlayerRefAst::You,
             cast_only: true,
-            subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+            subject: Box::new(grp(flt)),
             free: true,
             duration: "now".to_string(),
             count_limit: Some(CountLimitAst::AnyNumber),
             alt_cost: None,
-        }]);
+        });
     }
     if low == "cast the copies if able without paying their mana costs" {
-        return Some(vec![InstructionAst::GrantCastPermission {
-            player: PlayerRefAst::You,
-            cast_only: true,
-            subject: Box::new(SubjectRefAst::Anaphora("the copies".to_string())),
-            free: true,
-            duration: "now".to_string(),
-            count_limit: None,
-            alt_cost: None,
-        }]);
+        return some1(ins_grant_cast(
+            PlayerRefAst::You,
+            true,
+            anaphora("the copies"),
+            true,
+            "now",
+        ));
     }
     if let Some(after) = low.strip_prefix("you may cast ") {
         if let Some(flt_raw) = after.strip_suffix(" this way without paying their mana costs")
             && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
         {
-            return Some(vec![InstructionAst::Optional(vec![
-                InstructionAst::GrantCastPermission {
-                    player: PlayerRefAst::You,
-                    cast_only: true,
-                    subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
-                    free: true,
-                    duration: "this_way".to_string(),
-                    count_limit: None,
-                    alt_cost: None,
-                },
-            ])]);
+            return some1(ins_opt1(ins_grant_cast(
+                PlayerRefAst::You,
+                true,
+                grp(flt),
+                true,
+                "this_way",
+            )));
         }
         if let Some(after_up) = after.strip_prefix("up to ")
             && let Some((cnt_raw, tail)) = after_up.split_once(" spells from among ")
@@ -867,17 +748,15 @@ pub(super) fn parse_cast_copy_and_zone_actions(
         {
             let subj = parse_subject_or_target(pool_raw.trim(), vocab)
                 .unwrap_or_else(|_| SubjectRefAst::Anaphora(pool_raw.trim().to_string()));
-            return Some(vec![InstructionAst::Optional(vec![
-                InstructionAst::GrantCastPermission {
-                    player: PlayerRefAst::You,
-                    cast_only: true,
-                    subject: Box::new(subj),
-                    free: true,
-                    duration: "now".to_string(),
-                    count_limit: Some(CountLimitAst::UpTo(Box::new(cnt))),
-                    alt_cost: None,
-                },
-            ])]);
+            return some1(ins_opt1(InstructionAst::GrantCastPermission {
+                player: PlayerRefAst::You,
+                cast_only: true,
+                subject: Box::new(subj),
+                free: true,
+                duration: "now".to_string(),
+                count_limit: Some(CountLimitAst::UpTo(Box::new(cnt))),
+                alt_cost: None,
+            }));
         }
         if let Some((subj_raw, cost_tail)) = after.split_once(" by ")
             && let Some(cost_raw) = cost_tail.strip_suffix(" rather than paying its mana cost")
@@ -888,33 +767,27 @@ pub(super) fn parse_cast_copy_and_zone_actions(
                 .strip_prefix("discarding ")
                 .map_or_else(|| cost_raw.trim().to_string(), |r| format!("discard {r}"));
             if let Ok(atom) = parse_cost_atom(&norm_cost, vocab) {
-                return Some(vec![InstructionAst::Optional(vec![
-                    InstructionAst::GrantCastPermission {
-                        player: PlayerRefAst::You,
-                        cast_only: true,
-                        subject: Box::new(subj),
-                        free: false,
-                        duration: "now".to_string(),
-                        count_limit: None,
-                        alt_cost: Some(AltCastCostAst::PayCost(vec![atom])),
-                    },
-                ])]);
+                return some1(ins_opt1(InstructionAst::GrantCastPermission {
+                    player: PlayerRefAst::You,
+                    cast_only: true,
+                    subject: Box::new(subj),
+                    free: false,
+                    duration: "now".to_string(),
+                    count_limit: None,
+                    alt_cost: Some(AltCastCostAst::PayCost(vec![atom])),
+                }));
             }
         }
         if let Some(subj_raw) = after.strip_suffix(" without paying its mana cost")
             && subj_raw.contains(" milled this way")
         {
-            return Some(vec![InstructionAst::Optional(vec![
-                InstructionAst::GrantCastPermission {
-                    player: PlayerRefAst::You,
-                    cast_only: true,
-                    subject: Box::new(SubjectRefAst::Anaphora(subj_raw.trim().to_string())),
-                    free: true,
-                    duration: "now".to_string(),
-                    count_limit: None,
-                    alt_cost: None,
-                },
-            ])]);
+            return some1(ins_opt1(ins_grant_cast(
+                PlayerRefAst::You,
+                true,
+                SubjectRefAst::Anaphora(subj_raw.trim().to_string()),
+                true,
+                "now",
+            )));
         }
     }
 
@@ -922,9 +795,9 @@ pub(super) fn parse_cast_copy_and_zone_actions(
     if let Some(subj_raw) = low.strip_prefix("unlock a locked door of ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::UnlockDoor {
+        return some1(InstructionAst::UnlockDoor {
             subject: Box::new(subj),
-        }]);
+        });
     }
 
     // 5. Meld paired cards (Vanille, Cheerful l'Cie and future meld cards)
@@ -935,17 +808,17 @@ pub(super) fn parse_cast_copy_and_zone_actions(
         let into_name = s.get(into_start..).unwrap_or(into_low).trim().to_string();
         let subj = parse_subject_or_target(subj_raw.trim(), vocab)
             .unwrap_or_else(|_| SubjectRefAst::Anaphora(subj_raw.trim().to_string()));
-        return Some(vec![InstructionAst::Meld {
+        return some1(InstructionAst::Meld {
             subject: Box::new(subj),
             into_name,
-        }]);
+        });
     }
 
     // 6. Manifest / Cloak top card of library (Reality Shift, Thieving Amalgam, Unexplained Absence)
-    if let Some((who_raw, rest)) = low
-        .split_once(" manifests the top card of ")
-        .or_else(|| low.split_once(" manifest the top card of "))
-        && let Some(whose_raw) = rest.strip_suffix(" library")
+    if let Some((who_raw, rest)) = split_once_any(
+        &low,
+        &[" manifests the top card of ", " manifest the top card of "],
+    ) && let Some(whose_raw) = rest.strip_suffix(" library")
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
         let subject = Some(Box::new(SubjectRefAst::Anaphora(format!(
@@ -953,23 +826,23 @@ pub(super) fn parse_cast_copy_and_zone_actions(
             whose_raw.trim()
         ))));
         if player == PlayerRefAst::You {
-            return Some(vec![InstructionAst::Manifest {
-                count: Box::new(ValueExprAst::Const(1)),
+            return some1(InstructionAst::Manifest {
+                count: vconst(1),
                 dread: false,
                 subject,
-            }]);
+            });
         }
-        return Some(vec![InstructionAst::ManifestByPlayer {
+        return some1(InstructionAst::ManifestByPlayer {
             player,
-            count: Box::new(ValueExprAst::Const(1)),
+            count: vconst(1),
             dread: false,
             subject,
-        }]);
+        });
     }
-    if let Some((who_raw, rest)) = low
-        .split_once(" cloaks the top card of ")
-        .or_else(|| low.split_once(" cloak the top card of "))
-        && let Some(whose_raw) = rest.strip_suffix(" library")
+    if let Some((who_raw, rest)) = split_once_any(
+        &low,
+        &[" cloaks the top card of ", " cloak the top card of "],
+    ) && let Some(whose_raw) = rest.strip_suffix(" library")
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
         let subject = Some(Box::new(SubjectRefAst::Anaphora(format!(
@@ -977,24 +850,23 @@ pub(super) fn parse_cast_copy_and_zone_actions(
             whose_raw.trim()
         ))));
         if player == PlayerRefAst::You {
-            return Some(vec![InstructionAst::Cloak {
-                count: Box::new(ValueExprAst::Const(1)),
+            return some1(InstructionAst::Cloak {
+                count: vconst(1),
                 subject,
-            }]);
+            });
         }
-        return Some(vec![InstructionAst::CloakByPlayer {
+        return some1(InstructionAst::CloakByPlayer {
             player,
-            count: Box::new(ValueExprAst::Const(1)),
+            count: vconst(1),
             subject,
-        }]);
+        });
     }
 
     // 7. "<player> exiles <subj> with <val> <ck> counters on it" (Ertai's Meddling)
     if let Some((who_raw, rest)) = low.split_once(" exiles ")
         && let Some((subj_raw, cnt_tail)) = rest.split_once(" with ")
-        && let Some(cnt_and_kind) = cnt_tail
-            .strip_suffix(" counters on it")
-            .or_else(|| cnt_tail.strip_suffix(" counter on it"))
+        && let Some(cnt_and_kind) =
+            strip_suffix_any(&cnt_tail, &[" counters on it", " counter on it"])
         && let Some((cnt_raw, ck_raw)) = cnt_and_kind.split_once(' ')
         && let (Ok(subj), Ok(count)) = (
             parse_subject_or_target(subj_raw.trim(), vocab),
@@ -1002,25 +874,12 @@ pub(super) fn parse_cast_copy_and_zone_actions(
         )
     {
         let _ = who_raw;
-        return Some(vec![InstructionAst::ExileWithCounters {
+        return some1(InstructionAst::ExileWithCounters {
             subject: Box::new(subj),
             counter_kind: ck_raw.trim().to_string(),
             count: Box::new(count),
             face_down: false,
-        }]);
-    }
-
-    // 8. Phase out unchosen permanents (Disciple of Caelus Nin)
-    if let Some(subj_raw) = low.strip_suffix(" phase out") {
-        let clean = subj_raw
-            .trim()
-            .strip_prefix("all ")
-            .unwrap_or(subj_raw.trim());
-        if let Ok(flt) = parse_object_filter(clean, vocab) {
-            return Some(vec![InstructionAst::PhaseOut {
-                subject: Box::new(SubjectRefAst::All(Box::new(flt))),
-            }]);
-        }
+        });
     }
 
     // 9. Library/graveyard reordering, owner shuffles, reveal-into-hand, choose-and-discard-rest
@@ -1029,31 +888,31 @@ pub(super) fn parse_cast_copy_and_zone_actions(
         return Some(vec![InstructionAst::ReorderTopLibrary]);
     }
     if low == "reorder your graveyard at random" {
-        return Some(vec![InstructionAst::ReorderZone {
+        return some1(InstructionAst::ReorderZone {
             player: PlayerRefAst::You,
             zone: ZoneFilter::YourGraveyard,
             random: true,
-        }]);
+        });
     }
     if low == "their owners shuffle those cards into their libraries" {
-        return Some(vec![InstructionAst::ShuffleIntoLibrary {
-            subject: Box::new(SubjectRefAst::Anaphora("those cards".to_string())),
-        }]);
+        return some1(InstructionAst::ShuffleIntoLibrary {
+            subject: box_anaphora("those cards"),
+        });
     }
     if let Some(after) = low.strip_prefix("choose ")
         && let Some((cnt_raw, _)) = after.split_once(" cards in your hand and discard the rest")
         && let Ok(cnt) = parse_value_expr(cnt_raw.trim(), vocab)
     {
         return Some(vec![
-            InstructionAst::ChooseFromGroup {
-                count: Box::new(cnt),
-                random: false,
-                group: Box::new(SubjectRefAst::Group(Box::new(ObjectFilterAst {
+            ins_choose_group(
+                cnt,
+                false,
+                grp(ObjectFilterAst {
                     any_card: true,
                     zone: Some(ZoneFilter::YourHand),
                     ..Default::default()
-                }))),
-            },
+                }),
+            ),
             InstructionAst::Discard {
                 player: PlayerRefAst::You,
                 count: None,
@@ -1066,20 +925,14 @@ pub(super) fn parse_cast_copy_and_zone_actions(
     if low == "you each put the card you revealed into your hand"
         || low == "they each put the card they revealed into their hand"
     {
-        return Some(vec![InstructionAst::MoveZone {
-            subject: Box::new(SubjectRefAst::Anaphora("the card revealed".to_string())),
-            to: "hand".to_string(),
-        }]);
+        return some1(ins_move(anaphora("the card revealed"), "hand"));
     }
     if let Some(after) = low.strip_prefix("reveal a card that's exactly ")
         && let Some((num_raw, _)) =
             after.split_once(" colors from among them and put it into your hand")
         && let Some(n) = parse_number_word(num_raw.trim())
     {
-        let mut flt = ObjectFilterAst {
-            any_card: true,
-            ..Default::default()
-        };
+        let mut flt = any_card_flt();
         if n >= 2 {
             flt.color_arity = Some(ColorArity::Multicolored);
         }
@@ -1089,12 +942,9 @@ pub(super) fn parse_cast_copy_and_zone_actions(
             )));
         return Some(vec![
             InstructionAst::RevealCards {
-                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                subject: Box::new(grp(flt)),
             },
-            InstructionAst::MoveZone {
-                subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
-                to: "your hand".to_string(),
-            },
+            ins_move(anaphora("that card"), "your hand"),
         ]);
     }
 
@@ -1108,7 +958,7 @@ pub(super) fn parse_cast_copy_and_zone_actions(
         flt.zone = Some(ZoneFilter::YourGraveyard);
         return Some(vec![
             InstructionAst::ReturnZone {
-                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                subject: Box::new(grp(flt)),
                 from_zone: Some("your graveyard".to_string()),
                 to: "battlefield".to_string(),
                 tapped: false,
@@ -1117,16 +967,16 @@ pub(super) fn parse_cast_copy_and_zone_actions(
                 attached_to: None,
                 random: false,
                 except: None,
-                count: Some(Box::new(ValueExprAst::Const(1))),
+                count: Some(vconst(1)),
                 up_to: false,
                 any_number: false,
                 actor: None,
             },
-            InstructionAst::PutCounters {
-                subject: Box::new(SubjectRefAst::Anaphora("that creature".to_string())),
-                counter_kind: ck_raw.trim().to_string(),
-                count: Box::new(ValueExprAst::PriorResult),
-            },
+            ins_counters(
+                anaphora("that creature"),
+                ck_raw.trim().to_string(),
+                ValueExprAst::PriorResult,
+            ),
         ]);
     }
     if let Some(after) =
@@ -1145,7 +995,7 @@ pub(super) fn parse_cast_copy_and_zone_actions(
             op: CompareOp::Le,
             value: Box::new(val),
         });
-        return Some(vec![InstructionAst::ReturnZone {
+        return some1(InstructionAst::ReturnZone {
             subject: Box::new(SubjectRefAst::TargetObject {
                 filter: Box::new(flt),
                 count: TargetCountAst::AnyNumber,
@@ -1162,129 +1012,50 @@ pub(super) fn parse_cast_copy_and_zone_actions(
             up_to: false,
             any_number: true,
             actor: None,
-        }]);
-    }
-
-    // 11. Multi-named card search & draft-noted card search (Nissa's Encouragement, Aether Searcher)
-    if let Some(after) = low.strip_prefix("search your library and graveyard for a card named ") {
-        let mut names = Vec::new();
-        let raw_start = s.len().saturating_sub(after.len());
-        let orig_after = s.get(raw_start..).unwrap_or(after);
-        for chunk in orig_after
-            .replace(", and a card named ", "|")
-            .replace(", a card named ", "|")
-            .split('|')
-        {
-            let name = chunk.trim();
-            if !name.is_empty() {
-                names.push(name.to_string());
-            }
-        }
-        if names.len() >= 2 {
-            let searches = names
-                .into_iter()
-                .map(|name| InstructionAst::SearchLibrary {
-                    library: "your".to_string(),
-                    count: Box::new(ValueExprAst::Const(1)),
-                    up_to: false,
-                    any_number: false,
-                    exact: false,
-                    filter: Box::new(ObjectFilterAst {
-                        any_card: true,
-                        named: Some(NameFilterAst::Exact(name)),
-                        ..Default::default()
-                    }),
-                    reveal: false,
-                    to_zone: "found".to_string(),
-                    shuffle: false,
-                    extra_zones: vec![ZoneFilter::YourGraveyard],
-                    secondary_filter: None,
-                    secondary_is_or: false,
-                    where_x: None,
-                    rest_to_zone: None,
-                    modifier: None,
-                    follow_up: Vec::new(),
-                })
-                .collect();
-            return Some(searches);
-        }
-    }
-    if let Some(after) = low.strip_prefix("you may search your hand and/or library for a card with a name noted as you drafted cards named ~")
-        && after.is_empty()
-    {
-        return Some(vec![InstructionAst::Optional(vec![
-            InstructionAst::SearchLibrary {
-                library: "your".to_string(),
-                count: Box::new(ValueExprAst::Const(1)),
-                up_to: false,
-                any_number: false,
-                exact: false,
-                filter: Box::new(ObjectFilterAst {
-                    any_card: true,
-                    predicates: vec![FilterPredicateAst::StateQualification(
-                        "name_noted_drafted_self".to_string(),
-                    )],
-                    ..Default::default()
-                }),
-                reveal: false,
-                to_zone: "found".to_string(),
-                shuffle: false,
-                extra_zones: vec![ZoneFilter::YourHand],
-                secondary_filter: None,
-                secondary_is_or: false,
-                where_x: None,
-                rest_to_zone: None,
-                modifier: None,
-                follow_up: Vec::new(),
-            },
-        ])]);
+        });
     }
 
     // 12. Delayed loyalty-ability copy, Tempt-with-Mayhem scaled spell copy, target/attacker reselection
     // (Jaya's Phoenix, Tempt with Mayhem, Chef's Kiss, Capricopian)
     if low == "copy the next loyalty ability you activate this turn when you activate it" {
-        return Some(vec![InstructionAst::WhenYouNext {
+        return some1(InstructionAst::WhenYouNext {
             event: "activate_loyalty_ability".to_string(),
             body: vec![InstructionAst::Copy {
-                subject: Box::new(SubjectRefAst::Anaphora("that ability".to_string())),
+                subject: box_anaphora("that ability"),
                 exception: None,
                 count: None,
             }],
             duration: DurationAst::UntilEndOfTurn,
-        }]);
+        });
     }
     if low
         == "you copy that spell once plus an additional time for each opponent who copied the spell this way"
     {
-        return Some(vec![InstructionAst::Copy {
-            subject: Box::new(SubjectRefAst::Anaphora("that spell".to_string())),
+        return some1(InstructionAst::Copy {
+            subject: box_anaphora("that spell"),
             exception: None,
             count: Some(Box::new(ValueExprAst::Add(
-                Box::new(ValueExprAst::Const(1)),
+                vconst(1),
                 Box::new(ValueExprAst::CountPlayersMatching {
                     predicate: "opponent_copied_spell_this_way".to_string(),
                 }),
             ))),
-        }]);
+        });
     }
     if low == "reselect the targets at random for the spell and the copy" {
-        return Some(vec![InstructionAst::ReselectTargets {
-            subject: Box::new(SubjectRefAst::Anaphora(
-                "the spell and the copy".to_string(),
-            )),
+        return some1(InstructionAst::ReselectTargets {
+            subject: box_anaphora("the spell and the copy"),
             random: true,
-        }]);
+        });
     }
     if let Some(after) = low.strip_prefix("you may reselect which player ")
         && let Some(subj_raw) = after.strip_suffix(" is attacking")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::Optional(vec![
-            InstructionAst::ReselectTargets {
-                subject: Box::new(subj),
-                random: false,
-            },
-        ])]);
+        return some1(ins_opt1(InstructionAst::ReselectTargets {
+            subject: Box::new(subj),
+            random: false,
+        }));
     }
 
     None
@@ -1304,11 +1075,11 @@ pub(super) fn parse_resolution_control_and_forced_play(
         .and_then(|r| r.strip_suffix(" until ~ finishes resolving"))
         && let Some(controlled) = parse_player_ref_or_the_player(who_raw.trim())
     {
-        return Some(vec![InstructionAst::ControlPlayerDuringResolution {
+        return some1(InstructionAst::ControlPlayerDuringResolution {
             controller: PlayerRefAst::You,
             controlled,
             during_chosen_spell: false,
-        }]);
+        });
     }
 
     // 2. Word of Command S5 then-body: "you control <player> while that spell is resolving"
@@ -1317,30 +1088,27 @@ pub(super) fn parse_resolution_control_and_forced_play(
         .and_then(|r| r.strip_suffix(" while that spell is resolving"))
         && let Some(controlled) = parse_player_ref_or_the_player(who_raw.trim())
     {
-        return Some(vec![InstructionAst::ControlPlayerDuringResolution {
+        return some1(InstructionAst::ControlPlayerDuringResolution {
             controller: PlayerRefAst::You,
             controlled,
             during_chosen_spell: true,
-        }]);
+        });
     }
 
     // 3. Word of Command S3: "<player> plays/casts <subj> if able"
     if let Some(before_able) = low.strip_suffix(" if able")
-        && let Some((who_raw, subj_raw)) = before_able
-            .split_once(" plays ")
-            .or_else(|| before_able.split_once(" play "))
-            .or_else(|| before_able.split_once(" casts "))
-            .or_else(|| before_able.split_once(" cast "))
+        && let Some((who_raw, subj_raw)) =
+            split_once_any(&before_able, &[" plays ", " play ", " casts ", " cast "])
         && let (Some(player), Ok(subject)) = (
             parse_player_ref_or_the_player(who_raw.trim()),
             parse_subject_or_target(subj_raw.trim(), vocab),
         )
     {
-        return Some(vec![InstructionAst::ForcePlayCard {
+        return some1(InstructionAst::ForcePlayCard {
             player,
             subject: Box::new(subject),
             if_able: true,
-        }]);
+        });
     }
 
     // 4. Word of Command S4: "while doing so, <player> can activate mana abilities only if they're from <flt> and only if mana they produce is spent to activate other mana abilities of <flt> and/or to play that card"
@@ -1357,11 +1125,11 @@ pub(super) fn parse_resolution_control_and_forced_play(
         let spend_only_for_action_or_chained_mana = spend_tail.contains("other mana abilities")
             && (spend_tail.contains("to play that card") || spend_tail.contains("to cast that"));
         if spend_only_for_action_or_chained_mana {
-            return Some(vec![InstructionAst::RestrictManaAbilitiesDuringAction {
+            return some1(InstructionAst::RestrictManaAbilitiesDuringAction {
                 player,
                 allowed_source_filter: Box::new(allowed_source_filter),
                 spend_only_for_action_or_chained_mana: true,
-            }]);
+            });
         }
     }
 

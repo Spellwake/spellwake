@@ -1,11 +1,15 @@
 //! Trigger header (`TriggerSpecAst`) and trigger event (`TriggerEventAst`) grammar parser.
 
 use crate::ast::{
-    CardTypeMask, ConditionAst, ControllerRelation, ObjectFilterAst, PlayerRefAst, SubjectRefAst,
+    CardTypeMask, ControllerRelation, ObjectFilterAst, PlayerRefAst, SubjectRefAst,
     TriggerEventAst, TriggerSpecAst, TurnStepAst,
 };
 use crate::clauses::costs::peel_leading_count;
 use crate::clauses::statics::player_ref_to_controller_relation;
+use crate::combinators::{
+    any_card_flt, any_perm, cond_action, cond_counter_cmp, grp, obj_type, self_obj, split_once_any,
+    strip_prefix_any, strip_suffix_any,
+};
 use crate::filter::{
     parse_condition, parse_object_filter, parse_player_ref, parse_subject_or_target,
 };
@@ -33,15 +37,18 @@ pub fn parse_trigger_header(header: &str, vocab: &Vocabulary) -> Result<TriggerS
 
     // Compound trigger header: "<ev1> and/or whenever/when <ev2>" / "<ev1> and at the beginning of <step>"
     let clow = core_part.to_ascii_lowercase();
-    if let Some((left, right)) = clow
-        .split_once(", and whenever ")
-        .or_else(|| clow.split_once(" and whenever "))
-        .or_else(|| clow.split_once(", and when "))
-        .or_else(|| clow.split_once(" and when "))
-        .or_else(|| clow.split_once(", or whenever "))
-        .or_else(|| clow.split_once(" or whenever "))
-        .or_else(|| clow.split_once(", or when "))
-    {
+    if let Some((left, right)) = split_once_any(
+        &clow,
+        &[
+            ", and whenever ",
+            " and whenever ",
+            ", and when ",
+            " and when ",
+            ", or whenever ",
+            " or whenever ",
+            ", or when ",
+        ],
+    ) {
         let mut evs = parse_trigger_events(left, vocab)?;
         let right_trig = format!("whenever {right}");
         evs.extend(parse_trigger_events(&right_trig, vocab)?);
@@ -128,14 +135,14 @@ pub(crate) fn parse_trigger_events(
         return Ok(vec![TriggerEventAst::ChaosEnsues]);
     }
     if low == "at end of combat" || low == "at end of combat on your turn" {
-        return Ok(vec![TriggerEventAst::StepBegan {
-            step: TurnStepAst::EndOfCombat,
-            whose: if low.contains("your turn") {
+        return Ok(vec![trig_step(
+            TurnStepAst::EndOfCombat,
+            if low.contains("your turn") {
                 "your turn".to_string()
             } else {
                 "any".to_string()
             },
-        }]);
+        )]);
     }
     if low == "when you planeswalk to ~"
         || low == "when you planeswalk here"
@@ -160,30 +167,25 @@ pub(crate) fn parse_trigger_events(
     // CR 603.8 Counter threshold state trigger ("When there are 1,000 or more time counters on ~", The Millennium Calendar)
     if let Some(after) = low.strip_prefix("when there are ")
         && let Some((cnt_part, rest)) = after.split_once(" or more ")
-        && let Some((kind, subj_raw)) = rest
-            .split_once(" counters on ")
-            .or_else(|| rest.split_once(" counter on "))
+        && let Some((kind, subj_raw)) = split_once_any(&rest, &[" counters on ", " counter on "])
         && let (Some(n), Ok(subj)) = (
             parse_number_word(cnt_part.trim()),
             parse_subject_or_target(subj_raw, vocab),
         )
     {
         return Ok(vec![TriggerEventAst::StateTrigger(Box::new(
-            ConditionAst::CounterCompare {
-                subject: Box::new(subj),
-                counter_kind: kind.trim().to_string(),
-                op: crate::ast::CompareOp::Ge,
-                value: u16::try_from(n.max(0)).unwrap_or(u16::MAX),
-            },
+            cond_counter_cmp(
+                subj,
+                kind.trim().to_string(),
+                crate::ast::CompareOp::Ge,
+                u16::try_from(n.max(0)).unwrap_or(u16::MAX),
+            ),
         ))]);
     }
     // Mana-production triggers (Caged Sun, Gauntlet of Power) & Scry-bottom trigger (The Temporal Anchor)
     if low == "whenever a land's ability causes you to add one or more mana of the chosen color" {
         return Ok(vec![TriggerEventAst::LandTappedForManaColor {
-            filter: Box::new(ObjectFilterAst {
-                any_types: CardTypeMask::LAND,
-                ..Default::default()
-            }),
+            filter: Box::new(obj_type(CardTypeMask::LAND)),
             mana_color_filter: "chosen_color".to_string(),
             by_you: true,
         }]);
@@ -202,10 +204,7 @@ pub(crate) fn parse_trigger_events(
     if low
         == "whenever you choose to put one or more cards on the bottom of your library while scrying"
     {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: "scry_bottom".to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, "scry_bottom")]);
     }
     if low == "whenever you put one or more counters on a permanent or player" {
         return Ok(vec![TriggerEventAst::CountersChanged {
@@ -220,13 +219,11 @@ pub(crate) fn parse_trigger_events(
         .and_then(|r| r.strip_suffix(" dies or is put into the command zone"))
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::ZoneChange {
-            from: Some("battlefield".to_string()),
-            to: Some("graveyard_or_command".to_string()),
-            subject: Box::new(subj),
-            grouped: false,
-            entering_controller: None,
-        }]);
+        return Ok(vec![trig_zone(
+            Some("battlefield"),
+            Some("graveyard_or_command"),
+            subj,
+        )]);
     }
     if let Some(subj_raw) = low
         .strip_prefix("whenever ")
@@ -243,10 +240,10 @@ pub(crate) fn parse_trigger_events(
         .or_else(|| low.strip_prefix("when a spell or ability an opponent controls causes you to "))
         && (after_cause.starts_with("discard ") || after_cause.starts_with("sacrifice "))
     {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: format!("opponent_caused:{after_cause}"),
-        }]);
+        return Ok(vec![trig_kw(
+            PlayerRefAst::You,
+            format!("opponent_caused:{after_cause}"),
+        )]);
     }
     if let Some((a_part, b_part)) = low.split_once(" or when ")
         && let (Ok(mut ev1), Ok(mut ev2)) = (
@@ -258,33 +255,27 @@ pub(crate) fn parse_trigger_events(
         return Ok(ev1);
     }
     // General "<when/whenever> <player> attack[s] <subj> or a planeswalker they control" (Tenuous Truce)
-    if let Some(after_w) = low
-        .strip_prefix("when ")
-        .or_else(|| low.strip_prefix("whenever "))
-        && let Some((p_raw, tgt_raw)) = after_w
-            .split_once(" attack ")
-            .or_else(|| after_w.split_once(" attacks "))
+    if let Some(after_w) = strip_prefix_any(&low, &["when ", "whenever "])
+        && let Some((p_raw, tgt_raw)) = split_once_any(&after_w, &[" attack ", " attacks "])
         && let Some(actor) = parse_player_ref(p_raw.trim())
         && tgt_raw.contains(" or a planeswalker ")
     {
-        return Ok(vec![TriggerEventAst::Attacks {
-            actor: Some(actor),
-            subject: None,
-            grouped: true,
-            qualifier: Some(tgt_raw.to_string()),
-        }]);
+        return Ok(vec![trig_attacks_ext(
+            None,
+            Some(actor),
+            Some(tgt_raw.to_string()),
+            true,
+        )]);
     }
     // General CR 603.8 state triggers (Call to Arms, City in a Bottle)
     if low
         == "when the chosen color isn't the most common color among nontoken permanents the chosen player controls or is tied for most common"
         || (low.starts_with("whenever one or more ") && low.ends_with(" are on the battlefield"))
     {
-        return Ok(vec![TriggerEventAst::StateTrigger(Box::new(
-            ConditionAst::PlayerActionThisTurn {
-                player: PlayerRefAst::You,
-                action: low,
-            },
-        ))]);
+        return Ok(vec![TriggerEventAst::StateTrigger(Box::new(cond_action(
+            PlayerRefAst::You,
+            low,
+        )))]);
     }
     if matches!(
         low.as_str(),
@@ -294,65 +285,37 @@ pub(crate) fn parse_trigger_events(
             | "whenever an opponent who controls an artifact named ~ draws a card during their turn"
             | "whenever an opponent who controls an artifact named ~ gains life during their turn"
     ) {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: low,
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, low)]);
     }
     if low == "whenever a player casts their second spell during their turn" {
-        return Ok(vec![TriggerEventAst::SpellCast {
-            caster: PlayerRefAst::AnyPlayer,
-            spell: None,
-            self_spell: false,
-            targets: None,
-            nth_each_turn: Some(2),
-            include_copy: false,
-        }]);
+        return Ok(vec![trig_cast_ext(
+            PlayerRefAst::AnyPlayer,
+            None,
+            false,
+            None,
+            Some(2),
+            false,
+        )]);
     }
     if low == "whenever two or more creatures you control attack a player" {
-        return Ok(vec![TriggerEventAst::Attacks {
-            subject: None,
-            actor: Some(PlayerRefAst::You),
-            qualifier: Some("two_or_more".to_string()),
-            grouped: true,
-        }]);
-    }
-    if low
-        == "whenever you and/or at least one permanent you control becomes the target of a spell or ability"
-    {
-        return Ok(vec![TriggerEventAst::PlayerOrPermanentBecomesTargeted {
-            player: PlayerRefAst::You,
-            permanent_filter: Box::new(ObjectFilterAst {
-                any_permanent: true,
-                controller: Some(ControllerRelation::You),
-                ..Default::default()
-            }),
-        }]);
+        return Ok(vec![trig_attacks_ext(
+            None,
+            Some(PlayerRefAst::You),
+            Some("two_or_more".to_string()),
+            true,
+        )]);
     }
     if let Some(subj_raw) = low
         .strip_prefix("whenever ")
         .and_then(|r| r.strip_suffix(" enters transformed"))
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::ZoneChange {
-            from: None,
-            to: Some("battlefield_transformed".to_string()),
-            subject: Box::new(subj),
-            grouped: false,
-            entering_controller: None,
-        }]);
+        return Ok(vec![trig_zone(None, Some("battlefield_transformed"), subj)]);
     }
     if let Some(flt_raw) = low.strip_prefix("whenever you play ")
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::SpellCast {
-            caster: PlayerRefAst::You,
-            spell: Some(Box::new(flt)),
-            self_spell: false,
-            targets: None,
-            nth_each_turn: None,
-            include_copy: false,
-        }]);
+        return Ok(vec![trig_cast(PlayerRefAst::You, Some(flt))]);
     }
 
     // StepBegan: "at the beginning of ..." / "at the end of ..."
@@ -365,16 +328,10 @@ pub(crate) fn parse_trigger_events(
         };
 
         if let Some(owner) = rest.strip_prefix("the upkeep of ") {
-            return Ok(vec![TriggerEventAst::StepBegan {
-                step: TurnStepAst::Upkeep,
-                whose: owner.to_string(),
-            }]);
+            return Ok(vec![trig_step(TurnStepAst::Upkeep, owner.to_string())]);
         }
         if let Some(owner) = rest.strip_prefix("the end step of ") {
-            return Ok(vec![TriggerEventAst::StepBegan {
-                step: TurnStepAst::EndStep,
-                whose: owner.to_string(),
-            }]);
+            return Ok(vec![trig_step(TurnStepAst::EndStep, owner.to_string())]);
         }
 
         // Longest possessive match FIRST
@@ -439,20 +396,17 @@ pub(crate) fn parse_trigger_events(
             rest = r;
             "any"
         } else if rest.starts_with("combat on your turn") {
-            return Ok(vec![TriggerEventAst::StepBegan {
-                step: TurnStepAst::BeginningOfCombat,
-                whose: "you".to_string(),
-            }]);
+            return Ok(vec![trig_step(TurnStepAst::BeginningOfCombat, "you")]);
         } else if rest.starts_with("combat on each opponent's turn") {
-            return Ok(vec![TriggerEventAst::StepBegan {
-                step: TurnStepAst::BeginningOfCombat,
-                whose: "each_opponent".to_string(),
-            }]);
+            return Ok(vec![trig_step(
+                TurnStepAst::BeginningOfCombat,
+                "each_opponent",
+            )]);
         } else if rest.starts_with("combat on each player's turn") {
-            return Ok(vec![TriggerEventAst::StepBegan {
-                step: TurnStepAst::BeginningOfCombat,
-                whose: "each_player".to_string(),
-            }]);
+            return Ok(vec![trig_step(
+                TurnStepAst::BeginningOfCombat,
+                "each_player",
+            )]);
         } else {
             "any"
         };
@@ -486,15 +440,10 @@ pub(crate) fn parse_trigger_events(
         } else {
             return Err(format!("unparsed_step_trigger:{c}"));
         };
-        return Ok(vec![TriggerEventAst::StepBegan {
-            step,
-            whose: whose.to_string(),
-        }]);
+        return Ok(vec![trig_step(step, whose.to_string())]);
     }
 
-    let blow_raw = low
-        .strip_prefix("whenever ")
-        .or_else(|| low.strip_prefix("when "))
+    let blow_raw = strip_prefix_any(&low, &["whenever ", "when "])
         .unwrap_or(&low)
         .trim();
     let blow = blow_raw.strip_suffix(" this turn").unwrap_or(blow_raw);
@@ -507,7 +456,7 @@ pub(crate) fn parse_trigger_events(
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::AttacksWithOthers {
-            subject: Box::new(SubjectRefAst::SelfObject),
+            subject: self_obj(),
             min_others: u8::try_from(n.max(1)).unwrap_or(2),
             other_filter: Box::new(flt),
         }]);
@@ -542,7 +491,7 @@ pub(crate) fn parse_trigger_events(
             {
                 flt.flags = flt.flags.union(crate::ast::ObjectFilterFlags::EXCLUDE_SELF);
                 let other_subj = Box::new(SubjectRefAst::Group(Box::new(flt)));
-                let self_subj = Box::new(SubjectRefAst::SelfObject);
+                let self_subj = self_obj();
                 return Ok(match kind {
                     "enter" => vec![
                         TriggerEventAst::ZoneChange {
@@ -626,19 +575,8 @@ pub(crate) fn parse_trigger_events(
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![
-            TriggerEventAst::ZoneChange {
-                from: None,
-                to: Some("battlefield".to_string()),
-                subject: Box::new(subj.clone()),
-                grouped: false,
-                entering_controller: None,
-            },
-            TriggerEventAst::Attacks {
-                subject: Some(Box::new(subj)),
-                actor: None,
-                qualifier: None,
-                grouped: false,
-            },
+            trig_zone(None, Some("battlefield"), subj.clone()),
+            trig_attacks(Some(subj), None, None),
         ]);
     }
     if let Some(subj_raw) = blow
@@ -653,20 +591,8 @@ pub(crate) fn parse_trigger_events(
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![
-            TriggerEventAst::ZoneChange {
-                from: None,
-                to: Some("battlefield".to_string()),
-                subject: Box::new(subj.clone()),
-                grouped: false,
-                entering_controller: None,
-            },
-            TriggerEventAst::ZoneChange {
-                from: Some("battlefield".to_string()),
-                to: Some("graveyard".to_string()),
-                subject: Box::new(subj),
-                grouped: false,
-                entering_controller: None,
-            },
+            trig_zone(None, Some("battlefield"), subj.clone()),
+            trig_zone(Some("battlefield"), Some("graveyard"), subj),
         ]);
     }
     if let Some(subj_raw) = blow
@@ -675,20 +601,8 @@ pub(crate) fn parse_trigger_events(
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![
-            TriggerEventAst::ZoneChange {
-                from: None,
-                to: Some("battlefield".to_string()),
-                subject: Box::new(subj.clone()),
-                grouped: false,
-                entering_controller: None,
-            },
-            TriggerEventAst::ZoneChange {
-                from: Some("battlefield".to_string()),
-                to: None,
-                subject: Box::new(subj),
-                grouped: false,
-                entering_controller: None,
-            },
+            trig_zone(None, Some("battlefield"), subj.clone()),
+            trig_zone(Some("battlefield"), None, subj),
         ]);
     }
 
@@ -698,20 +612,8 @@ pub(crate) fn parse_trigger_events(
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![
-            TriggerEventAst::ZoneChange {
-                from: Some("battlefield".to_string()),
-                to: Some("graveyard".to_string()),
-                subject: Box::new(subj.clone()),
-                grouped: false,
-                entering_controller: None,
-            },
-            TriggerEventAst::ZoneChange {
-                from: Some("battlefield".to_string()),
-                to: Some("exile".to_string()),
-                subject: Box::new(subj),
-                grouped: false,
-                entering_controller: None,
-            },
+            trig_zone(Some("battlefield"), Some("graveyard"), subj.clone()),
+            trig_zone(Some("battlefield"), Some("exile"), subj),
         ]);
     }
     if let Some(subj_raw) = blow
@@ -720,26 +622,18 @@ pub(crate) fn parse_trigger_events(
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![
-            TriggerEventAst::ZoneChange {
-                from: None,
-                to: Some("battlefield".to_string()),
-                subject: Box::new(subj.clone()),
-                grouped: false,
-                entering_controller: None,
-            },
-            TriggerEventAst::DamageDealt {
-                combat_only: true,
-                noncombat_only: false,
-                source: Some(Box::new(subj)),
-                recipient: Some(Box::new(SubjectRefAst::Player(PlayerRefAst::AnyPlayer))),
-                grouped: false,
-                excess_only: false,
-            },
+            trig_zone(None, Some("battlefield"), subj.clone()),
+            trig_dmg(
+                true,
+                false,
+                Some(subj),
+                Some(SubjectRefAst::Player(PlayerRefAst::AnyPlayer)),
+                false,
+                false,
+            ),
         ]);
     }
-    if let Some(who_raw) = blow
-        .strip_suffix(" is attacked")
-        .or_else(|| blow.strip_suffix(" are attacked"))
+    if let Some(who_raw) = strip_suffix_any(&blow, &[" is attacked", " are attacked"])
         && let Some(player) = parse_player_ref(who_raw)
     {
         return Ok(vec![TriggerEventAst::PlayerAttacked { player }]);
@@ -756,10 +650,10 @@ pub(crate) fn parse_trigger_events(
             exact_result: None,
         }]);
     }
-    if let Some((subj_raw, _)) = blow
-        .split_once(" becomes attached to ")
-        .or_else(|| blow.split_once(" becomes unattached from "))
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
+    if let Some((subj_raw, _)) = split_once_any(
+        &blow,
+        &[" becomes attached to ", " becomes unattached from "],
+    ) && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::BecomesAttached {
             subject: Box::new(subj),
@@ -771,46 +665,29 @@ pub(crate) fn parse_trigger_events(
         }]);
     }
     if blow == "the ring tempts you" {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: "ring_tempts_you".to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, "ring_tempts_you")]);
     }
     if blow == "you activate an exhaust ability" {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: "exhaust".to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, "exhaust")]);
     }
-    if let Some(who_raw) = blow
-        .strip_suffix(" shuffles their library")
-        .or_else(|| blow.strip_suffix(" shuffle their library"))
+    if let Some(who_raw) = strip_suffix_any(
+        &blow,
+        &[" shuffles their library", " shuffle their library"],
+    ) && let Some(player) = parse_player_ref(who_raw)
+    {
+        return Ok(vec![trig_kw(player, "shuffle_library")]);
+    }
+    if let Some(who_raw) = strip_suffix_any(&blow, &[" becomes the monarch", " become the monarch"])
         && let Some(player) = parse_player_ref(who_raw)
     {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player,
-            action: "shuffle_library".to_string(),
-        }]);
-    }
-    if let Some(who_raw) = blow
-        .strip_suffix(" becomes the monarch")
-        .or_else(|| blow.strip_suffix(" become the monarch"))
-        && let Some(player) = parse_player_ref(who_raw)
-    {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player,
-            action: "become_monarch".to_string(),
-        }]);
+        return Ok(vec![trig_kw(player, "become_monarch")]);
     }
     if let Some(who_raw) = blow.strip_suffix(" activates a loyalty ability")
         && let Some(player) = parse_player_ref(who_raw)
     {
         return Ok(vec![TriggerEventAst::QualifiedAbilityActivated {
             player,
-            source_filter: Box::new(crate::ast::ObjectFilterAst {
-                any_permanent: true,
-                ..Default::default()
-            }),
+            source_filter: Box::new(any_perm()),
             loyalty_only: true,
             nonmana_only: false,
         }]);
@@ -820,18 +697,15 @@ pub(crate) fn parse_trigger_events(
     {
         return Ok(vec![TriggerEventAst::QualifiedAbilityActivated {
             player,
-            source_filter: Box::new(crate::ast::ObjectFilterAst {
-                any_permanent: true,
-                ..Default::default()
-            }),
+            source_filter: Box::new(any_perm()),
             loyalty_only: false,
             nonmana_only: true,
         }]);
     }
-    if let Some((who_raw, flt_raw)) = blow
-        .split_once(" activates an ability of ")
-        .or_else(|| blow.split_once(" activate an ability of "))
-    {
+    if let Some((who_raw, flt_raw)) = split_once_any(
+        &blow,
+        &[" activates an ability of ", " activate an ability of "],
+    ) {
         let (flt_clean, nonmana_only) = match flt_raw.strip_suffix(" that isn't a mana ability") {
             Some(c) => (c, true),
             None => (flt_raw, false),
@@ -862,14 +736,7 @@ pub(crate) fn parse_trigger_events(
             TriggerEventAst::LandPlayed {
                 player: PlayerRefAst::You,
             },
-            TriggerEventAst::SpellCast {
-                caster: PlayerRefAst::You,
-                spell: None,
-                self_spell: false,
-                targets: None,
-                nth_each_turn: None,
-                include_copy: false,
-            },
+            trig_cast(PlayerRefAst::You, None),
         ]);
     }
 
@@ -880,7 +747,7 @@ pub(crate) fn parse_trigger_events(
             TriggerEventAst::ZoneChange {
                 from: None,
                 to: Some("battlefield".to_string()),
-                subject: Box::new(SubjectRefAst::SelfObject),
+                subject: self_obj(),
                 grouped: false,
                 entering_controller: None,
             },
@@ -891,22 +758,13 @@ pub(crate) fn parse_trigger_events(
         return Ok(vec![TriggerEventAst::HauntedCreatureDies]);
     }
     if blow == "you lose control of ~" {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: "lose_control_self".to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, "lose_control_self")]);
     }
     if blow == "players finish voting" {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::EachPlayer,
-            action: "finish_voting".to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::EachPlayer, "finish_voting")]);
     }
     if blow == "you get one or more {e}" || blow == "you get one or more {tk}" {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: blow.to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, blow.to_string())]);
     }
     if blow == "you play a land from exile or cast a spell from exile" {
         return Ok(vec![
@@ -923,7 +781,7 @@ pub(crate) fn parse_trigger_events(
     {
         return Ok(vec![
             TriggerEventAst::Cycled {
-                subject: Box::new(SubjectRefAst::Group(Box::new(flt.clone()))),
+                subject: Box::new(grp(flt.clone())),
             },
             TriggerEventAst::CardDiscarded {
                 player: PlayerRefAst::You,
@@ -935,7 +793,7 @@ pub(crate) fn parse_trigger_events(
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::TapStateChanged {
-            subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+            subject: Box::new(grp(flt)),
             tapped: true,
             for_mana: false,
         }]);
@@ -968,27 +826,18 @@ pub(crate) fn parse_trigger_events(
     }
     if blow == "you scry or surveil" {
         return Ok(vec![
-            TriggerEventAst::KeywordActionPerformed {
-                player: PlayerRefAst::You,
-                action: "scry".to_string(),
-            },
-            TriggerEventAst::KeywordActionPerformed {
-                player: PlayerRefAst::You,
-                action: "surveil".to_string(),
-            },
+            trig_kw(PlayerRefAst::You, "scry"),
+            trig_kw(PlayerRefAst::You, "surveil"),
         ]);
     }
     if blow == "you attack a player" || blow == "you attack an opponent" {
-        return Ok(vec![TriggerEventAst::Attacks {
-            subject: None,
-            actor: Some(PlayerRefAst::You),
-            qualifier: Some("player".to_string()),
-            grouped: false,
-        }]);
+        return Ok(vec![trig_attacks(
+            None,
+            Some(PlayerRefAst::You),
+            Some("player".to_string()),
+        )]);
     }
-    if let Some((who_raw, flt_raw)) = blow
-        .split_once(" mills ")
-        .or_else(|| blow.split_once(" mill "))
+    if let Some((who_raw, flt_raw)) = split_once_any(&blow, &[" mills ", " mill "])
         && let (Some(player), Ok(flt)) = (
             parse_player_ref(who_raw),
             parse_object_filter(peel_one_or_more(flt_raw).0, vocab),
@@ -1000,28 +849,26 @@ pub(crate) fn parse_trigger_events(
         }]);
     }
     if blow == "a player loses the game" || blow == "an opponent loses the game" {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: if blow.starts_with("an opponent") {
+        return Ok(vec![trig_kw(
+            if blow.starts_with("an opponent") {
                 PlayerRefAst::AnyOpponent
             } else {
                 PlayerRefAst::AnyPlayer
             },
-            action: "loses_game".to_string(),
-        }]);
+            "loses_game",
+        )]);
     }
     if blow == "a player kicks a spell" || blow == "you kick a spell" {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: if blow.starts_with("you") {
+        return Ok(vec![trig_kw(
+            if blow.starts_with("you") {
                 PlayerRefAst::You
             } else {
                 PlayerRefAst::AnyPlayer
             },
-            action: "kick_spell".to_string(),
-        }]);
+            "kick_spell",
+        )]);
     }
-    if let Some((who_raw, rest)) = blow
-        .split_once(" puts ")
-        .or_else(|| blow.split_once(" put "))
+    if let Some((who_raw, rest)) = split_once_any(&blow, &[" puts ", " put "])
         && let Some(flt_raw) = rest.strip_suffix(" onto the battlefield")
         && let (Some(player), Ok(flt)) = (
             parse_player_ref(who_raw),
@@ -1029,13 +876,13 @@ pub(crate) fn parse_trigger_events(
         )
     {
         let entering_controller = player_ref_to_controller_relation(player);
-        return Ok(vec![TriggerEventAst::ZoneChange {
-            from: None,
-            to: Some("battlefield".to_string()),
-            subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
-            grouped: false,
+        return Ok(vec![trig_zone_ext(
+            None,
+            Some("battlefield"),
+            grp(flt),
+            false,
             entering_controller,
-        }]);
+        )]);
     }
     if blow == "a player plays a land or casts a spell"
         || blow == "a player plays a land from exile or casts a spell from exile"
@@ -1044,19 +891,10 @@ pub(crate) fn parse_trigger_events(
             TriggerEventAst::LandPlayed {
                 player: PlayerRefAst::AnyPlayer,
             },
-            TriggerEventAst::SpellCast {
-                caster: PlayerRefAst::AnyPlayer,
-                spell: None,
-                self_spell: false,
-                targets: None,
-                nth_each_turn: None,
-                include_copy: false,
-            },
+            trig_cast(PlayerRefAst::AnyPlayer, None),
         ]);
     }
-    if let Some((who_raw, subj_raw)) = blow
-        .split_once(" cycles ")
-        .or_else(|| blow.split_once(" cycle "))
+    if let Some((who_raw, subj_raw)) = split_once_any(&blow, &[" cycles ", " cycle "])
         && let (Some(_player), Ok(subj)) = (
             parse_player_ref(who_raw),
             parse_subject_or_target(subj_raw, vocab),
@@ -1064,19 +902,6 @@ pub(crate) fn parse_trigger_events(
     {
         return Ok(vec![TriggerEventAst::Cycled {
             subject: Box::new(subj),
-        }]);
-    }
-    if let Some((subj_raw, cond_raw)) = blow.split_once(" attacks while ")
-        && let (Ok(subj), Ok(_cond)) = (
-            parse_subject_or_target(subj_raw, vocab),
-            parse_condition(cond_raw, vocab),
-        )
-    {
-        return Ok(vec![TriggerEventAst::Attacks {
-            subject: Some(Box::new(subj)),
-            actor: None,
-            qualifier: Some(format!("while:{cond_raw}")),
-            grouped: false,
         }]);
     }
 
@@ -1087,12 +912,12 @@ pub(crate) fn parse_trigger_events(
                 TriggerEventAst::ZoneChange {
                     from: None,
                     to: Some("battlefield".to_string()),
-                    subject: Box::new(SubjectRefAst::SelfObject),
+                    subject: self_obj(),
                     grouped: false,
                     entering_controller: None,
                 },
                 TriggerEventAst::Attacks {
-                    subject: Some(Box::new(SubjectRefAst::SelfObject)),
+                    subject: Some(self_obj()),
                     actor: None,
                     qualifier: None,
                     grouped: false,
@@ -1104,14 +929,14 @@ pub(crate) fn parse_trigger_events(
                 TriggerEventAst::ZoneChange {
                     from: None,
                     to: Some("battlefield".to_string()),
-                    subject: Box::new(SubjectRefAst::SelfObject),
+                    subject: self_obj(),
                     grouped: false,
                     entering_controller: None,
                 },
                 TriggerEventAst::ZoneChange {
                     from: Some("battlefield".to_string()),
                     to: Some("graveyard".to_string()),
-                    subject: Box::new(SubjectRefAst::SelfObject),
+                    subject: self_obj(),
                     grouped: false,
                     entering_controller: None,
                 },
@@ -1122,12 +947,12 @@ pub(crate) fn parse_trigger_events(
                 TriggerEventAst::ZoneChange {
                     from: None,
                     to: Some("battlefield".to_string()),
-                    subject: Box::new(SubjectRefAst::SelfObject),
+                    subject: self_obj(),
                     grouped: false,
                     entering_controller: None,
                 },
                 TriggerEventAst::Transforms {
-                    subject: Box::new(SubjectRefAst::SelfObject),
+                    subject: self_obj(),
                 },
             ]);
         }
@@ -1136,12 +961,12 @@ pub(crate) fn parse_trigger_events(
                 TriggerEventAst::ZoneChange {
                     from: None,
                     to: Some("battlefield".to_string()),
-                    subject: Box::new(SubjectRefAst::SelfObject),
+                    subject: self_obj(),
                     grouped: false,
                     entering_controller: None,
                 },
                 TriggerEventAst::TurnedFaceUp {
-                    subject: Box::new(SubjectRefAst::SelfObject),
+                    subject: self_obj(),
                 },
             ]);
         }
@@ -1151,14 +976,14 @@ pub(crate) fn parse_trigger_events(
                 TriggerEventAst::ZoneChange {
                     from: None,
                     to: Some("battlefield".to_string()),
-                    subject: Box::new(SubjectRefAst::SelfObject),
+                    subject: self_obj(),
                     grouped: false,
                     entering_controller: None,
                 },
                 TriggerEventAst::ZoneChange {
                     from: Some("battlefield".to_string()),
                     to: None,
-                    subject: Box::new(SubjectRefAst::SelfObject),
+                    subject: self_obj(),
                     grouped: false,
                     entering_controller: None,
                 },
@@ -1171,12 +996,7 @@ pub(crate) fn parse_trigger_events(
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![
-            TriggerEventAst::Attacks {
-                subject: Some(Box::new(subj.clone())),
-                actor: None,
-                qualifier: None,
-                grouped: false,
-            },
+            trig_attacks(Some(subj.clone()), None, None),
             TriggerEventAst::Blocks {
                 subject: Box::new(subj),
                 attacker: None,
@@ -1241,52 +1061,43 @@ pub(crate) fn parse_trigger_events(
     if blow == "you cast a spell during an opponent's turn"
         || blow == "you cast your first spell during each opponent's turn"
     {
-        return Ok(vec![TriggerEventAst::SpellCast {
-            caster: PlayerRefAst::You,
-            spell: None,
-            self_spell: false,
-            targets: None,
-            nth_each_turn: if blow.contains("first") {
+        return Ok(vec![trig_cast_ext(
+            PlayerRefAst::You,
+            None,
+            false,
+            None,
+            if blow.contains("first") {
                 Some(1)
             } else {
                 None
             },
-            include_copy: false,
-        }]);
-    }
-    if blow == "a spell or ability an opponent controls causes you to discard ~" {
-        return Ok(vec![TriggerEventAst::CardDiscarded {
-            player: PlayerRefAst::You,
-            filter: Box::new(crate::ast::ObjectFilterAst {
-                any_card: true,
-                ..Default::default()
-            }),
-        }]);
+            false,
+        )]);
     }
     if let Some(after) = blow.strip_prefix("you cast your first ")
         && let Some(flt_raw) = after.strip_suffix(" each turn")
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::SpellCast {
-            caster: PlayerRefAst::You,
-            spell: Some(Box::new(flt)),
-            self_spell: false,
-            targets: None,
-            nth_each_turn: Some(1),
-            include_copy: false,
-        }]);
+        return Ok(vec![trig_cast_ext(
+            PlayerRefAst::You,
+            Some(flt),
+            false,
+            None,
+            Some(1),
+            false,
+        )]);
     }
     if let Some(flt_raw) = blow.strip_prefix("you next cast ")
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::SpellCast {
-            caster: PlayerRefAst::You,
-            spell: Some(Box::new(flt)),
-            self_spell: false,
-            targets: None,
-            nth_each_turn: Some(1),
-            include_copy: false,
-        }]);
+        return Ok(vec![trig_cast_ext(
+            PlayerRefAst::You,
+            Some(flt),
+            false,
+            None,
+            Some(1),
+            false,
+        )]);
     }
     if let Some(who_raw) = blow
         .strip_suffix(" searches their library")
@@ -1299,53 +1110,39 @@ pub(crate) fn parse_trigger_events(
     if blow == "you cast your second spell each turn"
         || blow == "a player casts their second spell each turn"
     {
-        return Ok(vec![TriggerEventAst::SpellCast {
-            caster: if blow.starts_with("you") {
+        return Ok(vec![trig_cast_ext(
+            if blow.starts_with("you") {
                 PlayerRefAst::You
             } else {
                 PlayerRefAst::AnyPlayer
             },
-            spell: None,
-            self_spell: false,
-            targets: None,
-            nth_each_turn: Some(2),
-            include_copy: false,
-        }]);
+            None,
+            false,
+            None,
+            Some(2),
+            false,
+        )]);
     }
     if blow == "you cast your third spell each turn" {
-        return Ok(vec![TriggerEventAst::SpellCast {
-            caster: PlayerRefAst::You,
-            spell: None,
-            self_spell: false,
-            targets: None,
-            nth_each_turn: Some(3),
-            include_copy: false,
-        }]);
+        return Ok(vec![trig_cast_ext(
+            PlayerRefAst::You,
+            None,
+            false,
+            None,
+            Some(3),
+            false,
+        )]);
     }
     if blow == "you cast a spell other than your first spell each turn" {
         return Ok(vec![TriggerEventAst::QualifiedTrigger {
-            inner: Box::new(TriggerEventAst::SpellCast {
-                caster: PlayerRefAst::You,
-                spell: None,
-                self_spell: false,
-                targets: None,
-                nth_each_turn: None,
-                include_copy: false,
-            }),
+            inner: Box::new(trig_cast(PlayerRefAst::You, None)),
             first_time_each_turn: false,
             timing: Some("other_than_first_each_turn".to_string()),
         }]);
     }
     if blow == "you cast a spell during your turn" || blow == "you cast a spell during combat" {
         return Ok(vec![TriggerEventAst::QualifiedTrigger {
-            inner: Box::new(TriggerEventAst::SpellCast {
-                caster: PlayerRefAst::You,
-                spell: None,
-                self_spell: false,
-                targets: None,
-                nth_each_turn: None,
-                include_copy: false,
-            }),
+            inner: Box::new(trig_cast(PlayerRefAst::You, None)),
             first_time_each_turn: false,
             timing: Some(if blow.ends_with("during combat") {
                 "during_combat".to_string()
@@ -1354,48 +1151,26 @@ pub(crate) fn parse_trigger_events(
             }),
         }]);
     }
-    if blow == "you cast your first spell with {x} in its mana cost each turn" {
-        let mut x_flt = crate::ast::ObjectFilterAst {
-            any_spell: true,
-            ..Default::default()
-        };
-        x_flt
-            .predicates
-            .push(crate::ast::FilterPredicateAst::HasManaSymbolInCost(
-                "{x}".to_string(),
-            ));
-        return Ok(vec![TriggerEventAst::SpellCast {
-            caster: PlayerRefAst::You,
-            spell: Some(Box::new(x_flt)),
-            self_spell: false,
-            targets: None,
-            nth_each_turn: Some(1),
-            include_copy: false,
-        }]);
-    }
 
     // Cast or copy (any player)
-    if let Some((who_raw, spell_raw)) = blow
-        .split_once(" casts or copies ")
-        .or_else(|| blow.split_once(" cast or copy "))
+    if let Some((who_raw, spell_raw)) =
+        split_once_any(&blow, &[" casts or copies ", " cast or copy "])
         && let (Some(caster), Ok(flt)) = (
             parse_player_ref(who_raw),
             parse_object_filter(spell_raw, vocab),
         )
     {
-        return Ok(vec![TriggerEventAst::SpellCast {
+        return Ok(vec![trig_cast_ext(
             caster,
-            spell: Some(Box::new(flt)),
-            self_spell: false,
-            targets: None,
-            nth_each_turn: None,
-            include_copy: true,
-        }]);
+            Some(flt),
+            false,
+            None,
+            None,
+            true,
+        )]);
     }
     // "<player> casts their first/second [<filter>] spell each turn"
-    if let Some((who_raw, rest)) = blow
-        .split_once(" casts their ")
-        .or_else(|| blow.split_once(" cast their "))
+    if let Some((who_raw, rest)) = split_once_any(&blow, &[" casts their ", " cast their "])
         && let Some(caster) = parse_player_ref(who_raw)
         && let Some(core) = rest.strip_suffix(" each turn")
     {
@@ -1428,10 +1203,10 @@ pub(crate) fn parse_trigger_events(
     }
 
     // Attacks and isn't blocked
-    if let Some(subj_raw) = blow
-        .strip_suffix(" attacks and isn't blocked")
-        .or_else(|| blow.strip_suffix(" attack and isn't blocked"))
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
+    if let Some(subj_raw) = strip_suffix_any(
+        &blow,
+        &[" attacks and isn't blocked", " attack and isn't blocked"],
+    ) && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::AttacksUnblocked {
             subject: Box::new(subj),
@@ -1465,23 +1240,27 @@ pub(crate) fn parse_trigger_events(
             } else {
                 (core_enter, None, None)
             };
-        let (subj_opt, tapped_qual) = if let Some(p) = core_enter
-            .strip_suffix(" enters the battlefield untapped")
-            .or_else(|| core_enter.strip_suffix(" enters untapped"))
-        {
+        let (subj_opt, tapped_qual) = if let Some(p) = strip_suffix_any(
+            &core_enter,
+            &[" enters the battlefield untapped", " enters untapped"],
+        ) {
             (Some(p), Some("untapped"))
-        } else if let Some(p) = core_enter
-            .strip_suffix(" enters the battlefield tapped")
-            .or_else(|| core_enter.strip_suffix(" enters tapped"))
-        {
+        } else if let Some(p) = strip_suffix_any(
+            &core_enter,
+            &[" enters the battlefield tapped", " enters tapped"],
+        ) {
             (Some(p), Some("tapped"))
         } else {
             (
-                core_enter
-                    .strip_suffix(" enters the battlefield")
-                    .or_else(|| core_enter.strip_suffix(" enter the battlefield"))
-                    .or_else(|| core_enter.strip_suffix(" enters"))
-                    .or_else(|| core_enter.strip_suffix(" enter")),
+                strip_suffix_any(
+                    &core_enter,
+                    &[
+                        " enters the battlefield",
+                        " enter the battlefield",
+                        " enters",
+                        " enter",
+                    ],
+                ),
                 None,
             )
         };
@@ -1516,26 +1295,21 @@ pub(crate) fn parse_trigger_events(
     }
 
     // Dies
-    if let Some(subj_raw) = blow
-        .strip_suffix(" dies")
-        .or_else(|| blow.strip_suffix(" die"))
-    {
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" dies", " die"]) {
         let (sraw, grouped) = peel_one_or_more(subj_raw);
         if let Ok(subj) = parse_subject_or_target(sraw, vocab) {
-            return Ok(vec![TriggerEventAst::ZoneChange {
-                from: Some("battlefield".to_string()),
-                to: Some("graveyard".to_string()),
-                subject: Box::new(subj),
+            return Ok(vec![trig_zone_ext(
+                Some("battlefield"),
+                Some("graveyard"),
+                subj,
                 grouped,
-                entering_controller: None,
-            }]);
+                None,
+            )]);
         }
     }
 
     // Leaves battlefield / graveyard (with optional trailing "during your turn")
-    let blow_noturn = blow
-        .strip_suffix(" during your turn")
-        .or_else(|| blow.strip_suffix(" during an opponent's turn"))
+    let blow_noturn = strip_suffix_any(&blow, &[" during your turn", " during an opponent's turn"])
         .unwrap_or(blow);
     for (suf, from) in [
         (" leaves the battlefield", "battlefield"),
@@ -1564,14 +1338,10 @@ pub(crate) fn parse_trigger_events(
     }
 
     // Put into a graveyard / exile / library / milled (with peel_one_or_more!)
-    let blow_noturn_zone = blow
-        .strip_suffix(" during your turn")
-        .or_else(|| blow.strip_suffix(" during an opponent's turn"))
-        .unwrap_or(blow);
-    if let Some(subj_raw) = blow_noturn_zone
-        .strip_suffix(" are milled")
-        .or_else(|| blow_noturn_zone.strip_suffix(" is milled"))
-    {
+    let blow_noturn_zone =
+        strip_suffix_any(&blow, &[" during your turn", " during an opponent's turn"])
+            .unwrap_or(blow);
+    if let Some(subj_raw) = strip_suffix_any(&blow_noturn_zone, &[" are milled", " is milled"]) {
         let (sraw, _) = peel_one_or_more(subj_raw);
         if let Ok(flt) = parse_object_filter(sraw, vocab) {
             return Ok(vec![TriggerEventAst::CardMilled {
@@ -1580,9 +1350,8 @@ pub(crate) fn parse_trigger_events(
             }]);
         }
     }
-    if let Some((subj_raw, rest)) = blow_noturn_zone
-        .split_once(" is put into ")
-        .or_else(|| blow_noturn_zone.split_once(" are put into "))
+    if let Some((subj_raw, rest)) =
+        split_once_any(&blow_noturn_zone, &[" is put into ", " are put into "])
     {
         let (sraw, grouped) = peel_one_or_more(subj_raw);
         let dest_zone = if rest.contains("graveyard") {
@@ -1653,25 +1422,20 @@ pub(crate) fn parse_trigger_events(
         if let Some(tgt_raw) = blow.strip_suffix(suf)
             && let Ok(tgt) = parse_subject_or_target(tgt_raw, vocab)
         {
-            return Ok(vec![TriggerEventAst::DamageDealt {
+            return Ok(vec![trig_dmg(
                 combat_only,
                 noncombat_only,
-                source: None,
-                recipient: Some(Box::new(tgt)),
-                grouped: false,
-                excess_only: suf.contains("excess "),
-            }]);
+                None,
+                Some(tgt),
+                false,
+                suf.contains("excess "),
+            )]);
         }
     }
 
     // Attacks
     if blow == "you attack" {
-        return Ok(vec![TriggerEventAst::Attacks {
-            subject: None,
-            actor: Some(PlayerRefAst::You),
-            qualifier: None,
-            grouped: false,
-        }]);
+        return Ok(vec![trig_attacks(None, Some(PlayerRefAst::You), None)]);
     }
     if let Some(after) = blow.strip_prefix("you attack with ") {
         let keep_as_qualifier = after.starts_with("two or more")
@@ -1684,35 +1448,30 @@ pub(crate) fn parse_trigger_events(
         if !keep_as_qualifier {
             let (flt_raw, grouped) = peel_one_or_more(after);
             if let Ok(flt) = parse_object_filter(flt_raw, vocab) {
-                return Ok(vec![TriggerEventAst::Attacks {
-                    subject: Some(Box::new(SubjectRefAst::Group(Box::new(flt)))),
-                    actor: Some(PlayerRefAst::You),
-                    qualifier: None,
+                return Ok(vec![trig_attacks_ext(
+                    Some(grp(flt)),
+                    Some(PlayerRefAst::You),
+                    None,
                     grouped,
-                }]);
+                )]);
             }
         }
-        return Ok(vec![TriggerEventAst::Attacks {
-            subject: None,
-            actor: Some(PlayerRefAst::You),
-            qualifier: Some(after.to_string()),
-            grouped: false,
-        }]);
+        return Ok(vec![trig_attacks(
+            None,
+            Some(PlayerRefAst::You),
+            Some(after.to_string()),
+        )]);
     }
-    if let Some(qual) = blow
-        .strip_prefix("an opponent attacks ")
-        .or_else(|| blow.strip_prefix("a player attacks "))
-    {
-        return Ok(vec![TriggerEventAst::Attacks {
-            subject: None,
-            actor: Some(if blow.starts_with("a player") {
+    if let Some(qual) = strip_prefix_any(&blow, &["an opponent attacks ", "a player attacks "]) {
+        return Ok(vec![trig_attacks(
+            None,
+            Some(if blow.starts_with("a player") {
                 PlayerRefAst::AnyPlayer
             } else {
                 PlayerRefAst::AnyOpponent
             }),
-            qualifier: Some(qual.to_string()),
-            grouped: false,
-        }]);
+            Some(qual.to_string()),
+        )]);
     }
     for (suf, qual) in [
         (
@@ -1753,20 +1512,18 @@ pub(crate) fn parse_trigger_events(
         if let Some(subj_raw) = blow.strip_suffix(suf) {
             let (sraw, grouped) = peel_one_or_more(subj_raw);
             if let Ok(subj) = parse_subject_or_target(sraw, vocab) {
-                return Ok(vec![TriggerEventAst::Attacks {
-                    subject: Some(Box::new(subj)),
-                    actor: None,
-                    qualifier: qual.map(ToString::to_string),
+                return Ok(vec![trig_attacks_ext(
+                    Some(subj),
+                    None,
+                    qual.map(ToString::to_string),
                     grouped,
-                }]);
+                )]);
             }
         }
     }
 
     // Becomes blocked / blocks (with peel_one_or_more! Do not swallow compound ", " / " or " tails.)
-    if let Some((subj_raw, rest)) = blow
-        .split_once(" becomes blocked")
-        .or_else(|| blow.split_once(" become blocked"))
+    if let Some((subj_raw, rest)) = split_once_any(&blow, &[" becomes blocked", " become blocked"])
         && !rest.starts_with(',')
         && !rest.trim_start().starts_with("or ")
         && let Ok(subj) = parse_subject_or_target(peel_one_or_more(subj_raw).0, vocab)
@@ -1783,9 +1540,7 @@ pub(crate) fn parse_trigger_events(
             }]);
         }
     }
-    if let Some((subj_raw, rest)) = blow
-        .split_once(" blocks")
-        .or_else(|| blow.split_once(" block"))
+    if let Some((subj_raw, rest)) = split_once_any(&blow, &[" blocks", " block"])
         && (rest.is_empty() || rest.starts_with(' '))
         && !rest.trim_start().starts_with("or ")
         && let Ok(subj) = parse_subject_or_target(peel_one_or_more(subj_raw).0, vocab)
@@ -1805,24 +1560,14 @@ pub(crate) fn parse_trigger_events(
     }
 
     // SpellCast: "<player> cast(s) <spell>"
-    if let Some((who_raw, spell_raw)) = blow
-        .split_once(" casts ")
-        .or_else(|| blow.split_once(" cast "))
+    if let Some((who_raw, spell_raw)) = split_once_any(&blow, &[" casts ", " cast "])
         && let Some(caster) = parse_player_ref(who_raw)
     {
         if spell_raw == "~" {
-            return Ok(vec![TriggerEventAst::SpellCast {
-                caster,
-                spell: None,
-                self_spell: true,
-                targets: None,
-                nth_each_turn: None,
-                include_copy: false,
-            }]);
+            return Ok(vec![trig_cast_ext(caster, None, true, None, None, false)]);
         }
-        if let Some((flt_raw, tgt_raw)) = spell_raw
-            .split_once(" that targets only ")
-            .or_else(|| spell_raw.split_once(" that targets "))
+        if let Some((flt_raw, tgt_raw)) =
+            split_once_any(&spell_raw, &[" that targets only ", " that targets "])
             && let (Ok(flt), Ok(tgt)) = (
                 parse_object_filter(flt_raw, vocab),
                 parse_subject_or_target(
@@ -1831,14 +1576,14 @@ pub(crate) fn parse_trigger_events(
                 ),
             )
         {
-            return Ok(vec![TriggerEventAst::SpellCast {
+            return Ok(vec![trig_cast_ext(
                 caster,
-                spell: Some(Box::new(flt)),
-                self_spell: false,
-                targets: Some(Box::new(tgt)),
-                nth_each_turn: None,
-                include_copy: false,
-            }]);
+                Some(flt),
+                false,
+                Some(tgt),
+                None,
+                false,
+            )]);
         }
         let (spell_clean, cast_qual) =
             if let Some(p) = spell_raw.strip_suffix(" using mana produced by ~") {
@@ -1868,26 +1613,12 @@ pub(crate) fn parse_trigger_events(
             && let Ok(mut flt) = parse_object_filter(flt_raw, vocab)
         {
             flt.required_keywords.push(kw_raw.trim().to_string());
-            return Ok(vec![wrap_cast_qual(TriggerEventAst::SpellCast {
-                caster,
-                spell: Some(Box::new(flt)),
-                self_spell: false,
-                targets: None,
-                nth_each_turn: None,
-                include_copy: false,
-            })]);
+            return Ok(vec![wrap_cast_qual(trig_cast(caster, Some(flt)))]);
         }
         if let Some((flt_raw, colors_raw)) = spell_clean.split_once(" that's both ")
             && let Ok(flt) = parse_object_filter(&format!("{flt_raw} {colors_raw}"), vocab)
         {
-            return Ok(vec![wrap_cast_qual(TriggerEventAst::SpellCast {
-                caster,
-                spell: Some(Box::new(flt)),
-                self_spell: false,
-                targets: None,
-                nth_each_turn: None,
-                include_copy: false,
-            })]);
+            return Ok(vec![wrap_cast_qual(trig_cast(caster, Some(flt)))]);
         }
         if spell_clean.contains(" in its mana cost")
             || spell_clean.contains("mana cost that contains")
@@ -1909,21 +1640,12 @@ pub(crate) fn parse_trigger_events(
             return Ok(vec![wrap_cast_qual(base_ev)]);
         }
         if let Ok(flt) = parse_object_filter(spell_clean, vocab) {
-            return Ok(vec![wrap_cast_qual(TriggerEventAst::SpellCast {
-                caster,
-                spell: Some(Box::new(flt)),
-                self_spell: false,
-                targets: None,
-                nth_each_turn: None,
-                include_copy: false,
-            })]);
+            return Ok(vec![wrap_cast_qual(trig_cast(caster, Some(flt)))]);
         }
     }
 
     // Player actions: draw / discard / sacrifice / gain-lose life / cycle
-    if let Some((who_raw, qual)) = blow
-        .split_once(" draws ")
-        .or_else(|| blow.split_once(" draw "))
+    if let Some((who_raw, qual)) = split_once_any(&blow, &[" draws ", " draw "])
         && let Some(player) = parse_player_ref(who_raw)
         && qual.contains("card")
     {
@@ -1932,24 +1654,16 @@ pub(crate) fn parse_trigger_events(
             qualifier: qual.to_string(),
         }]);
     }
-    if let Some((who_raw, flt_raw)) = blow
-        .split_once(" discards ")
-        .or_else(|| blow.split_once(" discard "))
+    if let Some((who_raw, flt_raw)) = split_once_any(&blow, &[" discards ", " discard "])
         && let Some(player) = parse_player_ref(who_raw)
     {
-        let flt =
-            parse_object_filter(flt_raw, vocab).unwrap_or_else(|_| crate::ast::ObjectFilterAst {
-                any_card: true,
-                ..Default::default()
-            });
+        let flt = parse_object_filter(flt_raw, vocab).unwrap_or_else(|_| any_card_flt());
         return Ok(vec![TriggerEventAst::CardDiscarded {
             player,
             filter: Box::new(flt),
         }]);
     }
-    if let Some((who_raw, subj_raw)) = blow
-        .split_once(" sacrifices ")
-        .or_else(|| blow.split_once(" sacrifice "))
+    if let Some((who_raw, subj_raw)) = split_once_any(&blow, &[" sacrifices ", " sacrifice "])
         && let (Some(player), Ok(subj)) = (
             parse_player_ref(who_raw),
             parse_subject_or_target(subj_raw, vocab),
@@ -1982,9 +1696,7 @@ pub(crate) fn parse_trigger_events(
             first_each_turn: true,
         }]);
     }
-    if let Some(who_raw) = blow
-        .strip_suffix(" gain life")
-        .or_else(|| blow.strip_suffix(" gains life"))
+    if let Some(who_raw) = strip_suffix_any(&blow, &[" gain life", " gains life"])
         && let Some(player) = parse_player_ref(who_raw)
     {
         return Ok(vec![TriggerEventAst::LifeChanged {
@@ -1993,9 +1705,7 @@ pub(crate) fn parse_trigger_events(
             first_each_turn: false,
         }]);
     }
-    if let Some(who_raw) = blow
-        .strip_suffix(" lose life")
-        .or_else(|| blow.strip_suffix(" loses life"))
+    if let Some(who_raw) = strip_suffix_any(&blow, &[" lose life", " loses life"])
         && let Some(player) = parse_player_ref(who_raw)
     {
         return Ok(vec![TriggerEventAst::LifeChanged {
@@ -2004,18 +1714,9 @@ pub(crate) fn parse_trigger_events(
             first_each_turn: false,
         }]);
     }
-    if let Some(subj_raw) = blow.strip_prefix("you cycle ")
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
-    {
-        return Ok(vec![TriggerEventAst::Cycled {
-            subject: Box::new(subj),
-        }]);
-    }
 
     // Tap / Untap / Mana / Targeted / Face-up / Transform / Counters
-    if let Some(subj_raw) = blow
-        .strip_suffix(" becomes tapped")
-        .or_else(|| blow.strip_suffix(" become tapped"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" becomes tapped", " become tapped"])
         && let Ok(subj) = parse_subject_or_target(peel_one_or_more(subj_raw).0, vocab)
     {
         return Ok(vec![TriggerEventAst::TapStateChanged {
@@ -2024,9 +1725,7 @@ pub(crate) fn parse_trigger_events(
             for_mana: false,
         }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" becomes untapped")
-        .or_else(|| blow.strip_suffix(" become untapped"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" becomes untapped", " become untapped"])
         && let Ok(subj) = parse_subject_or_target(peel_one_or_more(subj_raw).0, vocab)
     {
         return Ok(vec![TriggerEventAst::TapStateChanged {
@@ -2045,9 +1744,7 @@ pub(crate) fn parse_trigger_events(
         }]);
     }
     if let Some(rest) = blow.strip_suffix(" for mana")
-        && let Some((_, subj_raw)) = rest
-            .split_once(" taps ")
-            .or_else(|| rest.split_once(" tap "))
+        && let Some((_, subj_raw)) = split_once_any(&rest, &[" taps ", " tap "])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::TapStateChanged {
@@ -2056,10 +1753,10 @@ pub(crate) fn parse_trigger_events(
             for_mana: true,
         }]);
     }
-    if let Some((subj_raw, by_raw)) = blow
-        .split_once(" becomes the target of ")
-        .or_else(|| blow.split_once(" become the target of "))
-        && let Ok(subj) = parse_subject_or_target(peel_one_or_more(subj_raw).0, vocab)
+    if let Some((subj_raw, by_raw)) = split_once_any(
+        &blow,
+        &[" becomes the target of ", " become the target of "],
+    ) && let Ok(subj) = parse_subject_or_target(peel_one_or_more(subj_raw).0, vocab)
     {
         return Ok(vec![TriggerEventAst::BecomesTargeted {
             subject: Box::new(subj),
@@ -2072,36 +1769,24 @@ pub(crate) fn parse_trigger_events(
         .or_else(|| blow.strip_suffix(" are exiled from the battlefield"))
         && let Ok(subj) = parse_subject_or_target(peel_one_or_more(subj_raw).0, vocab)
     {
-        return Ok(vec![TriggerEventAst::ZoneChange {
-            from: Some("battlefield".to_string()),
-            to: Some("exile".to_string()),
-            subject: Box::new(subj),
-            grouped: false,
-            entering_controller: None,
-        }]);
+        return Ok(vec![trig_zone(Some("battlefield"), Some("exile"), subj)]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" fights")
-        .or_else(|| blow.strip_suffix(" fight"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" fights", " fight"])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::PermanentFights {
             subject: Box::new(subj),
         }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" is turned face up")
-        .or_else(|| blow.strip_suffix(" are turned face up"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" is turned face up", " are turned face up"])
         && let Ok(subj) = parse_subject_or_target(peel_one_or_more(subj_raw).0, vocab)
     {
         return Ok(vec![TriggerEventAst::TurnedFaceUp {
             subject: Box::new(subj),
         }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" transforms into ~")
-        .or_else(|| blow.strip_suffix(" transforms"))
-        .or_else(|| blow.strip_suffix(" transform"))
+    if let Some(subj_raw) =
+        strip_suffix_any(&blow, &[" transforms into ~", " transforms", " transform"])
         && let Ok(subj) = parse_subject_or_target(peel_one_or_more(subj_raw).0, vocab)
     {
         return Ok(vec![TriggerEventAst::Transforms {
@@ -2109,16 +1794,11 @@ pub(crate) fn parse_trigger_events(
         }]);
     }
     if let Some(after) = blow.strip_prefix("you put ")
-        && let Some((kind_raw, subj_raw)) = after
-            .split_once(" counters on ")
-            .or_else(|| after.split_once(" counter on "))
+        && let Some((kind_raw, subj_raw)) =
+            split_once_any(&after, &[" counters on ", " counter on "])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        let kind = kind_raw
-            .strip_prefix("one or more ")
-            .or_else(|| kind_raw.strip_prefix("a "))
-            .or_else(|| kind_raw.strip_prefix("an "))
-            .unwrap_or(kind_raw);
+        let kind = strip_prefix_any(&kind_raw, &["one or more ", "a ", "an "]).unwrap_or(kind_raw);
         return Ok(vec![TriggerEventAst::CountersChanged {
             subject: Box::new(subj),
             counter_kind: kind.trim().to_string(),
@@ -2134,21 +1814,21 @@ pub(crate) fn parse_trigger_events(
         } else {
             (blow, false, None)
         };
-    if let Some((left, subj_raw)) = blow_noexile
-        .split_once(" is put on ")
-        .or_else(|| blow_noexile.split_once(" are put on "))
-        .or_else(|| blow_noexile.split_once(" is placed on "))
-        .or_else(|| blow_noexile.split_once(" are placed on "))
-        .or_else(|| blow_noexile.split_once(" is removed from "))
-        .or_else(|| blow_noexile.split_once(" are removed from "))
-        && left.contains("counter")
+    if let Some((left, subj_raw)) = split_once_any(
+        &blow_noexile,
+        &[
+            " is put on ",
+            " are put on ",
+            " is placed on ",
+            " are placed on ",
+            " is removed from ",
+            " are removed from ",
+        ],
+    ) && left.contains("counter")
         && let Ok(subj) = parse_subject_or_target(peel_one_or_more(subj_raw).0, vocab)
     {
         let added = !blow_noexile.contains("removed from");
-        let kind = left
-            .strip_prefix("one or more ")
-            .or_else(|| left.strip_prefix("a "))
-            .or_else(|| left.strip_prefix("an "))
+        let kind = strip_prefix_any(&left, &["one or more ", "a ", "an "])
             .unwrap_or(left)
             .trim_end_matches(" counters")
             .trim_end_matches(" counter")
@@ -2178,45 +1858,10 @@ pub(crate) fn parse_trigger_events(
         return Ok(vec![TriggerEventAst::StateTrigger(Box::new(cond))]);
     }
 
-    // Eerie compound trigger: "Whenever an enchantment you control enters and whenever you fully unlock a Room"
-    if blow == "an enchantment you control enters and whenever you fully unlock a room" {
-        let flt = crate::ast::ObjectFilterAst {
-            any_types: crate::ast::CardTypeMask::ENCHANTMENT,
-            controller: Some(ControllerRelation::You),
-            ..Default::default()
-        };
-        return Ok(vec![
-            TriggerEventAst::ZoneChange {
-                from: None,
-                to: Some("battlefield".to_string()),
-                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
-                grouped: false,
-                entering_controller: None,
-            },
-            TriggerEventAst::RoomFullyUnlocked {
-                player: PlayerRefAst::You,
-            },
-        ]);
-    }
     if blow == "you cast a spell from anywhere other than your hand" {
         return Ok(vec![TriggerEventAst::CastFromOutsideHand {
             player: PlayerRefAst::You,
         }]);
-    }
-    if blow == "you cycle or discard a card" {
-        let flt = crate::ast::ObjectFilterAst {
-            any_card: true,
-            ..Default::default()
-        };
-        return Ok(vec![
-            TriggerEventAst::Cycled {
-                subject: Box::new(SubjectRefAst::Group(Box::new(flt.clone()))),
-            },
-            TriggerEventAst::CardDiscarded {
-                player: PlayerRefAst::You,
-                filter: Box::new(flt),
-            },
-        ]);
     }
     if let Some(n_raw) = blow.strip_prefix("you expend ")
         && let Ok(amount) = n_raw.trim().parse::<u16>()
@@ -2233,7 +1878,7 @@ pub(crate) fn parse_trigger_events(
     }
     if blow == "you unlock this door" || blow == "you unlock a door" || blow == "you unlock ~" {
         return Ok(vec![TriggerEventAst::UnlockDoor {
-            subject: Box::new(SubjectRefAst::SelfObject),
+            subject: self_obj(),
         }]);
     }
     if blow == "you fully unlock a room" {
@@ -2241,22 +1886,13 @@ pub(crate) fn parse_trigger_events(
             player: PlayerRefAst::You,
         }]);
     }
-    if blow == "this case is solved" || blow == "~ is solved" {
-        return Ok(vec![TriggerEventAst::CaseSolved]);
-    }
-    if blow == "~ is defeated" || blow == "this battle is defeated" {
-        return Ok(vec![TriggerEventAst::BattleDefeated]);
-    }
-    if let Some(lvl_raw) = blow
-        .strip_prefix("~ becomes level ")
-        .or_else(|| blow.strip_prefix("this class becomes level "))
+    if let Some(lvl_raw) =
+        strip_prefix_any(&blow, &["~ becomes level ", "this class becomes level "])
         && let Ok(level) = lvl_raw.trim().parse::<u8>()
     {
         return Ok(vec![TriggerEventAst::ClassLevelReached { level }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" mutates")
-        .or_else(|| blow.strip_suffix(" mutate"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" mutates", " mutate"])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::Mutates {
@@ -2277,28 +1913,12 @@ pub(crate) fn parse_trigger_events(
             subject: Box::new(subj),
         }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" exploits a creature")
-        .or_else(|| blow.strip_suffix(" exploit a creature"))
+    if let Some(subj_raw) =
+        strip_suffix_any(&blow, &[" exploits a creature", " exploit a creature"])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::Exploits {
             subject: Box::new(subj),
-        }]);
-    }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" becomes enchanted")
-        .or_else(|| blow.strip_suffix(" becomes equipped"))
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
-    {
-        let kind = if blow.ends_with("equipped") {
-            "equipped"
-        } else {
-            "enchanted"
-        };
-        return Ok(vec![TriggerEventAst::BecomesAttached {
-            subject: Box::new(subj),
-            attachment_kind: kind.to_string(),
         }]);
     }
     if let Some(subj_raw) = blow
@@ -2310,43 +1930,33 @@ pub(crate) fn parse_trigger_events(
             subject: Box::new(subj),
         }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" becomes crewed")
-        .or_else(|| blow.strip_suffix(" crews a vehicle"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" becomes crewed", " crews a vehicle"])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::Crewed {
             subject: Box::new(subj),
         }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" explores")
-        .or_else(|| blow.strip_suffix(" explore"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" explores", " explore"])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::Explores {
             subject: Box::new(subj),
         }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" connives")
-        .or_else(|| blow.strip_suffix(" connive"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" connives", " connive"])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::Connives {
             subject: Box::new(subj),
         }]);
     }
-    if let Some(who_raw) = blow
-        .strip_suffix(" commit a crime")
-        .or_else(|| blow.strip_suffix(" commits a crime"))
+    if let Some(who_raw) = strip_suffix_any(&blow, &[" commit a crime", " commits a crime"])
         && let Some(player) = parse_player_ref(who_raw)
     {
         return Ok(vec![TriggerEventAst::CrimeCommitted { player }]);
     }
-    if let Some(who_raw) = blow
-        .strip_suffix(" play a land")
-        .or_else(|| blow.strip_suffix(" plays a land"))
+    if let Some(who_raw) = strip_suffix_any(&blow, &[" play a land", " plays a land"])
         && let Some(player) = parse_player_ref(who_raw)
     {
         return Ok(vec![TriggerEventAst::LandPlayed { player }]);
@@ -2374,15 +1984,10 @@ pub(crate) fn parse_trigger_events(
         if let Some(who_raw) = blow.strip_suffix(suf)
             && let Some(player) = parse_player_ref(who_raw)
         {
-            return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-                player,
-                action: action.to_string(),
-            }]);
+            return Ok(vec![trig_kw(player, action.to_string())]);
         }
     }
-    if let Some((who_raw, roll_raw)) = blow
-        .split_once(" roll a ")
-        .or_else(|| blow.split_once(" rolls a "))
+    if let Some((who_raw, roll_raw)) = split_once_any(&blow, &[" roll a ", " rolls a "])
         && let (Some(player), Ok(n)) = (parse_player_ref(who_raw), roll_raw.trim().parse::<u16>())
     {
         return Ok(vec![TriggerEventAst::RollDie {
@@ -2390,21 +1995,22 @@ pub(crate) fn parse_trigger_events(
             exact_result: Some(n),
         }]);
     }
-    if let Some(who_raw) = blow
-        .strip_suffix(" roll one or more dice")
-        .or_else(|| blow.strip_suffix(" rolls one or more dice"))
-        .or_else(|| blow.strip_suffix(" roll a die"))
-        .or_else(|| blow.strip_suffix(" rolls a die"))
-        && let Some(player) = parse_player_ref(who_raw)
+    if let Some(who_raw) = strip_suffix_any(
+        &blow,
+        &[
+            " roll one or more dice",
+            " rolls one or more dice",
+            " roll a die",
+            " rolls a die",
+        ],
+    ) && let Some(player) = parse_player_ref(who_raw)
     {
         return Ok(vec![TriggerEventAst::RollDie {
             player,
             exact_result: None,
         }]);
     }
-    if let Some(who_raw) = blow
-        .strip_suffix(" win a coin flip")
-        .or_else(|| blow.strip_suffix(" wins a coin flip"))
+    if let Some(who_raw) = strip_suffix_any(&blow, &[" win a coin flip", " wins a coin flip"])
         && let Some(player) = parse_player_ref(who_raw)
     {
         return Ok(vec![TriggerEventAst::FlipCoin {
@@ -2412,9 +2018,7 @@ pub(crate) fn parse_trigger_events(
             won: Some(true),
         }]);
     }
-    if let Some(who_raw) = blow
-        .strip_suffix(" lose a coin flip")
-        .or_else(|| blow.strip_suffix(" loses a coin flip"))
+    if let Some(who_raw) = strip_suffix_any(&blow, &[" lose a coin flip", " loses a coin flip"])
         && let Some(player) = parse_player_ref(who_raw)
     {
         return Ok(vec![TriggerEventAst::FlipCoin {
@@ -2422,16 +2026,7 @@ pub(crate) fn parse_trigger_events(
             won: Some(false),
         }]);
     }
-    if let Some(who_raw) = blow
-        .strip_suffix(" flip a coin")
-        .or_else(|| blow.strip_suffix(" flips a coin"))
-        && let Some(player) = parse_player_ref(who_raw)
-    {
-        return Ok(vec![TriggerEventAst::FlipCoin { player, won: None }]);
-    }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" phases out")
-        .or_else(|| blow.strip_suffix(" phase out"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" phases out", " phase out"])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::PhaseChanged {
@@ -2439,9 +2034,7 @@ pub(crate) fn parse_trigger_events(
             phased_out: true,
         }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" phases in")
-        .or_else(|| blow.strip_suffix(" phase in"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" phases in", " phase in"])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::PhaseChanged {
@@ -2449,18 +2042,14 @@ pub(crate) fn parse_trigger_events(
             phased_out: false,
         }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" is exiled")
-        .or_else(|| blow.strip_suffix(" are exiled"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" is exiled", " are exiled"])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::Exiled {
             subject: Box::new(subj),
         }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" regenerates this way")
-        .or_else(|| blow.strip_suffix(" regenerates"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" regenerates this way", " regenerates"])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![TriggerEventAst::PermanentRegenerates {
@@ -2469,118 +2058,56 @@ pub(crate) fn parse_trigger_events(
         }]);
     }
 
-    // Orthogonal Pass J triggers: "one or more <flt> deals combat damage to <recip>" (Kutzil) & "you [next] cast that spell / <flt>" (Ogre Battlecaster)
-    if let Some((subj_raw, recip_raw)) = blow.split_once(" deals combat damage to ")
-        && subj_raw.starts_with("one or more ")
-        && let Ok(flt) = parse_object_filter(subj_raw.trim_start_matches("one or more "), vocab)
-        && let Ok(recip) = parse_subject_or_target(recip_raw, vocab)
-    {
-        return Ok(vec![TriggerEventAst::DamageDealt {
-            combat_only: true,
-            noncombat_only: false,
-            source: Some(Box::new(SubjectRefAst::Group(Box::new(flt)))),
-            recipient: Some(Box::new(recip)),
-            grouped: true,
-            excess_only: false,
-        }]);
-    }
     if blow == "you cast that spell" || blow == "you next cast that spell" {
-        return Ok(vec![TriggerEventAst::SpellCast {
-            caster: PlayerRefAst::You,
-            spell: None,
-            self_spell: false,
-            targets: None,
-            nth_each_turn: None,
-            include_copy: false,
-        }]);
-    }
-    if let Some(after) = blow.strip_prefix("you next cast ") {
-        let clean = after.strip_suffix(" this turn").unwrap_or(after).trim();
-        let (_, flt_raw) = peel_leading_count(clean, vocab);
-        if let Ok(flt) = parse_object_filter(flt_raw, vocab) {
-            return Ok(vec![TriggerEventAst::SpellCast {
-                caster: PlayerRefAst::You,
-                spell: Some(Box::new(flt)),
-                self_spell: false,
-                targets: None,
-                nth_each_turn: None,
-                include_copy: false,
-            }]);
-        }
+        return Ok(vec![trig_cast(PlayerRefAst::You, None)]);
     }
 
     // Orthogonal Pass I triggers: token creation, loyalty/nonmana ability activation, crewed, last counter, state triggers, keyword actions
-    if let Some((who_raw, rest)) = blow
-        .split_once(" create or sacrifice ")
-        .or_else(|| blow.split_once(" creates or sacrifices "))
+    if let Some((who_raw, rest)) =
+        split_once_any(&blow, &[" create or sacrifice ", " creates or sacrifices "])
         && let Some(player) = parse_player_ref(who_raw)
     {
         let (flt_raw, _) = peel_one_or_more(rest);
         let (_, clean) = peel_leading_count(flt_raw, vocab);
         if let Ok(flt) = parse_object_filter(clean, vocab) {
             return Ok(vec![
-                TriggerEventAst::ZoneChange {
-                    from: None,
-                    to: Some("battlefield".to_string()),
-                    subject: Box::new(SubjectRefAst::Group(Box::new(flt.clone()))),
-                    grouped: false,
-                    entering_controller: None,
-                },
+                trig_zone(None, Some("battlefield"), grp(flt.clone())),
                 TriggerEventAst::PermanentSacrificed {
                     player,
-                    subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                    subject: Box::new(grp(flt)),
                 },
             ]);
         }
     }
-    if let Some((who_raw, rest)) = blow
-        .split_once(" create ")
-        .or_else(|| blow.split_once(" creates "))
+    if let Some((who_raw, rest)) = split_once_any(&blow, &[" create ", " creates "])
         && let Some(player) = parse_player_ref(who_raw)
     {
         let (flt_raw, grouped) = peel_one_or_more(rest);
         let (_, clean) = peel_leading_count(flt_raw, vocab);
         if let Ok(flt) = parse_object_filter(clean, vocab) {
-            return Ok(vec![TriggerEventAst::ZoneChange {
-                from: None,
-                to: Some("battlefield".to_string()),
-                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+            return Ok(vec![trig_zone_ext(
+                None,
+                Some("battlefield"),
+                grp(flt),
                 grouped,
-                entering_controller: player_ref_to_controller_relation(player),
-            }]);
+                player_ref_to_controller_relation(player),
+            )]);
         }
     }
-    if let Some((who_raw, rest)) = blow
-        .split_once(" activate ")
-        .or_else(|| blow.split_once(" activates "))
+    if let Some((who_raw, rest)) = split_once_any(&blow, &[" activate ", " activates "])
         && let Some(player) = parse_player_ref(who_raw)
         && (rest.starts_with("a loyalty ability of ")
             || rest.starts_with("an ability that isn't a mana ability")
             || rest.starts_with("an ability that targets "))
     {
         let src_flt = if let Some(subj_raw) = rest.strip_prefix("a loyalty ability of ") {
-            parse_object_filter(subj_raw, vocab).unwrap_or_else(|_| crate::ast::ObjectFilterAst {
-                any_permanent: true,
-                ..Default::default()
-            })
+            parse_object_filter(subj_raw, vocab).unwrap_or_else(|_| any_perm())
         } else {
-            crate::ast::ObjectFilterAst {
-                any_permanent: true,
-                ..Default::default()
-            }
+            any_perm()
         };
         return Ok(vec![TriggerEventAst::AbilityActivated {
             player,
             source_filter: Box::new(src_flt),
-        }]);
-    }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" becomes crewed")
-        .or_else(|| blow.strip_suffix(" become crewed"))
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
-    {
-        return Ok(vec![TriggerEventAst::Crewed {
-            subject: Box::new(subj),
         }]);
     }
     if let Some((who_raw, rest)) = blow.split_once(" remove the last ")
@@ -2595,9 +2122,7 @@ pub(crate) fn parse_trigger_events(
             by_you: true,
         }]);
     }
-    if let Some((who_raw, rest)) = blow
-        .split_once(" roll a ")
-        .or_else(|| blow.split_once(" rolls a "))
+    if let Some((who_raw, rest)) = split_once_any(&blow, &[" roll a ", " rolls a "])
         && let Some(player) = parse_player_ref(who_raw)
         && rest
             .split(|c: char| !c.is_ascii_digit())
@@ -2623,80 +2148,57 @@ pub(crate) fn parse_trigger_events(
         if let Some(who_raw) = blow.strip_suffix(kw_act)
             && let Some(player) = parse_player_ref(who_raw)
         {
-            return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-                player,
-                action: label.to_string(),
-            }]);
+            return Ok(vec![trig_kw(player, label.to_string())]);
         }
     }
     if blow == "you cast or cycle ~" {
         return Ok(vec![
-            TriggerEventAst::SpellCast {
-                caster: PlayerRefAst::You,
-                spell: None,
-                self_spell: true,
-                targets: None,
-                nth_each_turn: None,
-                include_copy: false,
-            },
+            trig_cast_ext(PlayerRefAst::You, None, true, None, None, false),
             TriggerEventAst::Cycled {
-                subject: Box::new(SubjectRefAst::SelfObject),
+                subject: self_obj(),
             },
         ]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" is sacrificed or destroyed")
-        .or_else(|| blow.strip_suffix(" are sacrificed or destroyed"))
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
+    if let Some(subj_raw) = strip_suffix_any(
+        &blow,
+        &[
+            " is sacrificed or destroyed",
+            " are sacrificed or destroyed",
+        ],
+    ) && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(vec![
             TriggerEventAst::PermanentSacrificed {
                 player: PlayerRefAst::AnyPlayer,
                 subject: Box::new(subj.clone()),
             },
-            TriggerEventAst::ZoneChange {
-                from: Some("battlefield".to_string()),
-                to: Some("graveyard".to_string()),
-                subject: Box::new(subj),
-                grouped: false,
-                entering_controller: None,
-            },
+            trig_zone(Some("battlefield"), Some("graveyard"), subj),
         ]);
-    }
-    // Pass N orthogonal triggers: play/cast from zone, grouped and/or enters, returned to hand,
-    // ability activated, boast, trains, untap, shuffle, opponents dealt combat damage, attack with, gain control
-    if blow == "you play a card from exile" || blow == "you cast a spell from exile" {
-        return Ok(vec![TriggerEventAst::CastFromOutsideHand {
-            player: PlayerRefAst::You,
-        }]);
     }
     if let Some(after) = blow.strip_prefix("you cast ~ from ")
         && !after.is_empty()
     {
-        return Ok(vec![TriggerEventAst::SpellCast {
-            caster: PlayerRefAst::You,
-            spell: None,
-            self_spell: true,
-            targets: None,
-            nth_each_turn: None,
-            include_copy: false,
-        }]);
+        return Ok(vec![trig_cast_ext(
+            PlayerRefAst::You,
+            None,
+            true,
+            None,
+            None,
+            false,
+        )]);
     }
     if let Some(after) = blow
         .strip_prefix("~ and/or one or more other ")
-        .and_then(|r| {
-            r.strip_suffix(" enter")
-                .or_else(|| r.strip_suffix(" enter the battlefield"))
-        })
+        .and_then(|r| strip_suffix_any(r, &[" enter", " enter the battlefield"]))
         && let Ok(flt) = parse_object_filter(after, vocab)
     {
-        return Ok(vec![TriggerEventAst::ZoneChange {
-            from: None,
-            to: Some("battlefield".to_string()),
-            subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
-            grouped: true,
-            entering_controller: None,
-        }]);
+        return Ok(vec![trig_zone_ext(
+            None,
+            Some("battlefield"),
+            grp(flt),
+            true,
+            None,
+        )]);
     }
     if let Some(subj_raw) = blow
         .strip_suffix(" is returned to its owner's hand")
@@ -2704,13 +2206,7 @@ pub(crate) fn parse_trigger_events(
         .or_else(|| blow.strip_suffix(" are returned to their owners' hands"))
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::ZoneChange {
-            from: Some("battlefield".to_string()),
-            to: Some("hand".to_string()),
-            subject: Box::new(subj),
-            grouped: false,
-            entering_controller: None,
-        }]);
+        return Ok(vec![trig_zone(Some("battlefield"), Some("hand"), subj)]);
     }
     if let Some(subj_raw) = blow
         .strip_prefix("an ability of ")
@@ -2719,30 +2215,19 @@ pub(crate) fn parse_trigger_events(
     {
         return Ok(vec![TriggerEventAst::AbilityActivated {
             player: PlayerRefAst::AnyPlayer,
-            source_filter: Box::new(crate::ast::ObjectFilterAst {
-                any_permanent: true,
-                ..Default::default()
-            }),
+            source_filter: Box::new(any_perm()),
         }]);
     }
     if blow == "you activate a boast ability" {
         return Ok(vec![TriggerEventAst::AbilityActivated {
             player: PlayerRefAst::You,
-            source_filter: Box::new(crate::ast::ObjectFilterAst {
-                any_permanent: true,
-                ..Default::default()
-            }),
+            source_filter: Box::new(any_perm()),
         }]);
     }
-    if let Some(subj_raw) = blow
-        .strip_suffix(" trains")
-        .or_else(|| blow.strip_suffix(" train"))
+    if let Some(subj_raw) = strip_suffix_any(&blow, &[" trains", " train"])
         && parse_subject_or_target(subj_raw, vocab).is_ok()
     {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: "train".to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, "train")]);
     }
     if let Some(after) = blow.strip_prefix("you untap ") {
         let clean = after
@@ -2751,7 +2236,7 @@ pub(crate) fn parse_trigger_events(
         let (flt_raw, _) = peel_one_or_more(clean);
         if let Ok(flt) = parse_object_filter(flt_raw, vocab) {
             return Ok(vec![TriggerEventAst::TapStateChanged {
-                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                subject: Box::new(grp(flt)),
                 tapped: false,
                 for_mana: false,
             }]);
@@ -2760,39 +2245,42 @@ pub(crate) fn parse_trigger_events(
     if blow == "a spell or ability causes a player to shuffle their library"
         || blow == "a player shuffles their library"
     {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::AnyPlayer,
-            action: if blow.starts_with("a spell or ability") {
+        return Ok(vec![trig_kw(
+            PlayerRefAst::AnyPlayer,
+            if blow.starts_with("a spell or ability") {
                 "spell_or_ability_shuffle_library".to_string()
             } else {
                 "shuffle_library".to_string()
             },
-        }]);
+        )]);
     }
     if blow == "one or more of your opponents are dealt combat damage"
         || blow == "your opponents are dealt combat damage"
     {
-        return Ok(vec![TriggerEventAst::DamageDealt {
-            combat_only: true,
-            noncombat_only: false,
-            source: None,
-            recipient: Some(Box::new(SubjectRefAst::Player(PlayerRefAst::EachOpponent))),
-            grouped: true,
-            excess_only: false,
-        }]);
+        return Ok(vec![trig_dmg(
+            true,
+            false,
+            None,
+            Some(SubjectRefAst::Player(PlayerRefAst::EachOpponent)),
+            true,
+            false,
+        )]);
     }
-    if let Some(after) = blow
-        .strip_prefix("you attack a player or planeswalker with ")
-        .or_else(|| blow.strip_prefix("you attack with "))
-    {
+    if let Some(after) = strip_prefix_any(
+        &blow,
+        &[
+            "you attack a player or planeswalker with ",
+            "you attack with ",
+        ],
+    ) {
         let (flt_raw, grouped) = peel_one_or_more(after);
         if let Ok(flt) = parse_object_filter(flt_raw, vocab) {
-            return Ok(vec![TriggerEventAst::Attacks {
-                subject: Some(Box::new(SubjectRefAst::Group(Box::new(flt)))),
-                actor: Some(PlayerRefAst::You),
-                qualifier: None,
+            return Ok(vec![trig_attacks_ext(
+                Some(grp(flt)),
+                Some(PlayerRefAst::You),
+                None,
                 grouped,
-            }]);
+            )]);
         }
     }
     if let Some(subj_raw) = blow
@@ -2800,10 +2288,10 @@ pub(crate) fn parse_trigger_events(
         .and_then(|r| r.strip_suffix(" from another player"))
         && parse_subject_or_target(subj_raw, vocab).is_ok()
     {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: format!("gain_control:{subj_raw}"),
-        }]);
+        return Ok(vec![trig_kw(
+            PlayerRefAst::You,
+            format!("gain_control:{subj_raw}"),
+        )]);
     }
 
     // State trigger: "When ~ has no <kind> counters on it" / "When there are <N> or more <kind> counters on <subj>" (Nine Lives, Deadly Designs, Afiya Grove)
@@ -2814,17 +2302,12 @@ pub(crate) fn parse_trigger_events(
         return Ok(vec![TriggerEventAst::StateTrigger(Box::new(cond))]);
     }
     // "<subj> attacks a player who <cond>" / "<subj> attacks the player with the most life [or tied for most life]"
-    if let Some((subj_raw, rest)) = blow
-        .split_once(" attacks a player who ")
-        .or_else(|| blow.split_once(" attacks the player with "))
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
+    if let Some((subj_raw, rest)) = split_once_any(
+        &blow,
+        &[" attacks a player who ", " attacks the player with "],
+    ) && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::Attacks {
-            subject: Some(Box::new(subj)),
-            actor: None,
-            qualifier: Some(rest.to_string()),
-            grouped: false,
-        }]);
+        return Ok(vec![trig_attacks(Some(subj), None, Some(rest.to_string()))]);
     }
 
     // Peel trailing temporal/frequency qualifier and preserve it via `QualifiedTrigger`
@@ -2855,16 +2338,10 @@ pub(crate) fn parse_trigger_events(
     // attacks a battle, cast your commander, enlists, collect evidence, dealt combat damage,
     // visit an Attraction, sacrifice one or more <flt>, two or more <flt> attack, returned to hand
     if blow == "~ evolves" {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: "evolve".to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, "evolve")]);
     }
     if blow == "~ becomes plotted" || blow == "~ becomes saddled" {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: blow.to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, blow.to_string())]);
     }
     if matches!(
         blow,
@@ -2875,10 +2352,7 @@ pub(crate) fn parse_trigger_events(
             | "you collect evidence"
             | "you visit an attraction"
     ) {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: blow.to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, blow.to_string())]);
     }
     if let Some(flt_raw) = blow.strip_prefix("you play ")
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
@@ -2899,40 +2373,29 @@ pub(crate) fn parse_trigger_events(
             flags: crate::ast::ObjectFilterFlags::IS_COMMANDER,
             ..Default::default()
         };
-        return Ok(vec![TriggerEventAst::SpellCast {
-            caster: PlayerRefAst::You,
-            spell: Some(Box::new(cmdr_flt)),
-            self_spell: false,
-            targets: None,
-            nth_each_turn: None,
-            include_copy: false,
-        }]);
+        return Ok(vec![trig_cast(PlayerRefAst::You, Some(cmdr_flt))]);
     }
     if blow == "you're dealt combat damage" || blow == "you are dealt combat damage" {
-        return Ok(vec![TriggerEventAst::DamageDealt {
-            combat_only: true,
-            noncombat_only: false,
-            source: None,
-            recipient: Some(Box::new(SubjectRefAst::Player(PlayerRefAst::You))),
-            grouped: false,
-            excess_only: false,
-        }]);
+        return Ok(vec![trig_dmg(
+            true,
+            false,
+            None,
+            Some(SubjectRefAst::Player(PlayerRefAst::You)),
+            false,
+            false,
+        )]);
     }
     if let Some(subj_raw) = blow.strip_suffix(" attacks a battle")
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::Attacks {
-            subject: Some(Box::new(subj)),
-            actor: None,
-            qualifier: Some("battle".to_string()),
-            grouped: false,
-        }]);
+        return Ok(vec![trig_attacks(
+            Some(subj),
+            None,
+            Some("battle".to_string()),
+        )]);
     }
     if blow.starts_with("~ enlists ") {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: "enlist".to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, "enlist")]);
     }
     if let Some(after) = blow.strip_prefix("you sacrifice one or more ")
         && let Ok(subj) = parse_subject_or_target(after, vocab)
@@ -2946,30 +2409,17 @@ pub(crate) fn parse_trigger_events(
         && let Some(flt_raw) = after.strip_suffix(" attack")
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::Attacks {
-            subject: Some(Box::new(SubjectRefAst::Group(Box::new(flt)))),
-            actor: None,
-            qualifier: Some("two_or_more".to_string()),
-            grouped: true,
-        }]);
+        return Ok(vec![trig_attacks_ext(
+            Some(grp(flt)),
+            None,
+            Some("two_or_more".to_string()),
+            true,
+        )]);
     }
     if let Some(subj_raw) = blow.strip_suffix(" is returned to a player's hand")
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Ok(vec![TriggerEventAst::ZoneChange {
-            from: Some("battlefield".to_string()),
-            to: Some("hand".to_string()),
-            subject: Box::new(subj),
-            grouped: false,
-            entering_controller: None,
-        }]);
-    }
-    // CR Wave 2 triggers
-    if low == "at the beginning of the monarch's end step" {
-        return Ok(vec![TriggerEventAst::StepBegan {
-            step: TurnStepAst::EndStep,
-            whose: "monarch".to_string(),
-        }]);
+        return Ok(vec![trig_zone(Some("battlefield"), Some("hand"), subj)]);
     }
     if matches!(
         blow,
@@ -2980,10 +2430,7 @@ pub(crate) fn parse_trigger_events(
     ) || (blow.starts_with("a creature has ") && blow.ends_with(" counters on it"))
         || (blow.starts_with("you cast your ") && blow.ends_with(" spell each turn"))
     {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: blow.to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, blow.to_string())]);
     }
     // CR 603.8 State trigger & Pass R orthogonal triggers
     if matches!(
@@ -3140,10 +2587,7 @@ pub(crate) fn parse_trigger_events(
         || (blow.starts_with("an opponent is dealt ")
             && blow.ends_with(" or more damage by a single source"))
     {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: blow.to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, blow.to_string())]);
     }
     if blow.ends_with(" is championed with ~")
         || blow.starts_with("~ deals ")
@@ -3154,10 +2598,7 @@ pub(crate) fn parse_trigger_events(
         || blow.ends_with(" loses the game")
         || (blow.starts_with("~ and at least ") && blow.ends_with(" attack"))
     {
-        return Ok(vec![TriggerEventAst::KeywordActionPerformed {
-            player: PlayerRefAst::You,
-            action: blow.to_string(),
-        }]);
+        return Ok(vec![trig_kw(PlayerRefAst::You, blow.to_string())]);
     }
     // CR 603.8 State trigger: "When <condition>" (Floodgate, Opal Avenger, Phyrexian Devourer, Rune-Tail, Goblins of the Flarg)
     if low.starts_with("when ")
@@ -3409,7 +2850,7 @@ fn with_trigger_subject_self(ev: TriggerEventAst) -> TriggerEventAst {
         } => TriggerEventAst::ZoneChange {
             from,
             to,
-            subject: Box::new(SubjectRefAst::SelfObject),
+            subject: self_obj(),
             grouped,
             entering_controller,
         },
@@ -3423,7 +2864,7 @@ fn with_trigger_subject_self(ev: TriggerEventAst) -> TriggerEventAst {
         } => TriggerEventAst::DamageDealt {
             combat_only,
             noncombat_only,
-            source: Some(Box::new(SubjectRefAst::SelfObject)),
+            source: Some(self_obj()),
             recipient,
             grouped,
             excess_only,
@@ -3434,22 +2875,22 @@ fn with_trigger_subject_self(ev: TriggerEventAst) -> TriggerEventAst {
             qualifier,
             ..
         } => TriggerEventAst::Attacks {
-            subject: Some(Box::new(SubjectRefAst::SelfObject)),
+            subject: Some(self_obj()),
             actor,
             grouped,
             qualifier,
         },
         TriggerEventAst::Blocks { attacker, .. } => TriggerEventAst::Blocks {
-            subject: Box::new(SubjectRefAst::SelfObject),
+            subject: self_obj(),
             attacker,
         },
         TriggerEventAst::BecomesBlocked { blocker, .. } => TriggerEventAst::BecomesBlocked {
-            subject: Box::new(SubjectRefAst::SelfObject),
+            subject: self_obj(),
             blocker,
         },
         TriggerEventAst::BecomesBlockedByCount { min_blockers, .. } => {
             TriggerEventAst::BecomesBlockedByCount {
-                subject: Box::new(SubjectRefAst::SelfObject),
+                subject: self_obj(),
                 min_blockers,
             }
         }
@@ -3458,14 +2899,14 @@ fn with_trigger_subject_self(ev: TriggerEventAst) -> TriggerEventAst {
             by_text,
             ..
         } => TriggerEventAst::BecomesTargeted {
-            subject: Box::new(SubjectRefAst::SelfObject),
+            subject: self_obj(),
             by_opponent,
             by_text,
         },
         TriggerEventAst::TapStateChanged {
             tapped, for_mana, ..
         } => TriggerEventAst::TapStateChanged {
-            subject: Box::new(SubjectRefAst::SelfObject),
+            subject: self_obj(),
             tapped,
             for_mana,
         },
@@ -3475,7 +2916,7 @@ fn with_trigger_subject_self(ev: TriggerEventAst) -> TriggerEventAst {
             by_you,
             ..
         } => TriggerEventAst::CountersChanged {
-            subject: Box::new(SubjectRefAst::SelfObject),
+            subject: self_obj(),
             counter_kind,
             added,
             by_you,
@@ -3490,5 +2931,128 @@ fn with_trigger_subject_self(ev: TriggerEventAst) -> TriggerEventAst {
             timing,
         },
         other => other,
+    }
+}
+
+#[inline]
+fn trig_zone(from: Option<&str>, to: Option<&str>, subject: SubjectRefAst) -> TriggerEventAst {
+    TriggerEventAst::ZoneChange {
+        from: from.map(str::to_string),
+        to: to.map(str::to_string),
+        subject: Box::new(subject),
+        grouped: false,
+        entering_controller: None,
+    }
+}
+
+#[inline]
+fn trig_cast(caster: PlayerRefAst, spell: Option<ObjectFilterAst>) -> TriggerEventAst {
+    TriggerEventAst::SpellCast {
+        caster,
+        spell: spell.map(Box::new),
+        self_spell: false,
+        targets: None,
+        nth_each_turn: None,
+        include_copy: false,
+    }
+}
+
+#[inline]
+fn trig_kw(player: PlayerRefAst, action: impl Into<String>) -> TriggerEventAst {
+    TriggerEventAst::KeywordActionPerformed {
+        player,
+        action: action.into(),
+    }
+}
+
+#[inline]
+fn trig_attacks(
+    subject: Option<SubjectRefAst>,
+    actor: Option<PlayerRefAst>,
+    qualifier: Option<String>,
+) -> TriggerEventAst {
+    TriggerEventAst::Attacks {
+        subject: subject.map(Box::new),
+        actor,
+        qualifier,
+        grouped: false,
+    }
+}
+
+#[inline]
+fn trig_step(step: TurnStepAst, whose: impl Into<String>) -> TriggerEventAst {
+    TriggerEventAst::StepBegan {
+        step,
+        whose: whose.into(),
+    }
+}
+
+#[inline]
+fn trig_zone_ext(
+    from: Option<&str>,
+    to: Option<&str>,
+    subject: SubjectRefAst,
+    grouped: bool,
+    entering_controller: Option<ControllerRelation>,
+) -> TriggerEventAst {
+    TriggerEventAst::ZoneChange {
+        from: from.map(str::to_string),
+        to: to.map(str::to_string),
+        subject: Box::new(subject),
+        grouped,
+        entering_controller,
+    }
+}
+
+#[inline]
+fn trig_cast_ext(
+    caster: PlayerRefAst,
+    spell: Option<ObjectFilterAst>,
+    self_spell: bool,
+    targets: Option<SubjectRefAst>,
+    nth_each_turn: Option<u8>,
+    include_copy: bool,
+) -> TriggerEventAst {
+    TriggerEventAst::SpellCast {
+        caster,
+        spell: spell.map(Box::new),
+        self_spell,
+        targets: targets.map(Box::new),
+        nth_each_turn,
+        include_copy,
+    }
+}
+
+#[inline]
+fn trig_attacks_ext(
+    subject: Option<SubjectRefAst>,
+    actor: Option<PlayerRefAst>,
+    qualifier: Option<String>,
+    grouped: bool,
+) -> TriggerEventAst {
+    TriggerEventAst::Attacks {
+        subject: subject.map(Box::new),
+        actor,
+        qualifier,
+        grouped,
+    }
+}
+
+#[inline]
+fn trig_dmg(
+    combat_only: bool,
+    noncombat_only: bool,
+    source: Option<SubjectRefAst>,
+    recipient: Option<SubjectRefAst>,
+    grouped: bool,
+    excess_only: bool,
+) -> TriggerEventAst {
+    TriggerEventAst::DamageDealt {
+        combat_only,
+        noncombat_only,
+        source: source.map(Box::new),
+        recipient: recipient.map(Box::new),
+        grouped,
+        excess_only,
     }
 }

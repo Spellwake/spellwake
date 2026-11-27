@@ -12,7 +12,10 @@ use crate::ast::{
     ObjectPartitionKind, PartitionMembershipAst, PlayerRefAst, PriorActionRefKind, StatBoundAst,
     StatKind, SubjectRefAst, SupertypeMask, ValueExprAst, ZoneFilter,
 };
-use crate::combinators::trim_punct;
+use crate::combinators::{
+    anaphora, box_anaphora, card_flt, grp, obj_type, rsplit_once_any, self_obj, split_once_any,
+    strip_prefix_any, strip_suffix_any, trim_punct, val_obj_stat, vconst,
+};
 use crate::preprocess::parse_base_pt;
 use crate::vocab::{Vocabulary, lookup_card_type, lookup_color, lookup_supertype};
 
@@ -37,9 +40,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
     }
 
     // Fast path for "<kind> stickers on <subj>" (Pin Collection Layer 6 ability inheritance).
-    if let Some((kind_raw, host_raw)) = s
-        .split_once(" stickers on ")
-        .or_else(|| s.split_once(" sticker on "))
+    if let Some((kind_raw, host_raw)) = split_once_any(&s, &[" stickers on ", " sticker on "])
         && matches!(
             kind_raw.trim(),
             "ability" | "art" | "name" | "power and toughness" | "a" | "an"
@@ -63,43 +64,38 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
     loop {
         let mut changed = false;
 
-        if let Some(prefix) = s.strip_suffix(" with abilities") {
+        if peel_suf(&mut s, " with abilities") {
             flt.predicates.push(FilterPredicateAst::HasAbilities {
                 has_abilities: true,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with no abilities") {
+        if peel_suf(&mut s, " with no abilities") {
             flt.predicates.push(FilterPredicateAst::HasAbilities {
                 has_abilities: false,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" the monarch controls") {
+        if peel_suf(&mut s, " the monarch controls") {
             flt.predicates.push(FilterPredicateAst::ControlledByMonarch);
-            s = prefix.trim().to_string();
             continue;
         }
         // Pass E10 typed partition, phase-out, draft-ledger, first-printed-set, sticker, and mana-subset predicates
         // (peeled BEFORE generic "of your choice", "named ~", and zone suffixes so nothing shadows them).
-        if let Some(prefix) = s.strip_suffix(" in the sector of your choice") {
+        if peel_suf(&mut s, " in the sector of your choice") {
             flt.predicates.push(FilterPredicateAst::InObjectPartition {
                 kind: ObjectPartitionKind::Sector,
                 membership: PartitionMembershipAst::ChosenByController,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" in a pile with the chosen label") {
+        if peel_suf(&mut s, " in a pile with the chosen label") {
             flt.predicates.push(FilterPredicateAst::InObjectPartition {
                 kind: ObjectPartitionKind::LabeledPiles(Vec::new()),
-                membership: PartitionMembershipAst::MatchingSubjectTag(Box::new(
-                    SubjectRefAst::Anaphora("that creature".to_string()),
-                )),
+                membership: PartitionMembershipAst::MatchingSubjectTag(Box::new(anaphora(
+                    "that creature",
+                ))),
             });
-            s = prefix.trim().to_string();
             continue;
         }
         if let Some(prefix) = s
@@ -117,7 +113,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         {
             flt.predicates.push(FilterPredicateAst::MatchesDraftLedger {
                 kind: DraftLedgerQueryKind::NotedCreatureType,
-                source_card_name: Box::new(SubjectRefAst::SelfObject),
+                source_card_name: self_obj(),
             });
             s = prefix.trim().to_string();
             continue;
@@ -128,7 +124,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         {
             flt.predicates.push(FilterPredicateAst::MatchesDraftLedger {
                 kind: DraftLedgerQueryKind::NotedName,
-                source_card_name: Box::new(SubjectRefAst::SelfObject),
+                source_card_name: self_obj(),
             });
             s = prefix.trim().to_string();
             continue;
@@ -144,7 +140,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         {
             flt.predicates.push(FilterPredicateAst::MatchesDraftLedger {
                 kind: DraftLedgerQueryKind::NotedColor,
-                source_card_name: Box::new(SubjectRefAst::SelfObject),
+                source_card_name: self_obj(),
             });
             s = prefix.trim().to_string();
             continue;
@@ -214,16 +210,14 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that can block additional creatures") {
+        if peel_suf(&mut s, " that can block additional creatures") {
             flt.predicates
                 .push(FilterPredicateAst::CanBlockAdditionalCreatures);
-            s = prefix.trim().to_string();
             continue;
         }
 
-        if let Some(prefix) = s.strip_suffix(" of the chosen card type") {
+        if peel_suf(&mut s, " of the chosen card type") {
             flt.flags = flt.flags.union(ObjectFilterFlags::MATCHES_CHOSEN_CARD_TYPE);
-            s = prefix.trim().to_string();
             continue;
         }
 
@@ -262,10 +256,10 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             continue;
         }
         // Generalized "with the same name as <subj>"
-        if let Some((prefix, same_as_raw)) = s
-            .rsplit_once(" with the same name as ")
-            .or_else(|| s.rsplit_once(" that have the same name as "))
-            && !prefix.trim().is_empty()
+        if let Some((prefix, same_as_raw)) = rsplit_once_any(
+            &s,
+            &[" with the same name as ", " that have the same name as "],
+        ) && !prefix.trim().is_empty()
             && !same_as_raw.contains(" another card in their hand")
         {
             let target_raw = same_as_raw.trim();
@@ -286,71 +280,71 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 continue;
             }
         }
-        if let Some(prefix) = s.strip_suffix(" with the same name as another card in their hand") {
+        if peel_suf(&mut s, " with the same name as another card in their hand") {
             flt.named = Some(NameFilterAst::SameAsReferenced);
             flt.predicates.push(FilterPredicateAst::StateQualification(
                 "same_name_as_another_card_in_their_hand".to_string(),
             ));
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s
-            .strip_suffix(" that aren't on the battlefield")
-            .or_else(|| s.strip_suffix(" that isn't on the battlefield"))
-        {
+        if let Some(prefix) = strip_suffix_any(
+            &s,
+            &[
+                " that aren't on the battlefield",
+                " that isn't on the battlefield",
+            ],
+        ) {
             s = prefix.trim().to_string();
             continue;
         }
         // Pass E12: Lossless zone suffixes that carry owner, origin, prior-action, or nonland constraints
-        if let Some(prefix) =
-            s.strip_suffix(" that were put into your graveyard from your library this turn")
-        {
+        if peel_suf(
+            &mut s,
+            " that were put into your graveyard from your library this turn",
+        ) {
             flt.zone = Some(ZoneFilter::YourGraveyard);
             flt.predicates
                 .push(FilterPredicateAst::EnteredZoneFromThisTurn {
                     from_zone: ZoneFilter::YourLibrary,
                 });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" you own in exile and in your graveyard") {
+        if peel_suf(&mut s, " you own in exile and in your graveyard") {
             flt.zone = Some(ZoneFilter::YourGraveyardOrExile);
             flt.owner = Some(ControllerRelation::You);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" your opponents own in exile") {
+        if peel_suf(&mut s, " your opponents own in exile") {
             flt.zone = Some(ZoneFilter::Exile);
             flt.owner = Some(ControllerRelation::Opponents);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" an opponent owns in exile") {
+        if peel_suf(&mut s, " an opponent owns in exile") {
             flt.zone = Some(ZoneFilter::Exile);
             flt.owner = Some(ControllerRelation::Opponent);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" you own in exile") {
+        if peel_suf(&mut s, " you own in exile") {
             flt.zone = Some(ZoneFilter::Exile);
             flt.owner = Some(ControllerRelation::You);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" from among the nonland cards exiled this way") {
+        if peel_suf(&mut s, " from among the nonland cards exiled this way") {
             flt.zone = Some(ZoneFilter::Exile);
             flt.forbidden_types = flt.forbidden_types.union(CardTypeMask::LAND);
             flt.predicates
                 .push(FilterPredicateAst::AffectedByPriorAction(
                     PriorActionRefKind::ExiledThisWay,
                 ));
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s
-            .strip_suffix(" from among cards exiled this way")
-            .or_else(|| s.strip_suffix(" from among the exiled cards"))
-        {
+        if let Some(prefix) = strip_suffix_any(
+            &s,
+            &[
+                " from among cards exiled this way",
+                " from among the exiled cards",
+            ],
+        ) {
             flt.zone = Some(ZoneFilter::Exile);
             flt.predicates
                 .push(FilterPredicateAst::AffectedByPriorAction(
@@ -359,18 +353,16 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" from among cards exiled with ~") {
+        if peel_suf(&mut s, " from among cards exiled with ~") {
             flt.zone = Some(ZoneFilter::Exile);
             flt.flags = flt.flags.union(ObjectFilterFlags::EXILED_WITH_SELF);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" from among those nonland cards") {
+        if peel_suf(&mut s, " from among those nonland cards") {
             flt.forbidden_types = flt.forbidden_types.union(CardTypeMask::LAND);
             flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
                 kind: "from_among_those_cards".to_string(),
             });
-            s = prefix.trim().to_string();
             continue;
         }
         if let Some(prefix) = s
@@ -384,29 +376,24 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" from among cards revealed this way") {
+        if peel_suf(&mut s, " from among cards revealed this way") {
             flt.predicates
                 .push(FilterPredicateAst::AffectedByPriorAction(
                     PriorActionRefKind::RevealedThisWay,
                 ));
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s
-            .strip_suffix(" from among those cards")
-            .or_else(|| s.strip_suffix(" from among them"))
-            .or_else(|| s.strip_suffix(" among them"))
-        {
+        if let Some(prefix) = strip_suffix_any(
+            &s,
+            &[" from among those cards", " from among them", " among them"],
+        ) {
             flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
                 kind: "from_among_those".to_string(),
             });
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s
-            .strip_suffix(" from it")
-            .or_else(|| s.strip_suffix(" in it"))
-        {
+        if let Some(prefix) = strip_suffix_any(&s, &[" from it", " in it"]) {
             flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
                 kind: "in_referenced_zone".to_string(),
             });
@@ -439,40 +426,33 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         // Wave E6.2: Multi-zone, disjunctive, combat-target, blocking, attached-to, prior-action,
         // superlative, exclusion, and relational suffixes peeled BEFORE CTRL_SUFFIXES so inner
         // controller phrases ("an aura you control", "permanents you control") are not stripped early.
-        if let Some(prefix) = s.strip_suffix(" from the command zone and from your graveyard") {
+        if peel_suf(&mut s, " from the command zone and from your graveyard") {
             flt.zone = Some(ZoneFilter::CommandZone);
             flt.extra_zones.push(ZoneFilter::YourGraveyard);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" from your hand or from the command zone") {
+        if peel_suf(&mut s, " from your hand or from the command zone") {
             flt.zone = Some(ZoneFilter::YourHand);
             flt.extra_zones.push(ZoneFilter::CommandZone);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" in exile and in your graveyard") {
+        if peel_suf(&mut s, " in exile and in your graveyard") {
             flt.zone = Some(ZoneFilter::Exile);
             flt.extra_zones.push(ZoneFilter::YourGraveyard);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" from its owner's graveyard") {
+        if peel_suf(&mut s, " from its owner's graveyard") {
             flt.zone = Some(ZoneFilter::ItsOwnerGraveyard);
-            s = prefix.trim().to_string();
             continue;
         }
         if let Some(prefix) = s.strip_suffix(" that's an artifact or that has mana value 3 or less")
         {
-            let f_art = ObjectFilterAst {
-                any_types: CardTypeMask::ARTIFACT,
-                ..Default::default()
-            };
+            let f_art = obj_type(CardTypeMask::ARTIFACT);
             let f_mv3 = ObjectFilterAst {
                 stat_bounds: vec![StatBoundAst {
                     stat: StatKind::ManaValue,
                     op: CompareOp::Le,
-                    value: Box::new(ValueExprAst::Const(3)),
+                    value: vconst(3),
                 }],
                 ..Default::default()
             };
@@ -484,16 +464,8 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         if let Some(prefix) = s.strip_suffix(
             " that's an instant card, a sorcery card, or a card that has an adventure",
         ) {
-            let f_inst = ObjectFilterAst {
-                any_types: CardTypeMask::INSTANT,
-                any_card: true,
-                ..Default::default()
-            };
-            let f_sorc = ObjectFilterAst {
-                any_types: CardTypeMask::SORCERY,
-                any_card: true,
-                ..Default::default()
-            };
+            let f_inst = card_flt(CardTypeMask::INSTANT);
+            let f_sorc = card_flt(CardTypeMask::SORCERY);
             let f_adv = ObjectFilterAst {
                 any_card: true,
                 subtypes: vec!["Adventure".to_string()],
@@ -514,19 +486,18 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             flt.predicates.push(FilterPredicateAst::AttackingTarget {
                 target: Box::new(SubjectRefAst::Compound(vec![
                     SubjectRefAst::Player(PlayerRefAst::You),
-                    SubjectRefAst::Group(Box::new(your_pw)),
+                    grp(your_pw),
                 ])),
                 this_turn: false,
             });
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that's attacking you") {
+        if peel_suf(&mut s, " that's attacking you") {
             flt.predicates.push(FilterPredicateAst::AttackingTarget {
                 target: Box::new(SubjectRefAst::Player(PlayerRefAst::You)),
                 this_turn: false,
             });
-            s = prefix.trim().to_string();
             continue;
         }
         if let Some(prefix) = s
@@ -547,17 +518,17 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that's attacking one of your opponents") {
+        if peel_suf(&mut s, " that's attacking one of your opponents") {
             flt.predicates.push(FilterPredicateAst::AttackingTarget {
                 target: Box::new(SubjectRefAst::Player(PlayerRefAst::EachOpponent)),
                 this_turn: false,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) =
-            s.strip_suffix(" attacking your opponents and/or planeswalkers they control")
-        {
+        if peel_suf(
+            &mut s,
+            " attacking your opponents and/or planeswalkers they control",
+        ) {
             let opp_pw = ObjectFilterAst {
                 any_types: CardTypeMask::PLANESWALKER,
                 controller: Some(ControllerRelation::Opponents),
@@ -570,36 +541,33 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 ])),
                 this_turn: false,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" attacking a player") {
+        if peel_suf(&mut s, " attacking a player") {
             flt.predicates.push(FilterPredicateAst::AttackingTarget {
                 target: Box::new(SubjectRefAst::Player(PlayerRefAst::AnyPlayer)),
                 this_turn: false,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that attacked you this turn") {
+        if peel_suf(&mut s, " that attacked you this turn") {
             flt.predicates.push(FilterPredicateAst::AttackingTarget {
                 target: Box::new(SubjectRefAst::Player(PlayerRefAst::You)),
                 this_turn: true,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s
-            .strip_suffix(" that's blocking it")
-            .or_else(|| s.strip_suffix(" blocking that creature"))
+        if let Some(prefix) =
+            strip_suffix_any(&s, &[" that's blocking it", " blocking that creature"])
         {
-            flt.predicates.push(FilterPredicateAst::Blocking(Box::new(
-                SubjectRefAst::Anaphora("that creature".to_string()),
-            )));
+            flt.predicates
+                .push(FilterPredicateAst::Blocking(Box::new(anaphora(
+                    "that creature",
+                ))));
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that's enchanted by an aura you control") {
+        if peel_suf(&mut s, " that's enchanted by an aura you control") {
             let aura = ObjectFilterAst {
                 subtypes: vec!["Aura".to_string()],
                 controller: Some(ControllerRelation::You),
@@ -607,34 +575,30 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             };
             flt.predicates
                 .push(FilterPredicateAst::AttachedBy(Box::new(aura)));
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" attached to permanents you control") {
+        if peel_suf(&mut s, " attached to permanents you control") {
             let host = ObjectFilterAst {
                 any_permanent: true,
                 controller: Some(ControllerRelation::You),
                 ..Default::default()
             };
-            flt.predicates.push(FilterPredicateAst::AttachedTo(Box::new(
-                SubjectRefAst::Group(Box::new(host)),
-            )));
-            s = prefix.trim().to_string();
+            flt.predicates
+                .push(FilterPredicateAst::AttachedTo(Box::new(grp(host))));
             continue;
         }
-        if let Some(prefix) =
-            s.strip_suffix(" attached to attacking creatures your opponents control")
-        {
+        if peel_suf(
+            &mut s,
+            " attached to attacking creatures your opponents control",
+        ) {
             let host = ObjectFilterAst {
                 any_types: CardTypeMask::CREATURE,
                 combat: Some(CombatState::Attacking),
                 controller: Some(ControllerRelation::Opponents),
                 ..Default::default()
             };
-            flt.predicates.push(FilterPredicateAst::AttachedTo(Box::new(
-                SubjectRefAst::Group(Box::new(host)),
-            )));
-            s = prefix.trim().to_string();
+            flt.predicates
+                .push(FilterPredicateAst::AttachedTo(Box::new(grp(host))));
             continue;
         }
         if let Some(prefix) = s
@@ -645,12 +609,11 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that were blocked by that creature this turn") {
+        if peel_suf(&mut s, " that were blocked by that creature this turn") {
             flt.predicates.push(FilterPredicateAst::BlockedBy {
-                blocker: Box::new(SubjectRefAst::Anaphora("that creature".to_string())),
+                blocker: box_anaphora("that creature"),
                 this_turn: true,
             });
-            s = prefix.trim().to_string();
             continue;
         }
         if let Some(prefix) = s
@@ -696,14 +659,16 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some((prefix, after_no_cnt)) = s
-            .split_once(" that doesn't have a ")
-            .or_else(|| s.split_once(" that don't have a "))
-            .or_else(|| s.split_once(" that doesn't have an "))
-            .or_else(|| s.split_once(" that don't have an "))
-            && let Some(kind_raw) = after_no_cnt
-                .strip_suffix(" counter on it")
-                .or_else(|| after_no_cnt.strip_suffix(" counter on them"))
+        if let Some((prefix, after_no_cnt)) = split_once_any(
+            &s,
+            &[
+                " that doesn't have a ",
+                " that don't have a ",
+                " that doesn't have an ",
+                " that don't have an ",
+            ],
+        ) && let Some(kind_raw) =
+            strip_suffix_any(&after_no_cnt, &[" counter on it", " counter on them"])
         {
             flt.predicates.push(FilterPredicateAst::WithoutCounterKind(
                 kind_raw.trim().to_string(),
@@ -711,23 +676,20 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that didn't attack or enter this turn") {
+        if peel_suf(&mut s, " that didn't attack or enter this turn") {
             flt.flags = flt.flags.union(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN);
             flt.predicates.push(FilterPredicateAst::DidNotEnterThisTurn);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that didn't attack") {
+        if peel_suf(&mut s, " that didn't attack") {
             flt.flags = flt.flags.union(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with the same controller") {
+        if peel_suf(&mut s, " with the same controller") {
             flt.predicates
                 .push(FilterPredicateAst::WithSameControllerAs(Box::new(
-                    SubjectRefAst::Anaphora("target permanent".to_string()),
+                    anaphora("target permanent"),
                 )));
-            s = prefix.trim().to_string();
             continue;
         }
         if let Some((prefix, host_raw)) = s.rsplit_once(" enchanting ")
@@ -739,15 +701,10 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" attached to a creature or land") {
-            let host = ObjectFilterAst {
-                any_types: CardTypeMask::CREATURE.union(CardTypeMask::LAND),
-                ..Default::default()
-            };
-            flt.predicates.push(FilterPredicateAst::AttachedTo(Box::new(
-                SubjectRefAst::Group(Box::new(host)),
-            )));
-            s = prefix.trim().to_string();
+        if peel_suf(&mut s, " attached to a creature or land") {
+            let host = obj_type(CardTypeMask::CREATURE.union(CardTypeMask::LAND));
+            flt.predicates
+                .push(FilterPredicateAst::AttachedTo(Box::new(grp(host))));
             continue;
         }
         if let Some(prefix) = s
@@ -759,16 +716,15 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with equal or lesser toughness") {
+        if peel_suf(&mut s, " with equal or lesser toughness") {
             flt.predicates.push(FilterPredicateAst::StatRelationTo {
                 stat: StatKind::Toughness,
                 cmp: CompareOp::Le,
                 expr: Box::new(ValueExprAst::ObjectStat {
-                    subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                    subject: box_anaphora("it"),
                     stat: StatKind::Toughness,
                 }),
             });
-            s = prefix.trim().to_string();
             continue;
         }
         if let Some(prefix) = s
@@ -780,17 +736,15 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" another player controls") {
+        if peel_suf(&mut s, " another player controls") {
             flt.controller = Some(ControllerRelation::NotYou);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that dealt damage to it this turn") {
+        if peel_suf(&mut s, " that dealt damage to it this turn") {
             flt.flags = flt.flags.union(ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN);
             flt.predicates.push(FilterPredicateAst::StateQualification(
                 "dealt_damage_to_it_this_turn".to_string(),
             ));
-            s = prefix.trim().to_string();
             continue;
         }
         for (ch_sep, ch_player) in [
@@ -861,64 +815,55 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) =
-            s.strip_suffix(" whose controller was dealt combat damage by ~ this turn")
-        {
+        if peel_suf(
+            &mut s,
+            " whose controller was dealt combat damage by ~ this turn",
+        ) {
             flt.predicates
                 .push(FilterPredicateAst::ControllerDealtCombatDamageBySelfThisTurn);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that was put there from anywhere this turn") {
+        if peel_suf(&mut s, " that was put there from anywhere this turn") {
             flt.predicates.push(FilterPredicateAst::PutIntoZoneThisTurn);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that shares a card type with it") {
+        if peel_suf(&mut s, " that shares a card type with it") {
             flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
                 property: "card_type".to_string(),
-                reference: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                reference: box_anaphora("it"),
                 negated: false,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with an art sticker on it") {
+        if peel_suf(&mut s, " with an art sticker on it") {
             flt.predicates
                 .push(FilterPredicateAst::HasStickerKind("art".to_string()));
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with different controllers") {
+        if peel_suf(&mut s, " with different controllers") {
             flt.predicates
                 .push(FilterPredicateAst::DifferentControllers);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that was activated this turn") {
+        if peel_suf(&mut s, " that was activated this turn") {
             flt.predicates.push(FilterPredicateAst::ActivatedThisTurn);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" you own that your opponents control") {
+        if peel_suf(&mut s, " you own that your opponents control") {
             flt.owner = Some(ControllerRelation::You);
             flt.controller = Some(ControllerRelation::Opponents);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" the opponent to your left controls") {
+        if peel_suf(&mut s, " the opponent to your left controls") {
             flt.controller = Some(ControllerRelation::PlayerToLeft);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" controlled by the player to their right") {
+        if peel_suf(&mut s, " controlled by the player to their right") {
             flt.controller = Some(ControllerRelation::PlayerToRight);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some((prefix, kw_part)) = s
-            .split_once(" that doesn't have ")
-            .or_else(|| s.split_once(" that don't have "))
+        if let Some((prefix, kw_part)) =
+            split_once_any(&s, &[" that doesn't have ", " that don't have "])
             && !kw_part.contains(" counter")
             && let Some(kws) = parse_keyword_list(kw_part.trim(), vocab)
         {
@@ -926,35 +871,32 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that attacked or blocked this turn") {
+        if peel_suf(&mut s, " that attacked or blocked this turn") {
             flt.flags = flt
                 .flags
                 .union(ObjectFilterFlags::ATTACKED_OR_BLOCKED_THIS_TURN);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that aren't of a type chosen this way") {
+        if peel_suf(&mut s, " that aren't of a type chosen this way") {
             flt.predicates
                 .push(FilterPredicateAst::MatchesChosen { negated: true });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) =
-            s.strip_suffix(" that shares a card type with the sacrificed permanent")
-        {
+        if peel_suf(
+            &mut s,
+            " that shares a card type with the sacrificed permanent",
+        ) {
             flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
                 property: "card_type".to_string(),
-                reference: Box::new(SubjectRefAst::Anaphora(
-                    "the sacrificed permanent".to_string(),
-                )),
+                reference: box_anaphora("the sacrificed permanent"),
                 negated: false,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) =
-            s.strip_suffix(" that doesn't share a creature type with a creature you control")
-        {
+        if peel_suf(
+            &mut s,
+            " that doesn't share a creature type with a creature you control",
+        ) {
             let your_cr = ObjectFilterAst {
                 any_types: CardTypeMask::CREATURE,
                 controller: Some(ControllerRelation::You),
@@ -962,10 +904,9 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             };
             flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
                 property: "creature_type".to_string(),
-                reference: Box::new(SubjectRefAst::Group(Box::new(your_cr))),
+                reference: Box::new(grp(your_cr)),
                 negated: true,
             });
-            s = prefix.trim().to_string();
             continue;
         }
         if let Some(prefix) = s
@@ -973,25 +914,26 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         {
             flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
                 property: "creature_type".to_string(),
-                reference: Box::new(SubjectRefAst::Anaphora("the chosen creature".to_string())),
+                reference: box_anaphora("the chosen creature"),
                 negated: true,
             });
-            flt.predicates.push(FilterPredicateAst::Exclude(Box::new(
-                SubjectRefAst::Anaphora("the chosen creature".to_string()),
-            )));
+            flt.predicates
+                .push(FilterPredicateAst::Exclude(Box::new(anaphora(
+                    "the chosen creature",
+                ))));
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" they control but don't own") {
+        if peel_suf(&mut s, " they control but don't own") {
             flt.controller = Some(ControllerRelation::ThatPlayer);
             flt.predicates
                 .push(FilterPredicateAst::NotOwnedByController);
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) =
-            s.strip_suffix(" from another legendary source that's not a commander")
-        {
+        if peel_suf(
+            &mut s,
+            " from another legendary source that's not a commander",
+        ) {
             let src_flt = ObjectFilterAst {
                 any_permanent: true,
                 required_supertypes: SupertypeMask::LEGENDARY,
@@ -1000,18 +942,17 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             };
             flt.predicates
                 .push(FilterPredicateAst::FromSource(Box::new(src_flt)));
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" that's the second spell cast this turn") {
+        if peel_suf(&mut s, " that's the second spell cast this turn") {
             flt.predicates
                 .push(FilterPredicateAst::NthSpellCastThisTurn(2));
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) =
-            s.strip_suffix(" with the lowest toughness among creatures you don't control")
-        {
+        if peel_suf(
+            &mut s,
+            " with the lowest toughness among creatures you don't control",
+        ) {
             let scope = ObjectFilterAst {
                 any_types: CardTypeMask::CREATURE,
                 controller: Some(ControllerRelation::NotYou),
@@ -1022,52 +963,47 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
                 greatest: false,
                 scope: Box::new(scope),
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with equal or lesser mana value than that spell") {
+        if peel_suf(&mut s, " with equal or lesser mana value than that spell") {
             flt.predicates.push(FilterPredicateAst::StatRelationTo {
                 stat: StatKind::ManaValue,
                 cmp: CompareOp::Le,
                 expr: Box::new(ValueExprAst::ObjectStat {
-                    subject: Box::new(SubjectRefAst::Anaphora("that spell".to_string())),
+                    subject: box_anaphora("that spell"),
                     stat: StatKind::ManaValue,
                 }),
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with greater mana value than that creature") {
+        if peel_suf(&mut s, " with greater mana value than that creature") {
             flt.predicates.push(FilterPredicateAst::StatRelationTo {
                 stat: StatKind::ManaValue,
                 cmp: CompareOp::Gt,
                 expr: Box::new(ValueExprAst::ObjectStat {
-                    subject: Box::new(SubjectRefAst::Anaphora("that creature".to_string())),
+                    subject: box_anaphora("that creature"),
                     stat: StatKind::ManaValue,
                 }),
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with mana value equal to the number") {
+        if peel_suf(&mut s, " with mana value equal to the number") {
             flt.stat_bounds.push(StatBoundAst {
                 stat: StatKind::ManaValue,
                 op: CompareOp::Eq,
                 value: Box::new(ValueExprAst::ReferencedNumber),
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with lesser mana value") {
+        if peel_suf(&mut s, " with lesser mana value") {
             flt.predicates.push(FilterPredicateAst::StatRelationTo {
                 stat: StatKind::ManaValue,
                 cmp: CompareOp::Lt,
                 expr: Box::new(ValueExprAst::ObjectStat {
-                    subject: Box::new(SubjectRefAst::Anaphora("that creature".to_string())),
+                    subject: box_anaphora("that creature"),
                     stat: StatKind::ManaValue,
                 }),
             });
-            s = prefix.trim().to_string();
             continue;
         }
         // Negated prior-action chosen-this-way clauses (positive prior-action verbs are peeled compositionally below)
@@ -1121,9 +1057,8 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             continue;
         }
 
-        if let Some(prefix) = s.strip_suffix(" dealt damage this turn by a spider you controlled") {
+        if peel_suf(&mut s, " dealt damage this turn by a spider you controlled") {
             flt.flags = flt.flags.union(ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN);
-            s = prefix.trim().to_string();
             continue;
         }
 
@@ -1188,13 +1123,11 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             let mut matched_prior = false;
             for (verb, kind_opt, zone_ref_opt) in PRIOR_VERBS {
                 if let Some(before_verb) = before_tw.strip_suffix(verb) {
-                    let prefix = before_verb
-                        .strip_suffix(" that were")
-                        .or_else(|| before_verb.strip_suffix(" that was"))
-                        .or_else(|| before_verb.strip_suffix(" that player"))
-                        .or_else(|| before_verb.strip_suffix(" they"))
-                        .or_else(|| before_verb.strip_suffix(" you"))
-                        .unwrap_or(before_verb);
+                    let prefix = strip_suffix_any(
+                        &before_verb,
+                        &[" that were", " that was", " that player", " they", " you"],
+                    )
+                    .unwrap_or(before_verb);
                     if !prefix.trim().is_empty() {
                         if let Some(k) = kind_opt {
                             flt.predicates
@@ -1216,9 +1149,13 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         }
         // " that had a/an <kind> counter put on it this way"
         if let Some((prefix, rest)) = s.rsplit_once(" that had ")
-            && let Some(kind_raw) = rest
-                .strip_suffix(" counter put on it this way")
-                .or_else(|| rest.strip_suffix(" counters put on it this way"))
+            && let Some(kind_raw) = strip_suffix_any(
+                &rest,
+                &[
+                    " counter put on it this way",
+                    " counters put on it this way",
+                ],
+            )
             && !prefix.trim().is_empty()
         {
             let kind = kind_raw
@@ -1262,11 +1199,15 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
 
         // Compositional " [that (was|were|'s) ]attached to <subj>" peeler
         if !s.ends_with(" with another aura attached to it")
-            && let Some((prefix, host_raw)) = s
-                .rsplit_once(" that were attached to ")
-                .or_else(|| s.rsplit_once(" that was attached to "))
-                .or_else(|| s.rsplit_once(" that's attached to "))
-                .or_else(|| s.rsplit_once(" attached to "))
+            && let Some((prefix, host_raw)) = rsplit_once_any(
+                &s,
+                &[
+                    " that were attached to ",
+                    " that was attached to ",
+                    " that's attached to ",
+                    " attached to ",
+                ],
+            )
             && !prefix.trim().is_empty()
             && !host_raw.trim().is_empty()
         {
@@ -1284,811 +1225,305 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         }
 
         // Remaining non-decomposable idiomatic relative suffixes (sorted longest-first at call sites)
-        const REL_SUFFIXES: &[(&str, ObjectFilterFlags, Option<CombatState>)] = &[
-            (
-                " blocking or being blocked by ~",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockingOrBlockedBySelf),
-            ),
-            (
-                " blocking or blocked by ~",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockingOrBlockedBySelf),
-            ),
-            (
-                " that dealt combat damage to you this turn",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " blocking target attacking creature",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Blocking),
-            ),
-            (
-                " that has an activated ability with {t} in its cost",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that weren't chosen this way by any player",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" in the pile", ObjectFilterFlags::EMPTY, None),
-            (
-                " that are instant cards, are sorcery cards, and/or have an adventure",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " you controlled as you cast ~",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " you own in exile or in your graveyard",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that blocked or were blocked by it this turn",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockingOrBlockedBySelf),
-            ),
-            (
-                " that were blocked by that creature this combat",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Blocked),
-            ),
-            (
-                " that were blocked by that creature",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Blocked),
-            ),
-            (
-                " that were blocked by ~ this combat",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockedBySelf),
-            ),
-            (
-                " that was blocked by ~ this combat",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockedBySelf),
-            ),
-            (
-                " that blocked ~ this combat",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockingSelf),
-            ),
-            (
-                " that was attached to it",
-                ObjectFilterFlags::ATTACHED_TO_SELF,
-                None,
-            ),
-            (
-                " that were attached to it",
-                ObjectFilterFlags::ATTACHED_TO_SELF,
-                None,
-            ),
-            (
-                " that was attached to ~",
-                ObjectFilterFlags::ATTACHED_TO_SELF,
-                None,
-            ),
-            (
-                " that were attached to ~",
-                ObjectFilterFlags::ATTACHED_TO_SELF,
-                None,
-            ),
-            (
-                " blocking ~",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockingSelf),
-            ),
-            (
-                " blocked by ~",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockedBySelf),
-            ),
-            (
-                " that isn't attacking",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::NotAttacking),
-            ),
+        use CombatState as CS;
+        use ObjectFilterFlags as F;
+        const REL_FLAG_SUFFIXES: &[(&str, F)] = &[
+            (" that was attached to it", F::ATTACHED_TO_SELF),
+            (" that were attached to it", F::ATTACHED_TO_SELF),
+            (" that was attached to ~", F::ATTACHED_TO_SELF),
+            (" that were attached to ~", F::ATTACHED_TO_SELF),
             (
                 " that was dealt damage by ~ this turn",
-                ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN,
-                None,
+                F::DEALT_DAMAGE_BY_SELF_THIS_TURN,
             ),
             (
                 " dealt damage by ~ this turn",
-                ObjectFilterFlags::DEALT_DAMAGE_BY_SELF_THIS_TURN,
-                None,
+                F::DEALT_DAMAGE_BY_SELF_THIS_TURN,
             ),
             (
                 " that was dealt damage this turn",
-                ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN,
-                None,
+                F::DEALT_DAMAGE_THIS_TURN,
             ),
             (
                 " that entered the battlefield this turn",
-                ObjectFilterFlags::ENTERED_THIS_TURN,
-                None,
+                F::ENTERED_THIS_TURN,
             ),
-            (
-                " that entered this turn",
-                ObjectFilterFlags::ENTERED_THIS_TURN,
-                None,
-            ),
-            (
-                " that attacked this turn",
-                ObjectFilterFlags::ATTACKED_THIS_TURN,
-                None,
-            ),
-            (
-                " that died under your control this turn",
-                ObjectFilterFlags::DIED_THIS_TURN,
-                None,
-            ),
-            (
-                " that died this turn",
-                ObjectFilterFlags::DIED_THIS_TURN,
-                None,
-            ),
-            (" exiled with ~", ObjectFilterFlags::EXILED_WITH_SELF, None),
-            (" exiled with it", ObjectFilterFlags::EXILED_WITH_SELF, None),
-            (" exiled by ~", ObjectFilterFlags::EXILED_WITH_SELF, None),
-            (" exiled by it", ObjectFilterFlags::EXILED_WITH_SELF, None),
-            (
-                " with another aura attached to it",
-                ObjectFilterFlags::ENCHANTED,
-                None,
-            ),
-            (
-                " other than that creature or ~",
-                ObjectFilterFlags::EXCLUDE_SELF,
-                None,
-            ),
-            (
-                " controlled by different players",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " the chosen player controls",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" chosen at random", ObjectFilterFlags::EMPTY, None),
-            (
-                " of defending player's choice",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " in the pile of their choice",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
+            (" that entered this turn", F::ENTERED_THIS_TURN),
+            (" that attacked this turn", F::ATTACKED_THIS_TURN),
+            (" that died under your control this turn", F::DIED_THIS_TURN),
+            (" that died this turn", F::DIED_THIS_TURN),
+            (" exiled with ~", F::EXILED_WITH_SELF),
+            (" exiled with it", F::EXILED_WITH_SELF),
+            (" exiled by ~", F::EXILED_WITH_SELF),
+            (" exiled by it", F::EXILED_WITH_SELF),
+            (" with another aura attached to it", F::ENCHANTED),
+            (" other than that creature or ~", F::EXCLUDE_SELF),
             (
                 " of a type chosen this way",
-                ObjectFilterFlags::MATCHES_CHOSEN_TYPE_OR_COLOR,
-                None,
+                F::MATCHES_CHOSEN_TYPE_OR_COLOR,
             ),
-            (" other than ~", ObjectFilterFlags::EXCLUDE_SELF, None),
-            (" with the same mana value", ObjectFilterFlags::EMPTY, None),
-            (
-                " that wasn't put there this combat",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that weren't put onto the battlefield",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
+            (" other than ~", F::EXCLUDE_SELF),
             (
                 " that you've put one or more +1/+1 counters on this turn",
-                ObjectFilterFlags::WITH_ANY_COUNTER,
-                None,
-            ),
-            (
-                " with flying, deathtouch, and/or lifelink",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " with total power and toughness 5 or less",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" not cast this way", ObjectFilterFlags::EMPTY, None),
-            (
-                " not put onto the battlefield this way",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " not put into your hand this way",
-                ObjectFilterFlags::EMPTY,
-                None,
+                F::WITH_ANY_COUNTER,
             ),
             (
                 " that were put there from the battlefield this turn",
-                ObjectFilterFlags::DIED_THIS_TURN,
-                None,
+                F::DIED_THIS_TURN,
             ),
-            (" sacrificed as it entered", ObjectFilterFlags::EMPTY, None),
-            (
-                " with mana value 1 you discarded this way",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " with mana value less than or equal to that damage",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " with mana value less than or equal to that aura",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" with a different name", ObjectFilterFlags::EMPTY, None),
-            (
-                " from an artifact or enchantment source",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" from an artifact source", ObjectFilterFlags::EMPTY, None),
-            (
-                " attacking one of your opponents",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Attacking),
-            ),
-            (
-                " with two or more card types",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" that saddled it this turn", ObjectFilterFlags::EMPTY, None),
-            (" that crewed it this turn", ObjectFilterFlags::EMPTY, None),
-            (
-                " that targets only a single permanent or player",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " attacking you or a planeswalker you control",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Attacking),
-            ),
-            (
-                " that's attacking that player",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Attacking),
-            ),
-            (
-                " attacking that player",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Attacking),
-            ),
-            (
-                " attacking you",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Attacking),
-            ),
-            (" not named ~", ObjectFilterFlags::EXCLUDE_SELF, None),
-            (
-                " with lesser mana value than the creature that died",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " with equal or lesser mana value",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" with power less than ~'s", ObjectFilterFlags::EMPTY, None),
-            (" in your party", ObjectFilterFlags::EMPTY, None),
-            (
-                " exiled from their hand this way",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " exiled from your hand this way",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that aren't of the chosen type",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that isn't of the chosen type",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " of the chosen type",
-                ObjectFilterFlags::MATCHES_CHOSEN_TYPE,
-                None,
-            ),
+            (" not named ~", F::EXCLUDE_SELF),
+            (" of the chosen type", F::MATCHES_CHOSEN_TYPE),
             (
                 " of the creature type of your choice",
-                ObjectFilterFlags::MATCHES_CHOSEN_TYPE,
-                None,
+                F::MATCHES_CHOSEN_TYPE,
             ),
-            (
-                " of the color of your choice",
-                ObjectFilterFlags::MATCHES_CHOSEN_COLOR,
-                None,
-            ),
-            (
-                " of the chosen color",
-                ObjectFilterFlags::MATCHES_CHOSEN_COLOR,
-                None,
-            ),
-            (
-                " of that color",
-                ObjectFilterFlags::MATCHES_CHOSEN_COLOR,
-                None,
-            ),
-            (
-                " with a name chosen for ~",
-                ObjectFilterFlags::MATCHES_CHOSEN_NAME,
-                None,
-            ),
-            (" other than that creature", ObjectFilterFlags::EMPTY, None),
-            (" other than that permanent", ObjectFilterFlags::EMPTY, None),
-            (" other than that card", ObjectFilterFlags::EMPTY, None),
-            (
-                " that didn't attack this turn",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
+            (" of the color of your choice", F::MATCHES_CHOSEN_COLOR),
+            (" of the chosen color", F::MATCHES_CHOSEN_COLOR),
+            (" of that color", F::MATCHES_CHOSEN_COLOR),
+            (" with a name chosen for ~", F::MATCHES_CHOSEN_NAME),
             (
                 " that entered the battlefield under your control this turn",
-                ObjectFilterFlags::ENTERED_THIS_TURN,
-                None,
-            ),
-            (" not chosen this way", ObjectFilterFlags::EMPTY, None),
-            (
-                " that wasn't chosen this way",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" with a mana ability", ObjectFilterFlags::EMPTY, None),
-            (" with lesser power", ObjectFilterFlags::EMPTY, None),
-            (" with lesser toughness", ObjectFilterFlags::EMPTY, None),
-            (
-                " with toughness less than ~'s",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" cast from a graveyard", ObjectFilterFlags::EMPTY, None),
-            (
-                " that isn't exactly two colors",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that share a color with the spell most recently cast this turn",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that has the same name as a card in your graveyard",
-                ObjectFilterFlags::EMPTY,
-                None,
+                F::ENTERED_THIS_TURN,
             ),
             (
                 " that were put into your graveyard from the battlefield this turn",
-                ObjectFilterFlags::DIED_THIS_TURN,
-                None,
-            ),
-            (
-                " that were put there from anywhere this turn",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that was put there this turn",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" that was milled this turn", ObjectFilterFlags::EMPTY, None),
-            (" with a sticker on it", ObjectFilterFlags::EMPTY, None),
-            (" that convoked ~", ObjectFilterFlags::EMPTY, None),
-            (
-                " that were put into target player's graveyard from their library this turn",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " with the same mana value as that card",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that attacked during their controller's last turn",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " with mana value equal to the chosen number",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " with toughness greater than their power",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " in graveyards and libraries",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that was put there from your library this turn",
-                ObjectFilterFlags::EMPTY,
-                None,
+                F::DIED_THIS_TURN,
             ),
             (
                 " that were put into graveyards from the battlefield this turn",
-                ObjectFilterFlags::DIED_THIS_TURN,
-                None,
+                F::DIED_THIS_TURN,
             ),
             (
                 " dealt damage by enchanted creature this turn",
-                ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN,
-                None,
+                F::DEALT_DAMAGE_THIS_TURN,
             ),
-            (
-                " that targets only a single creature",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that shares a color or mana value with the exiled card",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that dealt combat damage to a player this turn",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " with mana value, power, or toughness equal to the chosen number",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " previously dealt damage by it",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " it has dealt damage to this game",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" that aren't all colors", ObjectFilterFlags::EMPTY, None),
-            (" that isn't all colors", ObjectFilterFlags::EMPTY, None),
-            (
-                " with that spell's mana value",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" that targets you", ObjectFilterFlags::EMPTY, None),
-            (" that have different names", ObjectFilterFlags::EMPTY, None),
-            (" with mana cost {0} or {1}", ObjectFilterFlags::EMPTY, None),
-            (" of each basic land type", ObjectFilterFlags::EMPTY, None),
-            (" except for ~", ObjectFilterFlags::EXCLUDE_SELF, None),
-            (
-                " that is snow or could produce {c}",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " attacking the last chosen player",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Attacking),
-            ),
-            (
-                " of each of the sacrificed creature's colors",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " of the chosen kind",
-                ObjectFilterFlags::MATCHES_CHOSEN_TYPE,
-                None,
-            ),
-            (
-                " put onto the battlefield with ~",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " attacking your opponents",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Attacking),
-            ),
-            (" that's not historic", ObjectFilterFlags::EMPTY, None),
-            (
-                " with the chosen name",
-                ObjectFilterFlags::MATCHES_CHOSEN_NAME,
-                None,
-            ),
-            (" named ~", ObjectFilterFlags::EMPTY, None),
-            (" with different powers", ObjectFilterFlags::EMPTY, None),
-            (
-                " blocking it",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockingSelf),
-            ),
-            (
-                " blocked by it",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockedBySelf),
-            ),
-            (
-                " with no counters on it",
-                ObjectFilterFlags::WITHOUT_COUNTERS,
-                None,
-            ),
-            (
-                " with no counters on them",
-                ObjectFilterFlags::WITHOUT_COUNTERS,
-                None,
-            ),
-            (" that has an adventure", ObjectFilterFlags::EMPTY, None),
-            (" that have an adventure", ObjectFilterFlags::EMPTY, None),
-            (
-                " with counters on it",
-                ObjectFilterFlags::WITH_ANY_COUNTER,
-                None,
-            ),
-            (
-                " with counters on them",
-                ObjectFilterFlags::WITH_ANY_COUNTER,
-                None,
-            ),
-            (" with {x} in its mana cost", ObjectFilterFlags::EMPTY, None),
-            (" with a basic land type", ObjectFilterFlags::EMPTY, None),
-            (" with greater power", ObjectFilterFlags::EMPTY, None),
-            (" that don't have a name", ObjectFilterFlags::EMPTY, None),
-            (
-                " it blocked this combat",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockedBySelf),
-            ),
-            (
-                " blocking it this combat",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockingSelf),
-            ),
-            (
-                " that share a creature type",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" that share a color", ObjectFilterFlags::EMPTY, None),
-            (
-                " that dealt damage this turn",
-                ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN,
-                None,
-            ),
-            (
-                " that don't have the same name as ~",
-                ObjectFilterFlags::EXCLUDE_SELF,
-                None,
-            ),
-            (" that share a card type", ObjectFilterFlags::EMPTY, None),
-            (
-                " that shares one of those types with it",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that are one or more colors",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " with mana value of the chosen quality",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " of that type",
-                ObjectFilterFlags::MATCHES_CHOSEN_TYPE,
-                None,
-            ),
-            (" with that name", ObjectFilterFlags::EMPTY, None),
-            (
-                " ~ is blocking",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockedBySelf),
-            ),
+            (" except for ~", F::EXCLUDE_SELF),
+            (" of the chosen kind", F::MATCHES_CHOSEN_TYPE),
+            (" with the chosen name", F::MATCHES_CHOSEN_NAME),
+            (" with no counters on it", F::WITHOUT_COUNTERS),
+            (" with no counters on them", F::WITHOUT_COUNTERS),
+            (" with counters on it", F::WITH_ANY_COUNTER),
+            (" with counters on them", F::WITH_ANY_COUNTER),
+            (" that dealt damage this turn", F::DEALT_DAMAGE_THIS_TURN),
+            (" that don't have the same name as ~", F::EXCLUDE_SELF),
+            (" of that type", F::MATCHES_CHOSEN_TYPE),
             (
                 " that dealt damage to you this turn",
-                ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN,
-                None,
+                F::DEALT_DAMAGE_THIS_TURN,
             ),
-            (" or suspended card", ObjectFilterFlags::EMPTY, None),
-            (
-                " controlled by the same player",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" other than it", ObjectFilterFlags::EXCLUDE_SELF, None),
-            (
-                " other than the chosen creature",
-                ObjectFilterFlags::EXCLUDE_SELF,
-                None,
-            ),
-            (
-                " each with power greater than its base power",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " with power greater than its base power",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " with power greater than that creature's base power",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" that weren't cast", ObjectFilterFlags::EMPTY, None),
-            (" that convoked it", ObjectFilterFlags::EMPTY, None),
-            (
-                " you've cast this turn",
-                ObjectFilterFlags::ENTERED_THIS_TURN,
-                None,
-            ),
-            (
-                " they've cast this turn",
-                ObjectFilterFlags::ENTERED_THIS_TURN,
-                None,
-            ),
-            (
-                " cast this turn",
-                ObjectFilterFlags::ENTERED_THIS_TURN,
-                None,
-            ),
-            (" that share a land type", ObjectFilterFlags::EMPTY, None),
-            (" with enchant creature", ObjectFilterFlags::EMPTY, None),
-            (" with enchant permanent", ObjectFilterFlags::EMPTY, None),
-            (
-                " that's attacking alone",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Attacking),
-            ),
-            (" that fought this turn", ObjectFilterFlags::EMPTY, None),
-            (
-                " on the battlefield or in the command zone",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" from a colorless source", ObjectFilterFlags::EMPTY, None),
-            (" from a creature source", ObjectFilterFlags::EMPTY, None),
-            (
-                " from an enchantment source",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" from a land source", ObjectFilterFlags::EMPTY, None),
-            (
-                " from a planeswalker source",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" with the same name", ObjectFilterFlags::EMPTY, None),
-            (" that wasn't cast", ObjectFilterFlags::EMPTY, None),
-            (
-                " that weren't cast this way",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" that wasn't cast this way", ObjectFilterFlags::EMPTY, None),
-            (" with an even mana value", ObjectFilterFlags::EMPTY, None),
-            (" with an odd mana value", ObjectFilterFlags::EMPTY, None),
-            (" chosen this way", ObjectFilterFlags::EMPTY, None),
-            (
-                " other than enchanted creature",
-                ObjectFilterFlags::EXCLUDE_SELF,
-                None,
-            ),
-            (
-                " attacking enchanted player",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::Attacking),
-            ),
+            (" other than it", F::EXCLUDE_SELF),
+            (" other than the chosen creature", F::EXCLUDE_SELF),
+            (" you've cast this turn", F::ENTERED_THIS_TURN),
+            (" they've cast this turn", F::ENTERED_THIS_TURN),
+            (" cast this turn", F::ENTERED_THIS_TURN),
+            (" other than enchanted creature", F::EXCLUDE_SELF),
             (
                 " that was put there from the battlefield this turn",
-                ObjectFilterFlags::DIED_THIS_TURN,
-                None,
+                F::DIED_THIS_TURN,
             ),
-            (" that was exiled with ~", ObjectFilterFlags::EMPTY, None),
-            (
-                " with activated abilities that aren't mana abilities",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (" with mana value 1 or 2", ObjectFilterFlags::EMPTY, None),
-            (" that's one or more colors", ObjectFilterFlags::EMPTY, None),
-            (" created with ~", ObjectFilterFlags::EMPTY, None),
-            (
-                " it's blocking",
-                ObjectFilterFlags::EMPTY,
-                Some(CombatState::BlockedBySelf),
-            ),
-            (
-                " dealt damage this turn",
-                ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN,
-                None,
-            ),
-            (" that blocked this turn", ObjectFilterFlags::EMPTY, None),
-            (
-                " that had counters put on it this way",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " without mana value of the chosen quality",
-                ObjectFilterFlags::EMPTY,
-                None,
-            ),
-            (
-                " that has a -1/-1 counter on it",
-                ObjectFilterFlags::WITH_ANY_COUNTER,
-                None,
-            ),
-            (
-                " that has a +1/+1 counter on it",
-                ObjectFilterFlags::WITH_ANY_COUNTER,
-                None,
-            ),
-            (
-                " with ice counters on them",
-                ObjectFilterFlags::WITH_ANY_COUNTER,
-                None,
-            ),
-            (" it can enchant", ObjectFilterFlags::EMPTY, None),
+            (" dealt damage this turn", F::DEALT_DAMAGE_THIS_TURN),
+            (" that has a -1/-1 counter on it", F::WITH_ANY_COUNTER),
+            (" that has a +1/+1 counter on it", F::WITH_ANY_COUNTER),
+            (" with ice counters on them", F::WITH_ANY_COUNTER),
         ];
-        for (suf, flag, combat) in REL_SUFFIXES {
-            if let Some(prefix) = s.strip_suffix(suf) {
-                flt.flags = flt.flags.union(*flag);
-                if let Some(c) = combat {
-                    flt.combat = Some(*c);
-                }
-                apply_rel_suffix_predicate(suf, *flag, *combat, &mut flt);
-                s = prefix.trim().to_string();
-                changed = true;
-                break;
+        const REL_COMBAT_SUFFIXES: &[(&str, CS)] = &[
+            (
+                " blocking or being blocked by ~",
+                CS::BlockingOrBlockedBySelf,
+            ),
+            (" blocking or blocked by ~", CS::BlockingOrBlockedBySelf),
+            (" blocking target attacking creature", CS::Blocking),
+            (
+                " that blocked or were blocked by it this turn",
+                CS::BlockingOrBlockedBySelf,
+            ),
+            (
+                " that were blocked by that creature this combat",
+                CS::Blocked,
+            ),
+            (" that were blocked by that creature", CS::Blocked),
+            (" that were blocked by ~ this combat", CS::BlockedBySelf),
+            (" that was blocked by ~ this combat", CS::BlockedBySelf),
+            (" that blocked ~ this combat", CS::BlockingSelf),
+            (" blocking ~", CS::BlockingSelf),
+            (" blocked by ~", CS::BlockedBySelf),
+            (" that isn't attacking", CS::NotAttacking),
+            (" attacking one of your opponents", CS::Attacking),
+            (
+                " attacking you or a planeswalker you control",
+                CS::Attacking,
+            ),
+            (" that's attacking that player", CS::Attacking),
+            (" attacking that player", CS::Attacking),
+            (" attacking you", CS::Attacking),
+            (" attacking the last chosen player", CS::Attacking),
+            (" attacking your opponents", CS::Attacking),
+            (" blocking it", CS::BlockingSelf),
+            (" blocked by it", CS::BlockedBySelf),
+            (" it blocked this combat", CS::BlockedBySelf),
+            (" blocking it this combat", CS::BlockingSelf),
+            (" ~ is blocking", CS::BlockedBySelf),
+            (" that's attacking alone", CS::Attacking),
+            (" attacking enchanted player", CS::Attacking),
+            (" it's blocking", CS::BlockedBySelf),
+        ];
+        const REL_PLAIN_SUFFIXES: &[&str] = &[
+            " that dealt combat damage to you this turn",
+            " that has an activated ability with {t} in its cost",
+            " that weren't chosen this way by any player",
+            " in the pile",
+            " that are instant cards, are sorcery cards, and/or have an adventure",
+            " you controlled as you cast ~",
+            " you own in exile or in your graveyard",
+            " controlled by different players",
+            " the chosen player controls",
+            " chosen at random",
+            " of defending player's choice",
+            " in the pile of their choice",
+            " with the same mana value",
+            " that wasn't put there this combat",
+            " that weren't put onto the battlefield",
+            " with flying, deathtouch, and/or lifelink",
+            " with total power and toughness 5 or less",
+            " not cast this way",
+            " not put onto the battlefield this way",
+            " not put into your hand this way",
+            " sacrificed as it entered",
+            " with mana value 1 you discarded this way",
+            " with mana value less than or equal to that damage",
+            " with mana value less than or equal to that aura",
+            " with a different name",
+            " from an artifact or enchantment source",
+            " from an artifact source",
+            " with two or more card types",
+            " that saddled it this turn",
+            " that crewed it this turn",
+            " that targets only a single permanent or player",
+            " with lesser mana value than the creature that died",
+            " with equal or lesser mana value",
+            " with power less than ~'s",
+            " in your party",
+            " exiled from their hand this way",
+            " exiled from your hand this way",
+            " that aren't of the chosen type",
+            " that isn't of the chosen type",
+            " other than that creature",
+            " other than that permanent",
+            " other than that card",
+            " that didn't attack this turn",
+            " not chosen this way",
+            " that wasn't chosen this way",
+            " with a mana ability",
+            " with lesser power",
+            " with lesser toughness",
+            " with toughness less than ~'s",
+            " cast from a graveyard",
+            " that isn't exactly two colors",
+            " that share a color with the spell most recently cast this turn",
+            " that has the same name as a card in your graveyard",
+            " that were put there from anywhere this turn",
+            " that was put there this turn",
+            " that was milled this turn",
+            " with a sticker on it",
+            " that convoked ~",
+            " that were put into target player's graveyard from their library this turn",
+            " with the same mana value as that card",
+            " that attacked during their controller's last turn",
+            " with mana value equal to the chosen number",
+            " with toughness greater than their power",
+            " in graveyards and libraries",
+            " that was put there from your library this turn",
+            " that targets only a single creature",
+            " that shares a color or mana value with the exiled card",
+            " that dealt combat damage to a player this turn",
+            " with mana value, power, or toughness equal to the chosen number",
+            " previously dealt damage by it",
+            " it has dealt damage to this game",
+            " that aren't all colors",
+            " that isn't all colors",
+            " with that spell's mana value",
+            " that targets you",
+            " that have different names",
+            " with mana cost {0} or {1}",
+            " of each basic land type",
+            " that is snow or could produce {c}",
+            " of each of the sacrificed creature's colors",
+            " put onto the battlefield with ~",
+            " that's not historic",
+            " named ~",
+            " with different powers",
+            " that has an adventure",
+            " that have an adventure",
+            " with {x} in its mana cost",
+            " with a basic land type",
+            " with greater power",
+            " that don't have a name",
+            " that share a creature type",
+            " that share a color",
+            " that share a card type",
+            " that shares one of those types with it",
+            " that are one or more colors",
+            " with mana value of the chosen quality",
+            " with that name",
+            " or suspended card",
+            " controlled by the same player",
+            " each with power greater than its base power",
+            " with power greater than its base power",
+            " with power greater than that creature's base power",
+            " that weren't cast",
+            " that convoked it",
+            " that share a land type",
+            " with enchant creature",
+            " with enchant permanent",
+            " that fought this turn",
+            " on the battlefield or in the command zone",
+            " from a colorless source",
+            " from a creature source",
+            " from an enchantment source",
+            " from a land source",
+            " from a planeswalker source",
+            " with the same name",
+            " that wasn't cast",
+            " that weren't cast this way",
+            " that wasn't cast this way",
+            " with an even mana value",
+            " with an odd mana value",
+            " chosen this way",
+            " that was exiled with ~",
+            " with activated abilities that aren't mana abilities",
+            " with mana value 1 or 2",
+            " that's one or more colors",
+            " created with ~",
+            " that blocked this turn",
+            " that had counters put on it this way",
+            " without mana value of the chosen quality",
+            " it can enchant",
+        ];
+        let best_rel = REL_FLAG_SUFFIXES
+            .iter()
+            .filter_map(|&(suf, flag)| s.strip_suffix(suf).map(|p| (suf, p, flag, None)))
+            .chain(REL_COMBAT_SUFFIXES.iter().filter_map(|&(suf, c)| {
+                s.strip_suffix(suf)
+                    .map(|p| (suf, p, ObjectFilterFlags::EMPTY, Some(c)))
+            }))
+            .chain(REL_PLAIN_SUFFIXES.iter().filter_map(|&suf| {
+                s.strip_suffix(suf)
+                    .map(|p| (suf, p, ObjectFilterFlags::EMPTY, None))
+            }))
+            .max_by_key(|(suf, _, _, _)| suf.len());
+        if let Some((suf, prefix, flag, combat)) = best_rel {
+            flt.flags = flt.flags.union(flag);
+            if let Some(c) = combat {
+                flt.combat = Some(c);
             }
-        }
-        if changed {
+            apply_rel_suffix_predicate(suf, flag, combat, &mut flt);
+            s = prefix.trim().to_string();
             continue;
         }
 
         // Flatten relative subtype/type clause INSIDE the loop so trailing controller/zone suffixes
         // like "creature you control that's an Ape or a Monkey" still get peeled cleanly!
-        if let Some((left, right)) = s
-            .split_once(" that's ")
-            .or_else(|| s.split_once(" that is "))
-            .or_else(|| s.split_once(" that are "))
-        {
+        if let Some((left, right)) = split_once_any(&s, &[" that's ", " that is ", " that are "]) {
             s = format!("{left} {right}");
             continue;
         }
@@ -2123,38 +1558,7 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = left.trim().to_string();
             continue;
         }
-        if let Some(left) = s
-            .strip_suffix(" whose power and toughness aren't equal")
-            .or_else(|| s.strip_suffix(" whose coin comes up tails"))
-            .or_else(|| s.strip_suffix(" that was activated this turn"))
-            .or_else(|| s.strip_suffix(" that were exiled this way"))
-            .or_else(|| s.strip_suffix(" that were put there from libraries this turn"))
-            .or_else(|| s.strip_suffix(" that's enchanted by an aura you control"))
-            .or_else(|| s.strip_suffix(" that's exactly two colors"))
-            .or_else(|| s.strip_suffix(" that's exactly three colors"))
-            .or_else(|| s.strip_suffix(" with exactly two colors"))
-            .or_else(|| s.strip_suffix(" with exactly three colors"))
-            .or_else(|| s.strip_suffix(" with power of the chosen quality"))
-            .or_else(|| s.strip_suffix(" with mana value of the chosen quality"))
-            .or_else(|| s.strip_suffix(" with mana value of that quality"))
-            .or_else(|| s.strip_suffix(" with the most votes or tied for most votes"))
-            .or_else(|| s.strip_suffix(" with the most life among your opponents"))
-            .or_else(|| s.strip_suffix(" that's exactly those colors"))
-            .or_else(|| s.strip_suffix(" of that color"))
-            .or_else(|| s.strip_suffix(" from among them"))
-            .or_else(|| s.strip_suffix(" from among the revealed cards"))
-            .or_else(|| s.strip_suffix(" from among the exiled cards"))
-            .or_else(|| s.strip_suffix(" you already control"))
-            .or_else(|| s.strip_suffix(" they controlled that were exiled this way"))
-            .or_else(|| s.strip_suffix(" that player milled this way"))
-            .or_else(|| s.strip_suffix(" that player controls"))
-            .or_else(|| s.strip_suffix(" they control"))
-            .or_else(|| s.strip_suffix(" ~ targets"))
-            .or_else(|| s.strip_suffix(" that entered since your last turn ended"))
-            .or_else(|| s.strip_suffix(" attacking the same player or planeswalker"))
-            .or_else(|| s.strip_suffix(" that was blocked by one of those creatures this turn"))
-            .or_else(|| s.strip_suffix(" that attacked"))
-            .or_else(|| s.strip_suffix(" of that type"))
+        if let Some(left) = strip_suffix_any(&s, &[" whose power and toughness aren't equal", " whose coin comes up tails", " that was activated this turn", " that were exiled this way", " that were put there from libraries this turn", " that's enchanted by an aura you control", " that's exactly two colors", " that's exactly three colors", " with exactly two colors", " with exactly three colors", " with power of the chosen quality", " with mana value of the chosen quality", " with mana value of that quality", " with the most votes or tied for most votes", " with the most life among your opponents", " that's exactly those colors", " of that color", " from among them", " from among the revealed cards", " from among the exiled cards", " you already control", " they controlled that were exiled this way", " that player milled this way", " that player controls", " they control", " ~ targets", " that entered since your last turn ended", " attacking the same player or planeswalker", " that was blocked by one of those creatures this turn", " that attacked", " of that type"])
             .or_else(|| {
                 s.strip_suffix(" not declared as an attacking or blocking creature this combat")
             })
@@ -2226,24 +1630,18 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             continue;
         }
         // General negated exclusion: "<filter> that isn't <filter>" / "<filter> that aren't <filter>" / "<filter> other than <filter>"
-        if let Some((left, right)) = s
-            .split_once(" that isn't ")
-            .or_else(|| s.split_once(" that aren't "))
-            .or_else(|| s.split_once(" other than "))
+        if let Some((left, right)) =
+            split_once_any(&s, &[" that isn't ", " that aren't ", " other than "])
             && !left.trim().is_empty()
             && let Ok(excl_flt) = parse_object_filter(right.trim(), vocab)
         {
             flt.predicates
-                .push(FilterPredicateAst::Exclude(Box::new(SubjectRefAst::Group(
-                    Box::new(excl_flt),
-                ))));
+                .push(FilterPredicateAst::Exclude(Box::new(grp(excl_flt))));
             s = left.trim().to_string();
             continue;
         }
         // Trailing "except [for] <filter>" exclusion (Flame Sweep, Everything Comes to Dust, etc.)
-        if let Some((left, right)) = s
-            .split_once(" except for ")
-            .or_else(|| s.split_once(" except "))
+        if let Some((left, right)) = split_once_any(&s, &[" except for ", " except "])
             && !left.trim().is_empty()
             && (right.trim().starts_with("those that ")
                 || parse_object_filter(right.trim(), vocab).is_ok())
@@ -2313,52 +1711,46 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         }
 
         // Wave E2 lossless relational, superlative, parity, and state filter predicates
-        if let Some(prefix) = s.strip_suffix(" with the greatest power") {
+        if peel_suf(&mut s, " with the greatest power") {
             flt.predicates.push(FilterPredicateAst::SuperlativeStat {
                 stat: StatKind::Power,
                 greatest: true,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with the least power") {
+        if peel_suf(&mut s, " with the least power") {
             flt.predicates.push(FilterPredicateAst::SuperlativeStat {
                 stat: StatKind::Power,
                 greatest: false,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with the greatest toughness") {
+        if peel_suf(&mut s, " with the greatest toughness") {
             flt.predicates.push(FilterPredicateAst::SuperlativeStat {
                 stat: StatKind::Toughness,
                 greatest: true,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with the least toughness") {
+        if peel_suf(&mut s, " with the least toughness") {
             flt.predicates.push(FilterPredicateAst::SuperlativeStat {
                 stat: StatKind::Toughness,
                 greatest: false,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with the greatest mana value") {
+        if peel_suf(&mut s, " with the greatest mana value") {
             flt.predicates.push(FilterPredicateAst::SuperlativeStat {
                 stat: StatKind::ManaValue,
                 greatest: true,
             });
-            s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with the least mana value") {
+        if peel_suf(&mut s, " with the least mana value") {
             flt.predicates.push(FilterPredicateAst::SuperlativeStat {
                 stat: StatKind::ManaValue,
                 greatest: false,
             });
-            s = prefix.trim().to_string();
             continue;
         }
         for (suf, cat) in [
@@ -2378,28 +1770,29 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         if changed {
             continue;
         }
-        if let Some(prefix) = s
-            .strip_suffix(" with even mana values")
-            .or_else(|| s.strip_suffix(" with an even mana value"))
+        if let Some(prefix) =
+            strip_suffix_any(&s, &[" with even mana values", " with an even mana value"])
         {
             flt.predicates
                 .push(FilterPredicateAst::ManaValueParity { even: true });
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s
-            .strip_suffix(" with odd mana values")
-            .or_else(|| s.strip_suffix(" with an odd mana value"))
+        if let Some(prefix) =
+            strip_suffix_any(&s, &[" with odd mana values", " with an odd mana value"])
         {
             flt.predicates
                 .push(FilterPredicateAst::ManaValueParity { even: false });
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s
-            .strip_suffix(" with {x} in their mana costs")
-            .or_else(|| s.strip_suffix(" with {x} in its mana cost"))
-        {
+        if let Some(prefix) = strip_suffix_any(
+            &s,
+            &[
+                " with {x} in their mana costs",
+                " with {x} in its mana cost",
+            ],
+        ) {
             flt.predicates
                 .push(FilterPredicateAst::HasManaSymbolInCost("{X}".to_string()));
             s = prefix.trim().to_string();
@@ -2434,9 +1827,8 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some((prefix, ench_raw)) = s
-            .rsplit_once(" that could enchant ")
-            .or_else(|| s.rsplit_once(" that could be attached to "))
+        if let Some((prefix, ench_raw)) =
+            rsplit_once_any(&s, &[" that could enchant ", " that could be attached to "])
             && !prefix.trim().is_empty()
             && let Ok(ref_subj) = parse_subject_or_target(ench_raw.trim(), vocab)
         {
@@ -2445,12 +1837,11 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" it could be attached to") {
+        if peel_suf(&mut s, " it could be attached to") {
             flt.predicates
                 .push(FilterPredicateAst::CouldAttachTo(Box::new(
                     SubjectRefAst::SelfObject,
                 )));
-            s = prefix.trim().to_string();
             continue;
         }
         for (pat, prop, neg) in [
@@ -2506,11 +1897,14 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
         if changed {
             continue;
         }
-        if let Some((prefix, mv_raw)) = s
-            .rsplit_once(" that have mana value ")
-            .or_else(|| s.rsplit_once(" that has mana value "))
-            .or_else(|| s.rsplit_once(" and has mana value "))
-            && !prefix.trim().is_empty()
+        if let Some((prefix, mv_raw)) = rsplit_once_any(
+            &s,
+            &[
+                " that have mana value ",
+                " that has mana value ",
+                " and has mana value ",
+            ],
+        ) && !prefix.trim().is_empty()
         {
             let m = mv_raw.trim();
             if let Ok(n) = m.parse::<i32>() {
@@ -2547,18 +1941,14 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             flt.predicates.push(FilterPredicateAst::StatRelationTo {
                 stat: StatKind::ManaValue,
                 cmp: CompareOp::Le,
-                expr: Box::new(ValueExprAst::ObjectStat {
-                    subject: Box::new(ref_subj),
-                    stat: StatKind::ManaValue,
-                }),
+                expr: Box::new(val_obj_stat(ref_subj, StatKind::ManaValue)),
             });
             s = prefix.trim().to_string();
             continue;
         }
-        if let Some(prefix) = s.strip_suffix(" with the same total power and toughness") {
+        if peel_suf(&mut s, " with the same total power and toughness") {
             flt.predicates
                 .push(FilterPredicateAst::SameTotalPowerAndToughness);
-            s = prefix.trim().to_string();
             continue;
         }
         if let Some(prefix) = s
@@ -2672,19 +2062,12 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
     }
 
     // Flatten relative subtype/type clause: "creature you control that's an Ape or a Monkey"
-    if let Some((left, right)) = s
-        .split_once(" that's ")
-        .or_else(|| s.split_once(" that is "))
-        .or_else(|| s.split_once(" that are "))
-    {
+    if let Some((left, right)) = split_once_any(&s, &[" that's ", " that is ", " that are "]) {
         s = format!("{left} {right}");
     }
 
     // Strip leading article
-    let core = s
-        .strip_prefix("a ")
-        .or_else(|| s.strip_prefix("an "))
-        .or_else(|| s.strip_prefix("the "))
+    let core = strip_prefix_any(&s, &["a ", "an ", "the "])
         .unwrap_or(&s)
         .trim();
 
@@ -2887,15 +2270,9 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
 fn peel_stat_range_list(s: &str) -> Option<(&str, [StatBoundAst; 2])> {
     let idx = s.rfind(" with ")?;
     let tail = &s[idx + 6..];
-    let (stat, rest) = if let Some(r) = tail
-        .strip_prefix("base power ")
-        .or_else(|| tail.strip_prefix("power "))
-    {
+    let (stat, rest) = if let Some(r) = strip_prefix_any(&tail, &["base power ", "power "]) {
         (StatKind::Power, r)
-    } else if let Some(r) = tail
-        .strip_prefix("base toughness ")
-        .or_else(|| tail.strip_prefix("toughness "))
-    {
+    } else if let Some(r) = strip_prefix_any(&tail, &["base toughness ", "toughness "]) {
         (StatKind::Toughness, r)
     } else {
         let r = tail.strip_prefix("mana value ")?;
@@ -2923,12 +2300,12 @@ fn peel_stat_range_list(s: &str) -> Option<(&str, [StatBoundAst; 2])> {
             StatBoundAst {
                 stat,
                 op: CompareOp::Ge,
-                value: Box::new(ValueExprAst::Const(lo)),
+                value: vconst(lo),
             },
             StatBoundAst {
                 stat,
                 op: CompareOp::Le,
-                value: Box::new(ValueExprAst::Const(hi)),
+                value: vconst(hi),
             },
         ],
     ))
@@ -2943,25 +2320,26 @@ fn peel_stat_bound<'a>(s: &'a str, vocab: &Vocabulary) -> Option<(&'a str, StatB
         let i = s.rfind(" with ")?;
         (i, &s[i + 6..])
     };
-    let (stat, rest) = if let Some(r) = tail
-        .strip_prefix("base power or toughness ")
-        .or_else(|| tail.strip_prefix("power or toughness "))
-        .or_else(|| tail.strip_prefix("base power "))
-        .or_else(|| tail.strip_prefix("total power "))
-        .or_else(|| tail.strip_prefix("power "))
-    {
+    let (stat, rest) = if let Some(r) = strip_prefix_any(
+        &tail,
+        &[
+            "base power or toughness ",
+            "power or toughness ",
+            "base power ",
+            "total power ",
+            "power ",
+        ],
+    ) {
         (StatKind::Power, r)
-    } else if let Some(r) = tail
-        .strip_prefix("base toughness ")
-        .or_else(|| tail.strip_prefix("total toughness "))
-        .or_else(|| tail.strip_prefix("toughness "))
-    {
+    } else if let Some(r) = strip_prefix_any(
+        &tail,
+        &["base toughness ", "total toughness ", "toughness "],
+    ) {
         (StatKind::Toughness, r)
-    } else if let Some(r) = tail
-        .strip_prefix("total mana value ")
-        .or_else(|| tail.strip_prefix("mana value "))
-        .or_else(|| tail.strip_prefix("converted mana cost "))
-    {
+    } else if let Some(r) = strip_prefix_any(
+        &tail,
+        &["total mana value ", "mana value ", "converted mana cost "],
+    ) {
         (StatKind::ManaValue, r)
     } else {
         let r = tail.strip_prefix("loyalty ")?;
@@ -2972,15 +2350,14 @@ fn peel_stat_bound<'a>(s: &'a str, vocab: &Vocabulary) -> Option<(&'a str, StatB
         (v.trim(), CompareOp::Le)
     } else if let Some(v) = rest.strip_suffix(" or greater") {
         (v.trim(), CompareOp::Ge)
-    } else if let Some(v) = rest
-        .strip_prefix("less than or equal to ")
-        .or_else(|| rest.strip_prefix("equal to or less than "))
+    } else if let Some(v) =
+        strip_prefix_any(&rest, &["less than or equal to ", "equal to or less than "])
     {
         (v.trim(), CompareOp::Le)
-    } else if let Some(v) = rest
-        .strip_prefix("greater than or equal to ")
-        .or_else(|| rest.strip_prefix("equal to or greater than "))
-    {
+    } else if let Some(v) = strip_prefix_any(
+        &rest,
+        &["greater than or equal to ", "equal to or greater than "],
+    ) {
         (v.trim(), CompareOp::Ge)
     } else if let Some(v) = rest.strip_prefix("less than ") {
         (v.trim(), CompareOp::Lt)
@@ -3013,12 +2390,8 @@ fn peel_stat_bound<'a>(s: &'a str, vocab: &Vocabulary) -> Option<(&'a str, StatB
 }
 
 fn peel_counter_pred(s: &str) -> Option<(&str, bool, String)> {
-    let body = s
-        .strip_suffix(" on it")
-        .or_else(|| s.strip_suffix(" on them"))?;
-    let body = body
-        .strip_suffix(" counters")
-        .or_else(|| body.strip_suffix(" counter"))?;
+    let body = strip_suffix_any(&s, &[" on it", " on them"])?;
+    let body = strip_suffix_any(&body, &[" counters", " counter"])?;
     let (idx, positive, after) = if let Some(i) = body.rfind(" without ") {
         (i, false, body[i + 9..].trim())
     } else if let Some(i) = body.rfind(" that has ") {
@@ -3029,10 +2402,7 @@ fn peel_counter_pred(s: &str) -> Option<(&str, bool, String)> {
         let i = body.rfind(" with ")?;
         (i, true, body[i + 6..].trim())
     };
-    let kind = after
-        .strip_prefix("one or more ")
-        .or_else(|| after.strip_prefix("a "))
-        .or_else(|| after.strip_prefix("an "))
+    let kind = strip_prefix_any(&after, &["one or more ", "a ", "an "])
         .unwrap_or(after)
         .trim();
     let ckind = if kind.is_empty() {
@@ -3068,6 +2438,73 @@ fn apply_rel_suffix_predicate(
     combat: Option<CombatState>,
     flt: &mut ObjectFilterAst,
 ) {
+    // Compact declarative suffix -> predicate tables.
+    const PRIOR_ACTION_MAP: &[(&str, PriorActionRefKind)] = &[
+        (
+            " sacrificed this way",
+            PriorActionRefKind::SacrificedThisWay,
+        ),
+        (
+            " they sacrificed this way",
+            PriorActionRefKind::SacrificedThisWay,
+        ),
+        (
+            " you sacrificed this way",
+            PriorActionRefKind::SacrificedThisWay,
+        ),
+        (" exiled this way", PriorActionRefKind::ExiledThisWay),
+        (" they exiled this way", PriorActionRefKind::ExiledThisWay),
+        (" you exiled this way", PriorActionRefKind::ExiledThisWay),
+        (" revealed this way", PriorActionRefKind::RevealedThisWay),
+        (
+            " they revealed this way",
+            PriorActionRefKind::RevealedThisWay,
+        ),
+        (
+            " you revealed this way",
+            PriorActionRefKind::RevealedThisWay,
+        ),
+        (" discarded this way", PriorActionRefKind::DiscardedThisWay),
+        (
+            " they discarded this way",
+            PriorActionRefKind::DiscardedThisWay,
+        ),
+        (
+            " you discarded this way",
+            PriorActionRefKind::DiscardedThisWay,
+        ),
+        (" destroyed this way", PriorActionRefKind::DestroyedThisWay),
+        (
+            " returned this way",
+            PriorActionRefKind::ReturnedToHandThisWay,
+        ),
+        (" tapped this way", PriorActionRefKind::TappedThisWay),
+        (
+            " put into a graveyard this way",
+            PriorActionRefKind::PutIntoGraveyardThisWay,
+        ),
+    ];
+    if let Some((_, kind)) = PRIOR_ACTION_MAP.iter().find(|&&(k, _)| k == suf) {
+        flt.predicates
+            .push(FilterPredicateAst::AffectedByPriorAction(kind.clone()));
+        return;
+    }
+    const PRIOR_ZONE_MAP: &[(&str, &str)] = &[
+        (" milled this way", "milled_this_way"),
+        (" they milled this way", "milled_this_way"),
+        (" dealt damage this way", "dealt_damage_this_way"),
+        (" created this way", "created_this_way"),
+        (
+            " put onto the battlefield this way",
+            "put_onto_battlefield_this_way",
+        ),
+    ];
+    if let Some((_, kind)) = PRIOR_ZONE_MAP.iter().find(|&&(k, _)| k == suf) {
+        flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
+            kind: (*kind).to_string(),
+        });
+        return;
+    }
     match suf {
         " with mana cost {0} or {1}" => {
             flt.predicates
@@ -3076,70 +2513,37 @@ fn apply_rel_suffix_predicate(
                     "{1}".to_string(),
                 ]));
         }
-        " that has a -1/-1 counter on it" => {
-            flt.counter_kind = Some("-1/-1".to_string());
-        }
-        " that has a +1/+1 counter on it" => {
-            flt.counter_kind = Some("+1/+1".to_string());
-        }
-        " with ice counters on them" => {
-            flt.counter_kind = Some("ice".to_string());
-        }
-        " chosen this way" => {
-            flt.predicates.push(FilterPredicateAst::StateQualification(
-                "chosen_this_way".to_string(),
-            ));
-        }
-        " that crewed it this turn"
-        | " that convoked it"
-        | " that fought this turn"
-        | " each with power greater than its base power"
-        | " with power greater than its base power"
-        | " with power greater than that creature's base power" => {
-            flt.predicates.push(FilterPredicateAst::StateQualification(
-                suf.trim().to_string(),
-            ));
-        }
+        " that has a -1/-1 counter on it" => flt.counter_kind = Some("-1/-1".to_string()),
+        " that has a +1/+1 counter on it" => flt.counter_kind = Some("+1/+1".to_string()),
+        " with ice counters on them" => flt.counter_kind = Some("ice".to_string()),
+        " chosen this way" => flt.predicates.push(FilterPredicateAst::StateQualification(
+            "chosen_this_way".to_string(),
+        )),
         " that aren't of the chosen type" | " that isn't of the chosen type" => {
             flt.predicates
                 .push(FilterPredicateAst::MatchesChosen { negated: true });
         }
-        " that shares a creature type with ~" => {
+        " that shares a creature type with ~" | " that shares a color with ~" => {
+            let prop = if suf.contains("color") {
+                "color"
+            } else {
+                "creature_type"
+            };
             flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
-                property: "creature_type".to_string(),
-                reference: Box::new(SubjectRefAst::SelfObject),
+                property: prop.to_string(),
+                reference: self_obj(),
                 negated: false,
             });
         }
-        " that shares a color with ~" => {
-            flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
-                property: "color".to_string(),
-                reference: Box::new(SubjectRefAst::SelfObject),
-                negated: false,
-            });
-        }
-        " that shares a creature type with it" | " that share a creature type with it" => {
-            flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
-                property: "creature_type".to_string(),
-                reference: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                negated: false,
-            });
-        }
-        " that shares a color with it" | " that share a color with it" => {
-            flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
-                property: "color".to_string(),
-                reference: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                negated: false,
-            });
-        }
-        " that shares a card type with it" => {
-            flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
-                property: "card_type".to_string(),
-                reference: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                negated: false,
-            });
-        }
-        " that share a creature type" | " that share a color" | " that share a card type" => {
+        " that shares a creature type with it"
+        | " that share a creature type with it"
+        | " that shares a color with it"
+        | " that share a color with it"
+        | " that shares a card type with it"
+        | " that share a creature type"
+        | " that share a color"
+        | " that share a card type"
+        | " of each of the sacrificed creature's colors" => {
             let prop = if suf.contains("creature type") {
                 "creature_type"
             } else if suf.contains("card type") {
@@ -3147,24 +2551,20 @@ fn apply_rel_suffix_predicate(
             } else {
                 "color"
             };
+            let reference = if suf.ends_with(" with it") {
+                box_anaphora("it")
+            } else if suf.contains("sacrificed creature") {
+                box_anaphora("the sacrificed creature")
+            } else {
+                box_anaphora("group")
+            };
             flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
                 property: prop.to_string(),
-                reference: Box::new(SubjectRefAst::Anaphora("group".to_string())),
+                reference,
                 negated: false,
             });
         }
-        " of each of the sacrificed creature's colors" => {
-            flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
-                property: "color".to_string(),
-                reference: Box::new(SubjectRefAst::Anaphora(
-                    "the sacrificed creature".to_string(),
-                )),
-                negated: false,
-            });
-        }
-        " named ~" => {
-            flt.named = Some(NameFilterAst::SelfName);
-        }
+        " named ~" => flt.named = Some(NameFilterAst::SelfName),
         " with the same name" | " with that name" => {
             flt.named = Some(NameFilterAst::SameAsReferenced);
         }
@@ -3181,9 +2581,7 @@ fn apply_rel_suffix_predicate(
                 suf.trim().to_string(),
             ));
         }
-        " with different names" => {
-            flt.flags = flt.flags.union(ObjectFilterFlags::DIFFERENT_NAMES);
-        }
+        " with different names" => flt.flags = flt.flags.union(ObjectFilterFlags::DIFFERENT_NAMES),
         " with different mana values" => {
             flt.flags = flt.flags.union(ObjectFilterFlags::DIFFERENT_MANA_VALUES);
         }
@@ -3193,36 +2591,18 @@ fn apply_rel_suffix_predicate(
         " with different card types" => {
             flt.flags = flt.flags.union(ObjectFilterFlags::DIFFERENT_CARD_TYPES);
         }
-        " with different powers" => {
-            flt.predicates.push(FilterPredicateAst::StateQualification(
-                "different_powers".to_string(),
-            ));
-        }
+        " with different powers" => flt.predicates.push(FilterPredicateAst::StateQualification(
+            "different_powers".to_string(),
+        )),
         " with {x} in its mana cost" | " with {x} in their mana costs" => {
             flt.predicates
                 .push(FilterPredicateAst::HasManaSymbolInCost("{x}".to_string()));
         }
-        " with a basic land type" => {
-            flt.predicates.push(FilterPredicateAst::HasBasicLandType);
-        }
-        " with a mana ability" => {
-            flt.predicates.push(FilterPredicateAst::HasAbilityKind {
-                kind: "mana_ability".to_string(),
-                negated: false,
-            });
-        }
-        " sacrificed this way" | " they sacrificed this way" | " you sacrificed this way" => {
-            flt.predicates
-                .push(FilterPredicateAst::AffectedByPriorAction(
-                    PriorActionRefKind::SacrificedThisWay,
-                ));
-        }
-        " exiled this way" | " they exiled this way" | " you exiled this way" => {
-            flt.predicates
-                .push(FilterPredicateAst::AffectedByPriorAction(
-                    PriorActionRefKind::ExiledThisWay,
-                ));
-        }
+        " with a basic land type" => flt.predicates.push(FilterPredicateAst::HasBasicLandType),
+        " with a mana ability" => flt.predicates.push(FilterPredicateAst::HasAbilityKind {
+            kind: "mana_ability".to_string(),
+            negated: false,
+        }),
         " exiled from their hand this way" | " exiled from your hand this way" => {
             flt.predicates
                 .push(FilterPredicateAst::AffectedByPriorAction(
@@ -3231,62 +2611,6 @@ fn apply_rel_suffix_predicate(
             flt.predicates.push(FilterPredicateAst::StateQualification(
                 suf.trim().to_string(),
             ));
-        }
-        " revealed this way" | " they revealed this way" | " you revealed this way" => {
-            flt.predicates
-                .push(FilterPredicateAst::AffectedByPriorAction(
-                    PriorActionRefKind::RevealedThisWay,
-                ));
-        }
-        " discarded this way" | " they discarded this way" | " you discarded this way" => {
-            flt.predicates
-                .push(FilterPredicateAst::AffectedByPriorAction(
-                    PriorActionRefKind::DiscardedThisWay,
-                ));
-        }
-        " destroyed this way" => {
-            flt.predicates
-                .push(FilterPredicateAst::AffectedByPriorAction(
-                    PriorActionRefKind::DestroyedThisWay,
-                ));
-        }
-        " returned this way" => {
-            flt.predicates
-                .push(FilterPredicateAst::AffectedByPriorAction(
-                    PriorActionRefKind::ReturnedToHandThisWay,
-                ));
-        }
-        " tapped this way" => {
-            flt.predicates
-                .push(FilterPredicateAst::AffectedByPriorAction(
-                    PriorActionRefKind::TappedThisWay,
-                ));
-        }
-        " put into a graveyard this way" => {
-            flt.predicates
-                .push(FilterPredicateAst::AffectedByPriorAction(
-                    PriorActionRefKind::PutIntoGraveyardThisWay,
-                ));
-        }
-        " milled this way" | " they milled this way" => {
-            flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
-                kind: "milled_this_way".to_string(),
-            });
-        }
-        " dealt damage this way" => {
-            flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
-                kind: "dealt_damage_this_way".to_string(),
-            });
-        }
-        " created this way" => {
-            flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
-                kind: "created_this_way".to_string(),
-            });
-        }
-        " put onto the battlefield this way" => {
-            flt.predicates.push(FilterPredicateAst::PriorActionZoneRef {
-                kind: "put_onto_battlefield_this_way".to_string(),
-            });
         }
         " that has an adventure" | " that have an adventure" => {
             flt.predicates.push(FilterPredicateAst::HasAbilityKind {
@@ -3297,17 +2621,19 @@ fn apply_rel_suffix_predicate(
         " that didn't attack this turn" => {
             flt.flags = flt.flags.union(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN);
         }
-        " in your party" => {
-            flt.predicates.push(FilterPredicateAst::StateQualification(
-                "in_your_party".to_string(),
-            ));
-        }
-        " cast from a graveyard" => {
-            flt.predicates.push(FilterPredicateAst::StateQualification(
-                "cast_from_graveyard".to_string(),
-            ));
-        }
-        " with greater power"
+        " in your party" => flt.predicates.push(FilterPredicateAst::StateQualification(
+            "in_your_party".to_string(),
+        )),
+        " cast from a graveyard" => flt.predicates.push(FilterPredicateAst::StateQualification(
+            "cast_from_graveyard".to_string(),
+        )),
+        " that crewed it this turn"
+        | " that convoked it"
+        | " that fought this turn"
+        | " each with power greater than its base power"
+        | " with power greater than its base power"
+        | " with power greater than that creature's base power"
+        | " with greater power"
         | " with power less than ~'s"
         | " with lesser mana value"
         | " with equal or lesser mana value"
@@ -3326,5 +2652,15 @@ fn apply_rel_suffix_predicate(
         _ => {
             let _ = (flag, combat);
         }
+    }
+}
+
+#[inline]
+fn peel_suf(s: &mut String, suf: &str) -> bool {
+    if let Some(prefix) = s.strip_suffix(suf) {
+        *s = prefix.trim().to_string();
+        true
+    } else {
+        false
     }
 }

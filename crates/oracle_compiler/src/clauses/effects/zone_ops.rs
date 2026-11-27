@@ -5,15 +5,21 @@ use super::{
     parse_atomic_effect, parse_effect_body, parse_sub_effect_extended, split_leading_player_verb,
 };
 use crate::ast::{
-    CardTypeMask, CompareOp, ConditionAst, ControllerRelation, CountLimitAst, DelayedStepScope,
-    DurationAst, ExchangeKind, FilterPredicateAst, InstructionAst, InteractiveChoiceKind,
-    NameFilterAst, ObjectFilterAst, ObjectFilterFlags, PileRefAst, PlayerRefAst, Rounding,
-    SearchModifierAst, StatBoundAst, StatKind, StaticAbilityAst, SubjectRefAst, TokenSpecAst,
-    TurnStepAst, ValueExprAst, ZoneFilter,
+    CardTypeMask, ConditionAst, ControllerRelation, CountLimitAst, DelayedStepScope, DurationAst,
+    ExchangeKind, FilterPredicateAst, InstructionAst, NameFilterAst, ObjectFilterAst,
+    ObjectFilterFlags, PileRefAst, PlayerRefAst, Rounding, SearchModifierAst, StatKind,
+    StaticAbilityAst, SubjectRefAst, TurnStepAst, ValueExprAst, ZoneFilter,
 };
 use crate::clauses::costs::{parse_cost_atom, peel_leading_count};
 use crate::clauses::statics::is_orthogonal_battlefield_dest;
-use crate::combinators::obj_type;
+use crate::combinators::{
+    anaphora, any_card_flt, box_anaphora, grp, ins_choose_group, ins_delayed, ins_discard,
+    ins_draw, ins_exchange, ins_exile, ins_exile_top, ins_fe_subj, ins_for_each_player,
+    ins_gain_control, ins_grant_cast, ins_if, ins_look_top, ins_manifest, ins_move, ins_move_cnt,
+    ins_opt_player, ins_opt1, ins_pile_action, ins_return_simple, ins_sac, ins_shuffle_into,
+    ins_temp_static, ins_unless, obj_type, some1, split_once_any, strip_prefix_any,
+    strip_suffix_any, val_div, val_player_stat, vconst,
+};
 use crate::filter::{
     parse_condition, parse_for_each_value_expr, parse_keyword_list, parse_object_filter,
     parse_player_ref, parse_subject_or_target, parse_value_expr,
@@ -22,15 +28,10 @@ use crate::preprocess::parse_base_pt;
 use crate::vocab::{Vocabulary, parse_number_word};
 
 pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
-    if let Some(after) = low
-        .strip_prefix("exile ")
-        .or_else(|| low.strip_prefix("exiles "))
-    {
+    if let Some(after) = strip_prefix_any(&low, &["exile ", "exiles "]) {
         if !after.contains(" from ")
             && !after.contains(" in ")
-            && let Some(whose) = after
-                .strip_suffix(" graveyards")
-                .or_else(|| after.strip_suffix(" graveyard"))
+            && let Some(whose) = strip_suffix_any(&after, &[" graveyards", " graveyard"])
         {
             return Some(InstructionAst::ExileGraveyard {
                 whose: whose
@@ -47,9 +48,7 @@ pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<Instructi
             });
         }
         if let Some((subj_raw, cnt_rest)) = after.split_once(" with ")
-            && let Some(left) = cnt_rest
-                .strip_suffix(" counters on it")
-                .or_else(|| cnt_rest.strip_suffix(" counter on it"))
+            && let Some(left) = strip_suffix_any(&cnt_rest, &[" counters on it", " counter on it"])
             && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
         {
             let (cnt, kind) = peel_leading_count(left, vocab);
@@ -68,9 +67,7 @@ pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<Instructi
         } else {
             Some(who)
         };
-        if let Some(whose) = after
-            .strip_suffix(" graveyards")
-            .or_else(|| after.strip_suffix(" graveyard"))
+        if let Some(whose) = strip_suffix_any(&after, &[" graveyards", " graveyard"])
             && !whose.contains(" from ")
             && !whose.contains(" in ")
         {
@@ -82,24 +79,20 @@ pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<Instructi
             Some(c) => (c, true),
             None => (after, false),
         };
-        let (after_fd, random) = match after_fd
-            .strip_suffix(" chosen at random")
-            .or_else(|| after_fd.strip_suffix(" at random"))
-        {
-            Some(c) => (c.trim(), true),
-            None => (after_fd, false),
-        };
+        let (after_fd, random) =
+            match strip_suffix_any(&after_fd, &[" chosen at random", " at random"]) {
+                Some(c) => (c.trim(), true),
+                None => (after_fd, false),
+            };
         if let Some(whose_lib) = after_fd.strip_prefix("the bottom card of ")
-            && let Some(whose) = whose_lib
-                .strip_suffix(" library")
-                .or_else(|| whose_lib.strip_suffix(" libraries"))
+            && let Some(whose) = strip_suffix_any(&whose_lib, &[" library", " libraries"])
         {
-            return Some(InstructionAst::ExileTopLibrary {
+            return Some(ins_exile_top(
                 actor,
-                whose: format!("{}_bottom", whose.trim_end_matches("'s")),
-                count: Box::new(ValueExprAst::Const(1)),
+                format!("{}_bottom", whose.trim_end_matches("'s")),
+                ValueExprAst::Const(1),
                 face_down,
-            });
+            ));
         }
         if let Some((subj_raw, rest_c)) = after_fd.split_once(" with a number of ")
             && let Some((kind_raw, eq_raw)) = rest_c.split_once(" counters on it equal to ")
@@ -119,7 +112,7 @@ pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<Instructi
             return Some(InstructionAst::Exile {
                 actor,
                 subject: Box::new(SubjectRefAst::InZone {
-                    subject: Box::new(SubjectRefAst::Anaphora("one of them".to_string())),
+                    subject: box_anaphora("one of them"),
                     zone: ZoneFilter::YourGraveyard,
                 }),
                 face_down,
@@ -138,7 +131,7 @@ pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<Instructi
             ));
             return Some(InstructionAst::Exile {
                 actor,
-                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                subject: Box::new(grp(flt)),
                 face_down,
                 random,
                 into_pile: false,
@@ -148,17 +141,15 @@ pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<Instructi
             && let Some(whose) = lib_part.strip_suffix(" library")
             && let Ok(cnt) = parse_value_expr(cnt_part, vocab)
         {
-            return Some(InstructionAst::ExileTopLibrary {
+            return Some(ins_exile_top(
                 actor,
-                whose: format!("{}_bottom", whose.trim_end_matches("'s")),
-                count: Box::new(cnt),
+                format!("{}_bottom", whose.trim_end_matches("'s")),
+                cnt,
                 face_down,
-            });
+            ));
         }
         if let Some(rest) = after_fd.strip_prefix("the top ")
-            && let Some((cnt_part, whose_lib)) = rest
-                .split_once(" cards of ")
-                .or_else(|| rest.split_once(" card of "))
+            && let Some((cnt_part, whose_lib)) = split_once_any(&rest, &[" cards of ", " card of "])
             && let Some(whose) = whose_lib.strip_suffix(" library")
         {
             let cnt = if cnt_part.is_empty() {
@@ -166,44 +157,37 @@ pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<Instructi
             } else {
                 parse_value_expr(cnt_part, vocab).ok()?
             };
-            return Some(InstructionAst::ExileTopLibrary {
+            return Some(ins_exile_top(
                 actor,
-                whose: whose.trim_end_matches("'s").to_string(),
-                count: Box::new(cnt),
+                whose.trim_end_matches("'s").to_string(),
+                cnt,
                 face_down,
-            });
+            ));
         }
         if let Some(whose_lib) = after_fd.strip_prefix("the top card of ")
-            && let Some(whose) = whose_lib
-                .strip_suffix(" library")
-                .or_else(|| whose_lib.strip_suffix(" libraries"))
+            && let Some(whose) = strip_suffix_any(&whose_lib, &[" library", " libraries"])
         {
-            return Some(InstructionAst::ExileTopLibrary {
+            return Some(ins_exile_top(
                 actor,
-                whose: whose.trim_end_matches("'s").to_string(),
-                count: Box::new(ValueExprAst::Const(1)),
+                whose.trim_end_matches("'s").to_string(),
+                ValueExprAst::Const(1),
                 face_down,
-            });
+            ));
         }
         if after_fd == "the top card" {
-            return Some(InstructionAst::ExileTopLibrary {
+            return Some(ins_exile_top(
                 actor,
-                whose: "your".to_string(),
-                count: Box::new(ValueExprAst::Const(1)),
+                "your",
+                ValueExprAst::Const(1),
                 face_down,
-            });
+            ));
         }
         if let Some(cnt_raw) = after_fd
             .strip_prefix("the top ")
             .and_then(|r| r.strip_suffix(" cards"))
             && let Ok(cnt) = parse_value_expr(cnt_raw, vocab)
         {
-            return Some(InstructionAst::ExileTopLibrary {
-                actor,
-                whose: "your".to_string(),
-                count: Box::new(cnt),
-                face_down,
-            });
+            return Some(ins_exile_top(actor, "your", cnt, face_down));
         }
         if after_fd == "your hand" || after_fd == "their hand" {
             return Some(InstructionAst::Exile {
@@ -246,30 +230,30 @@ pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<Instructi
             });
         }
         // "exile <count> cards from the top of <whose> library" / "exile a number of cards from the top of <whose> library equal to <val>"
-        if let Some((cnt_part, lib_part)) = after_fd
-            .split_once(" cards from the top of ")
-            .or_else(|| after_fd.split_once(" card from the top of "))
-        {
+        if let Some((cnt_part, lib_part)) = split_once_any(
+            &after_fd,
+            &[" cards from the top of ", " card from the top of "],
+        ) {
             if let Some((whose_lib, eq_val)) = lib_part.split_once(" library equal to ")
                 && cnt_part == "a number of"
                 && let Ok(cnt) = parse_value_expr(eq_val, vocab)
             {
-                return Some(InstructionAst::ExileTopLibrary {
+                return Some(ins_exile_top(
                     actor,
-                    whose: whose_lib.trim_end_matches("'s").to_string(),
-                    count: Box::new(cnt),
+                    whose_lib.trim_end_matches("'s").to_string(),
+                    cnt,
                     face_down,
-                });
+                ));
             }
             if let Some(whose) = lib_part.strip_suffix(" library")
                 && let Ok(cnt) = parse_value_expr(cnt_part, vocab)
             {
-                return Some(InstructionAst::ExileTopLibrary {
+                return Some(ins_exile_top(
                     actor,
-                    whose: whose.trim_end_matches("'s").to_string(),
-                    count: Box::new(cnt),
+                    whose.trim_end_matches("'s").to_string(),
+                    cnt,
                     face_down,
-                });
+                ));
             }
         }
         // "<player> exiles cards from the top of <whose> library until <player> exile(s) <filter>"
@@ -279,10 +263,8 @@ pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<Instructi
                 .or_else(|| rest.split_once(" library until they "))
                 .or_else(|| rest.split_once(" library until that player "))
         {
-            let flt_raw = until_rest
-                .strip_prefix("exile ")
-                .or_else(|| until_rest.strip_prefix("exiles "))
-                .unwrap_or(until_rest);
+            let flt_raw =
+                strip_prefix_any(&until_rest, &["exile ", "exiles "]).unwrap_or(until_rest);
             if let Ok(flt) = parse_object_filter(flt_raw, vocab) {
                 return Some(InstructionAst::ExileOrRevealTopUntil {
                     exile: true,
@@ -319,11 +301,7 @@ pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<Instructi
                 into_pile: false,
             };
             return Some(match delayed {
-                Some((step, scope)) => InstructionAst::DelayedTrigger {
-                    step,
-                    scope,
-                    body: vec![ins],
-                },
+                Some((step, scope)) => ins_delayed(step, scope, vec![ins]),
                 None => ins,
             });
         }
@@ -340,11 +318,7 @@ pub(super) fn try_parse_exile(low: &str, vocab: &Vocabulary) -> Option<Instructi
                 to: "exile".to_string(),
             };
             return Some(match delayed {
-                Some((step, scope)) => InstructionAst::DelayedTrigger {
-                    step,
-                    scope,
-                    body: vec![ins],
-                },
+                Some((step, scope)) => ins_delayed(step, scope, vec![ins]),
                 None => ins,
             });
         }
@@ -363,20 +337,12 @@ pub(super) fn try_parse_sacrifice(
     {
         let rhs = &low[idx + 8..];
         if let Some(spent_raw) = rhs.strip_suffix(" was spent to cast it") {
-            return Some(InstructionAst::IfCondition {
-                condition: Box::new(ConditionAst::Not(Box::new(ConditionAst::ManaSpentToCast(
+            return Some(ins_if(
+                ConditionAst::Not(Box::new(ConditionAst::ManaSpentToCast(
                     spent_raw.trim().to_string(),
-                )))),
-                then_body: vec![InstructionAst::Sacrifice {
-                    player: PlayerRefAst::You,
-                    count: None,
-                    subject: Box::new(subj),
-                    except: None,
-                    half: false,
-                    rounding: None,
-                    chooser: None,
-                }],
-            });
+                ))),
+                vec![ins_sac(PlayerRefAst::You, subj)],
+            ));
         }
         if let Some(pay_raw) = rhs.strip_prefix("you pay ")
             && let Ok(cost) = parse_cost_atom(&s[idx + 8 + 8..], vocab)
@@ -396,48 +362,24 @@ pub(super) fn try_parse_sacrifice(
             });
         }
         if let Ok(cond) = parse_condition(rhs, vocab) {
-            return Some(InstructionAst::IfCondition {
-                condition: Box::new(ConditionAst::Not(Box::new(cond))),
-                then_body: vec![InstructionAst::Sacrifice {
-                    player: PlayerRefAst::You,
-                    count: None,
-                    subject: Box::new(subj),
-                    except: None,
-                    half: false,
-                    rounding: None,
-                    chooser: None,
-                }],
-            });
+            return Some(ins_if(
+                ConditionAst::Not(Box::new(cond)),
+                vec![ins_sac(PlayerRefAst::You, subj)],
+            ));
         }
     }
     // "<subj>'s controller sacrifices it" (Arcum Dagsson, Reality Acid, Soul Ransom)
     if let Some(subj_raw) = low.strip_suffix("'s controller sacrifices it")
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Some(InstructionAst::Sacrifice {
-            player: PlayerRefAst::ThatObjectController,
-            count: None,
-            subject: Box::new(subj),
-            except: None,
-            half: false,
-            rounding: None,
-            chooser: None,
-        });
+        return Some(ins_sac(PlayerRefAst::ThatObjectController, subj));
     }
     // "<player> chooses and sacrifices <subj>" (Barrin's Spite, Retribution)
     if let Some((who, after)) =
         split_leading_player_verb(low, "choose and sacrifice", "chooses and sacrifices")
         && let Ok(subj) = parse_subject_or_target(after, vocab)
     {
-        return Some(InstructionAst::Sacrifice {
-            player: who,
-            count: None,
-            subject: Box::new(subj),
-            except: None,
-            half: false,
-            rounding: None,
-            chooser: None,
-        });
+        return Some(ins_sac(who, subj));
     }
     if let Some((who, after)) = split_leading_player_verb(low, "sacrifice", "sacrifices") {
         let (core, delayed_step) =
@@ -458,11 +400,7 @@ pub(super) fn try_parse_sacrifice(
                 subject: Box::new(subj),
             };
             return Some(match delayed_step {
-                Some((step, scope)) => InstructionAst::DelayedTrigger {
-                    step,
-                    scope,
-                    body: vec![ins],
-                },
+                Some((step, scope)) => ins_delayed(step, scope, vec![ins]),
                 None => ins,
             });
         }
@@ -481,29 +419,24 @@ pub(super) fn try_parse_sacrifice(
             (core, None)
         } else {
             (
-                core.strip_suffix(" of their choice")
-                    .or_else(|| core.strip_suffix(" of his or her choice"))
+                strip_suffix_any(&core, &[" of their choice", " of his or her choice"])
                     .unwrap_or(core),
                 None,
             )
         };
-        let (core, except) = if let Some((l, r)) = core
-            .split_once(", except for ")
-            .or_else(|| core.split_once(" except for "))
-        {
-            match parse_subject_or_target(r.trim(), vocab) {
-                Ok(exc) => (l.trim(), Some(Box::new(exc))),
-                Err(_) => (core, None),
-            }
-        } else {
-            (core, None)
-        };
+        let (core, except) =
+            if let Some((l, r)) = split_once_any(&core, &[", except for ", " except for "]) {
+                match parse_subject_or_target(r.trim(), vocab) {
+                    Ok(exc) => (l.trim(), Some(Box::new(exc))),
+                    Err(_) => (core, None),
+                }
+            } else {
+                (core, None)
+            };
         if core.contains(" except for ") {
             return None;
         }
-        let (core, half) = if let Some(c) = core
-            .strip_prefix("half of the ")
-            .or_else(|| core.strip_prefix("half the "))
+        let (core, half) = if let Some(c) = strip_prefix_any(&core, &["half of the ", "half the "])
         {
             (c.trim(), true)
         } else {
@@ -555,11 +488,7 @@ pub(super) fn try_parse_sacrifice(
                 chooser,
             };
             return Some(match delayed_step {
-                Some((step, scope)) => InstructionAst::DelayedTrigger {
-                    step,
-                    scope,
-                    body: vec![ins],
-                },
+                Some((step, scope)) => ins_delayed(step, scope, vec![ins]),
                 None => ins,
             });
         }
@@ -584,32 +513,18 @@ pub(super) fn try_parse_discard(s: &str, vocab: &Vocabulary) -> Option<Instructi
         && let Ok(cost) = parse_cost_atom(unless_raw, vocab)
     {
         let (cnt, _) = peel_leading_count(left_part, vocab);
-        return Some(InstructionAst::Unless {
-            body: vec![InstructionAst::Discard {
-                player: who,
-                count: Some(Box::new(cnt)),
-                filter: None,
-                anaphora: None,
-                random: false,
-            }],
-            unless_player: Some(PlayerRefAst::You),
-            unless_cost: Some(cost),
-            unless_action: None,
-            unless_condition: None,
-        });
+        return Some(ins_unless(
+            vec![ins_discard(who, Some(cnt))],
+            Some(PlayerRefAst::You),
+            Some(cost),
+            None,
+            None,
+        ));
     }
-    if let Some(fe) = after
-        .strip_prefix("a card for each ")
-        .or_else(|| after.strip_prefix("one card for each "))
+    if let Some(fe) = strip_prefix_any(&after, &["a card for each ", "one card for each "])
         && let Ok(cnt) = parse_for_each_value_expr(fe, vocab)
     {
-        return Some(InstructionAst::Discard {
-            player: who,
-            count: Some(Box::new(cnt)),
-            filter: None,
-            anaphora: None,
-            random: false,
-        });
+        return Some(ins_discard(who, Some(cnt)));
     }
     if matches!(after, "your hand" | "their hand" | "his or her hand") {
         return Some(InstructionAst::DiscardHand { player: who });
@@ -622,20 +537,14 @@ pub(super) fn try_parse_discard(s: &str, vocab: &Vocabulary) -> Option<Instructi
         } else {
             crate::ast::Rounding::Down
         };
-        return Some(InstructionAst::Discard {
-            player: who,
-            count: Some(Box::new(ValueExprAst::DivConst {
-                expr: Box::new(ValueExprAst::PlayerStat {
-                    player: who,
-                    stat: crate::ast::PlayerStatKind::CardsInHand,
-                }),
-                denom: 2,
+        return Some(ins_discard(
+            who,
+            Some(val_div(
+                val_player_stat(who, crate::ast::PlayerStatKind::CardsInHand),
+                2,
                 rounding,
-            })),
-            filter: None,
-            anaphora: None,
-            random: false,
-        });
+            )),
+        ));
     }
     let (core, random) = match after.strip_suffix(" at random") {
         Some(c) => (c, true),
@@ -734,17 +643,15 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
             } else {
                 (after, None)
             };
-        let (core, except) = if let Some((l, r)) = core
-            .split_once(", except for ")
-            .or_else(|| core.split_once(" except for "))
-        {
-            match parse_subject_or_target(r.trim(), vocab) {
-                Ok(exc) => (l.trim(), Some(Box::new(exc))),
-                Err(_) => (core, None),
-            }
-        } else {
-            (core, None)
-        };
+        let (core, except) =
+            if let Some((l, r)) = split_once_any(&core, &[", except for ", " except for "]) {
+                match parse_subject_or_target(r.trim(), vocab) {
+                    Ok(exc) => (l.trim(), Some(Box::new(exc))),
+                    Err(_) => (core, None),
+                }
+            } else {
+                (core, None)
+            };
         if core.contains(" except for ") {
             return None;
         }
@@ -858,11 +765,7 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
                         actor: None,
                     };
                     return Some(match delayed {
-                        Some((step, scope)) => InstructionAst::DelayedTrigger {
-                            step,
-                            scope,
-                            body: vec![ins],
-                        },
+                        Some((step, scope)) => ins_delayed(step, scope, vec![ins]),
                         None => ins,
                     });
                 }
@@ -878,9 +781,7 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
         };
         let (core_nocnt, with_counter) = if let Some((before, after_w)) =
             core_noatt.rsplit_once(" with ")
-            && let Some(kind) = after_w
-                .strip_suffix(" counter on it")
-                .or_else(|| after_w.strip_suffix(" counters on it"))
+            && let Some(kind) = strip_suffix_any(&after_w, &[" counter on it", " counters on it"])
         {
             (before, Some(kind.trim().to_string()))
         } else {
@@ -907,11 +808,7 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
                 actor: None,
             };
             return Some(match delayed {
-                Some((step, scope)) => InstructionAst::DelayedTrigger {
-                    step,
-                    scope,
-                    body: vec![ins],
-                },
+                Some((step, scope)) => ins_delayed(step, scope, vec![ins]),
                 None => ins,
             });
         }
@@ -1006,11 +903,7 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
                         actor: None,
                     };
                     return Some(match delayed {
-                        Some((step, scope)) => InstructionAst::DelayedTrigger {
-                            step,
-                            scope,
-                            body: vec![ins],
-                        },
+                        Some((step, scope)) => ins_delayed(step, scope, vec![ins]),
                         None => ins,
                     });
                 }
@@ -1020,9 +913,8 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
 
     // ChooseAndKeep ("... and the rest ..." / "... and the other ..." including "put one back and the rest into ...")
     if let Some((_, after)) = split_leading_player_verb(low, "put", "puts")
-        && let Some((keep_part, rest_part)) = after
-            .split_once(" and the rest ")
-            .or_else(|| after.split_once(" and the other "))
+        && let Some((keep_part, rest_part)) =
+            split_once_any(&after, &[" and the rest ", " and the other "])
     {
         let (up_to_pref, keep_clean) = if let Some(r) = keep_part.strip_prefix("up to ") {
             ("up to ", r)
@@ -1049,16 +941,10 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
                 } else if let Some(b) = ap.strip_prefix("back on ") {
                     b
                 } else {
-                    ap.strip_prefix("into ")
-                        .or_else(|| ap.strip_prefix("onto "))
-                        .or_else(|| ap.strip_prefix("on "))
-                        .unwrap_or("")
+                    strip_prefix_any(&ap, &["into ", "onto ", "on "]).unwrap_or("")
                 };
-                let rest_to = rest_part
-                    .strip_prefix("into ")
-                    .or_else(|| rest_part.strip_prefix("on "))
-                    .or_else(|| rest_part.strip_prefix("onto "))
-                    .unwrap_or("");
+                let rest_to =
+                    strip_prefix_any(&rest_part, &["into ", "on ", "onto "]).unwrap_or("");
                 if !keep_to.is_empty() && !rest_to.is_empty() {
                     return Some(InstructionAst::ChooseAndKeep {
                         pick: format!("{up_to_pref}{pick}"),
@@ -1069,12 +955,8 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
             }
         }
         // Mulch-style: "put all <filter> revealed this way into <dest1> and the rest into <dest2>"
-        if let Some((flt_part, keep_to)) = keep_part
-            .split_once(" into ")
-            .or_else(|| keep_part.split_once(" onto "))
-            && let Some(rest_to) = rest_part
-                .strip_prefix("into ")
-                .or_else(|| rest_part.strip_prefix("on "))
+        if let Some((flt_part, keep_to)) = split_once_any(&keep_part, &[" into ", " onto "])
+            && let Some(rest_to) = strip_prefix_any(&rest_part, &["into ", "on "])
             && parse_subject_or_target(flt_part, vocab).is_ok()
         {
             return Some(InstructionAst::ChooseAndKeep {
@@ -1117,45 +999,32 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
 
     // "<subj>'s owner puts it on ..." / "Its owner puts it on ..." / "The owner of <subj> puts it on/into ..."
     if low == "its owner puts it on their choice of the top or bottom of their library" {
-        return Some(InstructionAst::MoveZone {
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-            to: "owner_choice_top_or_bottom_of_library".to_string(),
-        });
+        return Some(ins_move(
+            anaphora("it"),
+            "owner_choice_top_or_bottom_of_library",
+        ));
     }
     if let Some((subj_raw, rest)) = low.split_once("'s owner puts it on ")
         && rest == "their choice of the top or bottom of their library"
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Some(InstructionAst::MoveZone {
-            subject: Box::new(subj),
-            to: "owner_choice_top_or_bottom_of_library".to_string(),
-        });
+        return Some(ins_move(subj, "owner_choice_top_or_bottom_of_library"));
     }
     if let Some(after) = low.strip_prefix("the owner of ")
-        && let Some((subj_raw, rest)) = after
-            .split_once(" puts it on ")
-            .or_else(|| after.split_once(" puts it into "))
+        && let Some((subj_raw, rest)) = split_once_any(&after, &[" puts it on ", " puts it into "])
         && (rest == "their choice of the top or bottom of their library"
             || rest == "their library second from the top or on the bottom")
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Some(InstructionAst::MoveZone {
-            subject: Box::new(subj),
-            to: rest.to_string(),
-        });
+        return Some(ins_move(subj, rest.to_string()));
     }
 
     // "shuffle and put <subj> on top [of your library]" (Mwonvuli Beast Tracker)
     if let Some(after) = low.strip_prefix("shuffle and put ")
-        && let Some(subj_raw) = after
-            .strip_suffix(" on top")
-            .or_else(|| after.strip_suffix(" on top of your library"))
+        && let Some(subj_raw) = strip_suffix_any(&after, &[" on top", " on top of your library"])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Some(InstructionAst::MoveZone {
-            subject: Box::new(subj),
-            to: "top_of_library_after_shuffle".to_string(),
-        });
+        return Some(ins_move(subj, "top_of_library_after_shuffle"));
     }
 
     // MoveZone: "[<player>] put(s) <subj> onto/into/on <dest>" (or inverted "put onto/into <dest> <subj>")
@@ -1177,10 +1046,7 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
             if let Some(subj_raw) = after_norm.strip_prefix(inv_pref)
                 && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
             {
-                return Some(InstructionAst::MoveZone {
-                    subject: Box::new(subj),
-                    to: dest.to_string(),
-                });
+                return Some(ins_move(subj, dest.to_string()));
             }
         }
         for sep in [" onto ", " into ", " on "] {
@@ -1332,20 +1198,17 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
                         if let Ok(t @ SubjectRefAst::TargetObject { .. }) =
                             parse_subject_or_target(obj_clean, vocab)
                         {
-                            return Some(InstructionAst::MoveZone {
-                                subject: Box::new(t),
-                                to: dest.to_string(),
-                            });
+                            return Some(ins_move(t, dest.to_string()));
                         }
                         if let Ok(subj) = parse_subject_or_target(any_rest, vocab) {
-                            return Some(InstructionAst::MoveCounted {
-                                actor: None,
-                                count: None,
-                                up_to: false,
-                                any_number: true,
-                                subject: Box::new(subj),
-                                to: dest.to_string(),
-                            });
+                            return Some(ins_move_cnt(
+                                None,
+                                None,
+                                false,
+                                true,
+                                subj,
+                                dest.to_string(),
+                            ));
                         }
                         return None;
                     }
@@ -1353,21 +1216,18 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
                         if let Ok(t @ SubjectRefAst::TargetObject { .. }) =
                             parse_subject_or_target(obj_clean, vocab)
                         {
-                            return Some(InstructionAst::MoveZone {
-                                subject: Box::new(t),
-                                to: dest.to_string(),
-                            });
+                            return Some(ins_move(t, dest.to_string()));
                         }
                         let (cnt, up_nocnt) = peel_leading_count(up_rest, vocab);
                         if let Ok(subj) = parse_subject_or_target(up_nocnt, vocab) {
-                            return Some(InstructionAst::MoveCounted {
-                                actor: None,
-                                count: Some(Box::new(cnt)),
-                                up_to: true,
-                                any_number: false,
-                                subject: Box::new(subj),
-                                to: dest.to_string(),
-                            });
+                            return Some(ins_move_cnt(
+                                None,
+                                Some(cnt),
+                                true,
+                                false,
+                                subj,
+                                dest.to_string(),
+                            ));
                         }
                         return None;
                     }
@@ -1375,36 +1235,30 @@ pub(super) fn try_parse_zone_moves(low: &str, vocab: &Vocabulary) -> Option<Inst
                         if let Ok(a @ SubjectRefAst::Anaphora(_)) =
                             parse_subject_or_target(obj_clean, vocab)
                         {
-                            return Some(InstructionAst::MoveZone {
-                                subject: Box::new(a),
-                                to: dest.to_string(),
-                            });
+                            return Some(ins_move(a, dest.to_string()));
                         }
                         return None;
                     }
                     let (cnt, obj_nocnt) = peel_leading_count(obj_clean, vocab);
                     let subj = if obj_clean == "the rest" || obj_clean == "the rest of the cards" {
-                        SubjectRefAst::Anaphora("the_rest".to_string())
+                        anaphora("the_rest")
                     } else if let Ok(s) = parse_subject_or_target(obj_clean, vocab) {
                         s
                     } else if matches!(cnt, ValueExprAst::Const(1)) {
                         parse_subject_or_target(obj_nocnt, vocab).ok()?
                     } else if let Ok(s) = parse_subject_or_target(obj_nocnt, vocab) {
-                        return Some(InstructionAst::MoveCounted {
-                            actor: None,
-                            count: Some(Box::new(cnt)),
-                            up_to: false,
-                            any_number: false,
-                            subject: Box::new(s),
-                            to: dest.to_string(),
-                        });
+                        return Some(ins_move_cnt(
+                            None,
+                            Some(cnt),
+                            false,
+                            false,
+                            s,
+                            dest.to_string(),
+                        ));
                     } else {
                         return None;
                     };
-                    return Some(InstructionAst::MoveZone {
-                        subject: Box::new(subj),
-                        to: dest.to_string(),
-                    });
+                    return Some(ins_move(subj, dest.to_string()));
                 }
             }
         }
@@ -1466,10 +1320,7 @@ fn parse_search_single_filter(flt_raw: &str, vocab: &Vocabulary) -> Option<Objec
             return None;
         }
         let mut base_flt = if matches!(type_part.trim(), "card" | "cards") {
-            ObjectFilterAst {
-                any_card: true,
-                ..ObjectFilterAst::default()
-            }
+            any_card_flt()
         } else {
             parse_object_filter(type_part.trim(), vocab).ok()?
         };
@@ -1496,9 +1347,7 @@ pub(super) fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<
         .unwrap_or(low_owned.as_str());
     let (opt_player, leading_subject_player, after) = if let Some(a) = low.strip_prefix("search ") {
         (None, None, a)
-    } else if let Some((who_raw, a)) = low
-        .split_once(" may each search ")
-        .or_else(|| low.split_once(" may search "))
+    } else if let Some((who_raw, a)) = split_once_any(&low, &[" may each search ", " may search "])
     {
         if let Some(p) = parse_player_ref(who_raw) {
             (Some(p), None, a)
@@ -1511,10 +1360,7 @@ pub(super) fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<
         } else {
             return None;
         }
-    } else if let Some((who_raw, a)) = low
-        .split_once(" searches ")
-        .or_else(|| low.split_once(" search "))
-    {
+    } else if let Some((who_raw, a)) = split_once_any(&low, &[" searches ", " search "]) {
         let _ = parse_player_ref(who_raw)?;
         (None, None, a)
     } else {
@@ -1666,21 +1512,16 @@ pub(super) fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<
     };
 
     // Split optional secondary destination ("and the other into ...", "and the rest into ...")
-    let (tail_main, rest_to_zone) = if let Some((l, r)) = tail
-        .split_once(" and the other ")
-        .or_else(|| tail.split_once(" and the rest "))
-    {
-        let rz = r
-            .split_once(", then shuffle")
-            .or_else(|| r.split_once(", then shuffles"))
-            .or_else(|| r.split_once(", shuffle"))
-            .map_or(r, |(d, _)| d)
-            .trim()
-            .to_string();
-        (l.trim(), Some(rz))
-    } else {
-        (tail, None)
-    };
+    let (tail_main, rest_to_zone) =
+        if let Some((l, r)) = split_once_any(&tail, &[" and the other ", " and the rest "]) {
+            let rz = split_once_any(&r, &[", then shuffle", ", then shuffles", ", shuffle"])
+                .map_or(r, |(d, _)| d)
+                .trim()
+                .to_string();
+            (l.trim(), Some(rz))
+        } else {
+            (tail, None)
+        };
 
     let mut follow_up: Vec<InstructionAst> = Vec::new();
     // Reject complex unparsed tail clauses unless we parse them into follow_up cleanly
@@ -1731,33 +1572,26 @@ pub(super) fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<
     let any_number = flt_part_raw.starts_with("any number of ") || flt_part_raw.starts_with("all ");
     let up_to = flt_part_raw.starts_with("up to ");
     let exact = flt_part_raw.starts_with("exactly ");
-    let flt_clean = flt_part_raw
-        .strip_prefix("any number of ")
-        .or_else(|| flt_part_raw.strip_prefix("all "))
-        .or_else(|| flt_part_raw.strip_prefix("up to "))
-        .or_else(|| flt_part_raw.strip_prefix("exactly "))
-        .unwrap_or(flt_part_raw);
+    let flt_clean = strip_prefix_any(
+        &flt_part_raw,
+        &["any number of ", "all ", "up to ", "exactly "],
+    )
+    .unwrap_or(flt_part_raw);
 
     // Optional compound search target: "<flt1> and/or a/an <flt2>", "<flt1> and a/an <flt2>",
     // or "<flt1> or a/an <flt2>". The right side must parse as a valid search filter (named or typed),
     // which supports both "a card named A and/or a card named B" and "a card named A or an Equipment card"
     // while keeping single card names such as "Sword of Feast and Famine" intact.
     let (primary_raw, secondary_filter, secondary_is_or) = if let Some((left_f, right_f)) =
-        flt_clean
-            .split_once(" and/or a ")
-            .or_else(|| flt_clean.split_once(" and/or an "))
+        split_once_any(&flt_clean, &[" and/or a ", " and/or an "])
         && let Some(sf) = parse_search_single_filter(right_f.trim(), vocab)
     {
         (left_f.trim(), Some(Box::new(sf)), false)
-    } else if let Some((left_f, right_f)) = flt_clean
-        .split_once(" and a ")
-        .or_else(|| flt_clean.split_once(" and an "))
+    } else if let Some((left_f, right_f)) = split_once_any(&flt_clean, &[" and a ", " and an "])
         && let Some(sf) = parse_search_single_filter(right_f.trim(), vocab)
     {
         (left_f.trim(), Some(Box::new(sf)), false)
-    } else if let Some((left_f, right_f)) = flt_clean
-        .split_once(" or a ")
-        .or_else(|| flt_clean.split_once(" or an "))
+    } else if let Some((left_f, right_f)) = split_once_any(&flt_clean, &[" or a ", " or an "])
         && let Some(sf) = parse_search_single_filter(right_f.trim(), vocab)
     {
         (left_f.trim(), Some(Box::new(sf)), true)
@@ -1767,9 +1601,7 @@ pub(super) fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<
 
     let (cnt, flt_raw) = if any_number {
         (ValueExprAst::Const(0), primary_raw)
-    } else if let Some(after_num) = primary_raw
-        .strip_prefix("a number of ")
-        .or_else(|| primary_raw.strip_prefix("number of "))
+    } else if let Some(after_num) = strip_prefix_any(&primary_raw, &["a number of ", "number of "])
         && let Some((inner_flt, eq_val)) = after_num.split_once(" equal to ")
         && let Ok(parsed_cnt) = parse_value_expr(eq_val.trim(), vocab)
     {
@@ -1860,18 +1692,12 @@ pub(super) fn try_parse_search_library(low: &str, vocab: &Vocabulary) -> Option<
         exact,
     };
     let wrapped = match opt_player {
-        Some(PlayerRefAst::You) => InstructionAst::Optional(vec![search_ins]),
-        Some(player) => InstructionAst::OptionalPlayer {
-            player,
-            body: vec![search_ins],
-        },
+        Some(PlayerRefAst::You) => ins_opt1(search_ins),
+        Some(player) => ins_opt_player(player, vec![search_ins]),
         None => search_ins,
     };
     Some(match leading_subject_player {
-        Some(subj_p) => InstructionAst::ForEachSubjectPlayer {
-            players: Box::new(subj_p),
-            body: vec![wrapped],
-        },
+        Some(subj_p) => ins_fe_subj(subj_p, vec![wrapped]),
         None => wrapped,
     })
 }
@@ -1902,23 +1728,16 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
             } else {
                 crate::ast::Rounding::Down
             };
-            Some(ValueExprAst::DivConst {
-                expr: Box::new(ValueExprAst::PlayerStat {
-                    player: who,
-                    stat: crate::ast::PlayerStatKind::CardsInLibrary,
-                }),
-                denom: 2,
+            Some(val_div(
+                val_player_stat(who, crate::ast::PlayerStatKind::CardsInLibrary),
+                2,
                 rounding,
-            })
-        } else if let Some(val_raw) = after
-            .strip_prefix("cards equal to ")
-            .or_else(|| after.strip_prefix("a number of cards equal to "))
+            ))
+        } else if let Some(val_raw) =
+            strip_prefix_any(&after, &["cards equal to ", "a number of cards equal to "])
         {
             parse_value_expr(val_raw, vocab).ok()
-        } else if let Some(cnt_raw) = after
-            .strip_suffix(" cards")
-            .or_else(|| after.strip_suffix(" card"))
-        {
+        } else if let Some(cnt_raw) = strip_suffix_any(&after, &[" cards", " card"]) {
             parse_value_expr(cnt_raw, vocab).ok()
         } else {
             None
@@ -1972,11 +1791,7 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
             }
         }
         if after.starts_with("target ") && parse_subject_or_target(after, vocab).is_ok() {
-            return Some(InstructionAst::LookTopLibrary {
-                reveal: true,
-                library: "target".to_string(),
-                count: Box::new(ValueExprAst::Const(1)),
-            });
+            return Some(ins_look_top(true, "target", ValueExprAst::Const(1)));
         }
     }
     if let Some((who, rest)) = split_leading_player_verb(low, "reveal", "reveals")
@@ -1995,16 +1810,12 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
             lib_str
         };
         if who == PlayerRefAst::You {
-            return Some(InstructionAst::LookTopLibrary {
-                reveal: true,
-                library,
-                count: Box::new(ValueExprAst::Const(1)),
-            });
+            return Some(ins_look_top(true, library, ValueExprAst::Const(1)));
         }
         return Some(InstructionAst::PlayerLookTopLibrary {
             player: who,
             library,
-            count: Box::new(ValueExprAst::Const(1)),
+            count: vconst(1),
             reveal: true,
         });
     }
@@ -2013,26 +1824,20 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
         && let Some(whose) = lib_rest.strip_suffix(" library")
         && let Ok(cnt) = parse_value_expr(cnt_raw, vocab)
     {
-        return Some(InstructionAst::LookTopLibrary {
-            reveal: false,
-            library: whose.trim_end_matches("'s").to_string(),
-            count: Box::new(cnt),
-        });
+        return Some(ins_look_top(
+            false,
+            whose.trim_end_matches("'s").to_string(),
+            cnt,
+        ));
     }
-    if let Some((who_raw, rest)) = low
-        .split_once(" reveals ")
-        .or_else(|| low.split_once(" reveal "))
+    if let Some((who_raw, rest)) = split_once_any(&low, &[" reveals ", " reveal "])
         && let Some(who) = parse_player_ref(who_raw)
     {
         if let Some(val_raw) = rest.strip_prefix("a number of cards from their hand equal to ")
             && let Ok(cnt) = parse_value_expr(val_raw, vocab)
         {
             if who == PlayerRefAst::You {
-                return Some(InstructionAst::LookTopLibrary {
-                    reveal: true,
-                    library: "hand".to_string(),
-                    count: Box::new(cnt),
-                });
+                return Some(ins_look_top(true, "hand", cnt));
             }
             return Some(InstructionAst::PlayerLookTopLibrary {
                 player: who,
@@ -2042,19 +1847,14 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
             });
         }
         if let Some(after_top) = rest.strip_prefix("the top ")
-            && let Some((cnt_raw, lib_tail)) = after_top
-                .split_once(" cards of ")
-                .or_else(|| after_top.split_once(" card of "))
+            && let Some((cnt_raw, lib_tail)) =
+                split_once_any(&after_top, &[" cards of ", " card of "])
             && let Some(whose) = lib_tail.strip_suffix(" library")
             && let Ok(cnt) = parse_value_expr(cnt_raw, vocab)
         {
             let library = whose.trim_end_matches("'s").to_string();
             if who == PlayerRefAst::You {
-                return Some(InstructionAst::LookTopLibrary {
-                    reveal: true,
-                    library,
-                    count: Box::new(cnt),
-                });
+                return Some(ins_look_top(true, library, cnt));
             }
             return Some(InstructionAst::PlayerLookTopLibrary {
                 player: who,
@@ -2070,11 +1870,7 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
             && let Ok(cnt) = parse_value_expr(cnt_raw, vocab)
         {
             if who == PlayerRefAst::You {
-                return Some(InstructionAst::LookTopLibrary {
-                    reveal: true,
-                    library: "hand".to_string(),
-                    count: Box::new(cnt),
-                });
+                return Some(ins_look_top(true, "hand", cnt));
             }
             return Some(InstructionAst::PlayerLookTopLibrary {
                 player: who,
@@ -2084,10 +1880,13 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
             });
         }
     }
-    if let Some((who_raw, rest)) = low
-        .split_once(" reveals a card at random from ")
-        .or_else(|| low.split_once(" reveal a card at random from "))
-        && rest.ends_with(" hand")
+    if let Some((who_raw, rest)) = split_once_any(
+        &low,
+        &[
+            " reveals a card at random from ",
+            " reveal a card at random from ",
+        ],
+    ) && rest.ends_with(" hand")
         && let Some(player) = parse_player_ref(who_raw)
     {
         return Some(InstructionAst::RevealRandomFromHand { player });
@@ -2100,16 +1899,12 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
         {
             let library = whose.trim_end_matches("'s").to_string();
             if who == PlayerRefAst::You {
-                return Some(InstructionAst::LookTopLibrary {
-                    reveal: false,
-                    library,
-                    count: Box::new(ValueExprAst::Const(1)),
-                });
+                return Some(ins_look_top(false, library, ValueExprAst::Const(1)));
             }
             return Some(InstructionAst::PlayerLookTopLibrary {
                 player: who,
                 library,
-                count: Box::new(ValueExprAst::Const(1)),
+                count: vconst(1),
                 reveal: false,
             });
         }
@@ -2119,11 +1914,7 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
         {
             let library = whose.trim_end_matches("'s").to_string();
             if who == PlayerRefAst::You {
-                return Some(InstructionAst::LookTopLibrary {
-                    reveal: false,
-                    library,
-                    count: Box::new(cnt),
-                });
+                return Some(ins_look_top(false, library, cnt));
             }
             return Some(InstructionAst::PlayerLookTopLibrary {
                 player: who,
@@ -2138,21 +1929,21 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
             if let Some(whose_lib) = rest.strip_prefix("card of ")
                 && let Some(whose) = whose_lib.strip_suffix(" library")
             {
-                return Some(InstructionAst::LookTopLibrary {
+                return Some(ins_look_top(
                     reveal,
-                    library: whose.trim_end_matches("'s").to_string(),
-                    count: Box::new(ValueExprAst::Const(1)),
-                });
+                    whose.trim_end_matches("'s").to_string(),
+                    ValueExprAst::Const(1),
+                ));
             }
             if let Some((cnt_str, whose_lib)) = rest.split_once(" cards of ")
                 && let Some(whose) = whose_lib.strip_suffix(" library")
                 && let Ok(cnt) = parse_value_expr(cnt_str, vocab)
             {
-                return Some(InstructionAst::LookTopLibrary {
+                return Some(ins_look_top(
                     reveal,
-                    library: whose.trim_end_matches("'s").to_string(),
-                    count: Box::new(cnt),
-                });
+                    whose.trim_end_matches("'s").to_string(),
+                    cnt,
+                ));
             }
         }
     }
@@ -2164,10 +1955,8 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
         if let Some(rest) = low.strip_prefix(pref)
             && let Some((lib_raw, until_rest)) = rest.split_once(" library until you ")
         {
-            let flt_raw = until_rest
-                .strip_prefix("exile ")
-                .or_else(|| until_rest.strip_prefix("reveal "))
-                .unwrap_or(until_rest);
+            let flt_raw =
+                strip_prefix_any(&until_rest, &["exile ", "reveal "]).unwrap_or(until_rest);
             let (_, flt_nocnt) = peel_leading_count(flt_raw, vocab);
             if let Ok(flt) = parse_object_filter(flt_raw, vocab)
                 .or_else(|_| parse_object_filter(flt_nocnt, vocab))
@@ -2189,22 +1978,6 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
         return Some(InstructionAst::LookAtHand { player: p });
     }
 
-    // Wheel: "each player shuffles their hand and graveyard into their library, then draws N cards"
-    if let Some((who_raw, rest)) = low
-        .split_once(" shuffles their hand and graveyard into their library, then draws ")
-        .or_else(|| {
-            low.split_once(" shuffle their hand and graveyard into their library, then draw ")
-        })
-        && let Some(cnt_raw) = rest.strip_suffix(" cards")
-        && let (Some(player), Ok(draw)) =
-            (parse_player_ref(who_raw), parse_value_expr(cnt_raw, vocab))
-    {
-        return Some(InstructionAst::WheelShuffleHandAndGraveyard {
-            player,
-            draw: Box::new(draw),
-        });
-    }
-
     // Imperative "shuffle your graveyard into your library" / "shuffle ~ and your graveyard into their owner's library" (Campfire, Elixir of Immortality)
     if low == "shuffle your graveyard into your library"
         || low == "shuffle ~ and your graveyard into their owner's library"
@@ -2214,9 +1987,7 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
         });
     }
     // "<player> shuffles their graveyard into their library"
-    if let Some((who_raw, rest)) = low
-        .split_once(" shuffles ")
-        .or_else(|| low.split_once(" shuffle "))
+    if let Some((who_raw, rest)) = split_once_any(&low, &[" shuffles ", " shuffle "])
         && matches!(
             rest,
             "their graveyard into their library"
@@ -2233,9 +2004,7 @@ pub(super) fn try_parse_library_ops(low: &str, vocab: &Vocabulary) -> Option<Ins
             player: PlayerRefAst::You,
         });
     }
-    if let Some((who_raw, hand_part)) = low
-        .split_once(" reveals ")
-        .or_else(|| low.split_once(" reveal "))
+    if let Some((who_raw, hand_part)) = split_once_any(&low, &[" reveals ", " reveal "])
         && matches!(hand_part, "their hand" | "his or her hand" | "your hand")
         && let Some(p) = parse_player_ref(who_raw)
     {
@@ -2250,9 +2019,8 @@ pub(super) fn parse_pile_separation_and_visibility(
 ) -> Option<Vec<InstructionAst>> {
     // Atris, Fortune's Favor, Sauron's Ransom:
     // "<player> look(s) at the top <N> cards of your library and separate(s) them into a face-down pile and a face-up pile"
-    if let Some((who_raw, rest)) = low
-        .split_once(" looks at the top ")
-        .or_else(|| low.split_once(" look at the top "))
+    if let Some((who_raw, rest)) =
+        split_once_any(&low, &[" looks at the top ", " look at the top "])
         && let Some(chooser) = parse_player_ref(who_raw.trim())
         && let Some((cnt_raw, tail)) = rest.split_once(" cards of your library and separate")
         && let Ok(cnt) = parse_value_expr(cnt_raw.trim(), vocab)
@@ -2267,11 +2035,7 @@ pub(super) fn parse_pile_separation_and_visibility(
             return None;
         };
         return Some(vec![
-            InstructionAst::LookTopLibrary {
-                reveal: false,
-                library: "your".to_string(),
-                count: Box::new(cnt),
-            },
+            ins_look_top(false, "your", cnt),
             InstructionAst::SeparateIntoPiles {
                 chooser,
                 pile_count: 2,
@@ -2280,25 +2044,12 @@ pub(super) fn parse_pile_separation_and_visibility(
         ]);
     }
 
-    // Conditional wrapper around pile separation ("if <cond>, <pile_sep>")
-    if let Some(after_if) = low.strip_prefix("if ")
-        && let Some((cond_raw, rest)) = after_if.split_once(", ")
-        && let Ok(cond) = parse_condition(cond_raw.trim(), vocab)
-        && let Some(inner) = parse_pile_separation_and_visibility(rest.trim(), vocab)
-    {
-        return Some(vec![InstructionAst::IfCondition {
-            condition: Box::new(cond),
-            then_body: inner,
-        }]);
-    }
-
     // Compositional cast-up-to-N spells from among a filtered group without paying mana costs
     // (e.g. "<player> may cast [up to <N> ]spell[s] from among <filter> [without paying ...]")
     if let Some((who_raw, rest)) = low.split_once(" may cast ")
         && let Some(player) = parse_player_ref(who_raw.trim())
-        && let Some((cnt_part, group_tail)) = rest
-            .split_once(" spells from among ")
-            .or_else(|| rest.split_once(" spell from among "))
+        && let Some((cnt_part, group_tail)) =
+            split_once_any(&rest, &[" spells from among ", " spell from among "])
     {
         let (flt_raw, free) = if let Some(p) = group_tail
             .strip_suffix(" without paying their mana costs")
@@ -2313,7 +2064,7 @@ pub(super) fn parse_pile_separation_and_visibility(
                 .ok()
                 .map(|v| CountLimitAst::UpTo(Box::new(v)))
         } else if matches!(cnt_part.trim(), "a" | "an" | "") {
-            Some(CountLimitAst::UpTo(Box::new(ValueExprAst::Const(1))))
+            Some(CountLimitAst::UpTo(vconst(1)))
         } else {
             parse_value_expr(cnt_part.trim(), vocab)
                 .ok()
@@ -2325,9 +2076,10 @@ pub(super) fn parse_pile_separation_and_visibility(
                 && (flt.flags.0 & ObjectFilterFlags::EXILED_WITH_SELF.0) != 0
             {
                 flt.flags = ObjectFilterFlags(flt.flags.0 & !ObjectFilterFlags::EXCLUDE_SELF.0);
-                flt.predicates.push(FilterPredicateAst::Exclude(Box::new(
-                    SubjectRefAst::Anaphora("that exiled card".to_string()),
-                )));
+                flt.predicates
+                    .push(FilterPredicateAst::Exclude(Box::new(anaphora(
+                        "that exiled card",
+                    ))));
             }
             if flt_raw.contains("your opponents own") {
                 flt.owner = Some(ControllerRelation::Opponents);
@@ -2340,20 +2092,17 @@ pub(super) fn parse_pile_separation_and_visibility(
             let inner = InstructionAst::GrantCastPermission {
                 player,
                 cast_only: true,
-                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                subject: Box::new(grp(flt)),
                 free,
                 duration: "now".to_string(),
                 count_limit,
                 alt_cost: None,
             };
-            return Some(vec![if player == PlayerRefAst::You {
-                InstructionAst::Optional(vec![inner])
+            return some1(if player == PlayerRefAst::You {
+                ins_opt1(inner)
             } else {
-                InstructionAst::OptionalPlayer {
-                    player,
-                    body: vec![inner],
-                }
-            }]);
+                ins_opt_player(player, vec![inner])
+            });
         }
     }
 
@@ -2361,9 +2110,8 @@ pub(super) fn parse_pile_separation_and_visibility(
     if let Some(after_ex) = low.strip_prefix("exile ")
         && let Some((head, tail)) = after_ex.split_once(", then ")
         && let Some((subj_and_vis, cnt_and_kind)) = head.split_once(" with ")
-        && let Some(ck_raw) = cnt_and_kind
-            .strip_suffix(" counters on it")
-            .or_else(|| cnt_and_kind.strip_suffix(" counter on it"))
+        && let Some(ck_raw) =
+            strip_suffix_any(&cnt_and_kind, &[" counters on it", " counter on it"])
     {
         let (subj_raw, face_down) = match subj_and_vis.trim().strip_suffix(" face down") {
             Some(p) => (p.trim(), true),
@@ -2386,9 +2134,7 @@ pub(super) fn parse_pile_separation_and_visibility(
     }
 
     // Compositional: "<player> turns face up <subj>, then <follow_up>"
-    if let Some((who_raw, rest)) = low
-        .split_once(" turns face up ")
-        .or_else(|| low.split_once(" turn face up "))
+    if let Some((who_raw, rest)) = split_once_any(&low, &[" turns face up ", " turn face up "])
         && let Some(player) = parse_player_ref(who_raw.trim())
         && let Some((subj_raw, tail)) = rest.split_once(", then ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
@@ -2423,7 +2169,7 @@ pub(super) fn parse_pile_separation_and_visibility(
                     player,
                     PlayerRefAst::EachPlayer | PlayerRefAst::EachOpponent
                 ) {
-                    vec![InstructionAst::ForEachPlayer { player, body }]
+                    vec![ins_for_each_player(player, body)]
                 } else {
                     body
                 },
@@ -2438,15 +2184,15 @@ pub(super) fn parse_pile_separation_and_visibility(
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
         let last_ins = if let Some(m_subj) = rest.strip_prefix("manifest ") {
-            Some(InstructionAst::Manifest {
-                count: Box::new(ValueExprAst::Const(0)),
-                dread: false,
-                subject: Some(Box::new(SubjectRefAst::Anaphora(m_subj.trim().to_string()))),
-            })
+            Some(ins_manifest(
+                ValueExprAst::Const(0),
+                false,
+                Some(SubjectRefAst::Anaphora(m_subj.trim().to_string())),
+            ))
         } else {
             rest.strip_prefix("cloak ")
                 .map(|c_subj| InstructionAst::Cloak {
-                    count: Box::new(ValueExprAst::Const(0)),
+                    count: vconst(0),
                     subject: Some(Box::new(SubjectRefAst::Anaphora(c_subj.trim().to_string()))),
                 })
         };
@@ -2460,7 +2206,7 @@ pub(super) fn parse_pile_separation_and_visibility(
                     into_pile: true,
                 },
                 InstructionAst::ShuffleIntoLibrary {
-                    subject: Box::new(SubjectRefAst::Anaphora("that pile".to_string())),
+                    subject: box_anaphora("that pile"),
                 },
                 final_op,
             ]);
@@ -2481,17 +2227,15 @@ pub(super) fn parse_cumulative_exile_until(
         .or_else(|| low.split_once(" exile cards from the top of their library until "))
         && let Some(player) = parse_player_ref(who_raw.trim())
         && let Some((_, mv_tail)) = rest.split_once("exiled cards with total mana value ")
-        && let Some(n_raw) = mv_tail
-            .strip_suffix(" or greater this way")
-            .or_else(|| mv_tail.strip_suffix(" or greater"))
+        && let Some(n_raw) = strip_suffix_any(&mv_tail, &[" or greater this way", " or greater"])
         && let Ok(threshold) = parse_value_expr(n_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::ExileOrRevealTopUntilTotalStat {
+        return some1(InstructionAst::ExileOrRevealTopUntilTotalStat {
             exile: true,
             player,
             stat: StatKind::ManaValue,
             threshold: Box::new(threshold),
-        }]);
+        });
     }
     None
 }
@@ -2502,45 +2246,6 @@ pub(super) fn parse_zone_choice_exchange_extended(
     dur: &DurationAst,
     vocab: &Vocabulary,
 ) -> Option<Vec<InstructionAst>> {
-    // 1. Copy card in exile/zone ("copy <flt>" / "you may copy <flt>") (Arcane Savant, Reversal of Fortune)
-    let (opt_copy, copy_core) = match low.strip_prefix("you may copy ") {
-        Some(r) => (true, r),
-        None => match low.strip_prefix("copy ") {
-            Some(r) => (false, r),
-            None => (false, ""),
-        },
-    };
-    if !copy_core.is_empty()
-        && let Ok(flt) = parse_object_filter(copy_core.trim(), vocab)
-    {
-        let ins = InstructionAst::Copy {
-            subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
-            exception: None,
-            count: None,
-        };
-        return Some(if opt_copy {
-            vec![InstructionAst::Optional(vec![ins])]
-        } else {
-            vec![ins]
-        });
-    }
-
-    // 2. Create token copy of a filtered card ("create a token that's a copy of <flt>") (Caller of the Untamed)
-    if let Some(src_raw) = low.strip_prefix("create a token that's a copy of ")
-        && let Ok(flt) = parse_object_filter(src_raw.trim(), vocab)
-    {
-        return Some(vec![InstructionAst::CreateToken {
-            controller: PlayerRefAst::You,
-            token: TokenSpecAst::Copy {
-                count: Box::new(ValueExprAst::Const(1)),
-                source: Box::new(SubjectRefAst::Group(Box::new(flt))),
-                tapped: false,
-                attacking: false,
-                exception: None,
-            },
-        }]);
-    }
-
     // 3. Exile from each graveyard ("[you may] exile <flt> from each graveyard") (King Narfi's Betrayal, Summon: Esper Valigarmanda)
     let (opt_ex, ex_core) = match low.strip_prefix("you may exile ") {
         Some(r) => (true, r),
@@ -2553,18 +2258,12 @@ pub(super) fn parse_zone_choice_exchange_extended(
         && let Ok(mut flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
         flt.zone = Some(ZoneFilter::AllGraveyards);
-        let ins = InstructionAst::ForEachPlayer {
-            player: PlayerRefAst::EachPlayer,
-            body: vec![InstructionAst::Exile {
-                actor: Some(PlayerRefAst::You),
-                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
-                random: false,
-                face_down: false,
-                into_pile: false,
-            }],
-        };
+        let ins = ins_for_each_player(
+            PlayerRefAst::EachPlayer,
+            vec![ins_exile(Some(PlayerRefAst::You), grp(flt))],
+        );
         return Some(if opt_ex {
-            vec![InstructionAst::Optional(vec![ins])]
+            vec![ins_opt1(ins)]
         } else {
             vec![ins]
         });
@@ -2574,80 +2273,54 @@ pub(super) fn parse_zone_choice_exchange_extended(
     if let Some(after_ex) = low.strip_prefix("exile the top card of each player's library with a ")
         && let Some(kind_raw) = after_ex.strip_suffix(" counter on it")
     {
-        return Some(vec![InstructionAst::ForEachPlayer {
-            player: PlayerRefAst::EachPlayer,
-            body: vec![InstructionAst::ExileWithCounters {
-                subject: Box::new(SubjectRefAst::Anaphora(
-                    "the top card of their library".to_string(),
-                )),
+        return some1(ins_for_each_player(
+            PlayerRefAst::EachPlayer,
+            vec![InstructionAst::ExileWithCounters {
+                subject: box_anaphora("the top card of their library"),
                 counter_kind: kind_raw.trim().to_string(),
-                count: Box::new(ValueExprAst::Const(1)),
+                count: vconst(1),
                 face_down: false,
             }],
-        }]);
+        ));
     }
 
     // 5. Exile card from hand until ~ leaves the battlefield (Intellect Devourer)
-    if let Some((who_raw, rest)) = low
-        .split_once(" exiles ")
-        .or_else(|| low.split_once(" exile "))
+    if let Some((who_raw, rest)) = split_once_any(&low, &[" exiles ", " exile "])
         && let Some(subj_raw) = rest.strip_suffix(" until ~ leaves the battlefield")
         && let (Some(player), Ok(subj)) = (
             parse_player_ref(who_raw.trim()),
             parse_subject_or_target(subj_raw.trim(), vocab),
         )
     {
-        return Some(vec![InstructionAst::ForEachPlayer {
+        return some1(ins_for_each_player(
             player,
-            body: vec![InstructionAst::ExileUntilLeaves {
+            vec![InstructionAst::ExileUntilLeaves {
                 subject: Box::new(subj),
             }],
-        }]);
+        ));
     }
 
     // 6. Exile card from hand and may play for as long as it remains exiled (Lightstall Inquisitor)
-    if let Some((who_raw, rest)) = low
-        .split_once(" exiles ")
-        .or_else(|| low.split_once(" exile "))
+    if let Some((who_raw, rest)) = split_once_any(&low, &[" exiles ", " exile "])
         && let Some((subj_raw, play_tail)) = rest.split_once(" and may play ")
         && let (Some(player), Ok(subj)) = (
             parse_player_ref(who_raw.trim()),
             parse_subject_or_target(subj_raw.trim(), vocab),
         )
     {
-        return Some(vec![InstructionAst::ForEachPlayer {
+        return some1(ins_for_each_player(
             player,
-            body: vec![
-                InstructionAst::Exile {
-                    actor: Some(PlayerRefAst::ThatPlayer),
-                    subject: Box::new(subj),
-                    random: false,
-                    face_down: false,
-                    into_pile: false,
-                },
-                InstructionAst::GrantCastPermission {
-                    player: PlayerRefAst::ThatPlayer,
-                    cast_only: false,
-                    subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
-                    free: false,
-                    duration: play_tail.trim().to_string(),
-                    count_limit: None,
-                    alt_cost: None,
-                },
+            vec![
+                ins_exile(Some(PlayerRefAst::ThatPlayer), subj),
+                ins_grant_cast(
+                    PlayerRefAst::ThatPlayer,
+                    false,
+                    anaphora("that card"),
+                    false,
+                    play_tail.trim().to_string(),
+                ),
             ],
-        }]);
-    }
-
-    // 7. Exile cards from top of library equal to <val> (Bone Mask)
-    if let Some(val_raw) = low.strip_prefix("exile cards from the top of your library equal to ")
-        && let Ok(count) = parse_value_expr(val_raw.trim(), vocab)
-    {
-        return Some(vec![InstructionAst::ExileTopLibrary {
-            actor: Some(PlayerRefAst::You),
-            whose: "your".to_string(),
-            count: Box::new(count),
-            face_down: false,
-        }]);
+        ));
     }
 
     // 8. Exile N of them at random (Orcish Librarian)
@@ -2655,43 +2328,39 @@ pub(super) fn parse_zone_choice_exchange_extended(
         && let Some(cnt_raw) = after.strip_suffix(" of them at random")
         && let Ok(count) = parse_value_expr(cnt_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::MoveCounted {
+        return some1(InstructionAst::MoveCounted {
             actor: Some(PlayerRefAst::You),
             count: Some(Box::new(count)),
             up_to: false,
             any_number: false,
-            subject: Box::new(SubjectRefAst::Anaphora("them".to_string())),
+            subject: box_anaphora("them"),
             to: "exile_random".to_string(),
-        }]);
+        });
     }
 
     // 9. Put that many cards from top of library into hand / Put bottom card into graveyard (Scroll Rack, Cellar Door)
     if let Some(after) = low.strip_prefix("put that many cards from the top of your library into ")
     {
-        return Some(vec![InstructionAst::MoveCounted {
+        return some1(InstructionAst::MoveCounted {
             actor: Some(PlayerRefAst::You),
             count: Some(Box::new(ValueExprAst::PriorResult)),
             up_to: false,
             any_number: false,
-            subject: Box::new(SubjectRefAst::Anaphora(
-                "the top cards of your library".to_string(),
-            )),
+            subject: box_anaphora("the top cards of your library"),
             to: after.trim().to_string(),
-        }]);
+        });
     }
     if let Some((who_raw, rest)) = low.split_once(" puts the bottom card of their library into ")
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
-        return Some(vec![InstructionAst::MoveCounted {
+        return some1(InstructionAst::MoveCounted {
             actor: Some(player),
-            count: Some(Box::new(ValueExprAst::Const(1))),
+            count: Some(vconst(1)),
             up_to: false,
             any_number: false,
-            subject: Box::new(SubjectRefAst::Anaphora(
-                "the bottom card of their library".to_string(),
-            )),
+            subject: box_anaphora("the bottom card of their library"),
             to: rest.trim().to_string(),
-        }]);
+        });
     }
 
     // 10. Search library, then shuffle and put that card <ordinal> from the top (Long-Term Plans)
@@ -2713,7 +2382,7 @@ pub(super) fn parse_zone_choice_exchange_extended(
         return Some(vec![
             InstructionAst::SearchLibrary {
                 library: "your".to_string(),
-                count: Box::new(ValueExprAst::Const(1)),
+                count: vconst(1),
                 up_to: false,
                 any_number: false,
                 exact: false,
@@ -2731,7 +2400,7 @@ pub(super) fn parse_zone_choice_exchange_extended(
             },
             InstructionAst::PutInLibraryAtPosition {
                 player: PlayerRefAst::You,
-                subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
+                subject: box_anaphora("that card"),
                 from_top,
             },
         ]);
@@ -2742,20 +2411,16 @@ pub(super) fn parse_zone_choice_exchange_extended(
         low.strip_prefix("manifest a number of cards from the top of your library equal to ")
         && let Ok(count) = parse_value_expr(val_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::Manifest {
-            count: Box::new(count),
-            dread: false,
-            subject: None,
-        }]);
+        return Some(vec![ins_manifest(count, false, None)]);
     }
     if let Some(subj_raw) = low.strip_prefix("manifest ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::Manifest {
-            count: Box::new(ValueExprAst::Const(1)),
-            dread: false,
-            subject: Some(Box::new(subj)),
-        }]);
+        return Some(vec![ins_manifest(
+            ValueExprAst::Const(1),
+            false,
+            Some(subj),
+        )]);
     }
 
     // 12. The owners of those cards shuffle them into their libraries (Turn the Earth)
@@ -2764,9 +2429,7 @@ pub(super) fn parse_zone_choice_exchange_extended(
         && tail.ends_with(" into their libraries")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::ShuffleIntoLibrary {
-            subject: Box::new(subj),
-        }]);
+        return Some(vec![ins_shuffle_into(subj)]);
     }
 
     // 13. Return to your hand <s1>, <s2>, and <s3> (Remove Enchantments)
@@ -2779,7 +2442,7 @@ pub(super) fn parse_zone_choice_exchange_extended(
             parse_subject_or_target(s3_raw.trim(), vocab),
         )
     {
-        return Some(vec![InstructionAst::ReturnZone {
+        return some1(InstructionAst::ReturnZone {
             subject: Box::new(SubjectRefAst::Compound(vec![s1, s2, s3])),
             from_zone: Some("battlefield".to_string()),
             to: "your hand".to_string(),
@@ -2793,30 +2456,7 @@ pub(super) fn parse_zone_choice_exchange_extended(
             up_to: false,
             any_number: false,
             actor: None,
-        }]);
-    }
-
-    // 14. Return a card at random from your graveyard to your hand (Fossil Find)
-    if let Some(after) = low.strip_prefix("return ")
-        && let Some((subj_raw, rest)) = after.split_once(" at random from ")
-        && let Some((zone_raw, to_raw)) = rest.split_once(" to ")
-        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
-    {
-        return Some(vec![InstructionAst::ReturnZone {
-            subject: Box::new(subj),
-            from_zone: Some(zone_raw.trim().to_string()),
-            to: to_raw.trim().to_string(),
-            tapped: false,
-            transformed: false,
-            with_counter: None,
-            attached_to: None,
-            random: true,
-            except: None,
-            count: None,
-            up_to: false,
-            any_number: false,
-            actor: None,
-        }]);
+        });
     }
 
     // 15. Return ~ to the battlefield under your control as a <type> (Takklemaggot)
@@ -2826,30 +2466,16 @@ pub(super) fn parse_zone_choice_exchange_extended(
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
         return Some(vec![
-            InstructionAst::ReturnZone {
-                subject: Box::new(subj.clone()),
-                from_zone: None,
-                to: "battlefield under your control".to_string(),
-                tapped: false,
-                transformed: false,
-                with_counter: None,
-                attached_to: None,
-                random: false,
-                except: None,
-                count: None,
-                up_to: false,
-                any_number: false,
-                actor: None,
-            },
-            InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::SetOrAddType {
+            ins_return_simple(subj.clone(), "battlefield under your control", false),
+            ins_temp_static(
+                StaticAbilityAst::SetOrAddType {
                     subject: Box::new(subj),
                     type_or_subtype: type_raw.trim().to_string(),
                     additive: false,
                     condition: None,
-                }),
-                duration: DurationAst::Permanent,
-            },
+                },
+                DurationAst::Permanent,
+            ),
         ]);
     }
 
@@ -2866,21 +2492,19 @@ pub(super) fn parse_zone_choice_exchange_extended(
             denom: 10,
             rounding: Rounding::Up,
         };
-        return Some(vec![InstructionAst::Sacrifice {
+        return some1(InstructionAst::Sacrifice {
             player,
             count: Some(Box::new(count)),
-            subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+            subject: Box::new(grp(flt)),
             except: None,
             half: false,
             rounding: Some(Rounding::Up),
             chooser: Some(PlayerRefAst::ThatPlayer),
-        }]);
+        });
     }
 
     // 17. Choose-per-filter / sacrifice-rest (Global Ruin, Stick Together, Guided Passage, Distended Mindbender)
-    if let Some((who_raw, rest)) = low
-        .split_once(" chooses from ")
-        .or_else(|| low.split_once(" choose from "))
+    if let Some((who_raw, rest)) = split_once_any(&low, &[" chooses from ", " choose from "])
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
         let (sac_rest, core) = match rest.strip_suffix(", then sacrifices the rest") {
@@ -2890,16 +2514,13 @@ pub(super) fn parse_zone_choice_exchange_extended(
         if let Some(after_src) = core.strip_prefix("the lands they control ")
             && let Ok(flt) = parse_object_filter(after_src.trim(), vocab)
         {
-            return Some(vec![InstructionAst::ChoosePerFilter {
+            return some1(InstructionAst::ChoosePerFilter {
                 player,
                 categories: vec![flt],
                 sacrifice_rest: sac_rest,
-            }]);
+            });
         }
-        if let Some(after_among) = core
-            .strip_prefix("among them ")
-            .or_else(|| core.strip_prefix("it "))
-        {
+        if let Some(after_among) = strip_prefix_any(&core, &["among them ", "it "]) {
             let parts: Vec<&str> = if let Some((a, bc)) = after_among.split_once(", ")
                 && let Some((b, c)) = bc.split_once(", and ")
             {
@@ -2914,11 +2535,11 @@ pub(super) fn parse_zone_choice_exchange_extended(
                 for p in parts {
                     cats.push(parse_object_filter(p, vocab).ok()?);
                 }
-                return Some(vec![InstructionAst::ChoosePerFilter {
+                return some1(InstructionAst::ChoosePerFilter {
                     player,
                     categories: cats,
                     sacrifice_rest: sac_rest,
-                }]);
+                });
             }
         }
     }
@@ -2929,31 +2550,11 @@ pub(super) fn parse_zone_choice_exchange_extended(
             parse_object_filter(flt_raw.trim(), vocab),
         )
     {
-        return Some(vec![InstructionAst::ChoosePerFilter {
+        return some1(InstructionAst::ChoosePerFilter {
             player,
             categories: vec![flt],
             sacrifice_rest: true,
-        }]);
-    }
-
-    // 18. Starting with you, each player separates <subj> into <N> piles (Whims of the Fates)
-    if let Some(after) = low.strip_prefix("starting with you, ")
-        && let Some((who_raw, rest)) = after.split_once(" separates ")
-        && let Some((subj_raw, pile_raw)) = rest.split_once(" into ")
-        && let Some(cnt_tok) = pile_raw.strip_suffix(" piles")
-        && let (Some(chooser), Ok(subject), Some(n)) = (
-            parse_player_ref(who_raw.trim()),
-            parse_subject_or_target(subj_raw.trim(), vocab),
-            parse_number_word(cnt_tok.trim()),
-        )
-    {
-        return Some(vec![InstructionAst::InteractiveChoice(
-            InteractiveChoiceKind::SeparateIntoPiles {
-                chooser,
-                subject: Box::new(subject),
-                pile_count: u8::try_from(n).unwrap_or(3),
-            },
-        )]);
+        });
     }
 
     // 19. Exile the pile of an opponent's choice and return the other to <zone> (Death or Glory)
@@ -2961,71 +2562,12 @@ pub(super) fn parse_zone_choice_exchange_extended(
         low.strip_prefix("exile the pile of an opponent's choice and return the other to ")
     {
         return Some(vec![
-            InstructionAst::PileAction {
-                action: "exile".to_string(),
-                pile: PileRefAst::ChosenPile,
-                filter: None,
-            },
-            InstructionAst::ReturnZone {
-                subject: Box::new(SubjectRefAst::PileRef(PileRefAst::OtherPile)),
-                from_zone: None,
-                to: dest.trim().to_string(),
-                tapped: false,
-                transformed: false,
-                with_counter: None,
-                attached_to: None,
-                random: false,
-                except: None,
-                count: None,
-                up_to: false,
-                any_number: false,
-                actor: None,
-            },
-        ]);
-    }
-
-    // 20. Choose <flt> with mana value 1 ..., then do the same for <flt> with mana value 2 and 3
-    if let Some(after) = low.strip_prefix("choose ")
-        && let Some((first_raw, rest)) = after.split_once(", then do the same for ")
-        && let Some((base_raw, nums_raw)) = rest.split_once(" with mana value ")
-        && let Some((n2_s, n3_s)) = nums_raw.split_once(" and ")
-        && let (Ok(f1), Ok(base_flt), Ok(n2), Ok(n3)) = (
-            parse_object_filter(first_raw.trim(), vocab),
-            parse_object_filter(base_raw.trim(), vocab),
-            n2_s.trim().parse::<i32>(),
-            n3_s.trim().parse::<i32>(),
-        )
-    {
-        let mut f2 = base_flt.clone();
-        f2.zone = f1.zone;
-        f2.stat_bounds.push(StatBoundAst {
-            stat: StatKind::ManaValue,
-            op: CompareOp::Eq,
-            value: Box::new(ValueExprAst::Const(n2)),
-        });
-        let mut f3 = base_flt;
-        f3.zone = f1.zone;
-        f3.stat_bounds.push(StatBoundAst {
-            stat: StatKind::ManaValue,
-            op: CompareOp::Eq,
-            value: Box::new(ValueExprAst::Const(n3)),
-        });
-        return Some(vec![
-            InstructionAst::ChooseFromGroup {
-                count: Box::new(ValueExprAst::Const(1)),
-                random: false,
-                group: Box::new(SubjectRefAst::Group(Box::new(f1))),
-            },
-            InstructionAst::ChooseFromGroup {
-                count: Box::new(ValueExprAst::Const(1)),
-                random: false,
-                group: Box::new(SubjectRefAst::Group(Box::new(f2))),
-            },
-            InstructionAst::ChooseFromGroup {
-                count: Box::new(ValueExprAst::Const(1)),
-                random: false,
-                group: Box::new(SubjectRefAst::Group(Box::new(f3))),
-            },
+            ins_pile_action("exile", PileRefAst::ChosenPile, None),
+            ins_return_simple(
+                SubjectRefAst::PileRef(PileRefAst::OtherPile),
+                dest.trim().to_string(),
+                false,
+            ),
         ]);
     }
 
@@ -3039,7 +2581,7 @@ pub(super) fn parse_zone_choice_exchange_extended(
         };
         if let Ok(group) = parse_subject_or_target(core.trim(), vocab) {
             let act = InstructionAst::ChooseFromGroup {
-                count: Box::new(ValueExprAst::Const(1)),
+                count: vconst(1),
                 random,
                 group: Box::new(group),
             };
@@ -3048,10 +2590,7 @@ pub(super) fn parse_zone_choice_exchange_extended(
                     player,
                     PlayerRefAst::EachOpponent | PlayerRefAst::EachPlayer
                 ) {
-                    vec![InstructionAst::ForEachPlayer {
-                        player,
-                        body: vec![act],
-                    }]
+                    vec![ins_for_each_player(player, vec![act])]
                 } else {
                     vec![act]
                 },
@@ -3077,69 +2616,14 @@ pub(super) fn parse_zone_choice_exchange_extended(
             stat,
             greatest: true,
         });
-        return Some(vec![InstructionAst::Exchange {
-            kind: ExchangeKind::Control,
-            left: Box::new(SubjectRefAst::Group(Box::new(flt))),
-            right: None,
-        }]);
+        return Some(vec![ins_exchange(ExchangeKind::Control, grp(flt), None)]);
     }
 
     // 23. For any number of opponents, <eff> (Windgrace's Judgment)
     if let Some(body_low) = low.strip_prefix("for any number of opponents, ")
         && let Some(body) = parse_sub_effect_extended(body_low, body_low, vocab)
     {
-        return Some(vec![InstructionAst::ForEachPlayer {
-            player: PlayerRefAst::EachOpponent,
-            body,
-        }]);
-    }
-
-    // 24. Distribute counters among one, two, or three <flt> (Invasion of Alara)
-    if let Some(after) = low.strip_prefix("distribute ")
-        && let Some((cnt_and_kind, tgts_raw)) = after.split_once(" counters among ")
-        && let Some((cnt_tok, kind_raw)) = cnt_and_kind.trim().split_once(' ')
-        && let Some(n) = parse_number_word(cnt_tok.trim())
-    {
-        let clean_tgt = tgts_raw
-            .trim()
-            .strip_prefix("one, two, or three ")
-            .or_else(|| tgts_raw.trim().strip_prefix("one or two "))
-            .unwrap_or(tgts_raw.trim());
-        if let Ok(flt) = parse_object_filter(clean_tgt, vocab) {
-            return Some(vec![InstructionAst::DistributeCounters {
-                counter_kind: kind_raw.trim().to_string(),
-                count: Box::new(ValueExprAst::Const(n)),
-                targets: Box::new(SubjectRefAst::Group(Box::new(flt))),
-            }]);
-        }
-    }
-
-    // 25. Gain control for as long as <cond> (Garland, Royal Kidnapper)
-    if let Some(after) = low.strip_prefix("gain control of ")
-        && let Some((subj_raw, cond_raw)) = after.split_once(" for as long as ")
-        && let (Ok(subj), Ok(cond)) = (
-            parse_subject_or_target(subj_raw.trim(), vocab),
-            parse_condition(cond_raw.trim(), vocab),
-        )
-    {
-        return Some(vec![InstructionAst::GainControl {
-            controller: PlayerRefAst::You,
-            subject: Box::new(subj),
-            duration: DurationAst::ForAsLongAs(Box::new(cond)),
-        }]);
-    }
-
-    // 26. Tap up to X target <flt>, where X is <val> (Make a _____ Splash)
-    if let Some((action_raw, x_raw)) = low.split_once(", where x is ")
-        && let (Ok(body), Ok(x_expr)) = (
-            parse_atomic_effect(action_raw.trim(), vocab),
-            parse_value_expr(x_raw.trim(), vocab),
-        )
-    {
-        return Some(vec![InstructionAst::BindX {
-            x_expr: Box::new(x_expr),
-            body,
-        }]);
+        return Some(vec![ins_for_each_player(PlayerRefAst::EachOpponent, body)]);
     }
 
     // 27. Leave <subj> in <zone> (Deliver Unto Evil)
@@ -3147,39 +2631,11 @@ pub(super) fn parse_zone_choice_exchange_extended(
         && let Some((subj_raw, zone_raw)) = after.split_once(" in ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::MoveZone {
-            subject: Box::new(subj),
-            to: format!("stay_in:{}", zone_raw.trim()),
-        }]);
-    }
-
-    // 28. Look at the top card(s) of <player>'s library (Tahngarth's Glare, look_and_exile_face_down)
-    if let Some((who_raw, rest)) = low.split_once(" looks at the top ")
-        && let Some(player) = parse_player_ref(who_raw.trim())
-        && let Some((cnt_part, lib_part)) = rest.split_once(" of ")
-        && let Some(whose_raw) = lib_part.strip_suffix(" library")
-    {
-        let count = if cnt_part.trim() == "card" {
-            ValueExprAst::Const(1)
-        } else {
-            let num_s = cnt_part
-                .trim()
-                .strip_suffix(" cards")
-                .unwrap_or(cnt_part.trim());
-            ValueExprAst::Const(parse_number_word(num_s.trim())?)
-        };
-        return Some(vec![InstructionAst::PlayerLookTopLibrary {
-            player,
-            library: whose_raw.trim().to_string(),
-            count: Box::new(count),
-            reveal: false,
-        }]);
+        return Some(vec![ins_move(subj, format!("stay_in:{}", zone_raw.trim()))]);
     }
 
     // 29. "<player> destroys <N> <flt>" (Burning of Xinye)
-    if let Some((who_raw, rest)) = low
-        .split_once(" destroys ")
-        .or_else(|| low.split_once(" destroy "))
+    if let Some((who_raw, rest)) = split_once_any(&low, &[" destroys ", " destroy "])
         && let Some(player) = parse_player_ref(who_raw.trim())
         && let Some((cnt_tok, flt_raw)) = rest.trim().split_once(' ')
         && let (Some(n), Ok(flt)) = (
@@ -3187,58 +2643,53 @@ pub(super) fn parse_zone_choice_exchange_extended(
             parse_object_filter(flt_raw.trim(), vocab),
         )
     {
-        return Some(vec![InstructionAst::ForEachPlayer {
+        return some1(ins_for_each_player(
             player,
-            body: vec![
-                InstructionAst::ChooseFromGroup {
-                    count: Box::new(ValueExprAst::Const(n)),
-                    random: false,
-                    group: Box::new(SubjectRefAst::Group(Box::new(flt))),
-                },
+            vec![
+                ins_choose_group(ValueExprAst::Const(n), false, grp(flt)),
                 InstructionAst::Destroy {
-                    subject: Box::new(SubjectRefAst::Anaphora("those permanents".to_string())),
+                    subject: box_anaphora("those permanents"),
                     random: false,
                     except: None,
                 },
             ],
-        }]);
+        ));
     }
 
     // 30. "<player> draws as many cards as they discarded this way" (Forget)
     if let Some(after) = low.strip_prefix("draws as many cards as ")
         && after.ends_with(" discarded this way")
     {
-        return Some(vec![InstructionAst::Draw {
-            player: PlayerRefAst::ThatPlayer,
-            count: Box::new(ValueExprAst::PriorResult),
-            up_to: false,
-        }]);
+        return some1(ins_draw(
+            PlayerRefAst::ThatPlayer,
+            ValueExprAst::PriorResult,
+        ));
     }
 
     // 31. "<player> each discard their hands" (Wheel and Deal)
     if let Some(who_raw) = low.strip_suffix(" each discard their hands")
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
-        return Some(vec![InstructionAst::ForEachPlayer {
+        return some1(ins_for_each_player(
             player,
-            body: vec![InstructionAst::DiscardHand {
+            vec![InstructionAst::DiscardHand {
                 player: PlayerRefAst::ThatPlayer,
             }],
-        }]);
+        ));
     }
 
     // 32. "another player of your choice may gain control of <subj>" (Stardew Valley)
     if let Some(subj_raw) = low.strip_prefix("another player of your choice may gain control of ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::OptionalPlayer {
-            player: PlayerRefAst::EachOtherPlayer,
-            body: vec![InstructionAst::GainControl {
-                controller: PlayerRefAst::ThatPlayer,
-                subject: Box::new(subj),
-                duration: dur.clone(),
-            }],
-        }]);
+        return some1(ins_opt_player(
+            PlayerRefAst::EachOtherPlayer,
+            vec![ins_gain_control(
+                PlayerRefAst::ThatPlayer,
+                subj,
+                dur.clone(),
+            )],
+        ));
     }
 
     None

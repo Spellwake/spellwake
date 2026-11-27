@@ -3,10 +3,13 @@
 use super::object::parse_object_filter;
 use super::subject::{parse_player_ref, parse_subject_or_target};
 use crate::ast::{
-    AggregateOp, CardTypeMask, FilterPredicateAst, ObjectFilterAst, PlayerRefAst, PlayerStatKind,
+    AggregateOp, CardTypeMask, FilterPredicateAst, PlayerRefAst, PlayerStatKind,
     PriorActionRefKind, Rounding, StatKind, SubjectRefAst, ValueExprAst,
 };
-use crate::combinators::trim_punct;
+use crate::combinators::{
+    anaphora, any_card_flt, box_anaphora, grp, obj_type, split_once_any, strip_prefix_any,
+    strip_suffix_any, trim_punct, val_div, val_obj_stat, val_player_stat, vconst,
+};
 use crate::preprocess::is_physical_tabletop_clause;
 use crate::vocab::{Vocabulary, parse_number_word};
 
@@ -19,14 +22,18 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         return Err("empty_value".to_string());
     }
     let low_full = raw.to_ascii_lowercase();
-    let low = low_full
-        .strip_suffix(" as this ability resolves")
-        .or_else(|| low_full.strip_suffix(" as this spell resolves"))
-        .or_else(|| low_full.strip_suffix(" as you cast ~"))
-        .or_else(|| low_full.strip_suffix(" as you cast this spell"))
-        .unwrap_or(&low_full)
-        .trim()
-        .to_string();
+    let low = strip_suffix_any(
+        &low_full,
+        &[
+            " as this ability resolves",
+            " as this spell resolves",
+            " as you cast ~",
+            " as you cast this spell",
+        ],
+    )
+    .unwrap_or(&low_full)
+    .trim()
+    .to_string();
 
     if low == "x" {
         return Ok(ValueExprAst::ChosenX);
@@ -40,15 +47,6 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         )
     {
         return Ok(ValueExprAst::Max(Box::new(lhs), Box::new(rhs)));
-    }
-    if let Some(before_ws) = low.strip_suffix(", whichever is smaller")
-        && let Some((lhs_raw, rhs_raw)) = before_ws.split_once(" or ")
-        && let (Ok(lhs), Ok(rhs)) = (
-            parse_value_expr(lhs_raw.trim(), vocab),
-            parse_value_expr(rhs_raw.trim(), vocab),
-        )
-    {
-        return Ok(ValueExprAst::Min(Box::new(lhs), Box::new(rhs)));
     }
     // Compositional "<expr1> in excess of <expr2>" -> Sub(e1, e2)
     if let Some((lhs_raw, rhs_raw)) = low.split_once(" in excess of ")
@@ -80,10 +78,7 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
     if let Some(after) = low.strip_prefix("the number of cards ")
         && let Some(who_part) = after.strip_suffix(" drawn this turn")
     {
-        let who_clean = who_part
-            .strip_suffix("'ve")
-            .or_else(|| who_part.strip_suffix(" have"))
-            .or_else(|| who_part.strip_suffix(" has"))
+        let who_clean = strip_suffix_any(&who_part, &["'ve", " have", " has"])
             .unwrap_or(who_part)
             .trim();
         if let Some(player) = parse_player_ref(who_clean) {
@@ -96,9 +91,9 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
     // Wave E6.2: Targeted semantic value expressions
     match low.as_str() {
         "the number of times it's been cast from the command zone this game" => {
-            return Ok(ValueExprAst::TimesCastFromCommandZone(Box::new(
-                SubjectRefAst::Anaphora("it".to_string()),
-            )));
+            return Ok(ValueExprAst::TimesCastFromCommandZone(Box::new(anaphora(
+                "it",
+            ))));
         }
         "the number of cards they drew this way" => {
             return Ok(ValueExprAst::CountDrawnThisWay(PlayerRefAst::ThatPlayer));
@@ -130,40 +125,32 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         }
         "spell you've cast this turn other than the first" => {
             return Ok(ValueExprAst::Max(
-                Box::new(ValueExprAst::Const(0)),
+                vconst(0),
                 Box::new(ValueExprAst::Sub(
                     Box::new(ValueExprAst::EventCountThisTurn {
                         event: "spells_cast_this_turn".to_string(),
                         player: Some(PlayerRefAst::You),
                     }),
-                    Box::new(ValueExprAst::Const(1)),
+                    vconst(1),
                 )),
             ));
         }
         _ => {}
     }
     // Compositional Wave E8 numeric expressions
-    if let Some(after_dmg) = low
-        .strip_prefix("the damage already dealt to ")
-        .or_else(|| low.strip_prefix("damage already dealt to "))
-        && let Some(subj_raw) = after_dmg.strip_suffix(" this turn")
+    if let Some(after_dmg) = strip_prefix_any(
+        &low,
+        &["the damage already dealt to ", "damage already dealt to "],
+    ) && let Some(subj_raw) = after_dmg.strip_suffix(" this turn")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
         return Ok(ValueExprAst::DamageDealtToSubjectThisTurn(Box::new(subj)));
     }
-    if let Some(subj_raw) = low.strip_suffix("'s total toxic value") {
-        let subj = parse_subject_or_target(subj_raw.trim(), vocab)?;
-        return Ok(ValueExprAst::TotalToxicValue(Box::new(subj)));
-    }
     if low == "its total toxic value" {
-        return Ok(ValueExprAst::TotalToxicValue(Box::new(
-            SubjectRefAst::Anaphora("it".to_string()),
-        )));
+        return Ok(ValueExprAst::TotalToxicValue(Box::new(anaphora("it"))));
     }
     if let Some(after_un) = low.strip_prefix("the amount of unspent mana ")
-        && let Some(who_raw) = after_un
-            .strip_suffix(" have")
-            .or_else(|| after_un.strip_suffix(" has"))
+        && let Some(who_raw) = strip_suffix_any(&after_un, &[" have", " has"])
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
         return Ok(ValueExprAst::UnspentManaAmount(player));
@@ -186,15 +173,12 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         && let Ok(base_n) = base_str.trim().parse::<i32>()
     {
         return Ok(ValueExprAst::Pow {
-            base: Box::new(ValueExprAst::Const(base_n)),
+            base: vconst(base_n),
             exp: Box::new(ValueExprAst::ChosenX),
         });
     }
     // Cluster 24: Generalized `half [of] <expr>, rounded (up|down)`
-    if let Some(after_half) = low
-        .strip_prefix("half of ")
-        .or_else(|| low.strip_prefix("half "))
-    {
+    if let Some(after_half) = strip_prefix_any(&low, &["half of ", "half "]) {
         for (suf, rounding) in [
             (", rounded up", Rounding::Up),
             (", rounded down", Rounding::Down),
@@ -204,11 +188,7 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
             if let Some(inner_raw) = after_half.strip_suffix(suf)
                 && let Ok(inner) = parse_value_expr(inner_raw.trim(), vocab)
             {
-                return Ok(ValueExprAst::DivConst {
-                    expr: Box::new(inner),
-                    denom: 2,
-                    rounding,
-                });
+                return Ok(val_div(inner, 2, rounding));
             }
         }
     }
@@ -230,46 +210,24 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         if let Some(tail) = low.strip_prefix(pat)
             && matches!(tail.trim(), "it" | "~")
         {
-            return Ok(ValueExprAst::ObjectStat {
-                subject: Box::new(SubjectRefAst::CraftExiledCards),
-                stat,
-            });
+            return Ok(val_obj_stat(SubjectRefAst::CraftExiledCards, stat));
         }
-    }
-    // Compositional multiplicative scaling: "2x", "twice <expr>", "<N> times <expr>"
-    if low == "2x" {
-        return Ok(ValueExprAst::Mul(
-            Box::new(ValueExprAst::Const(2)),
-            Box::new(ValueExprAst::ChosenX),
-        ));
     }
     if let Some(rest) = low.strip_prefix("twice ")
         && let Ok(inner) = parse_value_expr(rest.trim(), vocab)
     {
-        return Ok(ValueExprAst::Mul(
-            Box::new(ValueExprAst::Const(2)),
-            Box::new(inner),
-        ));
+        return Ok(ValueExprAst::Mul(vconst(2), Box::new(inner)));
     }
     if let Some((mult_raw, rest)) = low.split_once(" times ")
         && let Some(mult) = parse_number_word(mult_raw.trim())
         && let Ok(inner) = parse_value_expr(rest.trim(), vocab)
     {
-        return Ok(ValueExprAst::Mul(
-            Box::new(ValueExprAst::Const(mult)),
-            Box::new(inner),
-        ));
+        return Ok(ValueExprAst::Mul(vconst(mult), Box::new(inner)));
     }
     if low == "its base power" {
         return Ok(ValueExprAst::ObjectStat {
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+            subject: box_anaphora("it"),
             stat: StatKind::Power,
-        });
-    }
-    if low == "its base toughness" {
-        return Ok(ValueExprAst::ObjectStat {
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-            stat: StatKind::Toughness,
         });
     }
     // Strip trailing evaluation-time qualifiers (" as you activate this ability", " at that time")
@@ -306,18 +264,24 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         return Ok(ValueExprAst::PriorResult);
     }
     // Compositional life lost/gained this turn for any player (longest auxiliary suffixes first!)
-    if let Some(rest) = low
-        .strip_prefix("the total amount of life ")
-        .or_else(|| low.strip_prefix("the total life "))
-        .or_else(|| low.strip_prefix("the amount of life "))
-        .or_else(|| low.strip_prefix("the life "))
-    {
-        if let Some(who_raw) = rest
-            .strip_suffix(" have lost this turn")
-            .or_else(|| rest.strip_suffix(" has lost this turn"))
-            .or_else(|| rest.strip_suffix("'ve lost this turn"))
-            .or_else(|| rest.strip_suffix(" lost this turn"))
-        {
+    if let Some(rest) = strip_prefix_any(
+        &low,
+        &[
+            "the total amount of life ",
+            "the total life ",
+            "the amount of life ",
+            "the life ",
+        ],
+    ) {
+        if let Some(who_raw) = strip_suffix_any(
+            &rest,
+            &[
+                " have lost this turn",
+                " has lost this turn",
+                "'ve lost this turn",
+                " lost this turn",
+            ],
+        ) {
             let clean = who_raw.strip_prefix("lost by ").unwrap_or(who_raw).trim();
             if let Some(player) = parse_player_ref(clean) {
                 return Ok(ValueExprAst::LifeChangedThisTurn {
@@ -335,13 +299,16 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
                 gained: false,
             });
         }
-        if let Some(who_raw) = rest
-            .strip_suffix(" have gained this turn")
-            .or_else(|| rest.strip_suffix(" has gained this turn"))
-            .or_else(|| rest.strip_suffix("'ve gained this turn"))
-            .or_else(|| rest.strip_suffix(" gained this turn"))
-            .or_else(|| rest.strip_suffix(" gained"))
-            && let Some(player) = parse_player_ref(who_raw.trim())
+        if let Some(who_raw) = strip_suffix_any(
+            &rest,
+            &[
+                " have gained this turn",
+                " has gained this turn",
+                "'ve gained this turn",
+                " gained this turn",
+                " gained",
+            ],
+        ) && let Some(player) = parse_player_ref(who_raw.trim())
         {
             return Ok(ValueExprAst::LifeChangedThisTurn {
                 player,
@@ -353,30 +320,21 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         return Ok(ValueExprAst::AggregateStat {
             op: AggregateOp::Sum,
             stat: StatKind::Power,
-            filter: Box::new(ObjectFilterAst {
-                any_card: true,
-                ..Default::default()
-            }),
+            filter: Box::new(any_card_flt()),
         });
     }
     if low == "their total toughness" {
         return Ok(ValueExprAst::AggregateStat {
             op: AggregateOp::Sum,
             stat: StatKind::Toughness,
-            filter: Box::new(ObjectFilterAst {
-                any_card: true,
-                ..Default::default()
-            }),
+            filter: Box::new(any_card_flt()),
         });
     }
     if low == "their total mana value" {
         return Ok(ValueExprAst::AggregateStat {
             op: AggregateOp::Sum,
             stat: StatKind::ManaValue,
-            filter: Box::new(ObjectFilterAst {
-                any_card: true,
-                ..Default::default()
-            }),
+            filter: Box::new(any_card_flt()),
         });
     }
     if let Some(n) = parse_number_word(&low) {
@@ -420,42 +378,6 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
     if low == "the number of creatures in your party" {
         return Ok(ValueExprAst::PartySize);
     }
-    if let Some(rest) = low.strip_prefix("the amount of life ") {
-        if rest == "you've gained this turn" || rest == "you gained this turn" {
-            return Ok(ValueExprAst::LifeChangedThisTurn {
-                player: PlayerRefAst::You,
-                gained: true,
-            });
-        }
-        if rest == "you've lost this turn" || rest == "you lost this turn" {
-            return Ok(ValueExprAst::LifeChangedThisTurn {
-                player: PlayerRefAst::You,
-                gained: false,
-            });
-        }
-        if let Some((who_raw, tail)) = rest.split_once(' ')
-            && let Some(p) = parse_player_ref(who_raw)
-        {
-            if tail == "gained this turn"
-                || tail == "has gained this turn"
-                || tail == "have gained this turn"
-            {
-                return Ok(ValueExprAst::LifeChangedThisTurn {
-                    player: p,
-                    gained: true,
-                });
-            }
-            if tail == "lost this turn"
-                || tail == "has lost this turn"
-                || tail == "have lost this turn"
-            {
-                return Ok(ValueExprAst::LifeChangedThisTurn {
-                    player: p,
-                    gained: false,
-                });
-            }
-        }
-    }
     if let Some(target) = low.strip_prefix("the amount of mana spent to cast ")
         && matches!(
             target.trim(),
@@ -485,11 +407,10 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
     }
 
     // "the number of ..." / "the total number of ..."
-    if let Some(after_num) = low
-        .strip_prefix("the total number of ")
-        .or_else(|| low.strip_prefix("the number of "))
-        .or_else(|| low.strip_prefix("number of "))
-    {
+    if let Some(after_num) = strip_prefix_any(
+        &low,
+        &["the total number of ", "the number of ", "number of "],
+    ) {
         if after_num.ends_with(" removed this way")
             || after_num.ends_with(" exiled this way")
             || after_num.ends_with(" sacrificed this way")
@@ -535,9 +456,8 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         {
             return Ok(ValueExprAst::SubtypesAmong(Box::new(flt)));
         }
-        if let Some(ck_raw) = after_num
-            .strip_suffix(" counters you have")
-            .or_else(|| after_num.strip_suffix(" counter you have"))
+        if let Some(ck_raw) =
+            strip_suffix_any(&after_num, &[" counters you have", " counter you have"])
         {
             return Ok(ValueExprAst::PlayerCounterCount {
                 player: PlayerRefAst::You,
@@ -553,9 +473,7 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
                 counter_kind: ck_raw.trim().to_string(),
             });
         }
-        if let Some(subj_raw) = after_num
-            .strip_prefix("counters on ")
-            .or_else(|| after_num.strip_prefix("counter on "))
+        if let Some(subj_raw) = strip_prefix_any(&after_num, &["counters on ", "counter on "])
             && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
         {
             return Ok(ValueExprAst::CounterCount {
@@ -581,22 +499,22 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         }
         if let Some(rest) = after_num.strip_prefix("cards in ") {
             if let Some(who) = rest.strip_suffix(" hand") {
-                return Ok(ValueExprAst::PlayerStat {
-                    player: parse_possessive_player(who),
-                    stat: PlayerStatKind::CardsInHand,
-                });
+                return Ok(val_player_stat(
+                    parse_possessive_player(who),
+                    PlayerStatKind::CardsInHand,
+                ));
             }
             if let Some(who) = rest.strip_suffix(" library") {
-                return Ok(ValueExprAst::PlayerStat {
-                    player: parse_possessive_player(who),
-                    stat: PlayerStatKind::CardsInLibrary,
-                });
+                return Ok(val_player_stat(
+                    parse_possessive_player(who),
+                    PlayerStatKind::CardsInLibrary,
+                ));
             }
             if let Some(who) = rest.strip_suffix(" graveyard") {
-                return Ok(ValueExprAst::PlayerStat {
-                    player: parse_possessive_player(who),
-                    stat: PlayerStatKind::CardsInGraveyard,
-                });
+                return Ok(val_player_stat(
+                    parse_possessive_player(who),
+                    PlayerStatKind::CardsInGraveyard,
+                ));
             }
         }
         let flt_src = after_num
@@ -617,17 +535,14 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
     ] {
         if let Some(owner_raw) = low.strip_suffix(suffix) {
             if matches!(owner_raw, "its" | "his" | "her" | "their") {
-                return Ok(ValueExprAst::ObjectStat {
-                    subject: Box::new(SubjectRefAst::Anaphora(owner_raw.to_string())),
+                return Ok(val_obj_stat(
+                    SubjectRefAst::Anaphora(owner_raw.to_string()),
                     stat,
-                });
+                ));
             }
             if let Some(subj_raw) = owner_raw.strip_suffix("'s") {
                 if let Ok(subj) = parse_subject_or_target(subj_raw, vocab) {
-                    return Ok(ValueExprAst::ObjectStat {
-                        subject: Box::new(subj),
-                        stat,
-                    });
+                    return Ok(val_obj_stat(subj, stat));
                 }
                 if subj_raw.starts_with("the ")
                     && (subj_raw.contains("exiled")
@@ -638,10 +553,10 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
                         || subj_raw.contains("returned")
                         || subj_raw.contains("destroyed"))
                 {
-                    return Ok(ValueExprAst::ObjectStat {
-                        subject: Box::new(SubjectRefAst::Anaphora(subj_raw.to_string())),
+                    return Ok(val_obj_stat(
+                        SubjectRefAst::Anaphora(subj_raw.to_string()),
                         stat,
-                    });
+                    ));
                 }
             }
         }
@@ -655,10 +570,7 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
     ] {
         if let Some(subj_raw) = low.strip_prefix(pref) {
             if let Ok(subj) = parse_subject_or_target(subj_raw, vocab) {
-                return Ok(ValueExprAst::ObjectStat {
-                    subject: Box::new(subj),
-                    stat,
-                });
+                return Ok(val_obj_stat(subj, stat));
             }
             if subj_raw.starts_with("the ")
                 && (subj_raw.contains("exiled")
@@ -670,10 +582,10 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
                     || subj_raw.contains("destroyed")
                     || subj_raw.contains("other "))
             {
-                return Ok(ValueExprAst::ObjectStat {
-                    subject: Box::new(SubjectRefAst::Anaphora(subj_raw.to_string())),
+                return Ok(val_obj_stat(
+                    SubjectRefAst::Anaphora(subj_raw.to_string()),
                     stat,
-                });
+                ));
             }
         }
     }
@@ -691,9 +603,7 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
                 ("mana value ", StatKind::ManaValue),
             ] {
                 if let Some(rest) = after.strip_prefix(st_str) {
-                    let flt_raw = rest
-                        .strip_prefix("among ")
-                        .or_else(|| rest.strip_prefix("of "));
+                    let flt_raw = strip_prefix_any(&rest, &["among ", "of "]);
                     if let Some(fstr) = flt_raw {
                         if matches!(
                             fstr,
@@ -710,10 +620,7 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
                             return Ok(ValueExprAst::AggregateStat {
                                 op,
                                 stat,
-                                filter: Box::new(ObjectFilterAst {
-                                    any_card: true,
-                                    ..Default::default()
-                                }),
+                                filter: Box::new(any_card_flt()),
                             });
                         }
                         if let Ok(flt) = parse_object_filter(fstr, vocab) {
@@ -739,33 +646,21 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
             (after, Rounding::Down)
         };
         if let Some(who) = core.strip_suffix(" starting life total") {
-            return Ok(ValueExprAst::DivConst {
-                expr: Box::new(ValueExprAst::StartingLifeTotal(parse_possessive_player(
-                    who,
-                ))),
-                denom: 2,
+            return Ok(val_div(
+                ValueExprAst::StartingLifeTotal(parse_possessive_player(who)),
+                2,
                 rounding,
-            });
+            ));
         }
-        if let Some(who) = core
-            .strip_suffix(" life total")
-            .or_else(|| core.strip_suffix(" life"))
-        {
-            return Ok(ValueExprAst::DivConst {
-                expr: Box::new(ValueExprAst::PlayerStat {
-                    player: parse_possessive_player(who),
-                    stat: PlayerStatKind::LifeTotal,
-                }),
-                denom: 2,
+        if let Some(who) = strip_suffix_any(&core, &[" life total", " life"]) {
+            return Ok(val_div(
+                val_player_stat(parse_possessive_player(who), PlayerStatKind::LifeTotal),
+                2,
                 rounding,
-            });
+            ));
         }
         if let Ok(inner) = parse_value_expr(core, vocab) {
-            return Ok(ValueExprAst::DivConst {
-                expr: Box::new(inner),
-                denom: 2,
-                rounding,
-            });
+            return Ok(val_div(inner, 2, rounding));
         }
     }
 
@@ -785,16 +680,12 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         };
         return Ok(ValueExprAst::AggregateOverPlayers {
             op,
-            metric: Box::new(ValueExprAst::PlayerStat {
-                player,
-                stat: PlayerStatKind::LifeTotal,
-            }),
+            metric: Box::new(val_player_stat(player, PlayerStatKind::LifeTotal)),
         });
     }
     if let Some(after) = low.strip_prefix("the greatest number of ")
-        && let Some(flt_raw) = after
-            .strip_suffix(" a player controls")
-            .or_else(|| after.strip_suffix(" an opponent controls"))
+        && let Some(flt_raw) =
+            strip_suffix_any(&after, &[" a player controls", " an opponent controls"])
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
         return Ok(ValueExprAst::AggregateOverPlayers {
@@ -808,10 +699,7 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
     if let Some((who_raw, _)) = low.split_once("'s life total")
         && let Some(p) = parse_player_ref(who_raw)
     {
-        return Ok(ValueExprAst::PlayerStat {
-            player: p,
-            stat: PlayerStatKind::LifeTotal,
-        });
+        return Ok(val_player_stat(p, PlayerStatKind::LifeTotal));
     }
     if let Some(who) = low.strip_suffix(" starting life total") {
         return Ok(ValueExprAst::StartingLifeTotal(parse_possessive_player(
@@ -819,54 +707,16 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         )));
     }
     if let Some(who) = low.strip_suffix(" life total") {
-        return Ok(ValueExprAst::PlayerStat {
-            player: parse_possessive_player(who),
-            stat: PlayerStatKind::LifeTotal,
-        });
-    }
-
-    // "a third of <expr>[, rounded up/down]" / "one-third of <expr>" (Pox)
-    if let Some(after) = low
-        .strip_prefix("a third of ")
-        .or_else(|| low.strip_prefix("one-third of "))
-    {
-        let (core, rounding) = if let Some(c) = after.strip_suffix(", rounded up") {
-            (c, Rounding::Up)
-        } else if let Some(c) = after.strip_suffix(", rounded down") {
-            (c, Rounding::Down)
-        } else {
-            (after, Rounding::Down)
-        };
-        if let Ok(inner) = parse_value_expr(core, vocab) {
-            return Ok(ValueExprAst::DivConst {
-                expr: Box::new(inner),
-                denom: 3,
-                rounding,
-            });
-        }
+        return Ok(val_player_stat(
+            parse_possessive_player(who),
+            PlayerStatKind::LifeTotal,
+        ));
     }
 
     if let Some(flt_raw) = low.strip_prefix("the number of counters among ")
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
         return Ok(ValueExprAst::Count(Box::new(flt)));
-    }
-    // General possessive stat: "the <subj>'s power/toughness/mana value/loyalty"
-    for (suf, stat) in [
-        ("'s power", StatKind::Power),
-        ("'s toughness", StatKind::Toughness),
-        ("'s mana value", StatKind::ManaValue),
-        ("'s loyalty", StatKind::Loyalty),
-    ] {
-        if let Some(subj_raw) = low.strip_suffix(suf) {
-            let subj_clean = subj_raw.strip_prefix("the ").unwrap_or(subj_raw).trim();
-            if let Ok(subj) = parse_subject_or_target(subj_clean, vocab) {
-                return Ok(ValueExprAst::ObjectStat {
-                    subject: Box::new(subj),
-                    stat,
-                });
-            }
-        }
     }
     if let Some(after_ms) = low.strip_prefix("the number of ")
         && let Some((color_tok, flt_raw)) =
@@ -875,7 +725,7 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
     {
         return Ok(ValueExprAst::ColorPipsIn {
             color: color_tok.trim().to_string(),
-            subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+            subject: Box::new(grp(flt)),
         });
     }
     if low == "the chosen number"
@@ -919,29 +769,6 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
             filter: Box::new(flt),
             or_toughness: true,
         });
-    }
-    for (pref, stat, greatest) in [
-        ("the greatest mana value of ", StatKind::ManaValue, true),
-        ("the greatest mana value among ", StatKind::ManaValue, true),
-        ("the least mana value of ", StatKind::ManaValue, false),
-        ("the least mana value among ", StatKind::ManaValue, false),
-        ("the greatest power of ", StatKind::Power, true),
-        ("the greatest power among ", StatKind::Power, true),
-        ("the least power of ", StatKind::Power, false),
-        ("the least power among ", StatKind::Power, false),
-        ("the greatest toughness of ", StatKind::Toughness, true),
-        ("the greatest toughness among ", StatKind::Toughness, true),
-    ] {
-        if let Some(rest) = low.strip_prefix(pref)
-            && let Ok(flt) = parse_object_filter(rest.trim(), vocab)
-        {
-            return Ok(ValueExprAst::ExtremeStatAmong {
-                stat,
-                greatest,
-                filter: Box::new(flt),
-                or_toughness: false,
-            });
-        }
     }
     // "the greatest number of <flt> that have a creature type in common"
     if let Some(rest) = low
@@ -987,19 +814,13 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
     {
         return Ok(ValueExprAst::DistinctCountAmong {
             category: "colors".to_string(),
-            filter: Box::new(ObjectFilterAst {
-                any_types: CardTypeMask::CREATURE,
-                ..ObjectFilterAst::default()
-            }),
+            filter: Box::new(obj_type(CardTypeMask::CREATURE)),
         });
     }
     if low == "the number of card types the discarded card has" {
         return Ok(ValueExprAst::DistinctCountAmong {
             category: "card_types".to_string(),
-            filter: Box::new(ObjectFilterAst {
-                any_card: true,
-                ..ObjectFilterAst::default()
-            }),
+            filter: Box::new(any_card_flt()),
         });
     }
     if low.starts_with("the number of abilities from among ")
@@ -1022,12 +843,12 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         });
     }
     // "the number of players/opponents who ..." / "being attacked" / "you attacked this combat"
-    if let Some(rest) = low
-        .strip_prefix("the number of players ")
-        .or_else(|| low.strip_prefix("the number of opponents "))
-        && (rest.starts_with("who ")
-            || rest.starts_with("being ")
-            || rest.starts_with("you attacked"))
+    if let Some(rest) = strip_prefix_any(
+        &low,
+        &["the number of players ", "the number of opponents "],
+    ) && (rest.starts_with("who ")
+        || rest.starts_with("being ")
+        || rest.starts_with("you attacked"))
     {
         return Ok(ValueExprAst::CountPlayersMatching {
             predicate: low.clone(),
@@ -1039,11 +860,11 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
     if low == "the difference between its power and toughness" {
         return Ok(ValueExprAst::AbsDiff(
             Box::new(ValueExprAst::ObjectStat {
-                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                subject: box_anaphora("it"),
                 stat: StatKind::Power,
             }),
             Box::new(ValueExprAst::ObjectStat {
-                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                subject: box_anaphora("it"),
                 stat: StatKind::Toughness,
             }),
         ));
@@ -1056,10 +877,7 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
         if let Some(subj_raw) = low.strip_prefix(prefix) {
             let subj = parse_subject_or_target(subj_raw.trim(), vocab)
                 .unwrap_or_else(|_| SubjectRefAst::Anaphora(subj_raw.trim().to_string()));
-            return Ok(ValueExprAst::ObjectStat {
-                subject: Box::new(subj),
-                stat,
-            });
+            return Ok(val_obj_stat(subj, stat));
         }
     }
     if low == "the amount of {e} you have" {
@@ -1067,25 +885,6 @@ pub fn parse_value_expr(phrase: &str, vocab: &Vocabulary) -> Result<ValueExprAst
             event: low.clone(),
             player: Some(PlayerRefAst::You),
         });
-    }
-    if low == "the total number of creatures those players control" {
-        return Ok(ValueExprAst::EventCountThisTurn {
-            event: low.clone(),
-            player: None,
-        });
-    }
-    if let Some(after_life) = low.strip_prefix("the total amount of life ")
-        && let Some((who_raw, gained)) = after_life
-            .strip_suffix(" lost this turn")
-            .map(|w| (w, false))
-            .or_else(|| {
-                after_life
-                    .strip_suffix(" gained this turn")
-                    .map(|w| (w, true))
-            })
-        && let Some(player) = parse_player_ref(who_raw.trim())
-    {
-        return Ok(ValueExprAst::LifeChangedThisTurn { player, gained });
     }
     // Compositional turn/game event & damage counters (replaces verbatim single-card literal walls)
     if let Some(tgt) = low.strip_prefix("the number of colors of mana spent to cast ")
@@ -1192,10 +991,7 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
     if let Some(inner_fe) = fe.strip_suffix(" other than the first")
         && let Ok(inner) = parse_for_each_value_expr(inner_fe.trim(), vocab)
     {
-        return Ok(ValueExprAst::Sub(
-            Box::new(inner),
-            Box::new(ValueExprAst::Const(1)),
-        ));
+        return Ok(ValueExprAst::Sub(Box::new(inner), vconst(1)));
     }
     // Compositional "mana from <source> [that was ]spent to cast (~|it|this spell|that spell)"
     if let Some(after_mf) = fe.strip_prefix("mana from ")
@@ -1233,9 +1029,9 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
             return Ok(ValueExprAst::ColorsOfManaSpent);
         }
         "color of mana spent to cast that spell" => {
-            return Ok(ValueExprAst::ColorsOfManaSpentOn(Box::new(
-                SubjectRefAst::Anaphora("that spell".to_string()),
-            )));
+            return Ok(ValueExprAst::ColorsOfManaSpentOn(Box::new(anaphora(
+                "that spell",
+            ))));
         }
         "time ~ was kicked" | "time it was kicked" => {
             return Ok(ValueExprAst::TimesKicked);
@@ -1256,108 +1052,78 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
                 all_graveyards: true,
             });
         }
-        "counter removed this way"
-        | "counter removed"
-        | "card discarded this way"
-        | "card exiled this way"
-        | "card revealed this way"
-        | "card milled this way"
-        | "creature sacrificed this way"
-        | "permanent sacrificed this way"
-        | "creature destroyed this way"
-        | "creature that died this way"
-        | "card put into a graveyard this way"
-        | "card put into your graveyard this way"
-        | "1 damage dealt this way"
-        | "1 damage prevented this way"
-        | "damage dealt this way"
-        | "damage prevented this way"
-        | "1 life lost this way"
+        "counter removed"
         | "1 life you lost"
         | "flip you won"
+        | "flip you lose"
         | "creature it devoured"
         | "of that spell's colors"
-        | "unspent white mana you have"
-        | "unspent blue mana you have"
-        | "unspent black mana you have"
-        | "unspent red mana you have"
-        | "unspent green mana you have"
         | "mana spent to cast it"
         | "mana spent to cast ~"
         | "{s} spent to cast ~"
         | "card in your opponents' hands"
-        | "card drawn this way"
-        | "spell countered this way"
         | "player being attacked"
         | "opponent dealt damage"
         | "mana from a desert spent to cast ~"
+        | "mana from a treasure spent to cast it"
+        | "mana from a cave spent to cast it"
         | "fellowship vote"
         | "vote they received"
         | "{e} you've paid or lost this turn"
         | "counter among players and permanents"
-        | "spell and ability countered this way"
-        | "one they gained control of this way"
-        | "flip you lose"
-        | "white mana symbol in its mana cost"
-        | "blue mana symbol in its mana cost"
-        | "black mana symbol in its mana cost"
-        | "red mana symbol in its mana cost"
-        | "green mana symbol in its mana cost"
         | "card you own in exile and in your graveyard that's an instant card, a sorcery card, or a dragon card"
         | "opponent you're attacking"
         | "opponent you attacked this turn"
         | "target"
-        | "card you've drawn this turn"
-        | "card you drew this turn"
-        | "spell you've cast this turn"
-        | "spell you cast this turn"
-        | "spell your opponents have cast this turn"
-        | "spell an opponent has cast this turn"
-        | "spell cast this turn"
         | "opponent whose life total is less than half their starting life total"
         | "color in your commanders' color identity"
         | "color in your commander's color identity"
-        | "life you gained this turn"
-        | "life you lost this turn"
         | "time you've cast your commander from the command zone this game"
-        | "card you've discarded this turn"
-        | "card you discarded this turn"
-        | "spell you've cast this turn from anywhere other than your hand"
-        | "creature card put into their graveyard this way"
-        | "land card put into their graveyard this way"
+        | "time you've cast a commander from the command zone this game"
         | "graveyard with seven or more cards in it"
         | "supertype, card type, and subtype it has"
         | "time it has attacked this turn"
-        | "creature put into your graveyard from the battlefield this turn"
-        | "nontoken creature you controlled that was destroyed this way"
-        | "+1/+1 counter you've put on creatures under your control this turn"
-        | "{b} or {r} spent this way"
         | "creature blocking it beyond the first"
-        | "mana from a treasure spent to cast it"
-        | "{e} paid this way"
-        | "card looked at while scrying this way"
-        | "card put into your hand this way"
-        | "creature that phased out this way"
         | "time it regenerated this turn"
         | "name sticker on it"
         | "name sticker on ~ with seven or fewer letters"
         | "name sticker on ~ with eight or more letters"
         | "modified creature you controlled as you cast ~"
-        | "white mana symbol in the mana costs of permanents you control"
-        | "blue mana symbol in the mana costs of permanents you control"
-        | "black mana symbol in the mana costs of permanents you control"
-        | "red mana symbol in the mana costs of permanents you control"
-        | "green mana symbol in the mana costs of permanents you control"
-        | "creature you control with base power or toughness 1"
-        | "creature card put into your graveyard from the battlefield this turn"
-        | "creature card put into your graveyard this way"
-        | "time you've cast a commander from the command zone this game"
-        | "mana from a cave spent to cast it"
-        | "nontoken creature put into your graveyard from the battlefield this turn"
-        | "creature you controlled that dealt combat damage to a player this turn" => {
+        | "creature you control with base power or toughness 1" => {
             return Ok(ValueExprAst::PriorResult);
         }
-        _ => {}
+        other => {
+            // Compositional color-mana symbol, prior-action "this way", and turn-history counts.
+            if (other.starts_with("unspent ") && other.ends_with(" mana you have"))
+                || other.ends_with(" mana symbol in its mana cost")
+                || other.ends_with(" mana symbol in the mana costs of permanents you control")
+                || (other.ends_with(" this way")
+                    && (other.starts_with("card ")
+                        || other.starts_with("creature ")
+                        || other.starts_with("permanent ")
+                        || other.starts_with("land ")
+                        || other.starts_with("nontoken ")
+                        || other.starts_with("counter ")
+                        || other.starts_with("spell ")
+                        || other.starts_with("damage ")
+                        || other.starts_with("1 ")
+                        || other.starts_with("one ")
+                        || other.starts_with("{")))
+                || (other.ends_with(" this turn")
+                    && !other.contains("guess")
+                    && !other.contains("pile")
+                    && (other.starts_with("card you")
+                        || other.starts_with("spell you")
+                        || other.starts_with("spell an opponent")
+                        || other.starts_with("spell cast this turn")
+                        || other.starts_with("life you ")
+                        || other.starts_with("creature ")
+                        || other.starts_with("nontoken ")
+                        || other.starts_with("+1/+1 counter ")))
+            {
+                return Ok(ValueExprAst::PriorResult);
+            }
+        }
     }
 
     if fe == "unspent mana you have" {
@@ -1367,12 +1133,13 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
         });
     }
     // Compositional Wave E8 `for each ...` value expressions
-    if let Some(after_dom) = fe
-        .strip_prefix("basic land type among lands ")
-        .or_else(|| fe.strip_prefix("basic land types among lands "))
-        && let Some(who_raw) = after_dom
-            .strip_suffix(" control")
-            .or_else(|| after_dom.strip_suffix(" controls"))
+    if let Some(after_dom) = strip_prefix_any(
+        &fe,
+        &[
+            "basic land type among lands ",
+            "basic land types among lands ",
+        ],
+    ) && let Some(who_raw) = strip_suffix_any(&after_dom, &[" control", " controls"])
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
         return Ok(ValueExprAst::DomainCountFor(player));
@@ -1432,7 +1199,7 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
         && let Some(n) = parse_number_word(num_tok)
     {
         return Ok(ValueExprAst::Shortfall {
-            threshold: Box::new(ValueExprAst::Const(n)),
+            threshold: vconst(n),
             actual: Box::new(ValueExprAst::PriorResult),
         });
     }
@@ -1462,12 +1229,15 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
         return Ok(ValueExprAst::PriorResult);
     }
 
-    if let Some(flt_raw) = fe
-        .strip_prefix("different mana value among ")
-        .or_else(|| fe.strip_prefix("different mana values among "))
-        .or_else(|| fe.strip_prefix("different power among "))
-        .or_else(|| fe.strip_prefix("different powers among "))
-        && let Ok(flt) = parse_object_filter(flt_raw, vocab)
+    if let Some(flt_raw) = strip_prefix_any(
+        &fe,
+        &[
+            "different mana value among ",
+            "different mana values among ",
+            "different power among ",
+            "different powers among ",
+        ],
+    ) && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
         return Ok(ValueExprAst::CardTypesAmong(Box::new(flt)));
     }
@@ -1498,30 +1268,26 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
     }
 
     // "<kind> counter(s) you have" / "<kind> counter(s) your opponents have" / "<kind> counter(s) <player> has"
-    if let Some(ck) = fe
-        .strip_suffix(" counter you have")
-        .or_else(|| fe.strip_suffix(" counters you have"))
-    {
+    if let Some(ck) = strip_suffix_any(&fe, &[" counter you have", " counters you have"]) {
         return Ok(ValueExprAst::PlayerCounterCount {
             player: PlayerRefAst::You,
             counter_kind: ck.trim().to_string(),
         });
     }
-    if let Some(ck) = fe
-        .strip_suffix(" counter your opponents have")
-        .or_else(|| fe.strip_suffix(" counters your opponents have"))
-    {
+    if let Some(ck) = strip_suffix_any(
+        &fe,
+        &[
+            " counter your opponents have",
+            " counters your opponents have",
+        ],
+    ) {
         return Ok(ValueExprAst::PlayerCounterCount {
             player: PlayerRefAst::EachOpponent,
             counter_kind: ck.trim().to_string(),
         });
     }
-    if let Some((ck_part, who_part)) = fe
-        .split_once(" counter ")
-        .or_else(|| fe.split_once(" counters "))
-        && let Some(who_raw) = who_part
-            .strip_suffix(" has")
-            .or_else(|| who_part.strip_suffix(" have"))
+    if let Some((ck_part, who_part)) = split_once_any(&fe, &[" counter ", " counters "])
+        && let Some(who_raw) = strip_suffix_any(&who_part, &[" has", " have"])
         && let Some(player) = parse_player_ref(who_raw)
     {
         return Ok(ValueExprAst::PlayerCounterCount {
@@ -1531,9 +1297,7 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
     }
 
     // "counter(s) on <subj>" / "<kind> counter(s) on <subj>"
-    if let Some(subj_raw) = fe
-        .strip_prefix("counter on ")
-        .or_else(|| fe.strip_prefix("counters on "))
+    if let Some(subj_raw) = strip_prefix_any(&fe, &["counter on ", "counters on "])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(ValueExprAst::CounterCount {
@@ -1541,9 +1305,7 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
             counter_kind: "any".to_string(),
         });
     }
-    if let Some((ck, subj_raw)) = fe
-        .split_once(" counters on ")
-        .or_else(|| fe.split_once(" counter on "))
+    if let Some((ck, subj_raw)) = split_once_any(&fe, &[" counters on ", " counter on "])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         return Ok(ValueExprAst::CounterCount {
@@ -1555,22 +1317,22 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
     // "card in <player>'s hand/graveyard/library"
     if let Some(rest) = fe.strip_prefix("card in ") {
         if let Some(who) = rest.strip_suffix(" hand") {
-            return Ok(ValueExprAst::PlayerStat {
-                player: parse_possessive_player(who),
-                stat: PlayerStatKind::CardsInHand,
-            });
+            return Ok(val_player_stat(
+                parse_possessive_player(who),
+                PlayerStatKind::CardsInHand,
+            ));
         }
         if let Some(who) = rest.strip_suffix(" graveyard") {
-            return Ok(ValueExprAst::PlayerStat {
-                player: parse_possessive_player(who),
-                stat: PlayerStatKind::CardsInGraveyard,
-            });
+            return Ok(val_player_stat(
+                parse_possessive_player(who),
+                PlayerStatKind::CardsInGraveyard,
+            ));
         }
         if let Some(who) = rest.strip_suffix(" library") {
-            return Ok(ValueExprAst::PlayerStat {
-                player: parse_possessive_player(who),
-                stat: PlayerStatKind::CardsInLibrary,
-            });
+            return Ok(val_player_stat(
+                parse_possessive_player(who),
+                PlayerStatKind::CardsInLibrary,
+            ));
         }
     }
 
@@ -1605,9 +1367,7 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
         }
     }
     // "opponent who <cond>" / "player who <cond>"
-    if let Some(cond_raw) = fe
-        .strip_prefix("opponent who ")
-        .or_else(|| fe.strip_prefix("player who "))
+    if let Some(cond_raw) = strip_prefix_any(&fe, &["opponent who ", "player who "])
         && !cond_raw.is_empty()
     {
         return Ok(ValueExprAst::PriorResult);

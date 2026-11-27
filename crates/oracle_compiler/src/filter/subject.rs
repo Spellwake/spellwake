@@ -8,7 +8,7 @@ use crate::ast::{
     ConditionAst, FilterPredicateAst, GameMarker, ObjectFilterAst, ObjectFilterFlags, PileRefAst,
     PlayerRefAst, SubjectRefAst, TargetCountAst,
 };
-use crate::combinators::trim_punct;
+use crate::combinators::{grp, strip_prefix_any, strip_suffix_any, trim_punct};
 use crate::vocab::{Vocabulary, parse_number_word};
 
 pub fn parse_keyword_list(text: &str, vocab: &Vocabulary) -> Option<Vec<String>> {
@@ -36,67 +36,70 @@ pub fn parse_keyword_list(text: &str, vocab: &Vocabulary) -> Option<Vec<String>>
             out.push(kw.to_string());
             continue;
         }
-        if let Some(arg) = kw
-            .strip_prefix("ward ")
-            .or_else(|| kw.strip_prefix("toxic "))
-            .or_else(|| kw.strip_prefix("afflict "))
-            .or_else(|| kw.strip_prefix("afterlife "))
-            .or_else(|| kw.strip_prefix("annihilator "))
-            .or_else(|| kw.strip_prefix("bushido "))
-            .or_else(|| kw.strip_prefix("firebending "))
-            .or_else(|| kw.strip_prefix("frenzy "))
-            .or_else(|| kw.strip_prefix("poisonous "))
-            .or_else(|| kw.strip_prefix("rampage "))
-            .or_else(|| kw.strip_prefix("renown "))
-            .or_else(|| kw.strip_prefix("absorb "))
-            .or_else(|| kw.strip_prefix("modular "))
-            .or_else(|| kw.strip_prefix("crew "))
-            .or_else(|| kw.strip_prefix("saddle "))
-            .or_else(|| kw.strip_prefix("ripple "))
-            .or_else(|| kw.strip_prefix("equip "))
-            .or_else(|| kw.strip_prefix("dredge "))
-            .or_else(|| kw.strip_prefix("prowl "))
-            .or_else(|| kw.strip_prefix("miracle "))
-            .or_else(|| kw.strip_prefix("affinity for "))
-            .or_else(|| kw.strip_prefix("freerunning "))
-            .or_else(|| kw.strip_prefix("sticker kicker "))
-            .or_else(|| kw.strip_prefix("bloodthirst "))
-            .or_else(|| kw.strip_prefix("encore "))
-            .or_else(|| kw.strip_prefix("flashback "))
-            .or_else(|| kw.strip_prefix("cycling "))
-            .or_else(|| kw.strip_prefix("madness "))
-            .or_else(|| kw.strip_prefix("kicker "))
-            .or_else(|| kw.strip_prefix("buyback "))
-            .or_else(|| kw.strip_prefix("overload "))
-            .or_else(|| kw.strip_prefix("evoke "))
-            .or_else(|| kw.strip_prefix("dash "))
-            .or_else(|| kw.strip_prefix("unearth "))
-            .or_else(|| kw.strip_prefix("escape "))
-            .or_else(|| kw.strip_prefix("embalm "))
-            .or_else(|| kw.strip_prefix("eternalize "))
-            .or_else(|| kw.strip_prefix("plot "))
-            .or_else(|| kw.strip_prefix("warp "))
-            .or_else(|| kw.strip_prefix("foretell "))
-            .or_else(|| kw.strip_prefix("suspend "))
-            .or_else(|| kw.strip_prefix("ninjutsu "))
-            .or_else(|| kw.strip_prefix("spectacle "))
-            .or_else(|| kw.strip_prefix("blitz "))
-            .or_else(|| kw.strip_prefix("disturb "))
-            .or_else(|| kw.strip_prefix("scavenge "))
-            .or_else(|| kw.strip_prefix("morph "))
-            .or_else(|| kw.strip_prefix("megamorph "))
-            .or_else(|| kw.strip_prefix("disguise "))
-            .or_else(|| kw.strip_prefix("squad "))
-            .or_else(|| kw.strip_prefix("offspring "))
-            .or_else(|| kw.strip_prefix("web-slinging "))
-            .or_else(|| kw.strip_prefix("outlast "))
-            .or_else(|| kw.strip_prefix("sneak "))
-            .or_else(|| kw.strip_prefix("fabricate "))
-            .or_else(|| kw.strip_prefix("casualty "))
-            .or_else(|| kw.strip_prefix("backup "))
-            .or_else(|| kw.strip_prefix("awaken "))
-            .or_else(|| kw.strip_prefix("devour "))
-            && !arg.is_empty()
+        if let Some(arg) = strip_prefix_any(
+            &kw,
+            &[
+                "ward ",
+                "toxic ",
+                "afflict ",
+                "afterlife ",
+                "annihilator ",
+                "bushido ",
+                "firebending ",
+                "frenzy ",
+                "poisonous ",
+                "rampage ",
+                "renown ",
+                "absorb ",
+                "modular ",
+                "crew ",
+                "saddle ",
+                "ripple ",
+                "equip ",
+                "dredge ",
+                "prowl ",
+                "miracle ",
+                "affinity for ",
+                "freerunning ",
+                "sticker kicker ",
+                "bloodthirst ",
+                "encore ",
+                "flashback ",
+                "cycling ",
+                "madness ",
+                "kicker ",
+                "buyback ",
+                "overload ",
+                "evoke ",
+                "dash ",
+                "unearth ",
+                "escape ",
+                "embalm ",
+                "eternalize ",
+                "plot ",
+                "warp ",
+                "foretell ",
+                "suspend ",
+                "ninjutsu ",
+                "spectacle ",
+                "blitz ",
+                "disturb ",
+                "scavenge ",
+                "morph ",
+                "megamorph ",
+                "disguise ",
+                "squad ",
+                "offspring ",
+                "web-slinging ",
+                "outlast ",
+                "sneak ",
+                "fabricate ",
+                "casualty ",
+                "backup ",
+                "awaken ",
+                "devour ",
+            ],
+        ) && !arg.is_empty()
         {
             out.push(kw.to_string());
             continue;
@@ -283,55 +286,18 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         "enchanted player" => Some(PlayerRefAst::EnchantedPlayer),
         "its controller" => Some(PlayerRefAst::ItsController),
         "its owner" => Some(PlayerRefAst::ItsOwner),
-        "that creature's controller"
-        | "the creature's controller"
-        | "that creature's or spell's controller"
-        | "that permanent's controller"
-        | "the permanent's controller"
-        | "that land's controller"
-        | "the land's controller"
-        | "that artifact's controller"
-        | "the artifact's controller"
-        | "that enchantment's controller"
-        | "the enchantment's controller"
-        | "that planeswalker's controller"
-        | "the planeswalker's controller"
-        | "that battle's controller"
-        | "that token's controller"
-        | "that aura's controller"
-        | "that equipment's controller"
-        | "that card's controller"
-        | "that object's controller"
-        | "that spell's controller"
-        | "the spell's controller"
-        | "the ability's controller"
+        "that creature's or spell's controller"
         | "that spell's or ability's controller"
         | "that permanent's or spell's controller"
-        | "the sacrificed creature's controller"
-        | "the sacrificed permanent's controller"
-        | "the destroyed creature's controller"
-        | "the destroyed permanent's controller"
-        | "the exiled permanent's controller"
-        | "the exiled creature's controller"
-        | "the targeted creature's controller"
-        | "the blocked creature's controller"
-        | "the attacking creature's controller"
-        | "the blocking creature's controller"
-        | "enchanted land's controller"
-        | "enchanted enchantment's controller"
-        | "enchanted planeswalker's controller"
-        | "fortified land's controller"
-        | "the controller of that spell"
-        | "the controller of that permanent"
-        | "the controller of that creature"
-        | "the controller of that artifact"
-        | "the controller of that enchantment"
-        | "the controller of that land"
-        | "the controller of that planeswalker"
-        | "the controller of that ability"
         | "the controller of that spell or ability"
-        | "the controller of the countered spell"
-        | "the controller of that countered spell" => Some(PlayerRefAst::ThatObjectController),
+        | "that spell or ability's controller"
+        | "their controller"
+        | "their controllers"
+        | "that player's controller"
+        | "~'s controller"
+        | "the controller of target instant or sorcery spell" => {
+            Some(PlayerRefAst::ThatObjectController)
+        }
         "each opponent with no cards in hand" => Some(PlayerRefAst::EachOpponent),
         "each player ~ attacked this turn" => Some(PlayerRefAst::EachPlayer),
         "the player to your right" | "the player to your left" => Some(PlayerRefAst::AnyOpponent),
@@ -351,60 +317,9 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         | "the first player"
         | "the second player"
         | "the high bidder" => Some(PlayerRefAst::ThatPlayer),
-        "their controller"
-        | "that player's controller"
-        | "~'s controller"
-        | "enchanted permanent's controller"
-        | "enchanted creature's controller"
-        | "enchanted artifact's controller"
-        | "equipped creature's controller"
-        | "the source's controller"
-        | "that source's controller"
-        | "that spell or ability's controller" => Some(PlayerRefAst::ThatObjectController),
-        "the exiled card's owner"
-        | "their owner"
-        | "~'s owner"
-        | "that creature's owner"
-        | "that permanent's owner"
-        | "that card's owner"
-        | "that spell's owner"
-        | "that artifact's owner"
-        | "that enchantment's owner"
-        | "that land's owner"
-        | "that planeswalker's owner"
-        | "that battle's owner"
-        | "that aura's owner"
-        | "that equipment's owner"
-        | "that object's owner"
-        | "the creature's owner"
-        | "the permanent's owner"
-        | "the card's owner"
-        | "the spell's owner"
-        | "the land's owner"
-        | "the artifact's owner"
-        | "the enchantment's owner"
-        | "the planeswalker's owner"
-        | "the exiled permanent's owner"
-        | "the exiled creature's owner"
-        | "the discarded card's owner"
-        | "the revealed card's owner"
-        | "the milled card's owner"
-        | "the sacrificed creature's owner"
-        | "the sacrificed permanent's owner"
-        | "enchanted creature's owner"
-        | "enchanted permanent's owner"
-        | "enchanted land's owner"
-        | "enchanted artifact's owner"
-        | "equipped creature's owner"
-        | "the owner of that card"
-        | "the owner of that permanent"
-        | "the owner of that creature"
-        | "the owner of that spell"
-        | "the owner of that artifact"
-        | "the owner of that enchantment"
-        | "the owner of that land"
-        | "the owner of that planeswalker"
-        | "the owner of the exiled card" => Some(PlayerRefAst::ItsOwner),
+        "their owner" | "~'s owner" | "the owner of target permanent" => {
+            Some(PlayerRefAst::ItsOwner)
+        }
         "players" => Some(PlayerRefAst::EachPlayer),
         "your opponents"
         | "each of your opponents"
@@ -427,7 +342,6 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         "the player whose turn it is" => Some(PlayerRefAst::ActivePlayer),
         "the player with the most life" => Some(PlayerRefAst::AnyPlayer),
         "another one of your opponents chosen at random" => Some(PlayerRefAst::AnyOpponent),
-        "the owner of target permanent" => Some(PlayerRefAst::ItsOwner),
         "enchanted opponent" => Some(PlayerRefAst::EnchantedPlayer),
         "any opponent" | "target opponent chosen at random" => Some(PlayerRefAst::TargetOpponent),
         "target player other than its controller"
@@ -438,10 +352,6 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         | "two target players"
         | "up to two target players" => Some(PlayerRefAst::TargetPlayer),
         "another target opponent" => Some(PlayerRefAst::TargetOpponent),
-        "the controller of target instant or sorcery spell" | "that ability's controller" => {
-            Some(PlayerRefAst::ThatObjectController)
-        }
-        "their controllers" => Some(PlayerRefAst::ThatObjectController),
         "each of its controller's opponents" => Some(PlayerRefAst::EachOtherOpponent),
         "you and the controller of those creatures"
         | "each player starting with you"
@@ -465,6 +375,23 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
             Some(PlayerRefAst::EachPlayer)
         }
         other => {
+            // Compositional "<object>'s controller" / "the controller of <object>" and owner forms.
+            const OBJ_REF_PREFIXES: &[&str] =
+                &["that ", "the ", "enchanted ", "equipped ", "fortified "];
+            if let Some(stem) = other
+                .strip_suffix("'s controller")
+                .or_else(|| other.strip_prefix("the controller of "))
+                && OBJ_REF_PREFIXES.iter().any(|p| stem.starts_with(p))
+            {
+                return Some(PlayerRefAst::ThatObjectController);
+            }
+            if let Some(stem) = other
+                .strip_suffix("'s owner")
+                .or_else(|| other.strip_prefix("the owner of "))
+                && OBJ_REF_PREFIXES.iter().any(|p| stem.starts_with(p))
+            {
+                return Some(PlayerRefAst::ItsOwner);
+            }
             if other.starts_with("the player who controls the most ")
                 || other.starts_with("the player who controls the fewest ")
                 || other.starts_with("a player who controls more ")
@@ -595,9 +522,7 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
     }
 
     // Wave E4: "a second target <flt>" / "a third target <flt>" & "target permanent or player/opponent"
-    if let Some(after_ord) = low
-        .strip_prefix("a second target ")
-        .or_else(|| low.strip_prefix("a third target "))
+    if let Some(after_ord) = strip_prefix_any(&low, &["a second target ", "a third target "])
         && let Ok(flt) = parse_object_filter(after_ord.trim(), vocab)
     {
         return Ok(SubjectRefAst::TargetObject {
@@ -693,8 +618,100 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         }
     }
 
+    if low == "~" {
+        return Ok(SubjectRefAst::SelfObject);
+    }
+    // Compositional attached-host subjects ("enchanted/equipped/fortified <noun>").
+    if let Some(noun) = strip_prefix_any(&low, &["enchanted ", "equipped ", "fortified "])
+        && matches!(
+            noun,
+            "creature"
+                | "permanent"
+                | "land"
+                | "artifact"
+                | "enchantment"
+                | "planeswalker"
+                | "battle"
+                | "vehicle"
+                | "equipment"
+                | "aura"
+        )
+    {
+        return Ok(SubjectRefAst::AttachedHost(low));
+    }
+    // Compositional "that/the/those <single object noun>" and "<N> targets" anaphora/targets.
+    if let Some(noun) = strip_prefix_any(&low, &["that ", "the "])
+        && matches!(
+            noun,
+            "creature"
+                | "permanent"
+                | "card"
+                | "spell"
+                | "spell or ability"
+                | "ability"
+                | "artifact"
+                | "enchantment"
+                | "land"
+                | "planeswalker"
+                | "token"
+                | "aura"
+                | "equipment"
+                | "wall"
+                | "copy"
+                | "copies"
+                | "rest"
+                | "other"
+                | "aura card"
+                | "targeted creature"
+                | "amassed army"
+                | "army you amassed"
+                | "blighted creature"
+                | "copied spell"
+                | "milled card"
+                | "exiled card"
+                | "exiled cards"
+                | "other exiled cards"
+                | "sacrificed creature"
+                | "sacrificed permanent"
+                | "discarded card"
+                | "revealed card"
+                | "revealed cards"
+                | "chosen creature"
+                | "chosen creatures"
+                | "chosen card"
+                | "last chosen card"
+                | "chosen cards"
+                | "chosen permanents"
+                | "chosen player"
+                | "other chosen player"
+                | "first creature"
+                | "creature you control"
+                | "creature you chose"
+                | "creature your opponent chose"
+                | "player you chose"
+                | "permanent or player"
+                | "player or planeswalker"
+                | "creature or planeswalker"
+        )
+    {
+        return Ok(SubjectRefAst::Anaphora(low));
+    }
+    if let Some(noun) = low.strip_prefix("those ")
+        && matches!(
+            noun,
+            "creatures" | "permanents" | "cards" | "tokens" | "auras" | "lands" | "artifacts"
+        )
+    {
+        return Ok(SubjectRefAst::Anaphora(low));
+    }
+    if let Some(cnt_raw) = strip_suffix_any(&low, &[" other targets", " targets"]) {
+        let cnt_clean = cnt_raw.strip_prefix("up to ").unwrap_or(cnt_raw).trim();
+        if matches!(cnt_clean, "x" | "one or two") || parse_number_word(cnt_clean).is_some() {
+            return Ok(SubjectRefAst::AnyTarget);
+        }
+    }
+
     match low.as_str() {
-        "~" => return Ok(SubjectRefAst::SelfObject),
         "it"
         | "itself"
         | "he"
@@ -705,54 +722,7 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "herself"
         | "them"
         | "themselves"
-        | "that creature"
-        | "that permanent"
-        | "that card"
-        | "that spell"
-        | "that spell or ability"
-        | "that ability"
-        | "that artifact"
-        | "that enchantment"
-        | "that land"
-        | "that planeswalker"
-        | "that token"
-        | "that aura"
-        | "that equipment"
-        | "the creature"
-        | "the permanent"
-        | "the card"
-        | "the spell"
-        | "the ability"
-        | "the artifact"
-        | "the enchantment"
-        | "the land"
-        | "the planeswalker"
-        | "the aura"
-        | "the equipment"
-        | "those creatures"
-        | "those permanents"
-        | "those cards"
-        | "those tokens"
         | "both creatures"
-        | "the exiled card"
-        | "the exiled cards"
-        | "the other exiled cards"
-        | "the sacrificed creature"
-        | "the sacrificed permanent"
-        | "the discarded card"
-        | "the revealed card"
-        | "the revealed cards"
-        | "the chosen creature"
-        | "the chosen card"
-        | "the last chosen card"
-        | "the chosen cards"
-        | "the chosen player"
-        | "the other chosen player"
-        | "the token"
-        | "the copy"
-        | "the blighted creature"
-        | "the chosen creatures"
-        | "the army you amassed"
         | "one"
         | "another"
         | "the player who controls the most creatures"
@@ -767,16 +737,6 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "its owner"
         | "two of them at random"
         | "two of them"
-        | "the creature you control"
-        | "the rest"
-        | "the milled card"
-        | "the copied spell"
-        | "the copies"
-        | "that permanent or player"
-        | "that player or planeswalker"
-        | "that creature or planeswalker"
-        | "the aura card"
-        | "the targeted creature"
         | "another permanent of that type"
         | "one of the top two cards of your graveyard"
         | "your ring-bearer"
@@ -784,7 +744,6 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "the cards you exiled this way"
         | "the player or planeswalker that creature is attacking"
         | "the player or planeswalker it's attacking"
-        | "the amassed army"
         | "the bottom card of your library"
         | "target face-up exiled card"
         | "each of the chosen creatures"
@@ -792,17 +751,10 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "each of them"
         | "your commander"
         | "a commander you control"
-        | "the player you chose"
         | "one of them"
         | "one of those creatures"
         | "one of those cards"
         | "two of those cards"
-        | "the other"
-        | "those auras"
-        | "those lands"
-        | "those artifacts"
-        | "the chosen permanents"
-        | "that wall"
         | "the top card of your graveyard"
         | "the top creature card of your graveyard"
         | "the top creature card of defending player's graveyard"
@@ -814,9 +766,6 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "any of them that are walls"
         | "a random creature card from among them"
         | "each of those permanents and/or players"
-        | "the first creature"
-        | "the creature you chose"
-        | "the creature your opponent chose"
         | "all cards they exiled this way"
         | "all cards you exiled this way"
         | "the cards exiled this way"
@@ -828,22 +777,10 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "the nonland cards revealed this way"
         | "the top two cards of that player's library"
         | "either of them"
-        | "target permanent or suspended card" => {
+        | "target permanent or suspended card"
+        | "the first spell you cast each turn" => {
             return Ok(SubjectRefAst::Anaphora(low));
         }
-        "enchanted creature"
-        | "enchanted permanent"
-        | "enchanted land"
-        | "enchanted artifact"
-        | "enchanted enchantment"
-        | "enchanted planeswalker"
-        | "enchanted battle"
-        | "enchanted vehicle"
-        | "enchanted equipment"
-        | "enchanted aura"
-        | "fortified land"
-        | "equipped creature"
-        | "equipped permanent" => return Ok(SubjectRefAst::AttachedHost(low)),
         "any target"
         | "any other target"
         | "another target"
@@ -852,18 +789,6 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         | "target creature or player"
         | "target opponent or creature"
         | "target player or battle"
-        | "one or two targets"
-        | "two targets"
-        | "three targets"
-        | "x targets"
-        | "up to x targets"
-        | "up to two targets"
-        | "up to three targets"
-        | "up to four targets"
-        | "up to five targets"
-        | "up to six targets"
-        | "up to two other targets"
-        | "up to three other targets"
         | "target opponent, creature an opponent controls, or planeswalker an opponent controls"
         | "target creature token, player, or planeswalker"
         | "target planeswalker that player controls or battle that player protects"
@@ -883,9 +808,6 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
                 opponent_only: true,
             });
         }
-        "the first spell you cast each turn" => {
-            return Ok(SubjectRefAst::Anaphora(low));
-        }
         _ => {}
     }
 
@@ -897,10 +819,7 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
     }
 
     // Universal "that <subtype/type>", "one of those <subtype/type>", and "either of those <subtype/type>" anaphora
-    if let Some(rest) = low
-        .strip_prefix("that ")
-        .or_else(|| low.strip_prefix("one of those "))
-        .or_else(|| low.strip_prefix("either of those "))
+    if let Some(rest) = strip_prefix_any(&low, &["that ", "one of those ", "either of those "])
         && !rest.contains(" controls")
         && !rest.contains(" owns")
         && parse_object_filter(rest, vocab).is_ok()
@@ -1044,13 +963,11 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
     if let Some(rest) = low.strip_prefix("one, two, or three target ") {
         return finish_target(rest, TargetCountAst::UpTo(3), vocab);
     }
-    if let Some(rest) = low
-        .strip_prefix("one or two ")
-        .or_else(|| low.strip_prefix("one, two, or three "))
+    if let Some(rest) = strip_prefix_any(&low, &["one or two ", "one, two, or three "])
         && !rest.starts_with("target ")
         && let Ok(flt) = parse_object_filter(rest, vocab)
     {
-        return Ok(SubjectRefAst::Group(Box::new(flt)));
+        return Ok(grp(flt));
     }
 
     // "up to N/X [other] target <rest>" OR non-targeting "up to N/X <flt>" (Gix's Command, Nihiloor, Krenko's Buzzcrusher, SOLDIER Military Program)
@@ -1082,13 +999,13 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         if let Some(flt_raw) = after.strip_prefix("that many ")
             && let Ok(flt) = parse_object_filter(flt_raw, vocab)
         {
-            return Ok(SubjectRefAst::Group(Box::new(flt)));
+            return Ok(grp(flt));
         }
         if let Some((c, flt_raw)) = after.split_once(' ')
             && (c == "x" || parse_number_word(c).is_some())
             && let Ok(flt) = parse_object_filter(flt_raw, vocab)
         {
-            return Ok(SubjectRefAst::Group(Box::new(flt)));
+            return Ok(grp(flt));
         }
     }
     // Non-targeting "any number of <flt>" (Blessing of Frost, Nahiri's Resolve, Angelic Aberration)
@@ -1097,7 +1014,7 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         && !flt_raw.starts_with("other target ")
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(SubjectRefAst::Group(Box::new(flt)));
+        return Ok(grp(flt));
     }
     // "the first <flt> you cast each turn" (Peri Brown, Maelstrom Nexus, etc.)
     if let Some(flt_raw) = low
@@ -1105,7 +1022,7 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
         .and_then(|r| r.strip_suffix(" each turn"))
         && let Ok(flt) = parse_object_filter(flt_raw, vocab)
     {
-        return Ok(SubjectRefAst::Group(Box::new(flt)));
+        return Ok(grp(flt));
     }
 
     // "any number of [other] target <rest>"
@@ -1205,18 +1122,18 @@ pub fn parse_subject_or_target(phrase: &str, vocab: &Vocabulary) -> Result<Subje
     if let Some(rest) = low.strip_prefix("those ")
         && let Ok(flt) = parse_object_filter(rest, vocab)
     {
-        return Ok(SubjectRefAst::Group(Box::new(flt)));
+        return Ok(grp(flt));
     }
     if let Some(rest) = low.strip_prefix("any ")
         && !rest.starts_with("target")
         && !rest.starts_with("number of ")
         && let Ok(flt) = parse_object_filter(rest, vocab)
     {
-        return Ok(SubjectRefAst::Group(Box::new(flt)));
+        return Ok(grp(flt));
     }
 
     let first_err = match parse_object_filter(raw, vocab) {
-        Ok(flt) => return Ok(SubjectRefAst::Group(Box::new(flt))),
+        Ok(flt) => return Ok(grp(flt)),
         Err(e) => e,
     };
 
@@ -1313,9 +1230,7 @@ fn parse_compositional_target_one_of(low: &str, vocab: &Vocabulary) -> Option<Su
     }
 
     // 2. Disjunctive permanent/object + opponent/player ("target opponent or battle", "another target battle or opponent", "target artifact, creature, planeswalker, or opponent")
-    if let Some(obj_part) = rest
-        .strip_suffix(", or opponent")
-        .or_else(|| rest.strip_suffix(" or opponent"))
+    if let Some(obj_part) = strip_suffix_any(&rest, &[", or opponent", " or opponent"])
         && let Ok(mut flt) = parse_object_filter(obj_part.trim(), vocab)
     {
         if excl_self {

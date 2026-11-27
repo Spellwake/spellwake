@@ -2,19 +2,27 @@
 //! (continuous layers, keyword/spell grants, cost modifiers, cast permissions,
 //! replacement/as-enters effects, and combat/activation/game-rule restrictions).
 
-use super::{StaticOrReplacement, attach_condition, parse_static_or_replacement};
+use super::{
+    StaticOrReplacement, parse_static_or_replacement, st_alt_cast, st_cont_layer, st_cost_mod,
+    st_instead, st_kw, st_kw_ast, st_perm, st_r, st_rule, st_rule_ast, st_rule_flt, st_rule_full,
+    st_rule_subj, st_rule_subj_flt, st_s, st_set_type,
+};
 use crate::ast::{
-    CardTypeMask, ColorMask, CombatState, CompareOp, ConditionAst, ControllerRelation, CostAtomAst,
+    CardTypeMask, CombatState, CompareOp, ConditionAst, ControllerRelation, CostAtomAst,
     DurationAst, FilterPredicateAst, GameMarker, InstructionAst, ObjectFilterAst,
     ObjectFilterFlags, PlayerRefAst, PriorActionRefKind, ReplacementEffectAst, Rounding, StatKind,
     StaticAbilityAst, SubjectRefAst, TurnStepAst, ValueExprAst, ZoneFilter,
 };
 use crate::clauses::costs::{parse_cost_atom, parse_cost_list};
 use crate::clauses::effects::{
-    find_top_level_pattern, parse_atomic_effect, parse_effect_body, parse_effect_or_temp_clause,
+    parse_atomic_effect, parse_effect_body, parse_effect_or_temp_clause,
 };
 use crate::clauses::triggers::parse_trigger_events;
-use crate::combinators::obj_type;
+use crate::combinators::{
+    any_card_flt, any_perm, any_spell_flt, box_anaphora, card_flt, cond_matches, cond_zone_count,
+    grp, ins_choose_group, ins_counters, ins_move_cnt, ins_opt1, ins_rm_counters, obj_type,
+    self_obj, split_once_any, strip_prefix_any, strip_suffix_any, val_div, vconst,
+};
 use crate::filter::{
     parse_condition, parse_for_each_value_expr, parse_keyword_list, parse_object_filter,
     parse_player_ref, parse_subject_or_target, parse_value_expr,
@@ -31,9 +39,7 @@ pub(super) fn parse_extended_statics(
     // 1. "You may have ~ enter tapped" (Mariposa Military Base)
     if low == "you may have ~ enter tapped" || low == "you may have ~ enter the battlefield tapped"
     {
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::OptionalEntersTapped,
-        ));
+        return Some(st_r(ReplacementEffectAst::OptionalEntersTapped));
     }
 
     // 2. Leading "For each <over>, <static_or_replacement>" (preserves per quantifier losslessly via ScaledBy!)
@@ -74,57 +80,17 @@ pub(super) fn parse_extended_statics(
         }
     }
 
-    // 3. Universal trailing "<static_or_replacement> unless <cond>" (Steel Exemplar, Galactus)
-    if !low.starts_with("if ")
-        && let Some(idx) = find_top_level_pattern(s, " unless ")
-    {
-        let head = s[..idx].trim();
-        let cond_raw = s[idx + " unless ".len()..].trim();
-        if !head.is_empty()
-            && !cond_raw.is_empty()
-            && let Ok(cond) = parse_condition(cond_raw, vocab)
-            && let Ok(mut sr) = parse_static_or_replacement(head, vocab)
-        {
-            attach_condition(&mut sr, ConditionAst::Not(Box::new(cond)));
-            return Some(sr);
-        }
-    }
-
-    // 4. Compound "~ enters with <A> and <B>" / "~ enters with <A> plus an additional <B>" (preserves both A and B!)
-    if let Some(after_ent) = low.strip_prefix("~ enters with ")
-        && let Some((a, b)) = after_ent
-            .split_once(" plus an additional ")
-            .or_else(|| after_ent.split_once(" and "))
-        && let (Ok(StaticOrReplacement::Replacement(r1)), Ok(StaticOrReplacement::Replacement(r2))) = (
-            parse_static_or_replacement(&format!("~ enters with {a}"), vocab),
-            parse_static_or_replacement(&format!("~ enters with {b}"), vocab),
-        )
-    {
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::Compound(vec![r1, r2]),
-        ));
-    }
-
     // 5. General "<subj> attacks [<tgt>] each combat if able" / "<subj> must be blocked [by <flt>] if able" (Alexios, Galactus, Ace's Baseball Bat)
-    if let Some(before_able) = low
-        .strip_suffix(" each combat if able")
-        .or_else(|| low.strip_suffix(" if able"))
-    {
-        if let Some((subj_raw, tgt_raw)) = before_able
-            .split_once(" attacks ")
-            .or_else(|| before_able.split_once(" attack "))
+    if let Some(before_able) = strip_suffix_any(&low, &[" each combat if able", " if able"]) {
+        if let Some((subj_raw, tgt_raw)) = split_once_any(&before_able, &[" attacks ", " attack "])
             && let (Ok(subj), Ok(_tgt)) = (
                 parse_subject_or_target(subj_raw.trim(), vocab),
                 parse_subject_or_target(tgt_raw.trim(), vocab),
             )
         {
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::RuleOrCombatRestriction {
-                    subject: Some(Box::new(subj)),
-                    rule: format!("attacks_if_able:{}", tgt_raw.trim()),
-                    filter: None,
-                    condition: None,
-                },
+            return Some(st_rule_subj(
+                subj,
+                format!("attacks_if_able:{}", tgt_raw.trim()),
             ));
         }
         if let Some((subj_raw, blk_raw)) = before_able.split_once(" must be blocked by ")
@@ -133,14 +99,7 @@ pub(super) fn parse_extended_statics(
                 parse_object_filter(blk_raw.trim(), vocab),
             )
         {
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::RuleOrCombatRestriction {
-                    subject: Some(Box::new(subj)),
-                    rule: "must_be_blocked_by".to_string(),
-                    filter: Some(Box::new(flt)),
-                    condition: None,
-                },
-            ));
+            return Some(st_rule_subj_flt(subj, "must_be_blocked_by", flt));
         }
     }
 
@@ -152,30 +111,8 @@ pub(super) fn parse_extended_statics(
         if let Some(subj_raw) = low.strip_suffix(suf)
             && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
         {
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::RuleOrCombatRestriction {
-                    subject: Some(Box::new(subj)),
-                    rule: rule_name.to_string(),
-                    filter: None,
-                    condition: None,
-                },
-            ));
+            return Some(st_rule_subj(subj, rule_name.to_string()));
         }
-    }
-
-    // 7. General "<filter> have/has <kw>" where filter has zone/type clauses (Teferi, Niv-Mizzet Supreme, Sheltering Prayers, Falkenrath Gorger)
-    if let Some((subj_raw, kw_raw)) = low.split_once(" have ").or_else(|| low.split_once(" has "))
-        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
-        && let Some(kws) = parse_keyword_list(kw_raw.trim(), vocab)
-    {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::GrantKeywords {
-                subject: Box::new(subj),
-                keywords: kws,
-                condition: None,
-                paired_rule: None,
-            },
-        ));
     }
 
     // 8. General "The first time <event> each turn, <effect_or_rep>" (Edgar, Mirrormind Crown)
@@ -195,24 +132,18 @@ pub(super) fn parse_extended_statics(
             .ok()
             .and_then(|mut v| if v.len() == 1 { v.pop() } else { None })
             .map(Box::new);
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::FirstTimeEachTurnAction {
-                event_text: hdr.trim().to_string(),
-                event: parsed_ev,
-                body,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::FirstTimeEachTurnAction {
+            event_text: hdr.trim().to_string(),
+            event: parsed_ev,
+            body,
+        }));
     }
 
     // 9. General "you may have <subj> assign its combat damage as though it weren't blocked" (Invasion of Ikoria, Cunning Giant)
     if low.contains(" assign its combat damage ") && low.contains(" as though it weren't blocked") {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::SelfObject)),
-                rule: "assign_combat_damage_unblocked".to_string(),
-                filter: None,
-                condition: None,
-            },
+        return Some(st_rule_subj(
+            SubjectRefAst::SelfObject,
+            "assign_combat_damage_unblocked",
         ));
     }
 
@@ -220,26 +151,12 @@ pub(super) fn parse_extended_statics(
     if (low.starts_with("its ") || low.starts_with("the "))
         && low.ends_with(" cost is equal to its mana cost")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::SelfObject)),
-                rule: low.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule_subj(SubjectRefAst::SelfObject, low.to_string()));
     }
     if let Some((subj_raw, _)) = low.split_once(" can't be destroyed by lethal damage unless ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: low.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule_subj(subj, low.to_string()));
     }
 
     // Wave E2: Conspiracy / Draft-matters static rules (all 27 draft-action cards)
@@ -253,28 +170,25 @@ pub(super) fn parse_extended_statics(
         || low.starts_with("each player passes the last card from each booster pack ")
         || low.starts_with("if you removed a creature card with ")
     {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::DraftAction(
-            s.to_string(),
-        )));
+        return Some(st_s(StaticAbilityAst::DraftAction(s.to_string())));
     }
 
     // Wave E2: Attachment restriction ("~ can be attached only to <flt>")
     if let Some(flt_raw) = low.strip_prefix("~ can be attached only to ")
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::AttachmentRestriction {
-                filter: Some(Box::new(flt)),
-                target_player: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::AttachmentRestriction {
+            filter: Some(Box::new(flt)),
+            target_player: None,
+        }));
     }
 
     // Wave E2: Static mana-spending rules ("You may spend [<kind>] mana [only] as though it were <as_though> [to <purpose>]")
     if let Some(after_sp) = low.strip_prefix("you may spend ")
-        && let Some((kind_raw, rest)) = after_sp
-            .split_once(" only as though it were ")
-            .or_else(|| after_sp.split_once(" as though it were "))
+        && let Some((kind_raw, rest)) = split_once_any(
+            &after_sp,
+            &[" only as though it were ", " as though it were "],
+        )
     {
         let only_prefix = if after_sp.contains(" only as though it were ") {
             "only:"
@@ -290,18 +204,16 @@ pub(super) fn parse_extended_statics(
             (format!("{only_prefix}{}", rest.trim()), None)
         };
         let mk = kind_raw.trim();
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ManaSpendRule {
-                mana_kind: if mk == "mana" {
-                    None
-                } else {
-                    Some(mk.to_string())
-                },
-                as_though,
-                purpose,
-                condition: None,
+        return Some(st_s(StaticAbilityAst::ManaSpendRule {
+            mana_kind: if mk == "mana" {
+                None
+            } else {
+                Some(mk.to_string())
             },
-        ));
+            as_though,
+            purpose,
+            condition: None,
+        }));
     }
 
     // Wave E2: Look / Reveal static rules ("Play with your hand revealed", "You may look at <flt> any time", "Reveal the first card you draw ...", "You may reveal ~ from your opening hand")
@@ -312,54 +224,25 @@ pub(super) fn parse_extended_statics(
         || low == "reveal the first card you draw on each of your turns"
         || low == "reveal the first card you draw each turn"
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::LookOrRevealRule {
-                rule: low.to_string(),
-                filter: None,
-                follow_up: Vec::new(),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::LookOrRevealRule {
+            rule: low.to_string(),
+            filter: None,
+            follow_up: Vec::new(),
+            condition: None,
+        }));
     }
     if let Some(after_lk) = low.strip_prefix("you may look at ") {
-        let flt_clean = after_lk
-            .strip_suffix(" any time")
-            .or_else(|| after_lk.strip_suffix(" at any time"))
+        let flt_clean = strip_suffix_any(&after_lk, &[" any time", " at any time"])
             .unwrap_or(after_lk)
             .trim();
         if let Ok(flt) = parse_object_filter(flt_clean, vocab) {
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::LookOrRevealRule {
-                    rule: "look_any_time".to_string(),
-                    filter: Some(Box::new(flt)),
-                    follow_up: Vec::new(),
-                    condition: None,
-                },
-            ));
-        }
-    }
-
-    // Wave E2: Alternative casting cost ("You may cast <flt> by paying <cost> rather than paying their/its mana cost[s]")
-    if let Some(after_yc) = low.strip_prefix("you may cast ")
-        && let Some((flt_raw, rest)) = after_yc.split_once(" by paying ")
-        && let Some((cost_raw, _)) = rest
-            .split_once(" rather than paying their mana costs")
-            .or_else(|| rest.split_once(" rather than paying its mana cost"))
-            .or_else(|| rest.split_once(" rather than pay their mana costs"))
-            .or_else(|| rest.split_once(" rather than pay its mana cost"))
-        && let (Ok(flt), Ok(cost)) = (
-            parse_object_filter(flt_raw.trim(), vocab),
-            parse_cost_list(cost_raw.trim(), vocab),
-        )
-    {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::AlternativeCastCost {
-                cost,
+            return Some(st_s(StaticAbilityAst::LookOrRevealRule {
+                rule: "look_any_time".to_string(),
+                filter: Some(Box::new(flt)),
+                follow_up: Vec::new(),
                 condition: None,
-                for_spells: Some(Box::new(flt)),
-                next_only: false,
-            },
-        ));
+            }));
+        }
     }
 
     // Wave E2: Alternative ability/keyword cost ("You may <cost> rather than pay [the] <kind> cost [of/for ...]")
@@ -373,19 +256,17 @@ pub(super) fn parse_extended_statics(
         if (kind_scope.contains(" cost") || kind_scope.contains(" costs"))
             && let Ok(cost) = parse_cost_list(cost_clean, vocab)
         {
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::AlternativeAbilityCost {
-                    cost,
-                    ability_kind: kind_scope
-                        .split(" cost")
-                        .next()
-                        .unwrap_or(kind_scope)
-                        .trim()
-                        .to_string(),
-                    scope: kind_scope.trim().to_string(),
-                    condition: None,
-                },
-            ));
+            return Some(st_s(StaticAbilityAst::AlternativeAbilityCost {
+                cost,
+                ability_kind: kind_scope
+                    .split(" cost")
+                    .next()
+                    .unwrap_or(kind_scope)
+                    .trim()
+                    .to_string(),
+                scope: kind_scope.trim().to_string(),
+                condition: None,
+            }));
         }
     }
 
@@ -395,12 +276,10 @@ pub(super) fn parse_extended_statics(
         .and_then(|r| r.strip_suffix(" would deal"))
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::DoubleAllDamage {
-                source: Box::new(subj),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::DoubleAllDamage {
+            source: Box::new(subj),
+            condition: None,
+        }));
     }
     if let Some(after_if) = low.strip_prefix("if a source would deal damage to ")
         && let Some((tgt_raw, rem)) = after_if.split_once(", prevent half that damage, rounded ")
@@ -411,16 +290,14 @@ pub(super) fn parse_extended_statics(
         } else {
             Rounding::Down
         };
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::PreventFractionDamage {
-                source: None,
-                target: Box::new(tgt),
-                numerator: 1,
-                denom: 2,
-                rounding,
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::PreventFractionDamage {
+            source: None,
+            target: Box::new(tgt),
+            numerator: 1,
+            denom: 2,
+            rounding,
+            condition: None,
+        }));
     }
     if let Some(after_if) = low.strip_prefix("if a source would deal ")
         && let Some((amt_raw, rest)) = after_if.split_once(" or less damage to ")
@@ -430,14 +307,12 @@ pub(super) fn parse_extended_statics(
             parse_subject_or_target(tgt_raw.trim(), vocab),
         )
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::PreventThresholdDamage {
-                source: None,
-                target: Box::new(tgt),
-                max_damage: Box::new(amt),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::PreventThresholdDamage {
+            source: None,
+            target: Box::new(tgt),
+            max_damage: Box::new(amt),
+            condition: None,
+        }));
     }
     if let Some(after_if) = low.strip_prefix("if ")
         && let Some((tgt_raw, eff_raw)) =
@@ -445,13 +320,11 @@ pub(super) fn parse_extended_statics(
         && let Ok(tgt) = parse_subject_or_target(tgt_raw.trim(), vocab)
         && let Ok(body) = parse_atomic_effect(eff_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::PreventAndReplaceDamage {
-                target: Box::new(tgt),
-                follow_up: body,
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::PreventAndReplaceDamage {
+            target: Box::new(tgt),
+            follow_up: body,
+            condition: None,
+        }));
     }
     if low.starts_with("if an opponent would put one or more counters on a permanent or player, they put half that many ")
     {
@@ -462,7 +335,7 @@ pub(super) fn parse_extended_statics(
         } else {
             None
         };
-        return Some(StaticOrReplacement::Static(
+        return Some(st_s(
             StaticAbilityAst::CounterModificationReplacement {
                 player: PlayerRefAst::EachOpponent,
                 modifier: "half".to_string(),
@@ -472,28 +345,6 @@ pub(super) fn parse_extended_statics(
         ));
     }
 
-    // Wave E2: Dynamic X cost reduction ("~ costs {X} less to cast, where X is <expr>")
-    if let Some((before_wx, wx_raw)) = low.split_once(", where x is ")
-        && let Some(subj_raw) = before_wx
-            .strip_suffix(" costs {x} less to cast")
-            .or_else(|| before_wx.strip_suffix(" cost {x} less to cast"))
-        && let (Ok(subj), Ok(val)) = (
-            parse_subject_or_target(subj_raw.trim(), vocab),
-            parse_value_expr(wx_raw.trim(), vocab),
-        )
-    {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::CostModifier {
-                subject: Box::new(subj),
-                delta: "{X}".to_string(),
-                less: true,
-                next_only: false,
-                per: None,
-                scale_expr: Some(Box::new(val)),
-                condition: None,
-            },
-        ));
-    }
     // Wave E2: Scoped spell cost modifiers ("Spells your opponents cast during your turn / from graveyards or from exile cost {N} more/less to cast", "The first <flt> you cast during each of your turns costs {N} less to cast")
     if let Some((idx, vlen)) = low
         .find(" costs ")
@@ -517,31 +368,23 @@ pub(super) fn parse_extended_statics(
         let subj_s = s[..idx].trim();
         let subj = parse_subject_or_target(subj_s, vocab)
             .unwrap_or_else(|_| SubjectRefAst::Anaphora(subj_s.to_string()));
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::CostModifier {
-                subject: Box::new(subj),
-                delta: delta_tok.to_string(),
-                less,
-                next_only: subj_s.to_ascii_lowercase().starts_with("the first "),
-                per: None,
-                scale_expr,
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::CostModifier {
+            subject: Box::new(subj),
+            delta: delta_tok.to_string(),
+            less,
+            next_only: subj_s.to_ascii_lowercase().starts_with("the first "),
+            per: None,
+            scale_expr,
+            condition: None,
+        }));
     }
 
     // Wave E2: Turn/timing-prefixed PlayOrCastPermission ("During each of your turns, ...", "During each player's turn, ...", "During each opponent's end step, ...", "While you're searching your library, ...", "You may play any number of lands on each of your turns", "You may play <flt1> and cast <flt2> from <zone>")
     if low == "you may play any number of lands on each of your turns" {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::PlayOrCastPermission {
-                cast_only: false,
-                filter: Box::new(ObjectFilterAst {
-                    any_types: CardTypeMask::LAND,
-                    ..ObjectFilterAst::default()
-                }),
-                permission: "unlimited_lands_per_turn".to_string(),
-                condition: None,
-            },
+        return Some(st_perm(
+            false,
+            obj_type(CardTypeMask::LAND),
+            "unlimited_lands_per_turn",
         ));
     }
     for timing_pref in [
@@ -553,47 +396,21 @@ pub(super) fn parse_extended_statics(
         if let Some(rest) = low.strip_prefix(timing_pref)
             && (rest.contains("may play ") || rest.contains("may cast "))
         {
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::PlayOrCastPermission {
-                    cast_only: !rest.contains("may play "),
-                    filter: Box::new(ObjectFilterAst {
-                        any_card: true,
-                        ..ObjectFilterAst::default()
-                    }),
-                    permission: format!("{timing_pref}{rest}"),
-                    condition: None,
-                },
+            return Some(st_perm(
+                !rest.contains("may play "),
+                any_card_flt(),
+                format!("{timing_pref}{rest}"),
             ));
         }
     }
     if low.starts_with("you may play ") && low.contains(" and cast ") && low.contains(" from ") {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::PlayOrCastPermission {
-                cast_only: false,
-                filter: Box::new(ObjectFilterAst {
-                    any_card: true,
-                    ..ObjectFilterAst::default()
-                }),
-                permission: low.to_string(),
-                condition: None,
-            },
-        ));
+        return Some(st_perm(false, any_card_flt(), low.to_string()));
     }
     if (low.starts_with("each player may play ") || low.starts_with("you may look at "))
         && (low.contains("may play lands and cast spells from among ")
             || low.contains("play lands and cast spells from among "))
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::PlayOrCastPermission {
-                cast_only: false,
-                filter: Box::new(ObjectFilterAst {
-                    any_card: true,
-                    ..ObjectFilterAst::default()
-                }),
-                permission: low.to_string(),
-                condition: None,
-            },
-        ));
+        return Some(st_perm(false, any_card_flt(), low.to_string()));
     }
 
     // Wave E2: Can't / Must static restrictions (Solemnity, Void Winnower, Leonin Arbiter, Drannith Magistrate, Questing Beast, Gaddock Teeg, Angelic Arbiter, Ward of Bones, Ethersworn Canonist, Hand to Hand, Okk, Orcish Conscripts, Tromokratis, Seeker of Slaanesh, Nacatl War-Pride, etc.)
@@ -608,36 +425,23 @@ pub(super) fn parse_extended_statics(
             | "during combat, players can't cast spells or activate abilities that aren't mana abilities"
             | "you can't choose an untapped permanent as ~'s target as you cast it"
     ) {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: low.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule(low.to_string()));
     }
     if let Some(flt_raw) = low.strip_prefix("counters can't be put on ")
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::PreventCounters {
-                subject: Box::new(SubjectRefAst::All(Box::new(flt))),
-                counter_kind: None,
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::PreventCounters {
+            subject: Box::new(SubjectRefAst::All(Box::new(flt))),
+            counter_kind: None,
+            condition: None,
+        }));
     }
     if let Some((ck_raw, flt_raw)) = low.split_once(" counters can't be removed from ")
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::All(Box::new(flt)))),
-                rule: format!("cant_remove_counters:{}", ck_raw.trim()),
-                filter: None,
-                condition: None,
-            },
+        return Some(st_rule_subj(
+            SubjectRefAst::All(Box::new(flt)),
+            format!("cant_remove_counters:{}", ck_raw.trim()),
         ));
     }
     if let Some(flt_raw) = low
@@ -645,25 +449,17 @@ pub(super) fn parse_extended_statics(
         .and_then(|r| r.strip_suffix(" can't be prevented"))
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::All(Box::new(flt)))),
-                rule: "combat_damage_cant_be_prevented".to_string(),
-                filter: None,
-                condition: None,
-            },
+        return Some(st_rule_subj(
+            SubjectRefAst::All(Box::new(flt)),
+            "combat_damage_cant_be_prevented",
         ));
     }
     if let Some(flt_raw) = low.strip_prefix("your opponents can't block with ")
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::All(Box::new(flt)))),
-                rule: "opponents_cant_block_with".to_string(),
-                filter: None,
-                condition: None,
-            },
+        return Some(st_rule_subj(
+            SubjectRefAst::All(Box::new(flt)),
+            "opponents_cant_block_with",
         ));
     }
     if (low.starts_with("each opponent who ")
@@ -671,14 +467,7 @@ pub(super) fn parse_extended_statics(
         || low.starts_with("a player who "))
         && low.contains(" can't ")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: low.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule(low.to_string()));
     }
     if let Some((subj_raw, cond_raw)) = low
         .split_once(" can't attack unless ")
@@ -687,64 +476,39 @@ pub(super) fn parse_extended_statics(
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
         && !cond_raw.trim().is_empty()
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: low.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule_subj(subj, low.to_string()));
     }
     if (low.starts_with("each opponent must attack ")
         || low.starts_with("each player must attack "))
         && low.ends_with(" if able")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: low.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule(low.to_string()));
     }
     if let Some((subj_raw, rest)) = low.split_once(" must be blocked by ")
         && rest.ends_with(" if able")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: format!("must_be_blocked_by:{}", rest.trim()),
-                filter: None,
-                condition: None,
-            },
+        return Some(st_rule_subj(
+            subj,
+            format!("must_be_blocked_by:{}", rest.trim()),
         ));
     }
     // Wave E2 / E11: "As ~ becomes attached to a creature, <effect>" -> attach-timing replacement
     if let Some(after_ab) = low.strip_prefix("as ~ becomes attached to a creature, ")
         && let Ok(body) = parse_atomic_effect(after_ab.trim(), vocab)
     {
-        let creature_flt = crate::ast::ObjectFilterAst {
-            any_types: crate::ast::CardTypeMask::CREATURE,
-            ..Default::default()
-        };
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::AsBecomesAttachedAction {
-                target_filter: Box::new(creature_flt),
-                body,
-            },
-        ));
+        let creature_flt = obj_type(crate::ast::CardTypeMask::CREATURE);
+        return Some(st_r(ReplacementEffectAst::AsBecomesAttachedAction {
+            target_filter: Box::new(creature_flt),
+            body,
+        }));
     }
     if low.starts_with("as ~ enters, it becomes your choice of ")
         || low.starts_with("as ~ enters or is turned face up, it becomes your choice of ")
     {
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::AsEntersAction(vec![InstructionAst::ChooseOption(
-                low.to_string(),
-            )]),
-        ));
+        return Some(st_r(ReplacementEffectAst::AsEntersAction(vec![
+            InstructionAst::ChooseOption(low.to_string()),
+        ])));
     }
 
     parse_specialized_statics_a(s, low, vocab)
@@ -762,7 +526,7 @@ fn parse_specialized_statics_a(
 
     // E3-S1: SkipStep ("Each player skips their untap step")
     if low == "each player skips their untap step" {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::SkipStep {
+        return Some(st_s(StaticAbilityAst::SkipStep {
             player: PlayerRefAst::EachPlayer,
             step: TurnStepAst::UntapStep,
             condition: None,
@@ -772,24 +536,20 @@ fn parse_specialized_statics_a(
     if let Some(subj_raw) = low.strip_prefix("the monarch controls ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ControlChange {
-                controller: "the_monarch".to_string(),
-                subject: Box::new(subj),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::ControlChange {
+            controller: "the_monarch".to_string(),
+            subject: Box::new(subj),
+            condition: None,
+        }));
     }
     // E3-S3: MaxCounters ("~ can't have more than seven dream counters on it")
     if let Some((subj_raw, rest)) = low.split_once(" can't have more than ")
-        && let Some(cnt_kind) = rest
-            .strip_suffix(" counters on it")
-            .or_else(|| rest.strip_suffix(" counters on them"))
+        && let Some(cnt_kind) = strip_suffix_any(&rest, &[" counters on it", " counters on them"])
         && let Some((num_tok, kind_raw)) = cnt_kind.trim().split_once(' ')
         && let Some(max) = parse_number_word(num_tok.trim())
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::MaxCounters {
+        return Some(st_s(StaticAbilityAst::MaxCounters {
             subject: Box::new(subj),
             counter_kind: kind_raw.trim().to_string(),
             max,
@@ -799,14 +559,7 @@ fn parse_specialized_statics_a(
     if let Some(subj_raw) = low.strip_suffix(" can only attack alone")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: "can_only_attack_alone".to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule_subj(subj, "can_only_attack_alone"));
     }
     if let Some((left, rule_s)) = low
         .split_once(" and can only attack alone")
@@ -817,17 +570,10 @@ fn parse_specialized_statics_a(
         })
         && let Ok(StaticOrReplacement::Static(st)) = parse_static_or_replacement(left.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-            vec![
-                st,
-                StaticAbilityAst::RuleOrCombatRestriction {
-                    subject: None,
-                    rule: rule_s.to_string(),
-                    filter: None,
-                    condition: None,
-                },
-            ],
-        )));
+        return Some(st_s(StaticAbilityAst::Compound(vec![
+            st,
+            st_rule_ast(None, rule_s.to_string(), None),
+        ])));
     }
     // E3-S5: "~ gets +P/+T for every N <flt>" (Dark Matter Manipulator)
     if let Some((pt_part, fe_raw)) = low.split_once(" for every ")
@@ -845,35 +591,31 @@ fn parse_specialized_statics_a(
             ..
         })) = parse_static_or_replacement(pt_part.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ContinuousModifyPT {
-                subject,
-                dx,
-                dy,
-                grant_keywords,
-                grant_ability_text,
-                scale: Some(Box::new(ValueExprAst::DivConst {
-                    expr: Box::new(ValueExprAst::Count(Box::new(flt))),
-                    denom,
-                    rounding: Rounding::Down,
-                })),
-                condition,
-                paired_rule,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::ContinuousModifyPT {
+            subject,
+            dx,
+            dy,
+            grant_keywords,
+            grant_ability_text,
+            scale: Some(Box::new(val_div(
+                ValueExprAst::Count(Box::new(flt)),
+                denom,
+                Rounding::Down,
+            ))),
+            condition,
+            paired_rule,
+        }));
     }
     // E3-S6: Static ManaSpendRule variants ("Players may spend mana as though it were mana of any color", "Mana of any type can be spent to ...")
     if low == "players may spend mana as though it were mana of any color"
         || low.starts_with("mana of any type can be spent to ")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ManaSpendRule {
-                mana_kind: None,
-                as_though: "any_color_or_type".to_string(),
-                purpose: Some(low.to_string()),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::ManaSpendRule {
+            mana_kind: None,
+            as_though: "any_color_or_type".to_string(),
+            purpose: Some(low.to_string()),
+            condition: None,
+        }));
     }
     // E3-S7: InheritAbilities ("~ has all/each activated abilities of <subj>")
     if let Some((subj_raw, src_raw)) = low
@@ -882,46 +624,20 @@ fn parse_specialized_statics_a(
         .or_else(|| low.split_once(" has all abilities of "))
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        let src_flt =
-            parse_object_filter(src_raw.trim(), vocab).unwrap_or_else(|_| ObjectFilterAst {
-                any_card: true,
-                ..ObjectFilterAst::default()
-            });
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::InheritAbilities {
-                subject: Box::new(subj),
-                source_filter: Box::new(src_flt),
-                activated_only: low.contains("activated abilit"),
-                condition: None,
-            },
-        ));
-    }
-    // E3-S8: "Cast ~ only if <cond>"
-    if let Some(cond_raw) = low.strip_prefix("cast ~ only if ")
-        && let Ok(cond) = parse_condition(cond_raw.trim(), vocab)
-    {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::SelfObject)),
-                rule: "cast_only_if".to_string(),
-                filter: None,
-                condition: Some(Box::new(cond)),
-            },
-        ));
+        let src_flt = parse_object_filter(src_raw.trim(), vocab).unwrap_or_else(|_| any_card_flt());
+        return Some(st_s(StaticAbilityAst::InheritAbilities {
+            subject: Box::new(subj),
+            source_filter: Box::new(src_flt),
+            activated_only: low.contains("activated abilit"),
+            condition: None,
+        }));
     }
     // E3-S9: "If <subj> attacks, all <flt> attack if able" (Viashino Bey, War's Toll, Magnetic Web)
     if let Some(after_if) = low.strip_prefix("if ")
         && let Some((_, rest)) = after_if.split_once(" attacks, all ")
         && rest.ends_with(" attack if able")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: low.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule(low.to_string()));
     }
     // E3-S10: Toughness-based crew/saddle/station statics
     if low.contains(" using its toughness rather than its power")
@@ -929,14 +645,7 @@ fn parse_specialized_statics_a(
             || low.contains("saddles mounts")
             || low.contains("stations permanents"))
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: s.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule(s.to_string()));
     }
 
     parse_specialized_statics_b(s, low, vocab)
@@ -956,14 +665,12 @@ fn parse_specialized_statics_b(
     {
         let orig_rest = s[s.len() - rest.len()..].trim();
         let granted_abilities = crate::compile_granted_ability(orig_rest.trim_matches('"'), vocab);
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::BecomesEquipmentWith {
-                subject: Box::new(subj),
-                additive_types: low.contains("in addition to"),
-                granted_text: orig_rest.to_string(),
-                granted_abilities,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::BecomesEquipmentWith {
+            subject: Box::new(subj),
+            additive_types: low.contains("in addition to"),
+            granted_text: orig_rest.to_string(),
+            granted_abilities,
+        }));
     }
     // E4-S2: "<subj> loses/lose all land types and abilities and ..." (Lithoform Blight, Alpine Moon)
     if let Some((subj_raw, rest)) = low
@@ -976,13 +683,11 @@ fn parse_specialized_statics_b(
             .split_once('"')
             .and_then(|(_, q)| q.rsplit_once('"').map(|(inner, _)| inner))
             .and_then(|inner| crate::compile_granted_ability(inner, vocab));
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::LoseLandTypesAndGain {
-                subject: Box::new(subj),
-                granted_text: orig_rest.to_string(),
-                granted_abilities,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::LoseLandTypesAndGain {
+            subject: Box::new(subj),
+            granted_text: orig_rest.to_string(),
+            granted_abilities,
+        }));
     }
     // E4-S3: "<subj> is a creature in addition to its other types and has base power and base toughness each equal to its mana value" (Opalescence, Starfield of Nyx)
     if let Some(subj_raw) = low.strip_suffix(
@@ -990,10 +695,10 @@ fn parse_specialized_statics_b(
     ) && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
         let mv = ValueExprAst::ObjectStat {
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+            subject: box_anaphora("it"),
             stat: StatKind::ManaValue,
         };
-        return Some(StaticOrReplacement::Static(
+        return Some(st_s(
             StaticAbilityAst::DynamicBasePT {
                 subject: Box::new(subj),
                 power: Box::new(mv.clone()),
@@ -1004,12 +709,8 @@ fn parse_specialized_statics_b(
     }
     // E4-S4: "<subj> gets +X/+Y, where X is <e1> and Y is <e2>" (Phyrexian Ingester, Aspect of Wolf)
     if let Some((pt_raw, xy_raw)) = low.split_once(", where x is ")
-        && let Some((x_raw, y_raw)) = xy_raw
-            .split_once(", and y is ")
-            .or_else(|| xy_raw.split_once(" and y is "))
-        && let Some((subj_raw, mod_raw)) = pt_raw
-            .split_once(" gets ")
-            .or_else(|| pt_raw.split_once(" get "))
+        && let Some((x_raw, y_raw)) = split_once_any(&xy_raw, &[", and y is ", " and y is "])
+        && let Some((subj_raw, mod_raw)) = split_once_any(&pt_raw, &[" gets ", " get "])
         && let Some((dx_raw, dy_raw)) = parse_pt_mod(mod_raw.trim())
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
@@ -1020,30 +721,28 @@ fn parse_specialized_statics_b(
             let zero_y = if dy_raw.starts_with('-') { "-0" } else { "+0" };
             let zero_x = if dx_raw.starts_with('-') { "-0" } else { "+0" };
             let dy_norm = dy_raw.replace(['Y', 'y'], "X");
-            return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-                vec![
-                    StaticAbilityAst::ContinuousModifyPT {
-                        subject: Box::new(subj.clone()),
-                        dx: dx_raw,
-                        dy: zero_y.to_string(),
-                        grant_keywords: Vec::new(),
-                        grant_ability_text: None,
-                        scale: Some(Box::new(x_expr)),
-                        condition: None,
-                        paired_rule: None,
-                    },
-                    StaticAbilityAst::ContinuousModifyPT {
-                        subject: Box::new(subj),
-                        dx: zero_x.to_string(),
-                        dy: dy_norm,
-                        grant_keywords: Vec::new(),
-                        grant_ability_text: None,
-                        scale: Some(Box::new(y_expr)),
-                        condition: None,
-                        paired_rule: None,
-                    },
-                ],
-            )));
+            return Some(st_s(StaticAbilityAst::Compound(vec![
+                StaticAbilityAst::ContinuousModifyPT {
+                    subject: Box::new(subj.clone()),
+                    dx: dx_raw,
+                    dy: zero_y.to_string(),
+                    grant_keywords: Vec::new(),
+                    grant_ability_text: None,
+                    scale: Some(Box::new(x_expr)),
+                    condition: None,
+                    paired_rule: None,
+                },
+                StaticAbilityAst::ContinuousModifyPT {
+                    subject: Box::new(subj),
+                    dx: zero_x.to_string(),
+                    dy: dy_norm,
+                    grant_keywords: Vec::new(),
+                    grant_ability_text: None,
+                    scale: Some(Box::new(y_expr)),
+                    condition: None,
+                    paired_rule: None,
+                },
+            ])));
         }
         return None;
     }
@@ -1051,54 +750,31 @@ fn parse_specialized_statics_b(
     if low.starts_with("if ~ is in your opening hand")
         && low.contains("you may begin the game with ~ on the battlefield")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::SelfObject)),
-                rule: s.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule_subj(SubjectRefAst::SelfObject, s.to_string()));
     }
     // E4-S6: Trigger suppression/doubling ("Permanents entering don't cause abilities of <flt> to trigger", "If a triggered ability of ... triggers while ...")
     if low
         == "permanents entering don't cause abilities of permanents your opponents control to trigger"
         || low.starts_with("if a triggered ability of another shrine you control triggers while ")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::TriggerMultiplier {
-                event_desc: s.to_string(),
-                multiplier: if low.contains("don't cause") { 0 } else { 2 },
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::TriggerMultiplier {
+            event_desc: s.to_string(),
+            multiplier: if low.contains("don't cause") { 0 } else { 2 },
+            condition: None,
+        }));
     }
     // E4-S7: "If ~ is in a graveyard, effects from spells named <Name> count it as a card named <Name>" (Pardic Firecat, Diligent Farmhand)
     if low.starts_with("if ~ is in a graveyard, effects from spells named ")
         && low.contains(" count it as a card named ")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::SelfObject)),
-                rule: s.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule_subj(SubjectRefAst::SelfObject, s.to_string()));
     }
     // E4-S8: Mana-production replacement ("If tapped for mana, Plains produce ...", "If a land is tapped for two or more mana, it produces {C} instead ...")
     if low.starts_with("if tapped for mana, plains produce ")
         || low
             == "if a land is tapped for two or more mana, it produces {c} instead of any other type and amount"
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: s.to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule(s.to_string()));
     }
     parse_grant_and_cost_statics(s, low, vocab)
         .or_else(|| parse_chained_and_enters_statics(s, low, vocab))
@@ -1112,51 +788,11 @@ fn parse_grant_and_cost_statics(
     low: &str,
     vocab: &Vocabulary,
 ) -> Option<StaticOrReplacement> {
-    // Oviya, Automech Artisan: "Each creature that's attacking one of your opponents has trample."
-    if let Some((subj_raw, kw_raw)) = low.split_once(" has ").or_else(|| low.split_once(" have "))
-        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
-        && let Some(kws) = crate::filter::parse_keyword_list(kw_raw.trim(), vocab)
-    {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::GrantKeywords {
-                subject: Box::new(subj),
-                keywords: kws,
-                condition: None,
-                paired_rule: None,
-            },
-        ));
-    }
-
     // Eriette of the Charmed Apple: "Each creature that's enchanted by an Aura you control can't attack you or planeswalkers you control."
     if let Some((subj_raw, rest)) = low.split_once(" can't attack ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: format!("cant_attack:{}", rest.trim()),
-                filter: None,
-                condition: None,
-            },
-        ));
-    }
-
-    // Sailors' Bane: "~ costs {1} less to cast for each card you own in exile and in your graveyard that's an instant card, a sorcery card, or a card that has an Adventure."
-    if let Some(after) = low.strip_prefix("~ costs ")
-        && let Some((delta_raw, fe_raw)) = after.split_once(" less to cast for each ")
-        && let Ok(per_flt) = parse_object_filter(fe_raw.trim(), vocab)
-    {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::CostModifier {
-                subject: Box::new(SubjectRefAst::SelfObject),
-                delta: delta_raw.trim().to_ascii_uppercase(),
-                less: true,
-                next_only: false,
-                per: Some(Box::new(per_flt)),
-                scale_expr: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule_subj(subj, format!("cant_attack:{}", rest.trim())));
     }
 
     None
@@ -1177,10 +813,6 @@ fn parse_chained_and_enters_statics(
     }
     // 2. As-enters exile two matching cards, copy one with additional counters equal to the other's stat (The Mimeoplasm)
     if let Some(sr) = parse_as_enters_exile_copy_counters(low, vocab) {
-        return Some(sr);
-    }
-    // 3. As-enters pay any amount of life capped by a dynamic ValueExprAst (Nameless Race)
-    if let Some(sr) = parse_as_enters_capped_life(low, vocab) {
         return Some(sr);
     }
     // 4. Conditional -X/-Y static with min-capped Y (Snowblind)
@@ -1248,16 +880,14 @@ fn parse_as_enters_exile_copy_counters(
         ));
     Some(StaticOrReplacement::Replacement(
         ReplacementEffectAst::Compound(vec![
-            ReplacementEffectAst::AsEntersAction(vec![InstructionAst::Optional(vec![
-                InstructionAst::MoveCounted {
-                    actor: Some(PlayerRefAst::You),
-                    count: Some(Box::new(ValueExprAst::Const(2))),
-                    up_to: false,
-                    any_number: false,
-                    subject: Box::new(SubjectRefAst::Group(Box::new(src_flt.clone()))),
-                    to: "exile".to_string(),
-                },
-            ])]),
+            ReplacementEffectAst::AsEntersAction(vec![ins_opt1(ins_move_cnt(
+                Some(PlayerRefAst::You),
+                Some(ValueExprAst::Const(2)),
+                false,
+                false,
+                grp(src_flt.clone()),
+                "exile",
+            ))]),
             ReplacementEffectAst::EntersAsCopy {
                 optional: false,
                 filter: Box::new(exiled_copy_flt),
@@ -1266,7 +896,7 @@ fn parse_as_enters_exile_copy_counters(
             ReplacementEffectAst::EntersWithCounters {
                 counter_kind: kind_raw.trim().to_string(),
                 count: Box::new(ValueExprAst::ObjectStat {
-                    subject: Box::new(SubjectRefAst::Anaphora("the other card".to_string())),
+                    subject: box_anaphora("the other card"),
                     stat,
                 }),
                 per: None,
@@ -1277,45 +907,6 @@ fn parse_as_enters_exile_copy_counters(
                         action: "exile".to_string(),
                     },
                 ))),
-            },
-        ]),
-    ))
-}
-
-fn parse_as_enters_capped_life(low: &str, vocab: &Vocabulary) -> Option<StaticOrReplacement> {
-    // "as ~ enters, pay any amount of life. the amount you pay can't be more than <cap_expr>"
-    let cap_raw = low.strip_prefix(
-        "as ~ enters, pay any amount of life. the amount you pay can't be more than ",
-    )?;
-    let cap_expr = if let Some((lhs_raw, rhs_raw)) = cap_raw.split_once(" plus ") {
-        let lhs = parse_value_expr(
-            lhs_raw
-                .trim()
-                .strip_prefix("the total ")
-                .unwrap_or(lhs_raw.trim()),
-            vocab,
-        )
-        .ok()?;
-        let rhs_clean = rhs_raw
-            .trim()
-            .strip_prefix("the total ")
-            .unwrap_or(rhs_raw.trim())
-            .replace("in their graveyards", "in your opponents' graveyards");
-        let rhs = parse_value_expr(&rhs_clean, vocab).ok()?;
-        ValueExprAst::Add(Box::new(lhs), Box::new(rhs))
-    } else {
-        parse_value_expr(cap_raw.trim(), vocab).ok()?
-    };
-    Some(StaticOrReplacement::Replacement(
-        ReplacementEffectAst::AsEntersAction(vec![
-            InstructionAst::PayCost(CostAtomAst::PayLife(Box::new(ValueExprAst::ChosenX))),
-            InstructionAst::AbilityRestriction {
-                restriction: "as_enters_life_cap".to_string(),
-                condition: Some(Box::new(ConditionAst::Compare {
-                    lhs: Box::new(ValueExprAst::ChosenX),
-                    op: CompareOp::Le,
-                    rhs: Box::new(cap_expr),
-                })),
             },
         ]),
     ))
@@ -1333,10 +924,7 @@ fn parse_conditional_min_modify_pt(low: &str, vocab: &Vocabulary) -> Option<Stat
     let cond = if cond_raw.trim() == "that creature is attacking" {
         let mut att = obj_type(CardTypeMask::CREATURE);
         att.combat = Some(CombatState::Attacking);
-        ConditionAst::MatchesFilter {
-            subject: Box::new(subj.clone()),
-            filter: Box::new(att),
-        }
+        cond_matches(subj.clone(), att)
     } else {
         parse_condition(cond_raw.trim(), vocab).ok()?
     };
@@ -1344,7 +932,7 @@ fn parse_conditional_min_modify_pt(low: &str, vocab: &Vocabulary) -> Option<Stat
     let e2 = parse_value_expr(e2_raw.trim(), vocab).ok()?;
     let e3 = if let Some(stat_part) = e3_raw.strip_suffix(" minus 1") {
         let base = parse_value_expr(stat_part.trim(), vocab).ok()?;
-        ValueExprAst::Sub(Box::new(base), Box::new(ValueExprAst::Const(1)))
+        ValueExprAst::Sub(Box::new(base), vconst(1))
     } else {
         parse_value_expr(e3_raw.trim(), vocab).ok()?
     };
@@ -1357,14 +945,8 @@ fn parse_conditional_min_modify_pt(low: &str, vocab: &Vocabulary) -> Option<Stat
     Some(StaticOrReplacement::Static(
         StaticAbilityAst::DynamicModifyPT {
             subject: Box::new(subj),
-            power_delta: Box::new(ValueExprAst::Sub(
-                Box::new(ValueExprAst::Const(0)),
-                Box::new(x_expr),
-            )),
-            toughness_delta: Box::new(ValueExprAst::Sub(
-                Box::new(ValueExprAst::Const(0)),
-                Box::new(y_expr),
-            )),
+            power_delta: Box::new(ValueExprAst::Sub(vconst(0), Box::new(x_expr))),
+            toughness_delta: Box::new(ValueExprAst::Sub(vconst(0), Box::new(y_expr))),
             condition: None,
         },
     ))
@@ -1380,14 +962,9 @@ fn parse_untap_step_type_choice(low: &str) -> Option<StaticOrReplacement> {
     if normalized.is_empty() {
         return None;
     }
-    Some(StaticOrReplacement::Static(
-        StaticAbilityAst::RuleOrCombatRestriction {
-            subject: None,
-            rule: format!("untap_step_choose_type_only_untap:{normalized}"),
-            filter: None,
-            condition: None,
-        },
-    ))
+    Some(st_rule(format!(
+        "untap_step_choose_type_only_untap:{normalized}"
+    )))
 }
 
 /// Compositional Wave E8 static and replacement parser replacing legacy
@@ -1450,95 +1027,6 @@ fn parse_simple_color_condition(cond_raw: &str, vocab: &Vocabulary) -> Option<Co
     if let Ok(cond) = parse_condition(c, vocab) {
         return Some(cond);
     }
-    if let Some(color_word) = c.strip_prefix("it's ").or_else(|| c.strip_prefix("it is ")) {
-        let mask = match color_word.trim() {
-            "white" => ColorMask::WHITE,
-            "blue" => ColorMask::BLUE,
-            "black" => ColorMask::BLACK,
-            "red" => ColorMask::RED,
-            "green" => ColorMask::GREEN,
-            _ => ColorMask::EMPTY,
-        };
-        if !mask.is_empty() {
-            return Some(ConditionAst::MatchesFilter {
-                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                filter: Box::new(ObjectFilterAst {
-                    any_colors: mask,
-                    ..Default::default()
-                }),
-            });
-        }
-    }
-    if let Some(after) = c.strip_prefix("there are ")
-        && let Some((num_raw, _)) =
-            after.split_once(" or more card types among cards in your graveyard")
-        && let Some(n) = parse_number_word(num_raw.trim())
-    {
-        return Some(ConditionAst::Compare {
-            lhs: Box::new(ValueExprAst::CardTypesInGraveyard {
-                all_graveyards: false,
-            }),
-            op: CompareOp::Ge,
-            rhs: Box::new(ValueExprAst::Const(n)),
-        });
-    }
-    if c == "a card exiled with ~ is a creature card" {
-        return Some(ConditionAst::ZoneObjectCount {
-            filter: Box::new(ObjectFilterAst {
-                any_types: CardTypeMask::CREATURE,
-                any_card: true,
-                zone: Some(ZoneFilter::Exile),
-                flags: ObjectFilterFlags::EXILED_WITH_SELF,
-                ..Default::default()
-            }),
-            op: CompareOp::Ge,
-            value: 1,
-        });
-    }
-    if let Some(after) = c.strip_prefix("the top card of your graveyard is ")
-        && let Ok(flt) = parse_object_filter(after.trim(), vocab)
-    {
-        return Some(ConditionAst::Marker(GameMarker::TopCardOfZoneMatches {
-            zone: ZoneFilter::YourGraveyard,
-            filter: Box::new(flt),
-        }));
-    }
-    if let Some(after) = c.strip_prefix("that player controls ")
-        && let Some((num_raw, flt_raw)) = after.split_once(" or fewer ")
-        && let Some(n) = parse_number_word(num_raw.trim())
-        && let Ok(v) = u16::try_from(n)
-        && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
-    {
-        return Some(ConditionAst::ControlsCount {
-            player: PlayerRefAst::ThatPlayer,
-            filter: Box::new(flt),
-            op: CompareOp::Le,
-            value: v,
-        });
-    }
-    if let Some(after) = c.strip_prefix("a ")
-        && let Some((flt_raw, who_raw)) = after.split_once(" is attacking ")
-        && let Ok(mut flt) = parse_object_filter(flt_raw.trim(), vocab)
-        && let Some(defender) = parse_player_ref(who_raw.trim())
-    {
-        flt.predicates.push(FilterPredicateAst::AttackingTarget {
-            target: Box::new(SubjectRefAst::Player(defender)),
-            this_turn: false,
-        });
-        return Some(ConditionAst::ZoneObjectCount {
-            filter: Box::new(flt),
-            op: CompareOp::Ge,
-            value: 1,
-        });
-    }
-    if let Some((left, right)) = c.split_once(" and ")
-        && let (Some(c1), Some(c2)) = (
-            parse_simple_color_condition(left, vocab),
-            parse_simple_color_condition(right, vocab),
-        )
-    {
-        return Some(ConditionAst::And(Box::new(c1), Box::new(c2)));
-    }
     None
 }
 
@@ -1546,14 +1034,6 @@ fn parse_dynamic_pt_expr(raw: &str, vocab: &Vocabulary) -> Option<ValueExprAst> 
     let r = raw.trim();
     if let Ok(v) = parse_value_expr(r, vocab) {
         return Some(v);
-    }
-    if let Some((lhs_raw, rhs_raw)) = r.split_once(" plus ")
-        && let (Some(l), Some(rhs)) = (
-            parse_dynamic_pt_expr(lhs_raw, vocab),
-            parse_dynamic_pt_expr(rhs_raw, vocab),
-        )
-    {
-        return Some(ValueExprAst::Add(Box::new(l), Box::new(rhs)));
     }
     if let Some((lhs_raw, rhs_raw)) = r.split_once(" minus ")
         && let (Some(l), Some(rhs)) = (
@@ -1616,9 +1096,7 @@ fn parse_continuous_and_conditional_statics_e8(
         parts.push(rest_s[start..].trim());
         if parts.len() >= 2 {
             for raw_part in parts {
-                let cleaned_s = raw_part
-                    .strip_prefix("and ")
-                    .or_else(|| raw_part.strip_prefix("And "))
+                let cleaned_s = strip_prefix_any(&raw_part, &["and ", "And "])
                     .unwrap_or(raw_part)
                     .trim();
                 let cleaned_low = cleaned_s.to_ascii_lowercase();
@@ -1655,9 +1133,7 @@ fn parse_continuous_and_conditional_statics_e8(
                 }
             }
             if all_ok && !items.is_empty() {
-                return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-                    items,
-                )));
+                return Some(st_s(StaticAbilityAst::Compound(items)));
             }
         }
     }
@@ -1670,33 +1146,29 @@ fn parse_continuous_and_conditional_statics_e8(
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
         && let Some(kws) = parse_keyword_list(kws_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-            vec![
-                StaticAbilityAst::SetOrAddType {
-                    subject: Box::new(subj.clone()),
-                    type_or_subtype: ty_raw.trim().to_string(),
-                    additive: true,
-                    condition: None,
-                },
-                StaticAbilityAst::ContinuousModifyPT {
-                    subject: Box::new(subj),
-                    dx: dx.trim().to_string(),
-                    dy: dy.trim().to_string(),
-                    grant_keywords: kws,
-                    grant_ability_text: None,
-                    scale: None,
-                    condition: None,
-                    paired_rule: None,
-                },
-            ],
-        )));
+        return Some(st_s(StaticAbilityAst::Compound(vec![
+            StaticAbilityAst::SetOrAddType {
+                subject: Box::new(subj.clone()),
+                type_or_subtype: ty_raw.trim().to_string(),
+                additive: true,
+                condition: None,
+            },
+            StaticAbilityAst::ContinuousModifyPT {
+                subject: Box::new(subj),
+                dx: dx.trim().to_string(),
+                dy: dy.trim().to_string(),
+                grant_keywords: kws,
+                grant_ability_text: None,
+                scale: None,
+                condition: None,
+                paired_rule: None,
+            },
+        ])));
     }
 
     // 4. "<subj> get(s) <+P/+T> and has/have <kws_and_quoted_abilities>" (Cultist of the Absolute, Spy Kit)
     if let Some((subj_raw, rest)) = low.split_once(" get ").or_else(|| low.split_once(" gets "))
-        && let Some((pt_raw, grant_low)) = rest
-            .split_once(" and have ")
-            .or_else(|| rest.split_once(" and has "))
+        && let Some((pt_raw, grant_low)) = split_once_any(&rest, &[" and have ", " and has "])
         && let Some((dx, dy)) = pt_raw.trim().split_once('/')
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
@@ -1732,35 +1204,26 @@ fn parse_continuous_and_conditional_statics_e8(
                     condition: None,
                 });
             }
-            return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-                items,
-            )));
+            return Some(st_s(StaticAbilityAst::Compound(items)));
         }
         if let Some(names_flt) = grant_low
             .strip_prefix("all names of ")
             .and_then(|r| r.strip_suffix(" in addition to its name"))
             && let Ok(flt) = parse_object_filter(names_flt.trim(), vocab)
         {
-            return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-                vec![
-                    StaticAbilityAst::ContinuousModifyPT {
-                        subject: Box::new(subj.clone()),
-                        dx: dx.trim().to_string(),
-                        dy: dy.trim().to_string(),
-                        grant_keywords: Vec::new(),
-                        grant_ability_text: None,
-                        scale: None,
-                        condition: None,
-                        paired_rule: None,
-                    },
-                    StaticAbilityAst::RuleOrCombatRestriction {
-                        subject: Some(Box::new(subj)),
-                        rule: "has_all_names_of".to_string(),
-                        filter: Some(Box::new(flt)),
-                        condition: None,
-                    },
-                ],
-            )));
+            return Some(st_s(StaticAbilityAst::Compound(vec![
+                StaticAbilityAst::ContinuousModifyPT {
+                    subject: Box::new(subj.clone()),
+                    dx: dx.trim().to_string(),
+                    dy: dy.trim().to_string(),
+                    grant_keywords: Vec::new(),
+                    grant_ability_text: None,
+                    scale: None,
+                    condition: None,
+                    paired_rule: None,
+                },
+                st_rule_ast(Some(subj), "has_all_names_of", Some(flt)),
+            ])));
         }
     }
 
@@ -1782,12 +1245,7 @@ fn parse_continuous_and_conditional_statics_e8(
             if !kw_clean.is_empty()
                 && let Some(kws) = parse_keyword_list(&kw_clean, vocab)
             {
-                items.push(StaticAbilityAst::GrantKeywords {
-                    subject: Box::new(subj.clone()),
-                    keywords: kws,
-                    condition: None,
-                    paired_rule: None,
-                });
+                items.push(st_kw_ast(subj.clone(), kws));
             }
             for ab in quoted {
                 items.push(StaticAbilityAst::GrantAbilityText {
@@ -1798,64 +1256,32 @@ fn parse_continuous_and_conditional_statics_e8(
                 });
             }
             if !items.is_empty() {
-                return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-                    items,
-                )));
+                return Some(st_s(StaticAbilityAst::Compound(items)));
             }
         }
     }
 
-    // 6. "<subj> has <kw>, it can't be blocked, and its name and creature type are <desc>" (Psychic Paper)
-    if let Some((subj_raw, rest)) = low.split_once(" has ")
-        && let Some((kw_part, tail)) = rest.split_once(", it can't be blocked, and ")
-        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
-    {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-            vec![
-                StaticAbilityAst::GrantKeywords {
-                    subject: Box::new(subj.clone()),
-                    keywords: vec![kw_part.trim().to_string()],
-                    condition: None,
-                    paired_rule: None,
-                },
-                StaticAbilityAst::RuleOrCombatRestriction {
-                    subject: Some(Box::new(subj.clone())),
-                    rule: "cant_be_blocked".to_string(),
-                    filter: None,
-                    condition: None,
-                },
-                StaticAbilityAst::SetOrAddType {
-                    subject: Box::new(subj),
-                    type_or_subtype: tail.trim().to_string(),
-                    additive: false,
-                    condition: None,
-                },
-            ],
-        )));
-    }
-
     // 7. "<subj> have/has base power and toughness <P>/<T> and lose all <types>" (Curse of Conformity)
-    if let Some((subj_raw, rest)) = low
-        .split_once(" have base power and toughness ")
-        .or_else(|| low.split_once(" has base power and toughness "))
-        && let Some((pt_raw, lose_raw)) = rest
-            .split_once(" and lose all ")
-            .or_else(|| rest.split_once(" and loses all "))
+    if let Some((subj_raw, rest)) = split_once_any(
+        &low,
+        &[
+            " have base power and toughness ",
+            " has base power and toughness ",
+        ],
+    ) && let Some((pt_raw, lose_raw)) =
+        split_once_any(&rest, &[" and lose all ", " and loses all "])
         && let Some((p, t)) = pt_raw.trim().split_once('/')
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ContinuousLayerEffect {
-                subject: Box::new(subj),
-                set_types: Some(format!("lose_all:{}", lose_raw.trim())),
-                additive_types: false,
-                base_pt: Some((p.trim().to_string(), t.trim().to_string())),
-                set_colors: None,
-                grant_keywords: Vec::new(),
-                lose_keywords: Vec::new(),
-                lose_all_abilities: false,
-                condition: None,
-            },
+        return Some(st_cont_layer(
+            subj,
+            Some(format!("lose_all:{}", lose_raw.trim())),
+            false,
+            Some((p.trim().to_string(), t.trim().to_string())),
+            None,
+            Vec::new(),
+            Vec::new(),
+            false,
         ));
     }
 
@@ -1880,22 +1306,13 @@ fn parse_continuous_and_conditional_statics_e8(
             }
         }
         if ok && subjs.len() >= 2 {
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::GrantKeywords {
-                    subject: Box::new(SubjectRefAst::Compound(subjs)),
-                    keywords: kws,
-                    condition: None,
-                    paired_rule: None,
-                },
-            ));
+            return Some(st_kw(SubjectRefAst::Compound(subjs), kws));
         }
     }
 
     // 9. Trailing conditional keyword grant "<subj> have/has <kws> as long as <cond>" (Sheltering Prayers)
     if let Some((left, cond_raw)) = low.split_once(" as long as ")
-        && let Some((subj_raw, kw_raw)) = left
-            .split_once(" have ")
-            .or_else(|| left.split_once(" has "))
+        && let Some((subj_raw, kw_raw)) = split_once_any(&left, &[" have ", " has "])
         && let Some(kws) = parse_keyword_list(kw_raw.trim(), vocab)
         && let Some(cond) = parse_simple_color_condition(cond_raw, vocab)
     {
@@ -1913,14 +1330,12 @@ fn parse_continuous_and_conditional_statics_e8(
                     })
             })
             .ok()?;
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::GrantKeywords {
-                subject: Box::new(subj),
-                keywords: kws,
-                condition: Some(Box::new(cond)),
-                paired_rule: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::GrantKeywords {
+            subject: Box::new(subj),
+            keywords: kws,
+            condition: Some(Box::new(cond)),
+            paired_rule: None,
+        }));
     }
 
     // 10. Turn-scoped dynamic base P/T ("During your turn / During turns other than yours, <subj>'s power and toughness are each [equal to] <val>") (Angry Mob)
@@ -1940,14 +1355,12 @@ fn parse_continuous_and_conditional_statics_e8(
             } else {
                 ConditionAst::Not(Box::new(ConditionAst::IsYourTurn))
             };
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::DynamicBasePT {
-                    subject: Box::new(subj),
-                    power: Box::new(val.clone()),
-                    toughness: Box::new(val),
-                    condition: Some(Box::new(cond)),
-                },
-            ));
+            return Some(st_s(StaticAbilityAst::DynamicBasePT {
+                subject: Box::new(subj),
+                power: Box::new(val.clone()),
+                toughness: Box::new(val),
+                condition: Some(Box::new(cond)),
+            }));
         }
     }
 
@@ -1964,14 +1377,12 @@ fn parse_continuous_and_conditional_statics_e8(
             .or_else(|| rest_low.strip_prefix("~'s power and toughness are each equal to "))
             && let Some(val) = parse_dynamic_pt_expr(expr_raw, vocab)
         {
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::DynamicBasePT {
-                    subject: Box::new(SubjectRefAst::SelfObject),
-                    power: Box::new(val.clone()),
-                    toughness: Box::new(val),
-                    condition: Some(Box::new(cond)),
-                },
-            ));
+            return Some(st_s(StaticAbilityAst::DynamicBasePT {
+                subject: self_obj(),
+                power: Box::new(val.clone()),
+                toughness: Box::new(val),
+                condition: Some(Box::new(cond)),
+            }));
         }
         // Maximum hand size ("<player>'s maximum hand size is equal to <expr>") (Winter, Misanthropic Guide)
         if let Some((who_raw, expr_raw)) = rest_low
@@ -1980,32 +1391,25 @@ fn parse_continuous_and_conditional_statics_e8(
             && let Some(player) = parse_player_ref(who_raw.trim())
             && let Some(size) = parse_dynamic_pt_expr(expr_raw, vocab)
         {
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::ModifyMaximumHandSize {
-                    player,
-                    size: Box::new(size),
-                    condition: Some(Box::new(cond)),
-                },
-            ));
+            return Some(st_s(StaticAbilityAst::ModifyMaximumHandSize {
+                player,
+                size: Box::new(size),
+                condition: Some(Box::new(cond)),
+            }));
         }
         // Minimum spell cost floor ("each spell that would cost less than <N> mana to cast costs <N> mana to cast") (Trinisphere)
         if let Some(after_sp) = rest_low.strip_prefix("each spell that would cost less than ")
             && let Some((num_raw, _)) = after_sp.split_once(" mana to cast costs ")
             && let Some(n) = parse_number_word(num_raw.trim())
         {
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::CostModifier {
-                    subject: Box::new(SubjectRefAst::All(Box::new(ObjectFilterAst {
-                        any_spell: true,
-                        ..Default::default()
-                    }))),
-                    delta: format!("min_{n}"),
-                    less: false,
-                    next_only: false,
-                    per: None,
-                    scale_expr: Some(Box::new(ValueExprAst::Const(n))),
-                    condition: Some(Box::new(cond)),
-                },
+            return Some(st_cost_mod(
+                SubjectRefAst::All(Box::new(any_spell_flt())),
+                format!("min_{n}"),
+                false,
+                false,
+                None,
+                Some(ValueExprAst::Const(n)),
+                Some(cond),
             ));
         }
         // Copy stats/types or full text of referenced card (Duplicant, Volrath's Shapeshifter)
@@ -2019,19 +1423,17 @@ fn parse_continuous_and_conditional_statics_e8(
                     flags: ObjectFilterFlags::EXILED_WITH_SELF,
                     ..Default::default()
                 });
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::InheritAbilities {
-                    subject: Box::new(SubjectRefAst::SelfObject),
-                    source_filter: Box::new(src_flt),
-                    activated_only: false,
-                    condition: Some(Box::new(cond)),
-                },
-            ));
+            return Some(st_s(StaticAbilityAst::InheritAbilities {
+                subject: self_obj(),
+                source_filter: Box::new(src_flt),
+                activated_only: false,
+                condition: Some(Box::new(cond)),
+            }));
         }
         if let Some(after_ft) = rest_low.strip_prefix("~ has the full text of ") {
             let (quoted, _) = extract_quoted_segments(rest_s);
             let mut items = vec![StaticAbilityAst::InheritAbilities {
-                subject: Box::new(SubjectRefAst::SelfObject),
+                subject: self_obj(),
                 source_filter: Box::new(ObjectFilterAst {
                     any_card: true,
                     zone: Some(ZoneFilter::YourGraveyard),
@@ -2042,39 +1444,35 @@ fn parse_continuous_and_conditional_statics_e8(
             }];
             for ab in quoted {
                 items.push(StaticAbilityAst::GrantAbilityText {
-                    subject: Box::new(SubjectRefAst::SelfObject),
+                    subject: self_obj(),
                     ability_text: ab,
                     compiled: None,
                     condition: Some(Box::new(cond.clone())),
                 });
             }
             let _ = after_ft;
-            return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-                items,
-            )));
+            return Some(st_s(StaticAbilityAst::Compound(items)));
         }
         // Prevent combat damage + keyword ("prevent all combat damage it would deal and it has <kws>") (Woolly Razorback)
         if let Some(kw_raw) =
             rest_low.strip_prefix("prevent all combat damage it would deal and it has ")
             && let Some(kws) = parse_keyword_list(kw_raw.trim(), vocab)
         {
-            return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-                vec![
-                    StaticAbilityAst::PreventAllDamageStatic {
-                        combat_only: true,
-                        noncombat_only: false,
-                        both_ways: false,
-                        subject: Box::new(SubjectRefAst::SelfObject),
-                        by: Some(Box::new(SubjectRefAst::SelfObject)),
-                    },
-                    StaticAbilityAst::GrantKeywords {
-                        subject: Box::new(SubjectRefAst::SelfObject),
-                        keywords: kws,
-                        condition: Some(Box::new(cond)),
-                        paired_rule: None,
-                    },
-                ],
-            )));
+            return Some(st_s(StaticAbilityAst::Compound(vec![
+                StaticAbilityAst::PreventAllDamageStatic {
+                    combat_only: true,
+                    noncombat_only: false,
+                    both_ways: false,
+                    subject: self_obj(),
+                    by: Some(self_obj()),
+                },
+                StaticAbilityAst::GrantKeywords {
+                    subject: self_obj(),
+                    keywords: kws,
+                    condition: Some(Box::new(cond)),
+                    paired_rule: None,
+                },
+            ])));
         }
         // Prevent damage from source filter to subjects ("prevent all damage <src> would deal to <dst>") (Camel)
         if let Some(after_pr) = rest_low.strip_prefix("prevent all damage ")
@@ -2083,15 +1481,13 @@ fn parse_continuous_and_conditional_statics_e8(
         {
             let dst = parse_subject_or_target(dst_raw.trim(), vocab)
                 .unwrap_or_else(|_| SubjectRefAst::Anaphora(dst_raw.trim().to_string()));
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::PreventAllDamageStatic {
-                    combat_only: false,
-                    noncombat_only: false,
-                    both_ways: false,
-                    subject: Box::new(dst),
-                    by: Some(Box::new(src)),
-                },
-            ));
+            return Some(st_s(StaticAbilityAst::PreventAllDamageStatic {
+                combat_only: false,
+                noncombat_only: false,
+                both_ways: false,
+                subject: Box::new(dst),
+                by: Some(Box::new(src)),
+            }));
         }
         // Layer type + base P/T + unblockable ("it's a <types> with base power and toughness <P>/<T> and can't be blocked") (Futurist Operative)
         if let Some(after_its) = rest_low.strip_prefix("it's a ")
@@ -2099,27 +1495,25 @@ fn parse_continuous_and_conditional_statics_e8(
             && let Some((pt_raw, tail)) = pt_tail.split_once(" and ")
             && let Some((p, t)) = pt_raw.trim().split_once('/')
         {
-            return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-                vec![
-                    StaticAbilityAst::ContinuousLayerEffect {
-                        subject: Box::new(SubjectRefAst::SelfObject),
-                        set_types: Some(ty_raw.trim().to_string()),
-                        additive_types: false,
-                        base_pt: Some((p.trim().to_string(), t.trim().to_string())),
-                        set_colors: None,
-                        grant_keywords: Vec::new(),
-                        lose_keywords: Vec::new(),
-                        lose_all_abilities: false,
-                        condition: Some(Box::new(cond.clone())),
-                    },
-                    StaticAbilityAst::RuleOrCombatRestriction {
-                        subject: Some(Box::new(SubjectRefAst::SelfObject)),
-                        rule: tail.trim().to_string(),
-                        filter: None,
-                        condition: Some(Box::new(cond)),
-                    },
-                ],
-            )));
+            return Some(st_s(StaticAbilityAst::Compound(vec![
+                StaticAbilityAst::ContinuousLayerEffect {
+                    subject: self_obj(),
+                    set_types: Some(ty_raw.trim().to_string()),
+                    additive_types: false,
+                    base_pt: Some((p.trim().to_string(), t.trim().to_string())),
+                    set_colors: None,
+                    grant_keywords: Vec::new(),
+                    lose_keywords: Vec::new(),
+                    lose_all_abilities: false,
+                    condition: Some(Box::new(cond.clone())),
+                },
+                StaticAbilityAst::RuleOrCombatRestriction {
+                    subject: Some(self_obj()),
+                    rule: tail.trim().to_string(),
+                    filter: None,
+                    condition: Some(Box::new(cond)),
+                },
+            ])));
         }
     }
 
@@ -2127,72 +1521,57 @@ fn parse_continuous_and_conditional_statics_e8(
     if let Some(color_desc) =
         low.strip_prefix("all cards that aren't on the battlefield, spells, and permanents are ")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ContinuousLayerEffect {
-                subject: Box::new(SubjectRefAst::All(Box::new(ObjectFilterAst {
-                    any_card: true,
-                    any_spell: true,
-                    any_permanent: true,
-                    ..Default::default()
-                }))),
-                set_types: None,
-                additive_types: false,
-                base_pt: None,
-                set_colors: Some(color_desc.trim().to_string()),
-                grant_keywords: Vec::new(),
-                lose_keywords: Vec::new(),
-                lose_all_abilities: false,
-                condition: None,
-            },
+        return Some(st_cont_layer(
+            SubjectRefAst::All(Box::new(ObjectFilterAst {
+                any_card: true,
+                any_spell: true,
+                any_permanent: true,
+                ..Default::default()
+            })),
+            None,
+            false,
+            None,
+            Some(color_desc.trim().to_string()),
+            Vec::new(),
+            Vec::new(),
+            false,
         ));
     }
     if let Some(after) = low.strip_prefix("all instances of color words in the text of ")
         && let Some((scope_raw, target_raw)) = after.split_once(" are changed to ")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ContinuousLayerEffect {
-                subject: Box::new(SubjectRefAst::Anaphora(scope_raw.trim().to_string())),
-                set_types: None,
-                additive_types: false,
-                base_pt: None,
-                set_colors: Some(format!("text_change:{}", target_raw.trim())),
-                grant_keywords: Vec::new(),
-                lose_keywords: Vec::new(),
-                lose_all_abilities: false,
-                condition: None,
-            },
+        return Some(st_cont_layer(
+            SubjectRefAst::Anaphora(scope_raw.trim().to_string()),
+            None,
+            false,
+            None,
+            Some(format!("text_change:{}", target_raw.trim())),
+            Vec::new(),
+            Vec::new(),
+            false,
         ));
     }
     if let Some(after) = low.strip_prefix("basic lands of the ")
         && let Some((first_raw, second_raw)) = after.split_once(" are the ")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::SetOrAddType {
-                subject: Box::new(SubjectRefAst::Anaphora(format!(
-                    "basic lands of the {}",
-                    first_raw.trim()
-                ))),
-                type_or_subtype: second_raw.trim().to_string(),
-                additive: false,
-                condition: None,
-            },
+        return Some(st_set_type(
+            SubjectRefAst::Anaphora(format!("basic lands of the {}", first_raw.trim())),
+            second_raw.trim().to_string(),
+            false,
         ));
     }
     if let Some(flt_raw) = low.strip_suffix(" are colorless sources of damage") {
         let subj = parse_subject_or_target(flt_raw.trim(), vocab)
             .unwrap_or_else(|_| SubjectRefAst::Anaphora(flt_raw.trim().to_string()));
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ContinuousLayerEffect {
-                subject: Box::new(subj),
-                set_types: None,
-                additive_types: false,
-                base_pt: None,
-                set_colors: Some("colorless_damage_source".to_string()),
-                grant_keywords: Vec::new(),
-                lose_keywords: Vec::new(),
-                lose_all_abilities: false,
-                condition: None,
-            },
+        return Some(st_cont_layer(
+            subj,
+            None,
+            false,
+            None,
+            Some("colorless_damage_source".to_string()),
+            Vec::new(),
+            Vec::new(),
+            false,
         ));
     }
 
@@ -2212,21 +1591,12 @@ fn parse_keyword_and_spell_grant_statics_e8(
         })
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::SetOrAddType {
-                subject: Box::new(subj),
-                type_or_subtype: "chosen_creature_type".to_string(),
-                additive: true,
-                condition: None,
-            },
-        ));
+        return Some(st_set_type(subj, "chosen_creature_type", true));
     }
 
     // 2. "<spell_flt> gain(s) <kw> <cost> as you cast them" (Zinnia, Ashling, the Limitless)
     if let Some(before) = low.strip_suffix(" as you cast them")
-        && let Some((subj_raw, kw_cost)) = before
-            .split_once(" gain ")
-            .or_else(|| before.split_once(" gains "))
+        && let Some((subj_raw, kw_cost)) = split_once_any(&before, &[" gain ", " gains "])
     {
         let subj = parse_subject_or_target(subj_raw.trim(), vocab)
             .unwrap_or_else(|_| SubjectRefAst::Anaphora(subj_raw.trim().to_string()));
@@ -2234,14 +1604,12 @@ fn parse_keyword_and_spell_grant_statics_e8(
             .trim()
             .split_once(' ')
             .map_or((kw_cost.trim(), ""), |(k, c)| (k, c.trim()));
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::GrantKeywordWithCost {
-                subject: Box::new(subj),
-                keyword: kw.to_string(),
-                cost_rule: cost_rule.to_ascii_uppercase(),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::GrantKeywordWithCost {
+            subject: Box::new(subj),
+            keyword: kw.to_string(),
+            cost_rule: cost_rule.to_ascii_uppercase(),
+            condition: None,
+        }));
     }
 
     // 3. "<card_or_spell_flt> has/have <kw> [<cost>]" for graveyard/cast-filtered grants
@@ -2269,23 +1637,14 @@ fn parse_keyword_and_spell_grant_statics_e8(
             let subj = parse_subject_or_target(subj_raw.trim(), vocab)
                 .unwrap_or_else(|_| SubjectRefAst::Anaphora(subj_raw.trim().to_string()));
             if let Some(cost_rule) = cost_opt {
-                return Some(StaticOrReplacement::Static(
-                    StaticAbilityAst::GrantKeywordWithCost {
-                        subject: Box::new(subj),
-                        keyword: kw.to_string(),
-                        cost_rule,
-                        condition: None,
-                    },
-                ));
-            }
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::GrantKeywords {
+                return Some(st_s(StaticAbilityAst::GrantKeywordWithCost {
                     subject: Box::new(subj),
-                    keywords: vec![kw.to_string()],
+                    keyword: kw.to_string(),
+                    cost_rule,
                     condition: None,
-                    paired_rule: None,
-                },
-            ));
+                }));
+            }
+            return Some(st_kw(subj, vec![kw.to_string()]));
         }
     }
 
@@ -2294,28 +1653,24 @@ fn parse_keyword_and_spell_grant_statics_e8(
     if let Some((head, expr_raw)) = low.split_once(" x, where x is ") {
         let kw = head.strip_prefix("~ has ").unwrap_or(head).trim();
         if !kw.is_empty() && kw.split_whitespace().count() <= 2 {
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::GrantKeywordWithCost {
-                    subject: Box::new(SubjectRefAst::SelfObject),
-                    keyword: kw.to_string(),
-                    cost_rule: format!("x={}", expr_raw.trim()),
-                    condition: None,
-                },
-            ));
+            return Some(st_s(StaticAbilityAst::GrantKeywordWithCost {
+                subject: self_obj(),
+                keyword: kw.to_string(),
+                cost_rule: format!("x={}", expr_raw.trim()),
+                condition: None,
+            }));
         }
     }
     if let Some(rest) = low.strip_prefix("craft with ")
         && let Some((materials, cost_tok)) = rest.rsplit_once(' ')
         && cost_tok.starts_with('{')
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::GrantKeywordWithCost {
-                subject: Box::new(SubjectRefAst::SelfObject),
-                keyword: "craft".to_string(),
-                cost_rule: format!("{}|{}", materials.trim(), cost_tok.to_ascii_uppercase()),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::GrantKeywordWithCost {
+            subject: self_obj(),
+            keyword: "craft".to_string(),
+            cost_rule: format!("{}|{}", materials.trim(), cost_tok.to_ascii_uppercase()),
+            condition: None,
+        }));
     }
 
     // 5. "For each basic land type among <flt>, ~ has landwalk of that type" (Magnigoth Treefolk)
@@ -2324,13 +1679,13 @@ fn parse_keyword_and_spell_grant_statics_e8(
         && rest.contains(" has landwalk of that type")
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::ScaledBy {
+        return Some(st_s(StaticAbilityAst::ScaledBy {
             per: Box::new(ValueExprAst::DistinctCountAmong {
                 category: "basic_land_type".to_string(),
                 filter: Box::new(flt),
             }),
             inner: Box::new(StaticAbilityAst::GrantKeywords {
-                subject: Box::new(SubjectRefAst::SelfObject),
+                subject: self_obj(),
                 keywords: vec!["landwalk_matching_basic_land_type".to_string()],
                 condition: None,
                 paired_rule: None,
@@ -2344,26 +1699,16 @@ fn parse_keyword_and_spell_grant_statics_e8(
         && let Some((flt_part, _)) = cond_part.split_once(" was exiled with ~'s ")
         && let Some(kws) = parse_keyword_list(body_part.trim(), vocab)
     {
-        let mut flt =
-            parse_object_filter(flt_part.trim(), vocab).unwrap_or_else(|_| ObjectFilterAst {
-                any_types: CardTypeMask::CREATURE,
-                any_card: true,
-                ..Default::default()
-            });
+        let mut flt = parse_object_filter(flt_part.trim(), vocab)
+            .unwrap_or_else(|_| card_flt(CardTypeMask::CREATURE));
         flt.zone = Some(ZoneFilter::Exile);
         flt.flags = flt.flags.union(ObjectFilterFlags::EXILED_WITH_SELF);
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::GrantKeywords {
-                subject: Box::new(SubjectRefAst::SelfObject),
-                keywords: kws,
-                condition: Some(Box::new(ConditionAst::ZoneObjectCount {
-                    filter: Box::new(flt),
-                    op: CompareOp::Ge,
-                    value: 1,
-                })),
-                paired_rule: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::GrantKeywords {
+            subject: self_obj(),
+            keywords: kws,
+            condition: Some(Box::new(cond_zone_count(flt, CompareOp::Ge, 1))),
+            paired_rule: None,
+        }));
     }
 
     None
@@ -2397,9 +1742,9 @@ fn parse_cost_and_permission_statics_e8(
                 && let Ok(n) = after_plus.parse::<i32>()
             {
                 Some(CostAtomAst::PutCounters {
-                    count: Box::new(ValueExprAst::Const(n)),
+                    count: vconst(n),
                     counter_kind: "loyalty".to_string(),
-                    subject: Box::new(SubjectRefAst::Anaphora("that planeswalker".to_string())),
+                    subject: box_anaphora("that planeswalker"),
                 })
             } else if let Some(life_raw) = cost_clean.strip_suffix(" life")
                 && let Ok(amt) = parse_value_expr(life_raw.trim(), vocab)
@@ -2421,26 +1766,22 @@ fn parse_cost_and_permission_statics_e8(
                                 None
                             }
                         });
-                    return Some(StaticOrReplacement::Static(
-                        StaticAbilityAst::AdditionalActivationCost {
-                            subject: subj,
-                            cost: cost_atom,
-                            per,
-                            condition: None,
-                        },
-                    ));
+                    return Some(st_s(StaticAbilityAst::AdditionalActivationCost {
+                        subject: subj,
+                        cost: cost_atom,
+                        per,
+                        condition: None,
+                    }));
                 }
                 // Additional cast cost (Terror of the Peaks, Drought spells)
                 let subj = parse_subject_or_target(head.trim(), vocab)
                     .unwrap_or_else(|_| SubjectRefAst::Anaphora(head.trim().to_string()));
-                return Some(StaticOrReplacement::Static(
-                    StaticAbilityAst::AdditionalActivationCost {
-                        subject: Some(Box::new(subj)),
-                        cost: cost_atom,
-                        per: per.or_else(|| Some("cast".to_string())),
-                        condition: None,
-                    },
-                ));
+                return Some(st_s(StaticAbilityAst::AdditionalActivationCost {
+                    subject: Some(Box::new(subj)),
+                    cost: cost_atom,
+                    per: per.or_else(|| Some("cast".to_string())),
+                    condition: None,
+                }));
             }
         }
     }
@@ -2450,43 +1791,40 @@ fn parse_cost_and_permission_statics_e8(
         && let Some((subj_raw, rest)) = after.split_once(", ")
     {
         let r = rest.trim();
-        if let Some(flt_raw) = r.strip_prefix("sacrifice half ").and_then(|x| {
-            x.strip_suffix(", rounded up")
-                .or_else(|| x.strip_suffix(", rounded down"))
-        }) && let Ok(flt) = parse_object_filter(
-            flt_raw
-                .trim()
-                .strip_prefix("the ")
-                .unwrap_or(flt_raw.trim()),
-            vocab,
-        ) {
+        if let Some(flt_raw) = r
+            .strip_prefix("sacrifice half ")
+            .and_then(|x| strip_suffix_any(x, &[", rounded up", ", rounded down"]))
+            && let Ok(flt) = parse_object_filter(
+                flt_raw
+                    .trim()
+                    .strip_prefix("the ")
+                    .unwrap_or(flt_raw.trim()),
+                vocab,
+            )
+        {
             let rounding = if r.ends_with("rounded up") {
                 Rounding::Up
             } else {
                 Rounding::Down
             };
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::AdditionalCastCost {
-                    cost: CostAtomAst::Sacrifice {
-                        count: Box::new(ValueExprAst::DivConst {
-                            expr: Box::new(ValueExprAst::Count(Box::new(flt.clone()))),
-                            denom: 2,
-                            rounding,
-                        }),
-                        filter: Box::new(flt),
-                        up_to: false,
-                        min_one: false,
-                    },
+            return Some(st_s(StaticAbilityAst::AdditionalCastCost {
+                cost: CostAtomAst::Sacrifice {
+                    count: Box::new(val_div(
+                        ValueExprAst::Count(Box::new(flt.clone())),
+                        2,
+                        rounding,
+                    )),
+                    filter: Box::new(flt),
+                    up_to: false,
+                    min_one: false,
                 },
-            ));
+            }));
         }
         if r == "you may pay any amount of mana" {
             let _ = subj_raw;
-            return Some(StaticOrReplacement::Static(
-                StaticAbilityAst::AdditionalCastCost {
-                    cost: CostAtomAst::PayMana("{X}".to_string()),
-                },
-            ));
+            return Some(st_s(StaticAbilityAst::AdditionalCastCost {
+                cost: CostAtomAst::PayMana("{X}".to_string()),
+            }));
         }
     }
 
@@ -2496,14 +1834,12 @@ fn parse_cost_and_permission_statics_e8(
         && let Some(cost_raw) = rest.strip_suffix(" rather than pay that mana")
         && let Ok(cost_atom) = parse_cost_atom(cost_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::AlternativeAbilityCost {
-                cost: vec![cost_atom],
-                ability_kind: "mana_substitution".to_string(),
-                scope: sym_raw.trim().to_ascii_uppercase(),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::AlternativeAbilityCost {
+            cost: vec![cost_atom],
+            ability_kind: "mana_substitution".to_string(),
+            scope: sym_raw.trim().to_ascii_uppercase(),
+            condition: None,
+        }));
     }
 
     // 4. Alternative cast costs ("Rather than pay ...", "If <cond>, rather than pay ...", "Once during each of your turns, you may cast <flt> by paying ... rather than ...", "If <cond>, you may cast ~ without paying its mana cost and as though it had flash")
@@ -2512,17 +1848,7 @@ fn parse_cost_and_permission_statics_e8(
         low.strip_prefix("rather than pay the mana cost for a spell, its controller may ")
         && let Ok(cost_atom) = parse_cost_atom(after.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::AlternativeCastCost {
-                cost: vec![cost_atom],
-                condition: None,
-                for_spells: Some(Box::new(ObjectFilterAst {
-                    any_spell: true,
-                    ..Default::default()
-                })),
-                next_only: false,
-            },
-        ));
+        return Some(st_alt_cast(vec![cost_atom], Some(any_spell_flt())));
     }
     if low.starts_with("rather than pay ")
         && let Some((paid_part, alt_part)) = low.split_once(", ")
@@ -2533,24 +1859,17 @@ fn parse_cost_and_permission_statics_e8(
             .and_then(|r| r.split_once(" life"))
             .and_then(|(n, _)| parse_number_word(n.trim()))
             .map_or_else(
-                || CostAtomAst::PayLife(Box::new(ValueExprAst::Const(2))),
+                || CostAtomAst::PayLife(vconst(2)),
                 |n| {
                     CostAtomAst::PayLife(Box::new(ValueExprAst::Mul(
-                        Box::new(ValueExprAst::Const(n)),
+                        vconst(n),
                         Box::new(ValueExprAst::TimesCastFromCommandZone(Box::new(
                             SubjectRefAst::SelfObject,
                         ))),
                     )))
                 },
             );
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::AlternativeCastCost {
-                cost: vec![life_cost],
-                condition: None,
-                for_spells: None,
-                next_only: false,
-            },
-        ));
+        return Some(st_alt_cast(vec![life_cost], None));
     }
     if let Some(after_if) = low.strip_prefix("if ")
         && let Some((cond_raw, rest)) = after_if.split_once(", rather than pay ~'s mana cost, ")
@@ -2560,14 +1879,12 @@ fn parse_cost_and_permission_statics_e8(
         let cost = parse_cost_atom(eff_clean, vocab)
             .map(|c| vec![c])
             .unwrap_or_default();
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::AlternativeCastCost {
-                cost,
-                condition: Some(Box::new(cond)),
-                for_spells: None,
-                next_only: false,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::AlternativeCastCost {
+            cost,
+            condition: Some(Box::new(cond)),
+            for_spells: None,
+            next_only: false,
+        }));
     }
     if let Some(after_if) = low.strip_prefix("if ")
         && let Some((cond_raw, rest)) =
@@ -2581,19 +1898,17 @@ fn parse_cost_and_permission_statics_e8(
             next_only: false,
         };
         if rest.contains("as though it had flash") {
-            return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-                vec![
-                    alt,
-                    StaticAbilityAst::GrantKeywords {
-                        subject: Box::new(SubjectRefAst::SelfObject),
-                        keywords: vec!["flash".to_string()],
-                        condition: Some(Box::new(cond)),
-                        paired_rule: None,
-                    },
-                ],
-            )));
+            return Some(st_s(StaticAbilityAst::Compound(vec![
+                alt,
+                StaticAbilityAst::GrantKeywords {
+                    subject: self_obj(),
+                    keywords: vec!["flash".to_string()],
+                    condition: Some(Box::new(cond)),
+                    paired_rule: None,
+                },
+            ])));
         }
-        return Some(StaticOrReplacement::Static(alt));
+        return Some(st_s(alt));
     }
     if let Some(after) = low.strip_prefix("once during each of your turns, you may cast ")
         && let Some((flt_raw, rest)) = after
@@ -2601,17 +1916,17 @@ fn parse_cost_and_permission_statics_e8(
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
         let _ = rest;
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::OncePerTurn(
-            Box::new(StaticAbilityAst::AlternativeCastCost {
+        return Some(st_s(StaticAbilityAst::OncePerTurn(Box::new(
+            StaticAbilityAst::AlternativeCastCost {
                 cost: vec![CostAtomAst::PayLife(Box::new(ValueExprAst::ObjectStat {
-                    subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                    subject: box_anaphora("it"),
                     stat: StatKind::ManaValue,
                 }))],
                 condition: Some(Box::new(ConditionAst::IsYourTurn)),
                 for_spells: Some(Box::new(flt)),
                 next_only: false,
-            }),
-        )));
+            },
+        ))));
     }
 
     // 5. Cast from graveyard with scaling tax ("You may cast ~ from <zone> if you pay <delta> more to cast it for each <flt>") (Risen Executioner)
@@ -2620,28 +1935,26 @@ fn parse_cost_and_permission_statics_e8(
         && let Some((delta_raw, fe_raw)) = rest.split_once(" more to cast it for each ")
         && let Ok(per_flt) = parse_object_filter(fe_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-            vec![
-                StaticAbilityAst::PlayOrCastPermission {
-                    cast_only: true,
-                    filter: Box::new(ObjectFilterAst {
-                        zone: Some(ZoneFilter::YourGraveyard),
-                        ..Default::default()
-                    }),
-                    permission: format!("cast_self_from_{}", zone_raw.trim()),
-                    condition: None,
-                },
-                StaticAbilityAst::CostModifier {
-                    subject: Box::new(SubjectRefAst::SelfObject),
-                    delta: delta_raw.trim().to_ascii_uppercase(),
-                    less: false,
-                    next_only: false,
-                    per: Some(Box::new(per_flt)),
-                    scale_expr: None,
-                    condition: None,
-                },
-            ],
-        )));
+        return Some(st_s(StaticAbilityAst::Compound(vec![
+            StaticAbilityAst::PlayOrCastPermission {
+                cast_only: true,
+                filter: Box::new(ObjectFilterAst {
+                    zone: Some(ZoneFilter::YourGraveyard),
+                    ..Default::default()
+                }),
+                permission: format!("cast_self_from_{}", zone_raw.trim()),
+                condition: None,
+            },
+            StaticAbilityAst::CostModifier {
+                subject: self_obj(),
+                delta: delta_raw.trim().to_ascii_uppercase(),
+                less: false,
+                next_only: false,
+                per: Some(Box::new(per_flt)),
+                scale_expr: None,
+                condition: None,
+            },
+        ])));
     }
 
     // 6. Foretell cost/timing modifiers (Ranar, Cosmos Charger)
@@ -2649,20 +1962,18 @@ fn parse_cost_and_permission_statics_e8(
         && let Some((action_raw, rest)) = after.split_once(" each turn costs ")
         && let Some((cost_tok, _)) = rest.split_once(" to ")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::AlternativeAbilityCost {
-                cost: vec![CostAtomAst::PayMana(cost_tok.trim().to_ascii_uppercase())],
-                ability_kind: action_raw.trim().to_string(),
-                scope: "first_each_turn".to_string(),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::AlternativeAbilityCost {
+            cost: vec![CostAtomAst::PayMana(cost_tok.trim().to_ascii_uppercase())],
+            ability_kind: action_raw.trim().to_string(),
+            scope: "first_each_turn".to_string(),
+            condition: None,
+        }));
     }
     if let Some(after) = low.strip_prefix("foretelling cards from your hand costs ")
         && let Some((delta_raw, tail)) = after.split_once(" less")
     {
         let mut items = vec![StaticAbilityAst::CostModifier {
-            subject: Box::new(SubjectRefAst::Anaphora("foretell".to_string())),
+            subject: box_anaphora("foretell"),
             delta: delta_raw.trim().to_ascii_uppercase(),
             less: true,
             next_only: false,
@@ -2673,15 +1984,13 @@ fn parse_cost_and_permission_statics_e8(
         if tail.contains("on any player's turn") {
             items.push(StaticAbilityAst::ActivationLimitOverride {
                 ability_kind: "foretell".to_string(),
-                subject: Box::new(SubjectRefAst::Anaphora("cards in your hand".to_string())),
+                subject: box_anaphora("cards in your hand"),
                 extra_times: 0,
                 instant_speed: true,
                 condition: None,
             });
         }
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-            items,
-        )));
+        return Some(st_s(StaticAbilityAst::Compound(items)));
     }
 
     // 7. Mana spend restriction ("Spend only <kind> mana on X") (Emblazoned Golem)
@@ -2689,14 +1998,12 @@ fn parse_cost_and_permission_statics_e8(
         .strip_prefix("spend only ")
         .and_then(|r| r.strip_suffix(" mana on x"))
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ManaSpendRule {
-                mana_kind: Some(kind_raw.trim().to_string()),
-                as_though: "spend_only_on_x".to_string(),
-                purpose: Some("x".to_string()),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::ManaSpendRule {
+            mana_kind: Some(kind_raw.trim().to_string()),
+            as_though: "spend_only_on_x".to_string(),
+            purpose: Some("x".to_string()),
+            condition: None,
+        }));
     }
 
     // 8. Play/cast/plot permissions (Shared Fate, Evelyn, Fblthp Lost on the Range)
@@ -2705,14 +2012,7 @@ fn parse_cost_and_permission_statics_e8(
         && let Ok(mut flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
         flt.zone = Some(ZoneFilter::YourLibrary);
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::PlayOrCastPermission {
-                cast_only: true,
-                filter: Box::new(flt),
-                permission: "plot_from_library_top".to_string(),
-                condition: None,
-            },
-        ));
+        return Some(st_perm(true, flt, "plot_from_library_top"));
     }
     if low.starts_with("each player may look at cards they exiled with ~")
         && low.contains("play lands and cast spells from among those cards")
@@ -2723,22 +2023,20 @@ fn parse_cost_and_permission_statics_e8(
             flags: ObjectFilterFlags::EXILED_WITH_SELF,
             ..Default::default()
         };
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-            vec![
-                StaticAbilityAst::LookOrRevealRule {
-                    rule: "look_at_exiled_with_self".to_string(),
-                    filter: Some(Box::new(flt.clone())),
-                    follow_up: Vec::new(),
-                    condition: None,
-                },
-                StaticAbilityAst::PlayOrCastPermission {
-                    cast_only: false,
-                    filter: Box::new(flt),
-                    permission: "each_player_play_exiled_with_self".to_string(),
-                    condition: None,
-                },
-            ],
-        )));
+        return Some(st_s(StaticAbilityAst::Compound(vec![
+            StaticAbilityAst::LookOrRevealRule {
+                rule: "look_at_exiled_with_self".to_string(),
+                filter: Some(Box::new(flt.clone())),
+                follow_up: Vec::new(),
+                condition: None,
+            },
+            StaticAbilityAst::PlayOrCastPermission {
+                cast_only: false,
+                filter: Box::new(flt),
+                permission: "each_player_play_exiled_with_self".to_string(),
+                condition: None,
+            },
+        ])));
     }
     if let Some(after) = low.strip_prefix("once each turn, you may play a card from exile with a ")
         && let Some((ck_raw, rest)) = after.split_once(" counter on it")
@@ -2763,9 +2061,9 @@ fn parse_cost_and_permission_statics_e8(
                 condition: None,
             });
         }
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::OncePerTurn(
-            Box::new(StaticAbilityAst::Compound(items)),
-        )));
+        return Some(st_s(StaticAbilityAst::OncePerTurn(Box::new(
+            StaticAbilityAst::Compound(items),
+        ))));
     }
 
     // 9. Pregame mulligan special action ("Any time you could mulligan and ~ is in your hand, <eff>") (Serum Powder)
@@ -2773,13 +2071,13 @@ fn parse_cost_and_permission_statics_e8(
         let rest_s = &s[s.len() - after.len()..];
         let (body, fails) = parse_effect_body(rest_s, vocab);
         if fails.is_empty() && !body.is_empty() {
-            return Some(StaticOrReplacement::Static(StaticAbilityAst::FollowUp(
-                vec![InstructionAst::TemporarySpecialAction {
+            return Some(st_s(StaticAbilityAst::FollowUp(vec![
+                InstructionAst::TemporarySpecialAction {
                     timing: "mulligan".to_string(),
                     duration: DurationAst::Permanent,
                     body,
-                }],
-            )));
+                },
+            ])));
         }
     }
 
@@ -2797,33 +2095,25 @@ fn parse_replacement_and_enters_statics_e8(
         if let Some(after_ex) = after.strip_prefix("you may exchange ")
             && (after_ex.contains("text box") || after_ex.contains("text boxes"))
         {
-            return Some(StaticOrReplacement::Replacement(
-                ReplacementEffectAst::AsEntersAction(vec![InstructionAst::Optional(vec![
-                    InstructionAst::ExchangeTextBoxes {
-                        left: Box::new(SubjectRefAst::SelfObject),
-                        right: Box::new(SubjectRefAst::Anaphora("another creature".to_string())),
-                    },
-                ])]),
-            ));
+            return Some(st_r(ReplacementEffectAst::AsEntersAction(vec![ins_opt1(
+                InstructionAst::ExchangeTextBoxes {
+                    left: self_obj(),
+                    right: box_anaphora("another creature"),
+                },
+            )])));
         }
         if let Some(flt_raw) = after
             .strip_prefix("choose ")
             .and_then(|r| r.strip_suffix(" it could be attached to"))
             && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
         {
-            return Some(StaticOrReplacement::Replacement(
-                ReplacementEffectAst::AsEntersAction(vec![InstructionAst::ChooseFromGroup {
-                    count: Box::new(ValueExprAst::Const(1)),
-                    random: false,
-                    group: Box::new(SubjectRefAst::Group(Box::new(flt))),
-                }]),
-            ));
+            return Some(st_r(ReplacementEffectAst::AsEntersAction(vec![
+                ins_choose_group(ValueExprAst::Const(1), false, grp(flt)),
+            ])));
         }
         let (body, fails) = parse_effect_body(rest_s, vocab);
         if fails.is_empty() && !body.is_empty() {
-            return Some(StaticOrReplacement::Replacement(
-                ReplacementEffectAst::AsEntersAction(body),
-            ));
+            return Some(st_r(ReplacementEffectAst::AsEntersAction(body)));
         }
     }
 
@@ -2832,66 +2122,42 @@ fn parse_replacement_and_enters_statics_e8(
         && let Some((flt_raw, rest)) = after.split_once(" enters, ")
         && let Ok(_flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EventInstead {
-                subject_or_event: flt_raw.trim().to_string(),
-                would: "enters".to_string(),
-                instead: rest.trim().to_string(),
-                instead_body: parse_atomic_effect(rest.trim(), vocab).ok(),
-            },
+        return Some(st_instead(
+            flt_raw.trim().to_string(),
+            "enters",
+            rest.trim().to_string(),
+            parse_atomic_effect(rest.trim(), vocab).ok(),
         ));
     }
 
-    // 3. Multi-sentence as-enters & additional-cost follow-ups (Neverwinter Hydra, Grifter's Blade, Chorus of the Conclave, Alhammarret)
-    if let Some(after) = low.strip_prefix("it enters with a number of ")
-        && let Some((ck_raw, val_raw)) = after.split_once(" counters on it equal to ")
-    {
-        let count = parse_value_expr(val_raw.trim(), vocab).unwrap_or(ValueExprAst::PriorResult);
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EntersWithCounters {
-                counter_kind: ck_raw.trim().to_string(),
-                count: Box::new(count),
-                per: None,
-                x_expr: None,
-                condition: None,
-            },
-        ));
-    }
     if let Some(after) = low.strip_prefix("if you do, ") {
         if let Some(subj_raw) = after.strip_prefix("it enters attached to ") {
-            return Some(StaticOrReplacement::Replacement(
-                ReplacementEffectAst::EventInstead {
-                    subject_or_event: "~".to_string(),
-                    would: "enter".to_string(),
-                    instead: format!("enters_attached_to:{}", subj_raw.trim()),
-                    instead_body: None,
-                },
+            return Some(st_instead(
+                "~",
+                "enter",
+                format!("enters_attached_to:{}", subj_raw.trim()),
+                None,
             ));
         }
         if let Some((subj_raw, rest)) = after.split_once(" enters with that many additional ")
             && let Some(ck_raw) = rest.strip_suffix(" counters on it")
             && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
         {
-            return Some(StaticOrReplacement::Replacement(
-                ReplacementEffectAst::OthersEnterWithCounters {
-                    subject: Box::new(subj),
-                    counter_kind: ck_raw.trim().to_string(),
-                    count: Box::new(ValueExprAst::PriorResult),
-                    additional: true,
-                    per: None,
-                },
-            ));
+            return Some(st_r(ReplacementEffectAst::OthersEnterWithCounters {
+                subject: Box::new(subj),
+                counter_kind: ck_raw.trim().to_string(),
+                count: Box::new(ValueExprAst::PriorResult),
+                additional: true,
+                per: None,
+            }));
         }
     }
     if let Some(after) = low.strip_prefix("you choose the name of ")
         && let Some(flt_raw) = after.strip_suffix(" revealed this way")
     {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::FollowUp(
-            vec![InstructionAst::ChooseOption(format!(
-                "card_name_revealed:{}",
-                flt_raw.trim()
-            ))],
-        )));
+        return Some(st_s(StaticAbilityAst::FollowUp(vec![
+            InstructionAst::ChooseOption(format!("card_name_revealed:{}", flt_raw.trim())),
+        ])));
     }
 
     // 4. "For each kind of counter on <subj>, <other_subj> enters with a counter of that kind on it" (Blue, Loyal Raptor)
@@ -2900,40 +2166,34 @@ fn parse_replacement_and_enters_statics_e8(
         && let Some(other_raw) = rest.strip_suffix(" enters with a counter of that kind on it")
         && let Ok(other_subj) = parse_subject_or_target(other_raw.trim(), vocab)
     {
-        let src_flt =
-            parse_object_filter(src_raw.trim(), vocab).unwrap_or_else(|_| ObjectFilterAst {
-                any_permanent: true,
-                ..Default::default()
-            });
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::ScaledBy {
-                per: Box::new(ValueExprAst::DistinctCountAmong {
-                    category: "counter_kind".to_string(),
-                    filter: Box::new(src_flt),
-                }),
-                inner: Box::new(ReplacementEffectAst::OthersEnterWithCounters {
-                    subject: Box::new(other_subj),
-                    counter_kind: "that kind".to_string(),
-                    count: Box::new(ValueExprAst::Const(1)),
-                    additional: false,
-                    per: None,
-                }),
-            },
-        ));
+        let src_flt = parse_object_filter(src_raw.trim(), vocab).unwrap_or_else(|_| any_perm());
+        return Some(st_r(ReplacementEffectAst::ScaledBy {
+            per: Box::new(ValueExprAst::DistinctCountAmong {
+                category: "counter_kind".to_string(),
+                filter: Box::new(src_flt),
+            }),
+            inner: Box::new(ReplacementEffectAst::OthersEnterWithCounters {
+                subject: Box::new(other_subj),
+                counter_kind: "that kind".to_string(),
+                count: vconst(1),
+                additional: false,
+                per: None,
+            }),
+        }));
     }
 
     // 5. "~ escapes with \"<ability>\"" (Skyway Robber)
     if low.starts_with("~ escapes with \"") && s.contains('"') {
         let (quoted, _) = extract_quoted_segments(s);
         if let Some(ab) = quoted.into_iter().next() {
-            return Some(StaticOrReplacement::Replacement(
-                ReplacementEffectAst::AsEntersAction(vec![InstructionAst::GrantAbilityText {
-                    subject: Box::new(SubjectRefAst::SelfObject),
+            return Some(st_r(ReplacementEffectAst::AsEntersAction(vec![
+                InstructionAst::GrantAbilityText {
+                    subject: self_obj(),
                     ability_text: ab,
                     compiled: None,
                     duration: DurationAst::Permanent,
-                }]),
-            ));
+                },
+            ])));
         }
     }
 
@@ -2942,14 +2202,12 @@ fn parse_replacement_and_enters_statics_e8(
     if let Some(cost_raw) = low.strip_prefix("after you roll a die, you may ")
         && let Ok(costs) = parse_cost_list(cost_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::DieRollModifier {
-                cost: costs,
-                delta: None,
-                reroll: false,
-                once_each_turn: false,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::DieRollModifier {
+            cost: costs,
+            delta: None,
+            reroll: false,
+            once_each_turn: false,
+        }));
     }
     if let Some(num_raw) = low
         .strip_prefix("if you do, increase or decrease the result by ")
@@ -2957,27 +2215,23 @@ fn parse_replacement_and_enters_statics_e8(
         && let Some(n) = parse_number_word(num_raw.trim())
         && let Ok(delta) = i8::try_from(n)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::DieRollModifier {
-                cost: Vec::new(),
-                delta: Some(delta),
-                reroll: false,
-                once_each_turn: false,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::DieRollModifier {
+            cost: Vec::new(),
+            delta: Some(delta),
+            reroll: false,
+            once_each_turn: false,
+        }));
     }
     if let Some(after) = low.strip_prefix("once each turn, you may ")
         && let Some((cost_raw, _)) = after.split_once(" to reroll one or more dice you rolled")
         && let Ok(costs) = parse_cost_list(cost_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::DieRollModifier {
-                cost: costs,
-                delta: None,
-                reroll: true,
-                once_each_turn: true,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::DieRollModifier {
+            cost: costs,
+            delta: None,
+            reroll: true,
+            once_each_turn: true,
+        }));
     }
 
     // 7. Damage-counter replacement ("For each 1 damage that would be dealt to <subj>, if it has a <ck> counter on it, remove a <ck> counter from it and prevent that 1 damage") (Rock Hydra)
@@ -2986,133 +2240,95 @@ fn parse_replacement_and_enters_statics_e8(
         && let Some((ck_raw, _)) = rest.split_once(" counter on it, remove ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::PreventAndReplaceDamage {
-                target: Box::new(subj.clone()),
-                follow_up: vec![InstructionAst::RemoveCounters {
-                    subject: Box::new(subj),
-                    counter_kind: ck_raw.trim().to_string(),
-                    all: false,
-                    count: Some(Box::new(ValueExprAst::Const(1))),
-                }],
-                condition: Some(Box::new(ConditionAst::CounterCompare {
-                    subject: Box::new(SubjectRefAst::SelfObject),
-                    counter_kind: ck_raw.trim().to_string(),
-                    op: CompareOp::Ge,
-                    value: 1,
-                })),
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::PreventAndReplaceDamage {
+            target: Box::new(subj.clone()),
+            follow_up: vec![ins_rm_counters(
+                subj,
+                ck_raw.trim().to_string(),
+                false,
+                Some(ValueExprAst::Const(1)),
+            )],
+            condition: Some(Box::new(ConditionAst::CounterCompare {
+                subject: self_obj(),
+                counter_kind: ck_raw.trim().to_string(),
+                op: CompareOp::Ge,
+                value: 1,
+            })),
+        }));
     }
 
-    // 8. Death / discard / villainous choice / coin-flip / draw / surveil / cascade / library-search replacements
-    // (Firestorm Phoenix, Library of Leng, Nephalia Academy, The Valeyard, Edgar, River Song, Enhanced Surveillance, Averna, Opposition Agent)
-    if let Some(after_if) = low.strip_prefix("if ~ would die, ")
-        && let Some(eff_raw) = after_if.strip_suffix(" instead")
-        && let Ok(body) = parse_atomic_effect(eff_raw.trim(), vocab)
-    {
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EventInstead {
-                subject_or_event: "~".to_string(),
-                would: "die".to_string(),
-                instead: eff_raw.trim().to_string(),
-                instead_body: Some(body),
-            },
-        ));
-    }
     if let Some(after_if) = low.strip_prefix("if ")
         && let Some((src_raw, rest)) = after_if.split_once(" causes you to discard a card, ")
         && rest.contains(" instead of ")
     {
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EventInstead {
-                subject_or_event: src_raw.trim().to_string(),
-                would: "discard_card".to_string(),
-                instead: rest.trim().to_string(),
-                instead_body: None,
-            },
+        return Some(st_instead(
+            src_raw.trim().to_string(),
+            "discard_card",
+            rest.trim().to_string(),
+            None,
         ));
     }
     if let Some(after_if) = low.strip_prefix("if ")
         && let Some((who_raw, _)) = after_if
             .split_once(" would face a villainous choice, they face that choice an additional time")
     {
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EventInstead {
-                subject_or_event: who_raw.trim().to_string(),
-                would: "villainous_choice".to_string(),
-                instead: "face_additional_time".to_string(),
-                instead_body: None,
-            },
+        return Some(st_instead(
+            who_raw.trim().to_string(),
+            "villainous_choice",
+            "face_additional_time",
+            None,
         ));
     }
     if low.starts_with("the first time you flip one or more coins each turn, ") {
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EventInstead {
-                subject_or_event: "you".to_string(),
-                would: "first_coin_flip_each_turn".to_string(),
-                instead: low.to_string(),
-                instead_body: None,
-            },
+        return Some(st_instead(
+            "you",
+            "first_coin_flip_each_turn",
+            low.to_string(),
+            None,
         ));
     }
     if low == "you draw cards from the bottom of your library rather than the top" {
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EventInstead {
-                subject_or_event: "you".to_string(),
-                would: "draw_card".to_string(),
-                instead: "draw_from_bottom".to_string(),
-                instead_body: None,
-            },
-        ));
+        return Some(st_instead("you", "draw_card", "draw_from_bottom", None));
     }
     if let Some(after) = low.strip_prefix("you may look at an additional ")
         && let Some((num_raw, action_raw)) = after.split_once(" cards each time you ")
         && let Some(n) = parse_number_word(num_raw.trim())
     {
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EventInstead {
-                subject_or_event: "you".to_string(),
-                would: action_raw.trim().to_string(),
-                instead: format!("look_additional:{n}"),
-                instead_body: None,
-            },
+        return Some(st_instead(
+            "you",
+            action_raw.trim().to_string(),
+            format!("look_additional:{n}"),
+            None,
         ));
     }
     if let Some(after) = low.strip_prefix("as you cascade, ") {
         let rest_s = &s[s.len() - after.len()..];
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EventInstead {
-                subject_or_event: "you".to_string(),
-                would: "cascade".to_string(),
-                instead: after.trim().to_string(),
-                instead_body: parse_atomic_effect(rest_s, vocab).ok(),
-            },
+        return Some(st_instead(
+            "you",
+            "cascade",
+            after.trim().to_string(),
+            parse_atomic_effect(rest_s, vocab).ok(),
         ));
     }
     if let Some(after) = low.strip_prefix("while ")
         && let Some((who_raw, rest)) = after.split_once(" is searching their library, ")
     {
-        return Some(StaticOrReplacement::Replacement(
-            ReplacementEffectAst::EventInstead {
-                subject_or_event: who_raw.trim().to_string(),
-                would: "search_library".to_string(),
-                instead: rest.trim().to_string(),
-                instead_body: parse_atomic_effect(rest.trim(), vocab).ok(),
-            },
+        return Some(st_instead(
+            who_raw.trim().to_string(),
+            "search_library",
+            rest.trim().to_string(),
+            parse_atomic_effect(rest.trim(), vocab).ok(),
         ));
     }
     if let Some(after) = low.strip_prefix("you control ")
         && let Some(who_raw) = after.strip_suffix(" while they're searching their libraries")
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ControlChange {
-                controller: "you_while_searching".to_string(),
-                subject: Box::new(SubjectRefAst::Player(player)),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::ControlChange {
+            controller: "you_while_searching".to_string(),
+            subject: Box::new(SubjectRefAst::Player(player)),
+            condition: None,
+        }));
     }
 
     None
@@ -3130,9 +2346,7 @@ fn parse_combat_activation_and_rule_statics_e8(
         .or_else(|| low.strip_prefix('-').map(|r| (false, r)))
         .or_else(|| low.strip_prefix('\u{2212}').map(|r| (false, r)));
     if let Some((positive, after_sign)) = signed_prefix
-        && let Some((num_tok, rest_low)) = after_sign
-            .split_once(", and ")
-            .or_else(|| after_sign.split_once(", then "))
+        && let Some((num_tok, rest_low)) = split_once_any(&after_sign, &[", and ", ", then "])
         && let Ok(n) = num_tok.trim().parse::<i32>()
     {
         let rest_s = &s[s.len() - rest_low.len()..];
@@ -3140,22 +2354,22 @@ fn parse_combat_activation_and_rule_statics_e8(
         if fails.is_empty() && !body.is_empty() {
             let signed_n = if positive { n } else { -n };
             let loyalty_ins = if signed_n >= 0 {
-                InstructionAst::PutCounters {
-                    subject: Box::new(SubjectRefAst::SelfObject),
-                    counter_kind: "loyalty".to_string(),
-                    count: Box::new(ValueExprAst::Const(signed_n)),
-                }
+                ins_counters(
+                    SubjectRefAst::SelfObject,
+                    "loyalty",
+                    ValueExprAst::Const(signed_n),
+                )
             } else {
                 InstructionAst::RemoveCounters {
-                    subject: Box::new(SubjectRefAst::SelfObject),
+                    subject: self_obj(),
                     counter_kind: "loyalty".to_string(),
                     all: false,
-                    count: Some(Box::new(ValueExprAst::Const(-signed_n))),
+                    count: Some(vconst(-signed_n)),
                 }
             };
             let mut out = vec![loyalty_ins];
             out.append(&mut body);
-            return Some(StaticOrReplacement::Static(StaticAbilityAst::FollowUp(out)));
+            return Some(st_s(StaticAbilityAst::FollowUp(out)));
         }
     }
 
@@ -3176,45 +2390,39 @@ fn parse_combat_activation_and_rule_statics_e8(
             .trim()
             .strip_prefix("the ")
             .unwrap_or(kind_raw.trim());
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ActivationLimitOverride {
-                ability_kind: ability_kind.to_string(),
-                subject: Box::new(subj),
-                extra_times: if tail { 0 } else { 1 },
-                instant_speed: tail,
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::ActivationLimitOverride {
+            ability_kind: ability_kind.to_string(),
+            subject: Box::new(subj),
+            extra_times: if tail { 0 } else { 1 },
+            instant_speed: tail,
+            condition: None,
+        }));
     }
     if let Some((subj_raw, rest)) = low.split_once(" can ")
         && let Some((action_raw, _)) =
             rest.split_once(" twice during each of your turns rather than once")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ActivationLimitOverride {
-                ability_kind: action_raw.trim().to_string(),
-                subject: Box::new(subj),
-                extra_times: 1,
-                instant_speed: false,
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::ActivationLimitOverride {
+            ability_kind: action_raw.trim().to_string(),
+            subject: Box::new(subj),
+            extra_times: 1,
+            instant_speed: false,
+            condition: None,
+        }));
     }
     if let Some(after) = low.strip_prefix("each ")
         && let Some((kind_raw, rest)) = after.split_once(" ability of ")
         && let Some(subj_raw) = rest.strip_suffix(" can be activated an additional time")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::ActivationLimitOverride {
-                ability_kind: kind_raw.trim().to_string(),
-                subject: Box::new(subj),
-                extra_times: 1,
-                instant_speed: false,
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::ActivationLimitOverride {
+            ability_kind: kind_raw.trim().to_string(),
+            subject: Box::new(subj),
+            extra_times: 1,
+            instant_speed: false,
+            condition: None,
+        }));
     }
 
     // 3. Combat damage assignment & lethal-damage rules (Arcades, Zilortha, Defensive Formation, Butcher Orgg, Cunning Giant, Loot)
@@ -3228,69 +2436,58 @@ fn parse_combat_activation_and_rule_statics_e8(
             condition: None,
         }];
         if rest.contains("can attack as though it didn't have defender") {
-            items.push(StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: "can_attack_as_though_no_defender".to_string(),
-                filter: None,
-                condition: None,
-            });
+            items.push(st_rule_ast(
+                Some(subj),
+                "can_attack_as_though_no_defender",
+                None,
+            ));
         }
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-            items,
-        )));
+        return Some(st_s(StaticAbilityAst::Compound(items)));
     }
     if let Some(after) = low.strip_prefix("lethal damage dealt to ")
         && let Some(subj_raw) =
             after.strip_suffix(" is determined by their power rather than their toughness")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::CombatDamageAssignmentRule {
-                subject: Box::new(subj),
-                rule: "lethal_damage_by_power".to_string(),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::CombatDamageAssignmentRule {
+            subject: Box::new(subj),
+            rule: "lethal_damage_by_power".to_string(),
+            condition: None,
+        }));
     }
     if let Some(subj_raw) =
         low.strip_prefix("rather than the attacking player, you assign the combat damage of ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::CombatDamageAssignmentRule {
-                subject: Box::new(subj),
-                rule: "defender_assigns_combat_damage".to_string(),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::CombatDamageAssignmentRule {
+            subject: Box::new(subj),
+            rule: "defender_assigns_combat_damage".to_string(),
+            condition: None,
+        }));
     }
     if low.starts_with("you can divide that creature's combat damage as you choose among ") {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::CombatDamageAssignmentRule {
-                subject: Box::new(SubjectRefAst::Anaphora("that creature".to_string())),
-                rule: "divide_combat_damage_among_blockers".to_string(),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::CombatDamageAssignmentRule {
+            subject: box_anaphora("that creature"),
+            rule: "divide_combat_damage_among_blockers".to_string(),
+            condition: None,
+        }));
     }
     if let Some(after) = low.strip_prefix("you may assign ")
         && let Some((subj_raw, _)) =
             after.split_once("'s combat damage divided as you choose among ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::CombatDamageAssignmentRule {
-                subject: Box::new(subj),
-                rule: "divide_combat_damage_among_defender_and_creatures".to_string(),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::CombatDamageAssignmentRule {
+            subject: Box::new(subj),
+            rule: "divide_combat_damage_among_defender_and_creatures".to_string(),
+            condition: None,
+        }));
     }
     if let Some(after) = low.strip_prefix("if ")
         && let Some((subj_raw, _)) = after.split_once(" is unblocked, you may have it assign its combat damage to a creature defending player controls")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
+        return Some(st_s(
             StaticAbilityAst::CombatDamageAssignmentRule {
                 subject: Box::new(subj),
                 rule: "unblocked_may_assign_to_defending_creature".to_string(),
@@ -3304,13 +2501,11 @@ fn parse_combat_activation_and_rule_statics_e8(
         && rest.ends_with("'s power were positive")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::CombatDamageAssignmentRule {
-                subject: Box::new(subj),
-                rule: "negative_power_assigns_as_positive".to_string(),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::CombatDamageAssignmentRule {
+            subject: Box::new(subj),
+            rule: "negative_power_assigns_as_positive".to_string(),
+            condition: None,
+        }));
     }
 
     // 4. Combat blocking/attacking restrictions (Masako, Caverns of Despair, Invasion Plans, Akron Legionnaire, Intercessor's Arrest, Cogwork Tracker)
@@ -3319,13 +2514,9 @@ fn parse_combat_activation_and_rule_statics_e8(
         .and_then(|r| r.strip_suffix(" can block as though they were untapped"))
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::All(Box::new(flt)))),
-                rule: "tapped_can_block_as_untapped".to_string(),
-                filter: None,
-                condition: None,
-            },
+        return Some(st_rule_subj(
+            SubjectRefAst::All(Box::new(flt)),
+            "tapped_can_block_as_untapped",
         ));
     }
     if let Some(num_raw) = low
@@ -3333,24 +2524,10 @@ fn parse_combat_activation_and_rule_statics_e8(
         .and_then(|r| r.strip_suffix(" creatures can block each combat"))
         && let Some(n) = parse_number_word(num_raw.trim())
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: format!("max_blockers_each_combat:{n}"),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule(format!("max_blockers_each_combat:{n}")));
     }
     if low == "the attacking player chooses how each creature blocks each combat" {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: "attacking_player_chooses_blocks".to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule("attacking_player_chooses_blocks"));
     }
     if let Some(after) = low.strip_prefix("except for ")
         && let Some((exc_raw, rest)) = after.split_once(", ")
@@ -3358,45 +2535,25 @@ fn parse_combat_activation_and_rule_statics_e8(
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
         let exc_flt = parse_object_filter(exc_raw.trim(), vocab).ok();
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: format!("cant_attack_except:{}", exc_raw.trim()),
-                filter: exc_flt.map(Box::new),
-                condition: None,
-            },
+        return Some(st_rule_full(
+            Some(subj),
+            format!("cant_attack_except:{}", exc_raw.trim()),
+            exc_flt,
+            None,
         ));
     }
     if let Some((subj_raw, rest)) = low.split_once(" can't attack, block, or ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: format!("cant_attack_block_or:{}", rest.trim()),
-                filter: None,
-                condition: None,
-            },
-        ));
-    }
-    if low == "its activated abilities can't be activated unless they're mana abilities" {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::Anaphora("it".to_string()))),
-                rule: "cant_activate_nonmana_abilities".to_string(),
-                filter: None,
-                condition: None,
-            },
+        return Some(st_rule_subj(
+            subj,
+            format!("cant_attack_block_or:{}", rest.trim()),
         ));
     }
     if low == "~ attacks a player you noted for cards named ~ each combat if able" {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(SubjectRefAst::SelfObject)),
-                rule: "attacks_noted_player_if_able".to_string(),
-                filter: None,
-                condition: None,
-            },
+        return Some(st_rule_subj(
+            SubjectRefAst::SelfObject,
+            "attacks_noted_player_if_able",
         ));
     }
 
@@ -3404,79 +2561,37 @@ fn parse_combat_activation_and_rule_statics_e8(
     if let Some(after) = low.strip_prefix("room abilities of ")
         && after.ends_with(" trigger an additional time")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::TriggerMultiplier {
-                event_desc: low.to_string(),
-                multiplier: 2,
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::TriggerMultiplier {
+            event_desc: low.to_string(),
+            multiplier: 2,
+            condition: None,
+        }));
     }
     if let Some(subj_raw) =
         low.strip_suffix(" aren't put into their owners' graveyards for having 0 loyalty")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: "survives_zero_loyalty".to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule_subj(subj, "survives_zero_loyalty"));
     }
     if low == "a player losing unspent mana causes that player to lose that much life" {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: "unspent_mana_causes_life_loss".to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule("unspent_mana_causes_life_loss"));
     }
     if let Some(num_raw) = low
         .strip_prefix("your devotion to each color and each combination of colors is increased by ")
         && let Some(n) = parse_number_word(num_raw.trim())
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: format!("devotion_bonus:{n}"),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule(format!("devotion_bonus:{n}")));
     }
     if low == "players can cast spells and activate abilities only during their own turns" {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: "cast_and_activate_own_turn_only".to_string(),
-                filter: None,
-                condition: None,
-            },
-        ));
+        return Some(st_rule("cast_and_activate_own_turn_only"));
     }
     if low
         == "spells with the chosen names can't be cast and lands with the chosen names can't be played"
     {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-            vec![
-                StaticAbilityAst::RuleOrCombatRestriction {
-                    subject: None,
-                    rule: "spells_with_chosen_names_cant_be_cast".to_string(),
-                    filter: None,
-                    condition: None,
-                },
-                StaticAbilityAst::RuleOrCombatRestriction {
-                    subject: None,
-                    rule: "lands_with_chosen_names_cant_be_played".to_string(),
-                    filter: None,
-                    condition: None,
-                },
-            ],
-        )));
+        return Some(st_s(StaticAbilityAst::Compound(vec![
+            st_rule_ast(None, "spells_with_chosen_names_cant_be_cast", None),
+            st_rule_ast(None, "lands_with_chosen_names_cant_be_played", None),
+        ])));
     }
     if let Some(exp_raw) = low
         .strip_prefix(
@@ -3499,55 +2614,45 @@ fn parse_combat_activation_and_rule_statics_e8(
             })
             .collect::<Vec<_>>()
             .join(" ");
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::RuleOrCombatRestriction {
-                subject: None,
-                rule: format!("cant_cast_or_play_expansion:{}", exp_raw.trim()),
-                filter: Some(Box::new(ObjectFilterAst {
-                    any_card: true,
-                    predicates: vec![FilterPredicateAst::FirstPrintedInExpansion(exp_name)],
-                    ..ObjectFilterAst::default()
-                })),
-                condition: None,
+        return Some(st_rule_flt(
+            ObjectFilterAst {
+                any_card: true,
+                predicates: vec![FilterPredicateAst::FirstPrintedInExpansion(exp_name)],
+                ..ObjectFilterAst::default()
             },
+            format!("cant_cast_or_play_expansion:{}", exp_raw.trim()),
         ));
     }
     if let Some(after) = low.strip_prefix("note the ")
         && after.contains(" as it's put into exile")
     {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::LookOrRevealRule {
-                rule: low.to_string(),
-                filter: None,
-                follow_up: Vec::new(),
-                condition: None,
-            },
-        ));
+        return Some(st_s(StaticAbilityAst::LookOrRevealRule {
+            rule: low.to_string(),
+            filter: None,
+            follow_up: Vec::new(),
+            condition: None,
+        }));
     }
     if low.starts_with("as you create your deck, ") {
-        return Some(StaticOrReplacement::Static(
-            StaticAbilityAst::DeckConstructionRule(s.to_string()),
-        ));
+        return Some(st_s(StaticAbilityAst::DeckConstructionRule(s.to_string())));
     }
     if let Some(after) = low.strip_prefix("until that player's next turn, ")
         && after.contains("plays with that card revealed in their hand and can't play it")
     {
-        return Some(StaticOrReplacement::Static(StaticAbilityAst::Compound(
-            vec![
-                StaticAbilityAst::LookOrRevealRule {
-                    rule: "play_with_that_card_revealed_until_next_turn".to_string(),
-                    filter: None,
-                    follow_up: Vec::new(),
-                    condition: None,
-                },
-                StaticAbilityAst::RuleOrCombatRestriction {
-                    subject: Some(Box::new(SubjectRefAst::Anaphora("that card".to_string()))),
-                    rule: "cant_play_until_next_turn".to_string(),
-                    filter: None,
-                    condition: None,
-                },
-            ],
-        )));
+        return Some(st_s(StaticAbilityAst::Compound(vec![
+            StaticAbilityAst::LookOrRevealRule {
+                rule: "play_with_that_card_revealed_until_next_turn".to_string(),
+                filter: None,
+                follow_up: Vec::new(),
+                condition: None,
+            },
+            StaticAbilityAst::RuleOrCombatRestriction {
+                subject: Some(box_anaphora("that card")),
+                rule: "cant_play_until_next_turn".to_string(),
+                filter: None,
+                condition: None,
+            },
+        ])));
     }
 
     None

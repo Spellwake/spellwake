@@ -14,8 +14,13 @@ use crate::ast::{
 };
 use crate::clauses::costs::{parse_cost_atom, peel_leading_count};
 use crate::combinators::{
-    any_card_flt, any_perm, obj_type, parse_pile_visibility, parse_quoted_label_or_list,
-    parse_two_quoted_piles,
+    anaphora, any_card_flt, any_perm, box_anaphora, cond_cmp, grp, ins_ability_restr, ins_add_mana,
+    ins_animate, ins_choose_group, ins_combat_rule, ins_counters, ins_create_token, ins_delayed,
+    ins_dmg, ins_draw, ins_for_each_player, ins_gain_control, ins_grant_ab, ins_grant_kw, ins_if,
+    ins_life, ins_move, ins_opt_player, ins_opt1, ins_pile_action, ins_player_counters,
+    ins_rm_counters, ins_sac, ins_temp_static, ins_unless, obj_type, parse_pile_visibility,
+    parse_two_quoted_piles, self_obj, some1, split_once_any, strip_prefix_any, strip_suffix_any,
+    val_div, val_obj_stat, vconst,
 };
 use crate::compile_granted_ability;
 use crate::filter::{
@@ -70,12 +75,12 @@ pub(super) fn try_parse_deal_damage(s: &str, vocab: &Vocabulary) -> Option<Vec<I
         && let Some((val_raw, targets_desc)) = rest.split_once(" divided as you choose among ")
         && let Ok(amt) = parse_value_expr(val_raw, vocab)
     {
-        return Some(vec![InstructionAst::DealDamageDivided {
+        return some1(InstructionAst::DealDamageDivided {
             source: Box::new(src),
             amount: Box::new(amt),
             targets_desc: targets_desc.trim().to_string(),
             divider: None,
-        }]);
+        });
     }
     // "damage equal to <val> to <t1> and that much damage to <t2>" (Dragonspark Reactor)
     if let Some(rest) = alow.strip_prefix("damage equal to ")
@@ -88,16 +93,8 @@ pub(super) fn try_parse_deal_damage(s: &str, vocab: &Vocabulary) -> Option<Vec<I
         )
     {
         return Some(vec![
-            InstructionAst::DealDamage {
-                source: Box::new(src.clone()),
-                target: Box::new(t1),
-                amount: Box::new(amt.clone()),
-            },
-            InstructionAst::DealDamage {
-                source: Box::new(src),
-                target: Box::new(t2),
-                amount: Box::new(amt),
-            },
+            ins_dmg(src.clone(), t1, amt.clone()),
+            ins_dmg(src, t2, amt),
         ]);
     }
 
@@ -110,11 +107,7 @@ pub(super) fn try_parse_deal_damage(s: &str, vocab: &Vocabulary) -> Option<Vec<I
                     parse_subject_or_target(tgt_raw, vocab),
                 )
             {
-                return Some(vec![InstructionAst::DealDamage {
-                    source: Box::new(src),
-                    target: Box::new(tgt),
-                    amount: Box::new(amt),
-                }]);
+                return Some(vec![ins_dmg(src, tgt, amt)]);
             }
         }
     }
@@ -125,34 +118,7 @@ pub(super) fn try_parse_deal_damage(s: &str, vocab: &Vocabulary) -> Option<Vec<I
         && let Ok(amt) = parse_value_expr(val_raw, vocab)
         && let Ok(tgt) = parse_subject_or_target(tgt_raw, vocab)
     {
-        return Some(vec![InstructionAst::DealDamage {
-            source: Box::new(src),
-            target: Box::new(tgt),
-            amount: Box::new(amt),
-        }]);
-    }
-    // "damage equal to <val> to <t1> and <t2>"
-    if let Some(rest) = alow.strip_prefix("damage equal to ")
-        && let Some((val_raw, tgt_raw)) = rest.split_once(" to ")
-        && let Some((t1_raw, t2_raw)) = tgt_raw.split_once(" and ")
-        && let (Ok(amt), Ok(t1), Ok(t2)) = (
-            parse_value_expr(val_raw, vocab),
-            parse_subject_or_target(t1_raw, vocab),
-            parse_subject_or_target(t2_raw, vocab),
-        )
-    {
-        return Some(vec![
-            InstructionAst::DealDamage {
-                source: Box::new(src.clone()),
-                target: Box::new(t1),
-                amount: Box::new(amt.clone()),
-            },
-            InstructionAst::DealDamage {
-                source: Box::new(src),
-                target: Box::new(t2),
-                amount: Box::new(amt),
-            },
-        ]);
+        return Some(vec![ins_dmg(src, tgt, amt)]);
     }
 
     // Divided damage: "<amt> damage divided as you choose among <targets>" or "divided evenly, rounded down, among <targets>"
@@ -162,35 +128,19 @@ pub(super) fn try_parse_deal_damage(s: &str, vocab: &Vocabulary) -> Option<Vec<I
         .or_else(|| alow.split_once(" damage divided evenly, rounded up, among "))
         && let Ok(amt) = parse_value_expr(amt_raw, vocab)
     {
-        return Some(vec![InstructionAst::DealDamageDivided {
+        return some1(InstructionAst::DealDamageDivided {
             source: Box::new(src),
             amount: Box::new(amt),
             targets_desc: targets_desc.trim().to_string(),
             divider: None,
-        }]);
+        });
     }
 
-    // "<amt> damage instead" (when preceded by trailing " if <cond>" which was already peeled!)
-    if let Some(amt_raw) = alow.strip_suffix(" damage instead")
-        && let Ok(amt) = parse_value_expr(amt_raw, vocab)
-    {
-        return Some(vec![InstructionAst::ReplaceEffect(vec![
-            InstructionAst::DealDamage {
-                source: Box::new(src),
-                target: Box::new(SubjectRefAst::Anaphora("previous_target".to_string())),
-                amount: Box::new(amt),
-            },
-        ])]);
-    }
     // "<amt> damage" (when trailing " instead" was peeled by parse_atomic_effect!)
     if let Some(amt_raw) = alow.strip_suffix(" damage")
         && let Ok(amt) = parse_value_expr(amt_raw, vocab)
     {
-        return Some(vec![InstructionAst::DealDamage {
-            source: Box::new(src),
-            target: Box::new(SubjectRefAst::Anaphora("previous_target".to_string())),
-            amount: Box::new(amt),
-        }]);
+        return some1(ins_dmg(src, anaphora("previous_target"), amt));
     }
 
     // "<amt> damage[, rounded up/down,] to <tgt> [unless <cond>] [at end of combat] [for each <filter>]"
@@ -228,27 +178,17 @@ pub(super) fn try_parse_deal_damage(s: &str, vocab: &Vocabulary) -> Option<Vec<I
             amt = ValueExprAst::Mul(Box::new(amt), Box::new(fe_val));
         }
         let tgt = parse_subject_or_target(tgt_raw, vocab).ok()?;
-        let ins = InstructionAst::DealDamage {
-            source: Box::new(src),
-            target: Box::new(tgt),
-            amount: Box::new(amt),
-        };
+        let ins = ins_dmg(src, tgt, amt);
         let ins = match unless_cond {
-            Some(cond) => InstructionAst::Unless {
-                body: vec![ins],
-                unless_player: None,
-                unless_cost: None,
-                unless_action: None,
-                unless_condition: Some(Box::new(cond)),
-            },
+            Some(cond) => ins_unless(vec![ins], None, None, None, Some(cond)),
             None => ins,
         };
         return Some(if delayed_eoc {
-            vec![InstructionAst::DelayedTrigger {
-                step: TurnStepAst::EndOfCombat,
-                scope: DelayedStepScope::Next,
-                body: vec![ins],
-            }]
+            vec![ins_delayed(
+                TurnStepAst::EndOfCombat,
+                DelayedStepScope::Next,
+                vec![ins],
+            )]
         } else {
             vec![ins]
         });
@@ -282,11 +222,11 @@ pub(super) fn try_parse_modify_pt(
     if let Some((a_tok, b_tok)) = after.split_once(" or ")
         && let (Some(pa), Some(pb)) = (parse_pt_mod(a_tok.trim()), parse_pt_mod(b_tok.trim()))
     {
-        return Some(vec![InstructionAst::ModifyPTChoice {
+        return some1(InstructionAst::ModifyPTChoice {
             subject: Box::new(subj),
             choices: vec![pa, pb],
             duration: dur.clone(),
-        }]);
+        });
     }
     let (pt_tok, rest) = match after.split_once(' ') {
         Some((p, r)) => (p, r.trim()),
@@ -301,17 +241,11 @@ pub(super) fn try_parse_modify_pt(
     let mut ability_text = None;
     let mut extra_combat_rule = None;
 
-    if let Some(fe) = rlow
-        .strip_prefix("for each ")
-        .or_else(|| rlow.strip_prefix("until end of turn for each "))
-    {
+    if let Some(fe) = strip_prefix_any(&rlow, &["for each ", "until end of turn for each "]) {
         let (fe_core, extra_rule, trailing_gains) =
             if let Some(c) = fe.strip_suffix(" and can't be blocked") {
                 (c, Some("can't be blocked"), None)
-            } else if let Some((c, g)) = fe
-                .split_once(" and gains ")
-                .or_else(|| fe.split_once(" and gain "))
-            {
+            } else if let Some((c, g)) = split_once_any(&fe, &[" and gains ", " and gain "]) {
                 (c, None, Some(g.trim().to_string()))
             } else {
                 (fe, None, None)
@@ -319,10 +253,7 @@ pub(super) fn try_parse_modify_pt(
         scale = Some(Box::new(parse_for_each_value_expr(fe_core, vocab).ok()?));
         extra_combat_rule = extra_rule;
         kw_part = trailing_gains;
-    } else if let Some(after_g) = rest
-        .strip_prefix("and gains ")
-        .or_else(|| rest.strip_prefix("and gain "))
-    {
+    } else if let Some(after_g) = strip_prefix_any(&rest, &["and gains ", "and gain "]) {
         if after_g.starts_with('"') && after_g.ends_with('"') {
             ability_text = Some(after_g.trim_matches('"').to_string());
         } else if let Some((kw_side, ab_side)) = after_g.split_once(" and \"")
@@ -350,27 +281,14 @@ pub(super) fn try_parse_modify_pt(
     });
     if let Some(kp) = kw_part {
         let kws = parse_keyword_list(&kp, vocab)?;
-        out.push(InstructionAst::GrantKeywords {
-            subject: Box::new(subj.clone()),
-            keywords: kws,
-            duration: dur.clone(),
-        });
+        out.push(ins_grant_kw(subj.clone(), kws, dur.clone()));
     }
     if let Some(ab_txt) = ability_text {
         let compiled = compile_granted_ability(&ab_txt, vocab);
-        out.push(InstructionAst::GrantAbilityText {
-            subject: Box::new(subj.clone()),
-            ability_text: ab_txt,
-            compiled,
-            duration: dur.clone(),
-        });
+        out.push(ins_grant_ab(subj.clone(), ab_txt, compiled, dur.clone()));
     }
     if let Some(rule) = extra_combat_rule {
-        out.push(InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: rule.to_string(),
-            duration: dur.clone(),
-        });
+        out.push(ins_combat_rule(subj, rule.to_string(), dur.clone()));
     }
     Some(out)
 }
@@ -405,19 +323,14 @@ pub(super) fn try_parse_modify_abilities(
             let subj = parse_subject_or_target(&s_nodur[..idx], vocab).ok()?;
             // "<subj> gains that ability" / "<subj> loses \"<ab>\"" (Angelic Skirmisher, Glittering Lion)
             if is_gain && rlow == "that ability" {
-                return Some(vec![InstructionAst::GrantAbilityText {
-                    subject: Box::new(subj),
-                    ability_text: "that ability".to_string(),
-                    compiled: None,
-                    duration: dur.clone(),
-                }]);
+                return Some(vec![ins_grant_ab(subj, "that ability", None, dur.clone())]);
             }
             if !is_gain && rhs.starts_with('"') && rhs.ends_with('"') {
-                return Some(vec![InstructionAst::RemoveKeywords {
+                return some1(InstructionAst::RemoveKeywords {
                     subject: Box::new(subj),
                     keywords: vec![rhs.trim_matches('"').to_string()],
                     duration: dur.clone(),
-                }]);
+                });
             }
             // "<subj> loses all abilities and has/have base power and toughness P/T"
             if !is_gain
@@ -433,14 +346,7 @@ pub(super) fn try_parse_modify_abilities(
                         subject: Box::new(subj.clone()),
                         duration: dur.clone(),
                     },
-                    InstructionAst::AnimateOrSetBasePT {
-                        subject: Box::new(subj),
-                        power: p,
-                        toughness: t,
-                        description: None,
-                        keywords: Vec::new(),
-                        duration: dur.clone(),
-                    },
+                    ins_animate(subj, p, t, None, Vec::new(), dur.clone()),
                 ]);
             }
             // "<subj> lose(s) <kws> and can't have <kws>" (Arcane Lighthouse, Shadowspear, Bonds of Mortality)
@@ -457,18 +363,13 @@ pub(super) fn try_parse_modify_abilities(
                         keywords: lkws,
                         duration: dur.clone(),
                     },
-                    InstructionAst::CombatRuleMod {
-                        subject: Box::new(subj),
-                        rule: format!("cant_have:{cant_part}"),
-                        duration: dur.clone(),
-                    },
+                    ins_combat_rule(subj, format!("cant_have:{cant_part}"), dur.clone()),
                 ]);
             }
             // "<subj> loses <kw1> and gains <kw2>"
             if !is_gain
-                && let Some((lose_part, gain_part)) = rlow
-                    .split_once(" and gains ")
-                    .or_else(|| rlow.split_once(" and gain "))
+                && let Some((lose_part, gain_part)) =
+                    split_once_any(&rlow, &[" and gains ", " and gain "])
                 && let (Some(lkws), Some(gkws)) = (
                     parse_keyword_list(lose_part, vocab),
                     parse_keyword_list(gain_part, vocab),
@@ -480,11 +381,7 @@ pub(super) fn try_parse_modify_abilities(
                         keywords: lkws,
                         duration: dur.clone(),
                     },
-                    InstructionAst::GrantKeywords {
-                        subject: Box::new(subj),
-                        keywords: gkws,
-                        duration: dur.clone(),
-                    },
+                    ins_grant_kw(subj, gkws, dur.clone()),
                 ]);
             }
             // "<subj> gains <kws> and \"<ability>\""
@@ -495,24 +392,13 @@ pub(super) fn try_parse_modify_abilities(
             {
                 let compiled = compile_granted_ability(ab_inner, vocab);
                 return Some(vec![
-                    InstructionAst::GrantKeywords {
-                        subject: Box::new(subj.clone()),
-                        keywords: kws,
-                        duration: dur.clone(),
-                    },
-                    InstructionAst::GrantAbilityText {
-                        subject: Box::new(subj),
-                        ability_text: ab_inner.to_string(),
-                        compiled,
-                        duration: dur.clone(),
-                    },
+                    ins_grant_kw(subj.clone(), kws, dur.clone()),
+                    ins_grant_ab(subj, ab_inner.to_string(), compiled, dur.clone()),
                 ]);
             }
             // "<subj> gains <kws> and gets +X/+Y [for each ...]"
             if is_gain
-                && let Some((kw_side, pt_side)) = rhs
-                    .split_once(" and gets ")
-                    .or_else(|| rhs.split_once(" and get "))
+                && let Some((kw_side, pt_side)) = split_once_any(&rhs, &[" and gets ", " and get "])
                 && let Some(kws) = parse_keyword_list(kw_side, vocab)
                 && let Some(mut pt_ins) =
                     try_parse_modify_pt(&format!("~ gets {pt_side}"), dur, vocab)
@@ -531,21 +417,16 @@ pub(super) fn try_parse_modify_abilities(
                 return Some(out);
             }
             if rlow == "all abilities" && !is_gain {
-                return Some(vec![InstructionAst::RemoveAllAbilities {
+                return some1(InstructionAst::RemoveAllAbilities {
                     subject: Box::new(subj),
                     duration: dur.clone(),
-                }]);
+                });
             }
             if rlow.starts_with("protection from ") && is_gain {
-                return Some(vec![InstructionAst::GrantKeywords {
-                    subject: Box::new(subj),
-                    keywords: vec![rlow],
-                    duration: dur.clone(),
-                }]);
+                return Some(vec![ins_grant_kw(subj, vec![rlow], dur.clone())]);
             }
-            let (kw_target, is_choice) = if let Some(rest_kw) = rhs
-                .strip_prefix("your choice of ")
-                .or_else(|| rhs.strip_prefix("Your choice of "))
+            let (kw_target, is_choice) = if let Some(rest_kw) =
+                strip_prefix_any(&rhs, &["your choice of ", "Your choice of "])
             {
                 (rest_kw, true)
             } else {
@@ -557,11 +438,7 @@ pub(super) fn try_parse_modify_abilities(
                         .into_iter()
                         .map(|kw| {
                             vec![if is_gain {
-                                InstructionAst::GrantKeywords {
-                                    subject: Box::new(subj.clone()),
-                                    keywords: vec![kw],
-                                    duration: dur.clone(),
-                                }
+                                ins_grant_kw(subj.clone(), vec![kw], dur.clone())
                             } else {
                                 InstructionAst::RemoveKeywords {
                                     subject: Box::new(subj.clone()),
@@ -573,19 +450,15 @@ pub(super) fn try_parse_modify_abilities(
                         .collect();
                     return Some(vec![InstructionAst::Choice(branches)]);
                 }
-                return Some(vec![if is_gain {
-                    InstructionAst::GrantKeywords {
-                        subject: Box::new(subj),
-                        keywords: kws,
-                        duration: dur.clone(),
-                    }
+                return some1(if is_gain {
+                    ins_grant_kw(subj, kws, dur.clone())
                 } else {
                     InstructionAst::RemoveKeywords {
                         subject: Box::new(subj),
                         keywords: kws,
                         duration: dur.clone(),
                     }
-                }]);
+                });
             }
         }
     }
@@ -596,9 +469,7 @@ pub(super) fn try_parse_life(low: &str, vocab: &Vocabulary) -> Option<Vec<Instru
     // DrainLife: "each opponent loses N life and you gain N/that much life"
     if let Some((left, right)) = low.split_once(" life and you gain ")
         && let Some(gain_str) = right.strip_suffix(" life")
-        && let Some((who_raw, loss_str)) = left
-            .split_once(" loses ")
-            .or_else(|| left.split_once(" lose "))
+        && let Some((who_raw, loss_str)) = split_once_any(&left, &[" loses ", " lose "])
         && let (Some(who), Ok(loss), Ok(gain)) = (
             parse_player_ref(who_raw),
             parse_value_expr(loss_str, vocab),
@@ -606,16 +477,8 @@ pub(super) fn try_parse_life(low: &str, vocab: &Vocabulary) -> Option<Vec<Instru
         )
     {
         return Some(vec![
-            InstructionAst::ChangeLife {
-                player: who,
-                delta: Box::new(loss),
-                gain: false,
-            },
-            InstructionAst::ChangeLife {
-                player: PlayerRefAst::You,
-                delta: Box::new(gain),
-                gain: true,
-            },
+            ins_life(who, loss, false),
+            ins_life(PlayerRefAst::You, gain, true),
         ]);
     }
 
@@ -630,11 +493,7 @@ pub(super) fn try_parse_life(low: &str, vocab: &Vocabulary) -> Option<Vec<Instru
                 } else {
                     parse_value_expr(val_raw, vocab).ok()?
                 };
-                return Some(vec![InstructionAst::ChangeLife {
-                    player: who,
-                    delta: Box::new(amt),
-                    gain: is_gain,
-                }]);
+                return Some(vec![ins_life(who, amt, is_gain)]);
             }
             if let Some((amt_str, fe_str)) = rhs.split_once(" life for each ")
                 && let (Ok(base), Ok(fe_val)) = (
@@ -642,29 +501,21 @@ pub(super) fn try_parse_life(low: &str, vocab: &Vocabulary) -> Option<Vec<Instru
                     parse_for_each_value_expr(fe_str, vocab),
                 )
             {
-                return Some(vec![InstructionAst::ChangeLife {
-                    player: who,
-                    delta: Box::new(ValueExprAst::Mul(Box::new(base), Box::new(fe_val))),
-                    gain: is_gain,
-                }]);
+                return some1(ins_life(
+                    who,
+                    ValueExprAst::Mul(Box::new(base), Box::new(fe_val)),
+                    is_gain,
+                ));
             }
             if let Some(amt_str) = rhs.strip_suffix(" life")
                 && let Ok(amt) = parse_value_expr(amt_str, vocab)
             {
-                return Some(vec![InstructionAst::ChangeLife {
-                    player: who,
-                    delta: Box::new(amt),
-                    gain: is_gain,
-                }]);
+                return Some(vec![ins_life(who, amt, is_gain)]);
             }
             if rhs.starts_with("half ")
                 && let Ok(amt) = parse_value_expr(rhs, vocab)
             {
-                return Some(vec![InstructionAst::ChangeLife {
-                    player: who,
-                    delta: Box::new(amt),
-                    gain: is_gain,
-                }]);
+                return Some(vec![ins_life(who, amt, is_gain)]);
             }
         }
     }
@@ -674,12 +525,8 @@ pub(super) fn try_parse_life(low: &str, vocab: &Vocabulary) -> Option<Vec<Instru
 pub(super) fn try_parse_counters(low: &str, vocab: &Vocabulary) -> Option<InstructionAst> {
     // MoveCounters: "move <cnt> <kind> counter(s) from <src> onto/to <dst>"
     if let Some(after) = low.strip_prefix("move ")
-        && let Some((left, rest)) = after
-            .split_once(" counters from ")
-            .or_else(|| after.split_once(" counter from "))
-        && let Some((src_raw, dst_raw)) = rest
-            .split_once(" onto ")
-            .or_else(|| rest.split_once(" to "))
+        && let Some((left, rest)) = split_once_any(&after, &[" counters from ", " counter from "])
+        && let Some((src_raw, dst_raw)) = split_once_any(&rest, &[" onto ", " to "])
         && let (Ok(from), Ok(to)) = (
             parse_subject_or_target(src_raw, vocab),
             parse_subject_or_target(dst_raw, vocab),
@@ -721,35 +568,24 @@ pub(super) fn try_parse_counters(low: &str, vocab: &Vocabulary) -> Option<Instru
     if let Some((_, after_put)) = split_leading_player_verb(low, "put", "puts")
         && let Some(after) = after_put.strip_prefix("a number of ")
     {
-        if let Some((kind, rest)) = after
-            .split_once(" counters on ")
-            .or_else(|| after.split_once(" counter on "))
+        if let Some((kind, rest)) = split_once_any(&after, &[" counters on ", " counter on "])
             && let Some((subj_raw, val_raw)) = rest.split_once(" equal to ")
             && let (Ok(subj), Ok(val)) = (
                 parse_subject_or_target(subj_raw, vocab),
                 parse_value_expr(val_raw, vocab),
             )
         {
-            return Some(InstructionAst::PutCounters {
-                subject: Box::new(subj),
-                counter_kind: kind.trim().to_string(),
-                count: Box::new(val),
-            });
+            return Some(ins_counters(subj, kind.trim().to_string(), val));
         }
-        if let Some((kind, rest)) = after
-            .split_once(" counters equal to ")
-            .or_else(|| after.split_once(" counter equal to "))
+        if let Some((kind, rest)) =
+            split_once_any(&after, &[" counters equal to ", " counter equal to "])
             && let Some((val_raw, subj_raw)) = rest.rsplit_once(" on ")
             && let (Ok(val), Ok(subj)) = (
                 parse_value_expr(val_raw, vocab),
                 parse_subject_or_target(subj_raw, vocab),
             )
         {
-            return Some(InstructionAst::PutCounters {
-                subject: Box::new(subj),
-                counter_kind: kind.trim().to_string(),
-                count: Box::new(val),
-            });
+            return Some(ins_counters(subj, kind.trim().to_string(), val));
         }
     }
 
@@ -784,18 +620,16 @@ pub(super) fn try_parse_counters(low: &str, vocab: &Vocabulary) -> Option<Instru
         )
         && (left.is_empty() || left == "your choice of" || left.ends_with(" counter and"))
     {
-        return Some(InstructionAst::PutCounters {
-            subject: Box::new(subj),
-            counter_kind: format!("choice:{kws_raw}"),
-            count: Box::new(ValueExprAst::Const(1)),
-        });
+        return Some(ins_counters(
+            subj,
+            format!("choice:{kws_raw}"),
+            ValueExprAst::Const(1),
+        ));
     }
 
     // PutCounters: "[<player>] put(s) <cnt> <kind> counter(s) on <subj> [for each <filter>]"
     if let Some((_, after)) = split_leading_player_verb(low, "put", "puts")
-        && let Some((left, rest)) = after
-            .split_once(" counters on ")
-            .or_else(|| after.split_once(" counter on "))
+        && let Some((left, rest)) = split_once_any(&after, &[" counters on ", " counter on "])
     {
         let (subj_raw, fe_opt) = match rest.split_once(" for each ") {
             Some((sr, fe)) => (sr, Some(fe)),
@@ -807,27 +641,22 @@ pub(super) fn try_parse_counters(low: &str, vocab: &Vocabulary) -> Option<Instru
                 let scale_val = parse_for_each_value_expr(fe, vocab).ok()?;
                 cnt = ValueExprAst::Mul(Box::new(cnt), Box::new(scale_val));
             }
-            return Some(InstructionAst::PutCounters {
-                subject: Box::new(subj),
-                counter_kind: kind.to_string(),
-                count: Box::new(cnt),
-            });
+            return Some(ins_counters(subj, kind.to_string(), cnt));
         }
     }
 
     // RemoveCounters (including "remove those counters" / "remove all of those counters")
     if low == "remove those counters" || low == "remove all of those counters" {
         return Some(InstructionAst::RemoveCounters {
-            subject: Box::new(SubjectRefAst::SelfObject),
+            subject: self_obj(),
             counter_kind: "those".to_string(),
             all: true,
             count: None,
         });
     }
     if let Some((_, after)) = split_leading_player_verb(low, "remove", "removes")
-        && let Some((left, subj_raw)) = after
-            .split_once(" counters from ")
-            .or_else(|| after.split_once(" counter from "))
+        && let Some((left, subj_raw)) =
+            split_once_any(&after, &[" counters from ", " counter from "])
     {
         let (subj_clean, delayed_eoc) = match subj_raw.strip_suffix(" at end of combat") {
             Some(c) => (c, true),
@@ -842,31 +671,22 @@ pub(super) fn try_parse_counters(low: &str, vocab: &Vocabulary) -> Option<Instru
         )
         .ok()?;
         let ins = if let Some(kind) = left.strip_prefix("all ") {
-            InstructionAst::RemoveCounters {
-                subject: Box::new(subj),
-                counter_kind: kind.trim().to_string(),
-                all: true,
-                count: None,
-            }
+            ins_rm_counters(subj, kind.trim().to_string(), true, None)
         } else {
             let (cnt, kind) = peel_leading_count(left, vocab);
-            InstructionAst::RemoveCounters {
-                subject: Box::new(subj),
-                counter_kind: if kind.is_empty() {
+            ins_rm_counters(
+                subj,
+                if kind.is_empty() {
                     "any".to_string()
                 } else {
                     kind.to_string()
                 },
-                all: false,
-                count: Some(Box::new(cnt)),
-            }
+                false,
+                Some(cnt),
+            )
         };
         return Some(if delayed_eoc {
-            InstructionAst::DelayedTrigger {
-                step: TurnStepAst::EndOfCombat,
-                scope: DelayedStepScope::Next,
-                body: vec![ins],
-            }
+            ins_delayed(TurnStepAst::EndOfCombat, DelayedStepScope::Next, vec![ins])
         } else {
             ins
         });
@@ -882,32 +702,6 @@ pub(super) fn try_parse_combat_and_animate(
     vocab: &Vocabulary,
 ) -> Option<InstructionAst> {
     let snlow = s_nodur.to_ascii_lowercase();
-    // Cluster 12 (temporary effect form): "<subj> can't have [<kind>] counters put on it/them [until end of turn]"
-    if let Some((subj_raw, rest)) = snlow.split_once(" can't have ")
-        && let Some(kind_raw) = rest
-            .strip_suffix(" counters put on it")
-            .or_else(|| rest.strip_suffix(" counters placed on it"))
-            .or_else(|| rest.strip_suffix(" counters put on them"))
-            .or_else(|| rest.strip_suffix(" counters placed on them"))
-            .or_else(|| rest.strip_suffix(" counter put on it"))
-            .or_else(|| rest.strip_suffix(" counter put on them"))
-        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
-    {
-        let k = kind_raw.trim();
-        let counter_kind = if k.is_empty() || k == "any" {
-            None
-        } else {
-            Some(k.to_string())
-        };
-        return Some(InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::PreventCounters {
-                subject: Box::new(subj),
-                counter_kind,
-                condition: None,
-            }),
-            duration: dur.clone(),
-        });
-    }
     if let Some((who_raw, rest)) = snlow.split_once(" can't get ")
         && let Some(kind_raw) = rest.strip_suffix(" counters")
         && let Ok(subj) = parse_subject_or_target(who_raw.trim(), vocab)
@@ -918,14 +712,14 @@ pub(super) fn try_parse_combat_and_animate(
         } else {
             Some(k.to_string())
         };
-        return Some(InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::PreventCounters {
+        return Some(ins_temp_static(
+            StaticAbilityAst::PreventCounters {
                 subject: Box::new(subj),
                 counter_kind,
                 condition: None,
-            }),
-            duration: dur.clone(),
-        });
+            },
+            dur.clone(),
+        ));
     }
 
     for rule in [
@@ -986,90 +780,82 @@ pub(super) fn try_parse_combat_and_animate(
         if let Some(subj_raw) = snlow.strip_suffix(&format!(" {rule}"))
             && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
         {
-            return Some(InstructionAst::CombatRuleMod {
-                subject: Box::new(subj),
-                rule: rule.to_string(),
-                duration: dur.clone(),
-            });
+            return Some(ins_combat_rule(subj, rule.to_string(), dur.clone()));
         }
     }
     if let Some(rest) = low.strip_prefix("goad ")
         && let Ok(subj) = parse_subject_or_target(rest, vocab)
     {
-        return Some(InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: "goad".to_string(),
-            duration: DurationAst::UntilYourNextTurn,
-        });
+        return Some(ins_combat_rule(
+            subj,
+            "goad",
+            DurationAst::UntilYourNextTurn,
+        ));
     }
     // CR 509 General forced-block combat rule mod:
     // "<subj1> blocks/block <subj2> [this combat|this turn] if able"
     // "you may have <subj1> block <subj2> [this combat|this turn] if able"
     // (Impetuous Devils, Monstrous Step, Tolsimir, Grappling Hook)
     let is_optional_block = low.starts_with("you may have ");
-    let forced_block_core = low
-        .strip_prefix("you may have ")
-        .or_else(|| low.strip_prefix("have "))
-        .unwrap_or(low);
+    let forced_block_core = strip_prefix_any(&low, &["you may have ", "have "]).unwrap_or(low);
     if let Some(before_able) = forced_block_core
         .strip_suffix(" this combat if able")
         .or_else(|| forced_block_core.strip_suffix(" this turn if able"))
         .or_else(|| forced_block_core.strip_suffix(" if able"))
-        && let Some((b_raw, a_raw)) = before_able
-            .split_once(" blocks ")
-            .or_else(|| before_able.split_once(" block "))
+        && let Some((b_raw, a_raw)) = split_once_any(&before_able, &[" blocks ", " block "])
         && let (Ok(blocker), Ok(_attacker)) = (
             parse_subject_or_target(b_raw, vocab),
             parse_subject_or_target(a_raw, vocab),
         )
     {
-        let mod_ins = InstructionAst::CombatRuleMod {
-            subject: Box::new(blocker),
-            rule: format!("must_block:{a_raw}"),
-            duration: dur.clone(),
-        };
+        let mod_ins = ins_combat_rule(blocker, format!("must_block:{a_raw}"), dur.clone());
         if is_optional_block {
-            return Some(InstructionAst::Optional(vec![mod_ins]));
+            return Some(ins_opt1(mod_ins));
         }
         return Some(mod_ins);
     }
     // CR 508 Attacking redirection / status assignment ("Those creatures are now attacking that player", Tahngarth)
-    if let Some((subj_raw, who_raw)) = low
-        .split_once(" are now attacking ")
-        .or_else(|| low.split_once(" is now attacking "))
-        .or_else(|| low.split_once(" is attacking "))
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
+    if let Some((subj_raw, who_raw)) = split_once_any(
+        &low,
+        &[
+            " are now attacking ",
+            " is now attacking ",
+            " is attacking ",
+        ],
+    ) && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
         && (parse_player_ref(who_raw).is_some() || parse_subject_or_target(who_raw, vocab).is_ok())
     {
-        return Some(InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: format!("attacking:{who_raw}"),
-            duration: DurationAst::UntilEndOfCombat,
-        });
+        return Some(ins_combat_rule(
+            subj,
+            format!("attacking:{who_raw}"),
+            DurationAst::UntilEndOfCombat,
+        ));
     }
 
     // CR 608.2h / CR 613.4b dynamic P/T assignment (live or LKI):
     // "<subj>'s [base] power (is|becomes) <val>" / "its power is equal to <val>"
-    if let Some((subj_raw, rhs)) = snlow
-        .split_once("'s base power becomes ")
-        .or_else(|| snlow.split_once("'s base power is "))
-        .or_else(|| snlow.split_once("'s power becomes "))
-        .or_else(|| snlow.split_once("'s power is "))
-        .or_else(|| snlow.split_once(" has base power "))
-        .or_else(|| snlow.split_once(" have base power "))
-        .or_else(|| snlow.strip_prefix("its power is ").map(|r| ("it", r)))
-        .or_else(|| snlow.strip_prefix("its power becomes ").map(|r| ("it", r)))
-        .or_else(|| snlow.strip_prefix("its base power is ").map(|r| ("it", r)))
-        .or_else(|| {
-            snlow
-                .strip_prefix("its base power becomes ")
-                .map(|r| ("it", r))
-        })
-        && let (Ok(subj), Ok(val)) = (
-            parse_subject_or_target(subj_raw, vocab),
-            parse_value_expr(rhs, vocab),
-        )
-    {
+    if let Some((subj_raw, rhs)) = split_once_any(
+        &snlow,
+        &[
+            "'s base power becomes ",
+            "'s base power is ",
+            "'s power becomes ",
+            "'s power is ",
+            " has base power ",
+            " have base power ",
+        ],
+    )
+    .or_else(|| snlow.strip_prefix("its power is ").map(|r| ("it", r)))
+    .or_else(|| snlow.strip_prefix("its power becomes ").map(|r| ("it", r)))
+    .or_else(|| snlow.strip_prefix("its base power is ").map(|r| ("it", r)))
+    .or_else(|| {
+        snlow
+            .strip_prefix("its base power becomes ")
+            .map(|r| ("it", r))
+    }) && let (Ok(subj), Ok(val)) = (
+        parse_subject_or_target(subj_raw, vocab),
+        parse_value_expr(rhs, vocab),
+    ) {
         return Some(InstructionAst::SetDynamicPT {
             subject: Box::new(subj),
             power: Some(Box::new(val)),
@@ -1077,34 +863,36 @@ pub(super) fn try_parse_combat_and_animate(
             duration: dur.clone(),
         });
     }
-    if let Some((subj_raw, rhs)) = snlow
-        .split_once("'s base toughness becomes ")
-        .or_else(|| snlow.split_once("'s base toughness is "))
-        .or_else(|| snlow.split_once("'s toughness becomes "))
-        .or_else(|| snlow.split_once("'s toughness is "))
-        .or_else(|| snlow.split_once(" has base toughness "))
-        .or_else(|| snlow.split_once(" have base toughness "))
-        .or_else(|| snlow.strip_prefix("its toughness is ").map(|r| ("it", r)))
-        .or_else(|| {
-            snlow
-                .strip_prefix("its toughness becomes ")
-                .map(|r| ("it", r))
-        })
-        .or_else(|| {
-            snlow
-                .strip_prefix("its base toughness is ")
-                .map(|r| ("it", r))
-        })
-        .or_else(|| {
-            snlow
-                .strip_prefix("its base toughness becomes ")
-                .map(|r| ("it", r))
-        })
-        && let (Ok(subj), Ok(val)) = (
-            parse_subject_or_target(subj_raw, vocab),
-            parse_value_expr(rhs, vocab),
-        )
-    {
+    if let Some((subj_raw, rhs)) = split_once_any(
+        &snlow,
+        &[
+            "'s base toughness becomes ",
+            "'s base toughness is ",
+            "'s toughness becomes ",
+            "'s toughness is ",
+            " has base toughness ",
+            " have base toughness ",
+        ],
+    )
+    .or_else(|| snlow.strip_prefix("its toughness is ").map(|r| ("it", r)))
+    .or_else(|| {
+        snlow
+            .strip_prefix("its toughness becomes ")
+            .map(|r| ("it", r))
+    })
+    .or_else(|| {
+        snlow
+            .strip_prefix("its base toughness is ")
+            .map(|r| ("it", r))
+    })
+    .or_else(|| {
+        snlow
+            .strip_prefix("its base toughness becomes ")
+            .map(|r| ("it", r))
+    }) && let (Ok(subj), Ok(val)) = (
+        parse_subject_or_target(subj_raw, vocab),
+        parse_value_expr(rhs, vocab),
+    ) {
         return Some(InstructionAst::SetDynamicPT {
             subject: Box::new(subj),
             power: None,
@@ -1117,10 +905,8 @@ pub(super) fn try_parse_combat_and_animate(
     // - "<subj> becomes/become a/an <desc> with [base] power and toughness [each] equal to <val> [and gains <kws>]" (Gideon, Veiled Sentry, Fractalize, Woodcaller Automaton)
     // - "<subj> becomes/become a/an <desc> in addition to his/her/its other types and gains <kws>" (Sarkhan, Dragon Ascendant)
     // - "<subj> has/have base power and toughness P/T and becomes a <desc> in addition to its other [creature] types" (Allosaurus Shepherd)
-    if let Some((subj_raw, rhs)) = snlow
-        .split_once(" becomes a ")
-        .or_else(|| snlow.split_once(" becomes an "))
-        .or_else(|| snlow.split_once(" become "))
+    if let Some((subj_raw, rhs)) =
+        split_once_any(&snlow, &[" becomes a ", " becomes an ", " become "])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         if let Some((ty_part, rest)) = rhs.split_once(" with base power and toughness ") {
@@ -1138,94 +924,93 @@ pub(super) fn try_parse_combat_and_animate(
                     parse_keyword_list(tail_clean, vocab)
                 };
                 if let Some(keywords) = kws {
-                    return Some(InstructionAst::AnimateOrSetBasePT {
-                        subject: Box::new(subj),
-                        power: p,
-                        toughness: t,
-                        description: Some(ty_part.trim().to_string()),
+                    return Some(ins_animate(
+                        subj,
+                        p,
+                        t,
+                        Some(ty_part.trim().to_string()),
                         keywords,
-                        duration: dur_perm.clone(),
-                    });
+                        dur_perm.clone(),
+                    ));
                 }
             }
             if rest.starts_with("each equal to ") || rest.starts_with("equal to ") {
-                return Some(InstructionAst::AnimateOrSetBasePT {
-                    subject: Box::new(subj),
-                    power: "X".to_string(),
-                    toughness: "X".to_string(),
-                    description: Some(rhs.to_string()),
-                    keywords: Vec::new(),
-                    duration: dur_perm.clone(),
-                });
+                return Some(ins_animate(
+                    subj,
+                    "X",
+                    "X",
+                    Some(rhs.to_string()),
+                    Vec::new(),
+                    dur_perm.clone(),
+                ));
             }
         }
         if let Some((ty_part, rest)) = rhs.split_once(" with power and toughness each equal to ") {
             let _ = ty_part;
             let _ = rest;
-            return Some(InstructionAst::AnimateOrSetBasePT {
-                subject: Box::new(subj),
-                power: "X".to_string(),
-                toughness: "X".to_string(),
-                description: Some(rhs.to_string()),
-                keywords: Vec::new(),
-                duration: dur_perm.clone(),
-            });
+            return Some(ins_animate(
+                subj,
+                "X",
+                "X",
+                Some(rhs.to_string()),
+                Vec::new(),
+                dur_perm.clone(),
+            ));
         }
         if rhs.contains(" with ") && rhs.contains("base power and toughness equal to ") {
-            return Some(InstructionAst::AnimateOrSetBasePT {
-                subject: Box::new(subj),
-                power: "X".to_string(),
-                toughness: "X".to_string(),
-                description: Some(rhs.to_string()),
-                keywords: Vec::new(),
-                duration: dur_perm.clone(),
-            });
+            return Some(ins_animate(
+                subj,
+                "X",
+                "X",
+                Some(rhs.to_string()),
+                Vec::new(),
+                dur_perm.clone(),
+            ));
         }
-        if let Some((ty_part, kw_raw)) = rhs
-            .split_once(" in addition to his other types and gains ")
-            .or_else(|| rhs.split_once(" in addition to her other types and gains "))
-            .or_else(|| rhs.split_once(" in addition to its other types and gains "))
-            .or_else(|| rhs.split_once(" in addition to their other types and gain "))
-            && let Some(keywords) = parse_keyword_list(kw_raw, vocab)
+        if let Some((ty_part, kw_raw)) = split_once_any(
+            &rhs,
+            &[
+                " in addition to his other types and gains ",
+                " in addition to her other types and gains ",
+                " in addition to its other types and gains ",
+                " in addition to their other types and gain ",
+            ],
+        ) && let Some(keywords) = parse_keyword_list(kw_raw, vocab)
         {
-            return Some(InstructionAst::AnimateOrSetBasePT {
-                subject: Box::new(subj),
-                power: "keep".to_string(),
-                toughness: "keep".to_string(),
-                description: Some(ty_part.trim().to_string()),
+            return Some(ins_animate(
+                subj,
+                "keep",
+                "keep",
+                Some(ty_part.trim().to_string()),
                 keywords,
-                duration: dur_perm.clone(),
-            });
+                dur_perm.clone(),
+            ));
         }
     }
     if let Some((subj_raw, rhs)) = snlow
         .split_once(" has base power and toughness ")
         .or_else(|| snlow.split_once(" have base power and toughness "))
-        && let Some((pt_tok, ty_rest)) = rhs
-            .split_once(" and becomes a ")
-            .or_else(|| rhs.split_once(" and become "))
+        && let Some((pt_tok, ty_rest)) = split_once_any(&rhs, &[" and becomes a ", " and become "])
         && let (Ok(subj), Some((p, t))) = (
             parse_subject_or_target(subj_raw, vocab),
             parse_base_pt(pt_tok.trim()),
         )
     {
-        return Some(InstructionAst::AnimateOrSetBasePT {
-            subject: Box::new(subj),
-            power: p,
-            toughness: t,
-            description: Some(ty_rest.trim().to_string()),
-            keywords: Vec::new(),
-            duration: dur.clone(),
-        });
+        return Some(ins_animate(
+            subj,
+            p,
+            t,
+            Some(ty_rest.trim().to_string()),
+            Vec::new(),
+            dur.clone(),
+        ));
     }
 
     // CR 611/613 "<subj> becomes/become a/an <desc> with \"<ab>\" [and loses all other [card types and] abilities]"
     // (Vraska Betrayal's Sting, Kitesail Larcenist, Tenth District Hero)
     if s_nodur.contains('"')
-        && let Some((subj_raw, rhs)) = snlow
-            .split_once(" becomes a ")
-            .or_else(|| snlow.split_once(" becomes an "))
-            .or_else(|| snlow.split_once(" become "))
+        && let Some((subj_raw, rhs)) =
+            split_once_any(&snlow, &[" becomes a ", " becomes an ", " become "])
         && let Some((ty_part, after_w)) = rhs.split_once(" with \"")
         && let Some((ab_raw, tail)) = after_w.split_once('"')
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
@@ -1241,8 +1026,8 @@ pub(super) fn try_parse_combat_and_animate(
                 .and_then(|(_, r)| r.split_once('"'))
                 .map_or(ab_raw, |(inner, _)| inner);
             let compiled = compile_granted_ability(orig_ab, vocab);
-            return Some(InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::Compound(vec![
+            return Some(ins_temp_static(
+                StaticAbilityAst::Compound(vec![
                     StaticAbilityAst::ContinuousLayerEffect {
                         subject: Box::new(subj.clone()),
                         set_types: Some(ty_part.trim().to_string()),
@@ -1260,9 +1045,9 @@ pub(super) fn try_parse_combat_and_animate(
                         compiled,
                         condition: None,
                     },
-                ])),
-                duration: dur.clone(),
-            });
+                ]),
+                dur.clone(),
+            ));
         }
     }
     if let Some((subj_raw, rhs)) = snlow
@@ -1273,26 +1058,7 @@ pub(super) fn try_parse_combat_and_animate(
             parse_base_pt(rhs.trim()),
         )
     {
-        return Some(InstructionAst::AnimateOrSetBasePT {
-            subject: Box::new(subj),
-            power: p,
-            toughness: t,
-            description: None,
-            keywords: Vec::new(),
-            duration: dur.clone(),
-        });
-    }
-    // "double <subj>'s power [X times]" (Exponential Growth, etc.)
-    if let Some(after) = snlow.strip_prefix("double ")
-        && let Some((subj_raw, tail)) = after.split_once("'s power")
-        && (tail.is_empty() || tail.ends_with(" times"))
-        && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
-    {
-        return Some(InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: format!("DoublePower{tail}"),
-            duration: dur.clone(),
-        });
+        return Some(ins_animate(subj, p, t, None, Vec::new(), dur.clone()));
     }
     // "<subj> [each] have/has base power and toughness P/T [and has/have <kws>]"
     if let Some((subj_raw, rhs)) = snlow
@@ -1301,43 +1067,35 @@ pub(super) fn try_parse_combat_and_animate(
         .or_else(|| snlow.split_once(" has base power and toughness "))
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        let (pt_tok, kws) = if let Some((pt_side, kw_side)) = rhs
-            .split_once(" and has ")
-            .or_else(|| rhs.split_once(" and have "))
-        {
-            (
-                pt_side.trim(),
-                parse_keyword_list(kw_side, vocab).unwrap_or_default(),
-            )
-        } else {
-            (rhs.trim(), Vec::new())
-        };
+        let (pt_tok, kws) =
+            if let Some((pt_side, kw_side)) = split_once_any(&rhs, &[" and has ", " and have "]) {
+                (
+                    pt_side.trim(),
+                    parse_keyword_list(kw_side, vocab).unwrap_or_default(),
+                )
+            } else {
+                (rhs.trim(), Vec::new())
+            };
         if let Some((p, t)) = parse_base_pt(pt_tok) {
-            return Some(InstructionAst::AnimateOrSetBasePT {
-                subject: Box::new(subj),
-                power: p,
-                toughness: t,
-                description: None,
-                keywords: kws,
-                duration: dur.clone(),
-            });
+            return Some(ins_animate(subj, p, t, None, kws, dur.clone()));
         }
     }
 
     // "<subj> becomes <color(s) / type> [in addition to its other colors/types]"
-    if let Some((subj_raw, rhs_raw)) = snlow
-        .split_once(" becomes ")
-        .or_else(|| snlow.split_once(" become "))
-    {
-        let rhs = rhs_raw
-            .strip_suffix(" in addition to its other colors")
-            .or_else(|| rhs_raw.strip_suffix(" in addition to their other colors"))
-            .or_else(|| rhs_raw.strip_suffix(" in addition to its other types"))
-            .or_else(|| rhs_raw.strip_suffix(" in addition to their other types"))
-            .or_else(|| rhs_raw.strip_suffix(" in addition to its other creature types"))
-            .or_else(|| rhs_raw.strip_suffix(" in addition to their other creature types"))
-            .unwrap_or(rhs_raw)
-            .trim();
+    if let Some((subj_raw, rhs_raw)) = split_once_any(&snlow, &[" becomes ", " become "]) {
+        let rhs = strip_suffix_any(
+            &rhs_raw,
+            &[
+                " in addition to its other colors",
+                " in addition to their other colors",
+                " in addition to its other types",
+                " in addition to their other types",
+                " in addition to its other creature types",
+                " in addition to their other creature types",
+            ],
+        )
+        .unwrap_or(rhs_raw)
+        .trim();
         let is_color_or_type = matches!(
             rhs,
             "white"
@@ -1365,21 +1123,19 @@ pub(super) fn try_parse_combat_and_animate(
                 && words.all(|w| matches!(w, "white" | "blue" | "black" | "red" | "green"))
         };
         if is_color_or_type && let Ok(subj) = parse_subject_or_target(subj_raw, vocab) {
-            return Some(InstructionAst::AnimateOrSetBasePT {
-                subject: Box::new(subj),
-                power: "keep".to_string(),
-                toughness: "keep".to_string(),
-                description: Some(rhs_raw.to_string()),
-                keywords: Vec::new(),
-                duration: dur.clone(),
-            });
+            return Some(ins_animate(
+                subj,
+                "keep",
+                "keep",
+                Some(rhs_raw.to_string()),
+                Vec::new(),
+                dur.clone(),
+            ));
         }
     }
     // "<subj> becomes/become an artifact creature / creature / basic land"
-    if let Some((subj_raw, rhs)) = snlow
-        .split_once(" becomes an ")
-        .or_else(|| snlow.split_once(" becomes a "))
-        .or_else(|| snlow.split_once(" become "))
+    if let Some((subj_raw, rhs)) =
+        split_once_any(&snlow, &[" becomes an ", " becomes a ", " become "])
         && (matches!(
             rhs,
             "artifact creature"
@@ -1396,31 +1152,29 @@ pub(super) fn try_parse_combat_and_animate(
         ) || rhs.starts_with("artifact creature with power and toughness each equal to "))
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Some(InstructionAst::AnimateOrSetBasePT {
-            subject: Box::new(subj),
-            power: "keep".to_string(),
-            toughness: "keep".to_string(),
-            description: Some(rhs.to_string()),
-            keywords: Vec::new(),
-            duration: dur.clone(),
-        });
+        return Some(ins_animate(
+            subj,
+            "keep",
+            "keep",
+            Some(rhs.to_string()),
+            Vec::new(),
+            dur.clone(),
+        ));
     }
     // "<subj> is a <color/subtype> in addition to its other [colors and] types" (Eluge, etc.)
-    if let Some((subj_raw, rhs)) = snlow
-        .split_once(" is a ")
-        .or_else(|| snlow.split_once(" is an "))
+    if let Some((subj_raw, rhs)) = split_once_any(&snlow, &[" is a ", " is an "])
         && (rhs.ends_with(" in addition to its other colors and types")
             || rhs.ends_with(" in addition to its other types"))
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
-        return Some(InstructionAst::AnimateOrSetBasePT {
-            subject: Box::new(subj),
-            power: "keep".to_string(),
-            toughness: "keep".to_string(),
-            description: Some(rhs.to_string()),
-            keywords: Vec::new(),
-            duration: dur.clone(),
-        });
+        return Some(ins_animate(
+            subj,
+            "keep",
+            "keep",
+            Some(rhs.to_string()),
+            Vec::new(),
+            dur.clone(),
+        ));
     }
     // "<subj> doesn't/don't untap during its/their controller(s)' untap step(s) for as long as <cond>"
     if let Some((subj_raw, cond_raw)) = low
@@ -1433,11 +1187,11 @@ pub(super) fn try_parse_combat_and_animate(
             parse_condition(cond_raw, vocab),
         )
     {
-        return Some(InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: "DoesntUntap".to_string(),
-            duration: DurationAst::ForAsLongAs(Box::new(cond)),
-        });
+        return Some(ins_combat_rule(
+            subj,
+            "DoesntUntap",
+            DurationAst::ForAsLongAs(Box::new(cond)),
+        ));
     }
 
     if let Some((subj_raw, blocker_raw)) = snlow.split_once(" can't be blocked by ")
@@ -1446,11 +1200,11 @@ pub(super) fn try_parse_combat_and_animate(
             parse_object_filter(blocker_raw, vocab),
         )
     {
-        return Some(InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: format!("CantBeBlockedBy:{blocker_raw}"),
-            duration: dur.clone(),
-        });
+        return Some(ins_combat_rule(
+            subj,
+            format!("CantBeBlockedBy:{blocker_raw}"),
+            dur.clone(),
+        ));
     }
     if let Some((blocker_raw, atk_raw)) = snlow.split_once(" can't block ")
         && let (Ok(blocker), Ok(_atk)) = (
@@ -1458,11 +1212,11 @@ pub(super) fn try_parse_combat_and_animate(
             parse_subject_or_target(atk_raw, vocab),
         )
     {
-        return Some(InstructionAst::CombatRuleMod {
-            subject: Box::new(blocker),
-            rule: format!("CantBlock:{atk_raw}"),
-            duration: dur.clone(),
-        });
+        return Some(ins_combat_rule(
+            blocker,
+            format!("CantBlock:{atk_raw}"),
+            dur.clone(),
+        ));
     }
 
     // "[have] <subj> becomes/become a copy of <source> [until end of turn][, except <exception>]"
@@ -1502,21 +1256,15 @@ pub(super) fn try_parse_combat_and_animate(
 
     // Lure effect: "All <creatures> able to block <subj> [this turn] do so" (You Look Upon the Tarrasque, etc.)
     if let Some((who_part, rest)) = snlow.split_once(" able to block ")
-        && let Some(subj_raw) = rest
-            .strip_suffix(" this turn do so")
-            .or_else(|| rest.strip_suffix(" this combat do so"))
-            .or_else(|| rest.strip_suffix(" do so"))
+        && let Some(subj_raw) =
+            strip_suffix_any(&rest, &[" this turn do so", " this combat do so", " do so"])
         && let (Ok(blockers), Ok(subj)) = (
             parse_subject_or_target(who_part, vocab),
             parse_subject_or_target(subj_raw, vocab),
         )
     {
         if who_part.trim() == "all creatures" {
-            return Some(InstructionAst::CombatRuleMod {
-                subject: Box::new(subj),
-                rule: "AllAbleBlock".to_string(),
-                duration: dur.clone(),
-            });
+            return Some(ins_combat_rule(subj, "AllAbleBlock", dur.clone()));
         }
         return Some(InstructionAst::ForcedBlockByFilter {
             blockers: Box::new(blockers),
@@ -1528,41 +1276,46 @@ pub(super) fn try_parse_combat_and_animate(
     if let Some(before_in_add) = snlow
         .strip_suffix(" in addition to its other types")
         .or_else(|| snlow.strip_suffix(" in addition to their other types"))
-        && let Some((subj_raw, ty_raw)) = before_in_add
-            .split_once(" becomes a ")
-            .or_else(|| before_in_add.split_once(" becomes an "))
-            .or_else(|| before_in_add.split_once(" become "))
+        && let Some((subj_raw, ty_raw)) =
+            split_once_any(&before_in_add, &[" becomes a ", " becomes an ", " become "])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
         && (ty_raw == "~"
             || vocab.lookup_subtype(ty_raw).is_some()
             || parse_object_filter(ty_raw, vocab).is_ok())
     {
-        return Some(InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::SetOrAddType {
+        return Some(ins_temp_static(
+            StaticAbilityAst::SetOrAddType {
                 subject: Box::new(subj),
                 type_or_subtype: ty_raw.to_string(),
                 additive: true,
                 condition: None,
-            }),
-            duration: dur.clone(),
-        });
+            },
+            dur.clone(),
+        ));
     }
 
     // Strip optional trailing "in addition to its/their other [colors and] types" for animation
-    let anim_clean = snlow
-        .strip_suffix(" in addition to its other colors and types")
-        .or_else(|| snlow.strip_suffix(" in addition to their other colors and types"))
-        .or_else(|| snlow.strip_suffix(" in addition to its other types"))
-        .or_else(|| snlow.strip_suffix(" in addition to their other types"))
-        .unwrap_or(&snlow);
+    let anim_clean = strip_suffix_any(
+        &snlow,
+        &[
+            " in addition to its other colors and types",
+            " in addition to their other colors and types",
+            " in addition to its other types",
+            " in addition to their other types",
+        ],
+    )
+    .unwrap_or(&snlow);
 
     // "<subj> becomes / become / each become a copy of <src>[, except <exc>]" (Polymorphous Rush, Shuri, Taskmaster)
-    if let Some((subj_raw, rest)) = anim_clean
-        .split_once(" each become a copy of ")
-        .or_else(|| anim_clean.split_once(" becomes a copy of "))
-        .or_else(|| anim_clean.split_once(" become a copy of "))
-        .or_else(|| anim_clean.split_once(" become copies of "))
-    {
+    if let Some((subj_raw, rest)) = split_once_any(
+        &anim_clean,
+        &[
+            " each become a copy of ",
+            " becomes a copy of ",
+            " become a copy of ",
+            " become copies of ",
+        ],
+    ) {
         let (src_raw, exception) = match rest.split_once(", except ") {
             Some((sr, exc)) => (sr.trim(), Some(exc.trim().to_string())),
             None => (rest.trim(), None),
@@ -1581,38 +1334,44 @@ pub(super) fn try_parse_combat_and_animate(
     }
 
     // "<subj> becomes a <desc> with base power and toughness P/T"
-    if let Some((subj_raw, rest)) = anim_clean
-        .split_once(" each become a ")
-        .or_else(|| anim_clean.split_once(" each become an "))
-        .or_else(|| anim_clean.split_once(" each become "))
-        .or_else(|| anim_clean.split_once(" becomes a "))
-        .or_else(|| anim_clean.split_once(" becomes an "))
-        .or_else(|| anim_clean.split_once(" become "))
-        && let Some((desc, pt_tok)) = rest.split_once(" with base power and toughness ")
+    if let Some((subj_raw, rest)) = split_once_any(
+        &anim_clean,
+        &[
+            " each become a ",
+            " each become an ",
+            " each become ",
+            " becomes a ",
+            " becomes an ",
+            " become ",
+        ],
+    ) && let Some((desc, pt_tok)) = rest.split_once(" with base power and toughness ")
         && let (Ok(subj), Some((p, t))) = (
             parse_subject_or_target(subj_raw, vocab),
             parse_base_pt(pt_tok.trim()),
         )
     {
-        return Some(InstructionAst::AnimateOrSetBasePT {
-            subject: Box::new(subj),
-            power: p,
-            toughness: t,
-            description: Some(desc.trim().to_string()),
-            keywords: Vec::new(),
-            duration: dur.clone(),
-        });
+        return Some(ins_animate(
+            subj,
+            p,
+            t,
+            Some(desc.trim().to_string()),
+            Vec::new(),
+            dur.clone(),
+        ));
     }
 
     // "<subj> becomes a P/T <desc> [with <kws>]"
-    if let Some((subj_raw, rest)) = anim_clean
-        .split_once(" each become a ")
-        .or_else(|| anim_clean.split_once(" each become an "))
-        .or_else(|| anim_clean.split_once(" each become "))
-        .or_else(|| anim_clean.split_once(" becomes a "))
-        .or_else(|| anim_clean.split_once(" becomes an "))
-        .or_else(|| anim_clean.split_once(" become "))
-        && rest.contains("creature")
+    if let Some((subj_raw, rest)) = split_once_any(
+        &anim_clean,
+        &[
+            " each become a ",
+            " each become an ",
+            " each become ",
+            " becomes a ",
+            " becomes an ",
+            " become ",
+        ],
+    ) && rest.contains("creature")
         && let Some((pt_tok, desc_rest)) = rest.split_once(' ')
         && let (Ok(subj), Some((p, t))) = (
             parse_subject_or_target(subj_raw, vocab),
@@ -1623,31 +1382,29 @@ pub(super) fn try_parse_combat_and_animate(
             Some((d, kw)) => (d, parse_keyword_list(kw, vocab).unwrap_or_default()),
             None => (desc_rest, Vec::new()),
         };
-        return Some(InstructionAst::AnimateOrSetBasePT {
-            subject: Box::new(subj),
-            power: p,
-            toughness: t,
-            description: Some(desc.trim().to_string()),
-            keywords: kws,
-            duration: dur.clone(),
-        });
+        return Some(ins_animate(
+            subj,
+            p,
+            t,
+            Some(desc.trim().to_string()),
+            kws,
+            dur.clone(),
+        ));
     }
 
     // "<subj> becomes a/an <Subtype(s)> [with <kws>]" (Kargan Intimidator, Warden of the First Tree, Rageform)
-    if let Some((subj_raw, rest)) = anim_clean
-        .split_once(" becomes a ")
-        .or_else(|| anim_clean.split_once(" becomes an "))
+    if let Some((subj_raw, rest)) = split_once_any(&anim_clean, &[" becomes a ", " becomes an "])
         && let Ok(subj) = parse_subject_or_target(subj_raw, vocab)
     {
         if rest == "aura with enchant creature" || rest == "aura with enchant permanent" {
-            return Some(InstructionAst::AnimateOrSetBasePT {
-                subject: Box::new(subj),
-                power: "keep".to_string(),
-                toughness: "keep".to_string(),
-                description: Some(rest.to_string()),
-                keywords: Vec::new(),
-                duration: dur_perm.clone(),
-            });
+            return Some(ins_animate(
+                subj,
+                "keep",
+                "keep",
+                Some(rest.to_string()),
+                Vec::new(),
+                dur_perm.clone(),
+            ));
         }
         let (type_part, kws) = match rest.split_once(" with ") {
             Some((tp, kw_raw)) => (tp.trim(), parse_keyword_list(kw_raw, vocab)),
@@ -1657,14 +1414,14 @@ pub(super) fn try_parse_combat_and_animate(
             && !type_part.is_empty()
             && parse_object_filter(type_part, vocab).is_ok()
         {
-            return Some(InstructionAst::AnimateOrSetBasePT {
-                subject: Box::new(subj),
-                power: "keep".to_string(),
-                toughness: "keep".to_string(),
-                description: Some(type_part.to_string()),
-                keywords: kw_list,
-                duration: dur.clone(),
-            });
+            return Some(ins_animate(
+                subj,
+                "keep",
+                "keep",
+                Some(type_part.to_string()),
+                kw_list,
+                dur.clone(),
+            ));
         }
     }
 
@@ -1728,13 +1485,13 @@ pub(super) fn parse_source_choice_redirect(
             }
             other => parse_subject_or_target(other, vocab).ok()?,
         };
-        return Some(vec![InstructionAst::RedirectDamage {
+        return some1(InstructionAst::RedirectDamage {
             amount: Box::new(amt),
             from: Box::new(from),
             to: Box::new(to),
             source_choice: Some("source_of_your_choice".to_string()),
             duration: Some(DurationAst::UntilEndOfTurn),
-        }]);
+        });
     }
     None
 }
@@ -1762,15 +1519,15 @@ pub(super) fn parse_combat_and_resource_grammar(
             kind: kind_word.trim().to_string(),
             negated: false,
         });
-        create_ins.push(InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::InheritAbilities {
-                subject: Box::new(SubjectRefAst::Anaphora("the token".to_string())),
+        create_ins.push(ins_temp_static(
+            StaticAbilityAst::InheritAbilities {
+                subject: box_anaphora("the token"),
                 source_filter: Box::new(src_flt),
                 activated_only: kind_word.trim() == "activated",
                 condition: None,
-            }),
-            duration: DurationAst::Permanent,
-        });
+            },
+            DurationAst::Permanent,
+        ));
         return Some(create_ins);
     }
 
@@ -1780,18 +1537,15 @@ pub(super) fn parse_combat_and_resource_grammar(
         && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
         let _ = tail;
-        return Some(vec![InstructionAst::ForEachObject {
+        return some1(InstructionAst::ForEachObject {
             filter: Box::new(flt),
-            body: vec![InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::RuleOrCombatRestriction {
-                    subject: Some(Box::new(SubjectRefAst::Anaphora("it".to_string()))),
+            body: vec![ins_temp_static(StaticAbilityAst::RuleOrCombatRestriction {
+                    subject: Some(box_anaphora("it")),
                     rule: "extra_loyalty_activation_as_though_none_activated".to_string(),
                     filter: None,
                     condition: None,
-                }),
-                duration: DurationAst::UntilEndOfTurn,
-            }],
-        }]);
+                }, DurationAst::UntilEndOfTurn)],
+        });
     }
 
     // 3. Per-mana alternative activation payment ("for each mana in this ability's activation cost, you may <cost> rather than pay that mana") (Heirloom Epic)
@@ -1800,15 +1554,15 @@ pub(super) fn parse_combat_and_resource_grammar(
         && let Some(cost_raw) = after_fe.strip_suffix(" rather than pay that mana")
         && let Ok(cost_atom) = parse_cost_atom(cost_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::AlternativeAbilityCost {
+        return some1(ins_temp_static(
+            StaticAbilityAst::AlternativeAbilityCost {
                 cost: vec![cost_atom],
                 ability_kind: "this_ability_convoke".to_string(),
                 scope: "per_mana_in_activation_cost".to_string(),
                 condition: None,
-            }),
-            duration: DurationAst::Instant,
-        }]);
+            },
+            DurationAst::Instant,
+        ));
     }
 
     // 4. Coin flip branch with recursive flip-again decision ("if you win/lose the flip, <body...>, and <player> decides whether to flip again") (Game of Chaos)
@@ -1827,20 +1581,20 @@ pub(super) fn parse_combat_and_resource_grammar(
     {
         let (mut then_body, fails) = parse_effect_body(body_raw.trim(), vocab);
         if fails.is_empty() && !then_body.is_empty() {
-            then_body.push(InstructionAst::OptionalPlayer {
-                player: decider,
-                body: vec![InstructionAst::RepeatProcess {
+            then_body.push(ins_opt_player(
+                decider,
+                vec![InstructionAst::RepeatProcess {
                     condition: None,
                     max_times: None,
                     any_number: false,
                 }],
-            });
-            return Some(vec![InstructionAst::IfCondition {
-                condition: Box::new(ConditionAst::CoinFlipOutcome {
+            ));
+            return some1(ins_if(
+                ConditionAst::CoinFlipOutcome {
                     outcome: outcome.to_string(),
-                }),
+                },
                 then_body,
-            }]);
+            ));
         }
     }
 
@@ -1875,7 +1629,7 @@ pub(super) fn parse_combat_and_resource_grammar(
         let nth_perm = |nth: u8| {
             let mut flt = any_perm();
             flt.predicates.push(FilterPredicateAst::NthChosenType(nth));
-            Box::new(SubjectRefAst::Group(Box::new(flt)))
+            Box::new(grp(flt))
         };
         let sac_player = match player {
             PlayerRefAst::EachPlayer | PlayerRefAst::EachOpponent => PlayerRefAst::ThatPlayer,
@@ -1884,7 +1638,7 @@ pub(super) fn parse_combat_and_resource_grammar(
         let body = vec![
             InstructionAst::Sacrifice {
                 player: sac_player,
-                count: Some(Box::new(ValueExprAst::Const(n1))),
+                count: Some(vconst(n1)),
                 subject: nth_perm(1),
                 except: None,
                 half: false,
@@ -1893,7 +1647,7 @@ pub(super) fn parse_combat_and_resource_grammar(
             },
             InstructionAst::Sacrifice {
                 player: sac_player,
-                count: Some(Box::new(ValueExprAst::Const(n2))),
+                count: Some(vconst(n2)),
                 subject: nth_perm(2),
                 except: None,
                 half: false,
@@ -1902,7 +1656,7 @@ pub(super) fn parse_combat_and_resource_grammar(
             },
             InstructionAst::Sacrifice {
                 player: sac_player,
-                count: Some(Box::new(ValueExprAst::Const(n3))),
+                count: Some(vconst(n3)),
                 subject: nth_perm(3),
                 except: None,
                 half: false,
@@ -1915,7 +1669,7 @@ pub(super) fn parse_combat_and_resource_grammar(
                 player,
                 PlayerRefAst::EachPlayer | PlayerRefAst::EachOpponent
             ) {
-                vec![InstructionAst::ForEachPlayer { player, body }]
+                vec![ins_for_each_player(player, body)]
             } else {
                 body
             },
@@ -1924,9 +1678,7 @@ pub(super) fn parse_combat_and_resource_grammar(
 
     // 7. Capped life gain ("you gain life equal to <base>, but not more [life] than [the amount of {<c>} spent on x, ]the player's life total before the damage was dealt, the planeswalker's loyalty before the damage was dealt, or the creature's toughness") (Drain Life, Soul Burn)
     if let Some(after_gain) = low.strip_prefix("you gain life equal to ")
-        && let Some((base_raw, cap_raw)) = after_gain
-            .split_once(", but not more life than ")
-            .or_else(|| after_gain.split_once(", but not more than "))
+        && let Some((base_raw, cap_raw)) = split_once_any(&after_gain, &[", but not more life than ", ", but not more than "])
         && cap_raw.ends_with("the player's life total before the damage was dealt, the planeswalker's loyalty before the damage was dealt, or the creature's toughness")
     {
         let base_val = if base_raw.trim() == "the damage dealt" {
@@ -1946,11 +1698,7 @@ pub(super) fn parse_combat_and_resource_grammar(
             );
         }
         delta = ValueExprAst::Min(Box::new(delta), Box::new(ValueExprAst::TargetPreDamageCap));
-        return Some(vec![InstructionAst::ChangeLife {
-            player: PlayerRefAst::You,
-            delta: Box::new(delta),
-            gain: true,
-        }]);
+        return Some(vec![ins_life(PlayerRefAst::You, delta, true)]);
     }
 
     // 8. Count colors of <subj>, then search your library for <filter> that's exactly that many colors plus <n> (Evolving Door)
@@ -1974,7 +1722,7 @@ pub(super) fn parse_combat_and_resource_grammar(
         }
         let target_colors = ValueExprAst::Add(
             Box::new(ValueExprAst::ColorsAmong(Box::new(src_flt))),
-            Box::new(ValueExprAst::Const(plus_n)),
+            vconst(plus_n),
         );
         search_flt
             .predicates
@@ -1982,9 +1730,9 @@ pub(super) fn parse_combat_and_resource_grammar(
                 op: CompareOp::Eq,
                 expr: Box::new(target_colors),
             });
-        return Some(vec![InstructionAst::SearchLibrary {
+        return some1(InstructionAst::SearchLibrary {
             library: "your".to_string(),
-            count: Box::new(ValueExprAst::Const(1)),
+            count: vconst(1),
             up_to: false,
             any_number: false,
             exact: false,
@@ -1999,22 +1747,7 @@ pub(super) fn parse_combat_and_resource_grammar(
             rest_to_zone: None,
             modifier: None,
             follow_up: Vec::new(),
-        }]);
-    }
-
-    // 9. Destroy with explicit exception ("destroy <subj>, except for <filter>") (Total War and future destroy-except cards)
-    if let Some(after_des) = low.strip_prefix("destroy ")
-        && let Some((subj_raw, exc_raw)) = after_des.split_once(", except for ")
-        && let (Ok(subj), Ok(exc)) = (
-            parse_subject_or_target(subj_raw.trim(), vocab),
-            parse_subject_or_target(exc_raw.trim(), vocab),
-        )
-    {
-        return Some(vec![InstructionAst::Destroy {
-            subject: Box::new(subj),
-            random: false,
-            except: Some(Box::new(exc)),
-        }]);
+        });
     }
 
     // 10. Put X <kind> counters on target creature that <blocker> blocked this turn, where X is <val> (Glyph of Delusion)
@@ -2031,17 +1764,17 @@ pub(super) fn parse_combat_and_resource_grammar(
             blocker: Box::new(blocker),
             this_turn: true,
         });
-        return Some(vec![InstructionAst::BindX {
+        return some1(InstructionAst::BindX {
             x_expr: Box::new(x_expr),
-            body: vec![InstructionAst::PutCounters {
-                subject: Box::new(SubjectRefAst::TargetObject {
+            body: vec![ins_counters(
+                SubjectRefAst::TargetObject {
                     filter: Box::new(blocked_cr),
                     count: TargetCountAst::Exact(1),
-                }),
-                counter_kind: kind_raw.trim().to_string(),
-                count: Box::new(ValueExprAst::ChosenX),
-            }],
-        }]);
+                },
+                kind_raw.trim().to_string(),
+                ValueExprAst::ChosenX,
+            )],
+        });
     }
 
     // 11. Reanimate from LKI graveyard of last controller when blocked by <blocker> (Glyph of Reincarnation)
@@ -2064,13 +1797,10 @@ pub(super) fn parse_combat_and_resource_grammar(
             blocker: Box::new(blocker),
             this_turn: true,
         });
-        return Some(vec![InstructionAst::ForEachObject {
+        return some1(InstructionAst::ForEachObject {
             filter: Box::new(died),
-            body: vec![InstructionAst::MoveZone {
-                subject: Box::new(SubjectRefAst::Group(Box::new(gy_flt))),
-                to: dest_raw.trim().to_string(),
-            }],
-        }]);
+            body: vec![ins_move(grp(gy_flt), dest_raw.trim().to_string())],
+        });
     }
 
     // 12. Return <subj> to its owner's hand if it shares a color with the most common color among <scope> (Barrin's Unmaking)
@@ -2092,15 +1822,13 @@ pub(super) fn parse_combat_and_resource_grammar(
             SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f) => *f,
             _ => any_perm(),
         };
-        return Some(vec![InstructionAst::IfCondition {
-            condition: Box::new(ConditionAst::Marker(
-                GameMarker::SharesMostCommonColorAmong {
-                    subject: Box::new(subj.clone()),
-                    scope: Box::new(scope_flt),
-                    allow_tie,
-                },
-            )),
-            then_body: vec![InstructionAst::ReturnZone {
+        return some1(ins_if(
+            ConditionAst::Marker(GameMarker::SharesMostCommonColorAmong {
+                subject: Box::new(subj.clone()),
+                scope: Box::new(scope_flt),
+                allow_tie,
+            }),
+            vec![InstructionAst::ReturnZone {
                 subject: Box::new(subj),
                 from_zone: Some("battlefield".to_string()),
                 to: "its owner's hand".to_string(),
@@ -2115,7 +1843,7 @@ pub(super) fn parse_combat_and_resource_grammar(
                 any_number: false,
                 actor: None,
             }],
-        }]);
+        ));
     }
 
     // 13. Temporary shroud exemption ("until end of turn, <subj> can be the target of spells and abilities controlled by <player> as though it didn't have shroud") (Autumn Willow)
@@ -2140,15 +1868,15 @@ pub(super) fn parse_combat_and_resource_grammar(
             controller: Some(ctrl),
             ..Default::default()
         };
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::RuleOrCombatRestriction {
+        return some1(ins_temp_static(
+            StaticAbilityAst::RuleOrCombatRestriction {
                 subject: Some(Box::new(subj)),
                 rule: "ignore_shroud_for_controller".to_string(),
                 filter: Some(Box::new(sp_or_ab)),
                 condition: None,
-            }),
-            duration: DurationAst::UntilEndOfTurn,
-        }]);
+            },
+            DurationAst::UntilEndOfTurn,
+        ));
     }
 
     // 14. Unpreventable and unredirectable damage ("damage that would be dealt to <subj> this turn can't be prevented or dealt instead to another permanent or player") (Whippoorwill)
@@ -2158,15 +1886,15 @@ pub(super) fn parse_combat_and_resource_grammar(
         )
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::RuleOrCombatRestriction {
+        return some1(ins_temp_static(
+            StaticAbilityAst::RuleOrCombatRestriction {
                 subject: Some(Box::new(subj)),
                 rule: "damage_cant_be_prevented_or_redirected".to_string(),
                 filter: None,
                 condition: None,
-            }),
-            duration: DurationAst::UntilEndOfTurn,
-        }]);
+            },
+            DurationAst::UntilEndOfTurn,
+        ));
     }
 
     // 15. Reveal hand then discard cards sharing name with cards spliced onto <subj> (Minamo's Meddling)
@@ -2214,13 +1942,11 @@ pub(super) fn parse_combat_and_resource_grammar(
         spell_flt
             .predicates
             .push(FilterPredicateAst::LastMatchingThisTurn);
-        return Some(vec![InstructionAst::DealDamage {
-            source: Box::new(src),
-            target: Box::new(SubjectRefAst::ControllerOf(Box::new(SubjectRefAst::Group(
-                Box::new(spell_flt),
-            )))),
-            amount: Box::new(amt),
-        }]);
+        return some1(ins_dmg(
+            src,
+            SubjectRefAst::ControllerOf(Box::new(grp(spell_flt))),
+            amt,
+        ));
     }
 
     let _ = s;
@@ -2247,9 +1973,7 @@ fn parse_ordered_type_sac_count(part: &str, ordinal_suffix: &str) -> Option<i32>
         .strip_suffix(" of their choice")
         .unwrap_or(before_ord)
         .trim();
-    let cnt_tok = before_choice
-        .strip_suffix(" permanents")
-        .or_else(|| before_choice.strip_suffix(" permanent"))
+    let cnt_tok = strip_suffix_any(&before_choice, &[" permanents", " permanent"])
         .unwrap_or(before_choice)
         .trim();
     parse_number_word(cnt_tok)
@@ -2268,18 +1992,7 @@ pub(super) fn parse_damage_life_mana_extended(
                 && let Some((a1, t1)) = parse_dmg_amount_and_target(part1.trim(), vocab)
                 && let Some((a2, t2)) = parse_dmg_amount_and_target(part2.trim(), vocab)
             {
-                return Some(vec![
-                    InstructionAst::DealDamage {
-                        source: Box::new(src.clone()),
-                        target: Box::new(t1),
-                        amount: Box::new(a1),
-                    },
-                    InstructionAst::DealDamage {
-                        source: Box::new(src),
-                        target: Box::new(t2),
-                        amount: Box::new(a2),
-                    },
-                ]);
+                return Some(vec![ins_dmg(src.clone(), t1, a1), ins_dmg(src, t2, a2)]);
             }
         }
         if let Some(after_eq) = rest.strip_prefix("damage equal to ")
@@ -2289,11 +2002,7 @@ pub(super) fn parse_damage_life_mana_extended(
                 parse_subject_or_target(tgt_raw.trim(), vocab),
             )
         {
-            return Some(vec![InstructionAst::DealDamage {
-                source: Box::new(src),
-                target: Box::new(tgt),
-                amount: Box::new(amt),
-            }]);
+            return Some(vec![ins_dmg(src, tgt, amt)]);
         }
         if let Some(after_to) = rest.strip_prefix("damage to ")
             && let Some((tgt_raw, val_raw)) = after_to.split_once(" equal to ")
@@ -2302,11 +2011,7 @@ pub(super) fn parse_damage_life_mana_extended(
                 parse_value_expr(val_raw.trim(), vocab),
             )
         {
-            return Some(vec![InstructionAst::DealDamage {
-                source: Box::new(src),
-                target: Box::new(tgt),
-                amount: Box::new(amt),
-            }]);
+            return Some(vec![ins_dmg(src, tgt, amt)]);
         }
     }
 
@@ -2319,9 +2024,8 @@ pub(super) fn parse_damage_life_mana_extended(
         .or_else(|| low.split_once(" lose ").map(|(w, r)| (w, false, r)))
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
-        if let Some((base_raw, after_plus)) = rest
-            .split_once(" life plus an additional ")
-            .or_else(|| rest.split_once(" life plus "))
+        if let Some((base_raw, after_plus)) =
+            split_once_any(&rest, &[" life plus an additional ", " life plus "])
             && let Some((per_raw, fe_raw)) = after_plus.split_once(" life for each ")
             && let (Ok(base_v), Ok(per_v), Ok(fe_v)) = (
                 parse_value_expr(base_raw.trim(), vocab),
@@ -2329,14 +2033,14 @@ pub(super) fn parse_damage_life_mana_extended(
                 parse_for_each_value_expr(fe_raw.trim(), vocab),
             )
         {
-            return Some(vec![InstructionAst::ChangeLife {
+            return some1(ins_life(
                 player,
-                delta: Box::new(ValueExprAst::Add(
+                ValueExprAst::Add(
                     Box::new(base_v),
                     Box::new(ValueExprAst::Mul(Box::new(per_v), Box::new(fe_v))),
-                )),
+                ),
                 gain,
-            }]);
+            ));
         }
         if let Some((per_raw, fe_raw)) = rest.split_once(" life for each ")
             && let Ok(per_v) = parse_value_expr(per_raw.trim(), vocab)
@@ -2351,11 +2055,7 @@ pub(super) fn parse_damage_life_mana_extended(
             } else {
                 ValueExprAst::Mul(Box::new(per_v), Box::new(fe_v))
             };
-            return Some(vec![InstructionAst::ChangeLife {
-                player,
-                delta: Box::new(delta),
-                gain,
-            }]);
+            return Some(vec![ins_life(player, delta, gain)]);
         }
     }
 
@@ -2369,34 +2069,22 @@ pub(super) fn parse_damage_life_mana_extended(
         )
     {
         return Some(vec![
-            InstructionAst::Draw {
-                player,
-                count: Box::new(val.clone()),
-                up_to: false,
-            },
-            InstructionAst::ChangeLife {
-                player,
-                delta: Box::new(val),
-                gain: false,
-            },
+            ins_draw(player, val.clone()),
+            ins_life(player, val, false),
         ]);
     }
 
     // 4. "<player> gets twice that many <kind> counters" (Struggle for Project Purity)
-    if let Some((who_raw, rest)) = low
-        .split_once(" gets twice that many ")
-        .or_else(|| low.split_once(" get twice that many "))
+    if let Some((who_raw, rest)) =
+        split_once_any(&low, &[" gets twice that many ", " get twice that many "])
         && let Some(kind_raw) = rest.strip_suffix(" counters")
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
-        return Some(vec![InstructionAst::GainPlayerCounters {
+        return some1(ins_player_counters(
             player,
-            counter_kind: kind_raw.trim().to_string(),
-            count: Box::new(ValueExprAst::Mul(
-                Box::new(ValueExprAst::Const(2)),
-                Box::new(ValueExprAst::PriorResult),
-            )),
-        }]);
+            kind_raw.trim().to_string(),
+            ValueExprAst::Mul(vconst(2), Box::new(ValueExprAst::PriorResult)),
+        ));
     }
 
     // 5. Mana production formulas (Extraplanar Lens, Open the Omenpaths, Paliano, Belbe, Radiant Lotus, Three Tree City)
@@ -2404,10 +2092,10 @@ pub(super) fn parse_damage_life_mana_extended(
         && let Some(player) = parse_player_ref(who_raw.trim())
     {
         if rest == "one mana of any type that land produced" {
-            return Some(vec![InstructionAst::AddManaLandProduced {
+            return some1(InstructionAst::AddManaLandProduced {
                 player,
-                count: Some(Box::new(ValueExprAst::Const(1))),
-            }]);
+                count: Some(vconst(1)),
+            });
         }
         if let Some((sym_raw, fe_raw)) = rest.split_once(" for each ")
             && let Ok(fe_val) = parse_for_each_value_expr(fe_raw.trim(), vocab)
@@ -2418,24 +2106,24 @@ pub(super) fn parse_damage_life_mana_extended(
                 let amount = if n == 1 {
                     fe_val
                 } else {
-                    ValueExprAst::Mul(Box::new(ValueExprAst::Const(n)), Box::new(fe_val))
+                    ValueExprAst::Mul(vconst(n), Box::new(fe_val))
                 };
-                return Some(vec![InstructionAst::AddMana {
+                return some1(ins_add_mana(
                     player,
-                    mana: ManaSpecAst::ScaledSymbol {
+                    ManaSpecAst::ScaledSymbol {
                         symbol: "chosen_color".to_string(),
                         amount: Box::new(amount),
                     },
-                }]);
+                ));
             }
             if sym_raw.trim().starts_with('{') && sym_raw.trim().ends_with('}') {
-                return Some(vec![InstructionAst::AddMana {
+                return some1(ins_add_mana(
                     player,
-                    mana: ManaSpecAst::ScaledSymbol {
+                    ManaSpecAst::ScaledSymbol {
                         symbol: sym_raw.trim().to_ascii_uppercase(),
                         amount: Box::new(fe_val),
                     },
-                }]);
+                ));
             }
         }
     }
@@ -2448,40 +2136,37 @@ pub(super) fn parse_damage_life_mana_extended(
             )
         {
             return Some(vec![
-                InstructionAst::AddMana {
-                    player: PlayerRefAst::You,
-                    mana: ManaSpecAst::AnyColor {
-                        amount: Box::new(ValueExprAst::Const(n1)),
+                ins_add_mana(
+                    PlayerRefAst::You,
+                    ManaSpecAst::AnyColor {
+                        amount: vconst(n1),
                         single_color: true,
                     },
-                },
-                InstructionAst::AddMana {
-                    player: PlayerRefAst::You,
-                    mana: ManaSpecAst::AnyColor {
-                        amount: Box::new(ValueExprAst::Const(n2)),
+                ),
+                ins_add_mana(
+                    PlayerRefAst::You,
+                    ManaSpecAst::AnyColor {
+                        amount: vconst(n2),
                         single_color: true,
                     },
-                },
+                ),
             ]);
         }
         if after == "one mana of any color chosen as you drafted cards named ~" {
-            return Some(vec![InstructionAst::AddMana {
-                player: PlayerRefAst::You,
-                mana: ManaSpecAst::ChosenColor,
-            }]);
+            return some1(ins_add_mana(PlayerRefAst::You, ManaSpecAst::ChosenColor));
         }
         if let Some(val_raw) = after
             .strip_prefix("an amount of mana of that color equal to ")
             .or_else(|| after.strip_prefix("an amount of mana of the chosen color equal to "))
             && let Ok(val) = parse_value_expr(val_raw.trim(), vocab)
         {
-            return Some(vec![InstructionAst::AddMana {
-                player: PlayerRefAst::You,
-                mana: ManaSpecAst::ScaledSymbol {
+            return some1(ins_add_mana(
+                PlayerRefAst::You,
+                ManaSpecAst::ScaledSymbol {
                     symbol: "chosen_color".to_string(),
                     amount: Box::new(val),
                 },
-            }]);
+            ));
         }
     }
 
@@ -2493,10 +2178,8 @@ fn parse_dmg_amount_and_target(
     vocab: &Vocabulary,
 ) -> Option<(ValueExprAst, SubjectRefAst)> {
     let clean = part.strip_prefix("an additional ").unwrap_or(part).trim();
-    let (amt_raw, tgt_raw) = clean
-        .split_once(" additional damage to ")
-        .or_else(|| clean.split_once(" damage to "))
-        .unwrap_or(("", ""));
+    let (amt_raw, tgt_raw) =
+        split_once_any(&clean, &[" additional damage to ", " damage to "]).unwrap_or(("", ""));
     if !amt_raw.is_empty()
         && let (Ok(amt), Ok(tgt)) = (
             parse_value_expr(amt_raw.trim(), vocab),
@@ -2504,27 +2187,6 @@ fn parse_dmg_amount_and_target(
         )
     {
         return Some((amt, tgt));
-    }
-    for (needle, rounding) in [
-        (" damage, rounded down, to ", Rounding::Down),
-        (" damage, rounded up, to ", Rounding::Up),
-    ] {
-        if let Some((before_dmg, tgt_raw)) = clean.split_once(needle)
-            && let Some(inner_raw) = before_dmg.strip_prefix("half ")
-            && let (Ok(inner), Ok(tgt)) = (
-                parse_value_expr(inner_raw.trim(), vocab),
-                parse_subject_or_target(tgt_raw.trim(), vocab),
-            )
-        {
-            return Some((
-                ValueExprAst::DivConst {
-                    expr: Box::new(inner),
-                    denom: 2,
-                    rounding,
-                },
-                tgt,
-            ));
-        }
     }
     None
 }
@@ -2549,12 +2211,12 @@ pub(super) fn parse_statics_and_restrictions_extended(
         } else {
             dur.clone()
         };
-        return Some(vec![InstructionAst::BecomeCopy {
+        return some1(InstructionAst::BecomeCopy {
             subject: Box::new(subject),
             source: Box::new(source),
             duration: copy_dur,
             exception: None,
-        }]);
+        });
     }
 
     // 2. Base P/T dynamic assignment (Galion, Trench Gorger, Brine Hag)
@@ -2564,18 +2226,12 @@ pub(super) fn parse_statics_and_restrictions_extended(
             .or_else(|| after.strip_suffix("'s power and toughness"))
         && let Ok(src) = parse_subject_or_target(src_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::SetDynamicPT {
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-            power: Some(Box::new(ValueExprAst::ObjectStat {
-                subject: Box::new(src.clone()),
-                stat: StatKind::Power,
-            })),
-            toughness: Some(Box::new(ValueExprAst::ObjectStat {
-                subject: Box::new(src),
-                stat: StatKind::Toughness,
-            })),
+        return some1(InstructionAst::SetDynamicPT {
+            subject: box_anaphora("it"),
+            power: Some(Box::new(val_obj_stat(src.clone(), StatKind::Power))),
+            toughness: Some(Box::new(val_obj_stat(src, StatKind::Toughness))),
             duration: DurationAst::UntilEndOfTurn,
-        }]);
+        });
     }
     if let Some((subj_raw, val_raw)) =
         low.split_once(" has base power and base toughness each equal to ")
@@ -2584,57 +2240,36 @@ pub(super) fn parse_statics_and_restrictions_extended(
             parse_value_expr(val_raw.trim(), vocab),
         )
     {
-        return Some(vec![InstructionAst::SetDynamicPT {
+        return some1(InstructionAst::SetDynamicPT {
             subject: Box::new(subject),
             power: Some(Box::new(val.clone())),
             toughness: Some(Box::new(val)),
             duration: DurationAst::Permanent,
-        }]);
+        });
     }
     if let Some(after) = low.strip_prefix("the base power and toughness of ")
         && let Some((subj_raw, pt_raw)) = after.split_once(" become ")
         && let Some((p_s, t_s)) = pt_raw.trim().split_once('/')
         && let Ok(subject) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::AnimateOrSetBasePT {
-            subject: Box::new(subject),
-            power: p_s.trim().to_string(),
-            toughness: t_s.trim().to_string(),
-            description: None,
-            keywords: Vec::new(),
-            duration: DurationAst::Permanent,
-        }]);
+        return some1(ins_animate(
+            subject,
+            p_s.trim().to_string(),
+            t_s.trim().to_string(),
+            None,
+            Vec::new(),
+            DurationAst::Permanent,
+        ));
     }
 
     // 3. Change land type (Vision Charm)
     if low == "each land of the first chosen type becomes the second chosen type until end of turn"
     {
-        return Some(vec![InstructionAst::BecomeChosenCharacteristic {
+        return some1(InstructionAst::BecomeChosenCharacteristic {
             subject: Box::new(SubjectRefAst::Each(Box::new(obj_type(CardTypeMask::LAND)))),
             kind: "second_chosen_land_type".to_string(),
             duration: DurationAst::UntilEndOfTurn,
-        }]);
-    }
-
-    // 4. Activated abilities can't be activated for as long as <cond> (Braided Net)
-    if let Some((subj_raw, cond_raw)) =
-        low.split_once(" activated abilities can't be activated for as long as ")
-        && let Ok(cond) = parse_condition(cond_raw.trim(), vocab)
-    {
-        let subj = if subj_raw.trim() == "its" {
-            SubjectRefAst::Anaphora("it".to_string())
-        } else {
-            parse_subject_or_target(subj_raw.trim().trim_end_matches("'s"), vocab).ok()?
-        };
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::RuleOrCombatRestriction {
-                subject: Some(Box::new(subj)),
-                rule: "activated_abilities_cant_be_activated".to_string(),
-                filter: None,
-                condition: Some(Box::new(cond.clone())),
-            }),
-            duration: DurationAst::ForAsLongAs(Box::new(cond)),
-        }]);
+        });
     }
 
     // 5. Assign combat damage as though unblocked (Outmaneuver, Predatory Focus)
@@ -2646,54 +2281,24 @@ pub(super) fn parse_statics_and_restrictions_extended(
         .strip_suffix(" assign their combat damage this turn as though they weren't blocked")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        let act = InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: "assign_combat_damage_as_though_unblocked".to_string(),
-            duration: DurationAst::UntilEndOfTurn,
-        };
+        let act = ins_combat_rule(
+            subj,
+            "assign_combat_damage_as_though_unblocked",
+            DurationAst::UntilEndOfTurn,
+        );
         return Some(if opt_unb {
-            vec![InstructionAst::Optional(vec![act])]
+            vec![ins_opt1(act)]
         } else {
             vec![act]
         });
     }
 
-    // 6. Combat restrictions & forced attacks/blocks
-    if let Some(subj_raw) =
-        low.strip_suffix(" can't attack you or planeswalkers you control that combat")
-        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
-    {
-        return Some(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: "cant_attack_you_or_your_planeswalkers".to_string(),
-            duration: DurationAst::UntilEndOfCombat,
-        }]);
-    }
-    if let Some((who_raw, _)) =
-        low.split_once(" can't attack you or permanents you control during their next turn")
-        && let Some(player) = parse_player_ref(who_raw.trim())
-    {
-        return Some(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(SubjectRefAst::Player(player)),
-            rule: "cant_attack_you_or_your_permanents".to_string(),
-            duration: DurationAst::UntilEndOfPlayersNextTurn(player),
-        }]);
-    }
-    if let Some(subj_raw) = low.strip_suffix(" attack this turn if able")
-        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
-    {
-        return Some(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: "attacks_if_able".to_string(),
-            duration: DurationAst::UntilEndOfTurn,
-        }]);
-    }
     if low == "you choose how those creatures block" {
-        return Some(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(SubjectRefAst::Anaphora("those creatures".to_string())),
-            rule: "you_choose_how_they_block".to_string(),
-            duration: DurationAst::UntilEndOfTurn,
-        }]);
+        return some1(ins_combat_rule(
+            anaphora("those creatures"),
+            "you_choose_how_they_block",
+            DurationAst::UntilEndOfTurn,
+        ));
     }
     if let Some(after) = low.strip_prefix("attacking doesn't cause ")
         && let Some((subj_raw, cond_raw)) = after.split_once(" to tap this combat if ")
@@ -2702,15 +2307,15 @@ pub(super) fn parse_statics_and_restrictions_extended(
             parse_condition(cond_raw.trim(), vocab),
         )
     {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::RuleOrCombatRestriction {
+        return some1(ins_temp_static(
+            StaticAbilityAst::RuleOrCombatRestriction {
                 subject: Some(Box::new(subj)),
                 rule: "attacking_doesnt_cause_tap".to_string(),
                 filter: None,
                 condition: Some(Box::new(cond)),
-            }),
-            duration: DurationAst::UntilEndOfCombat,
-        }]);
+            },
+            DurationAst::UntilEndOfCombat,
+        ));
     }
 
     // 7. Temporary revealed-hand rule (Stromgald Spy)
@@ -2722,17 +2327,15 @@ pub(super) fn parse_statics_and_restrictions_extended(
             parse_condition(cond_raw.trim(), vocab),
         )
     {
-        return Some(vec![InstructionAst::Optional(vec![
-            InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::LookOrRevealRule {
-                    rule: format!("play_with_hand_revealed:{}", who_raw.trim()),
-                    filter: None,
-                    follow_up: Vec::new(),
-                    condition: Some(Box::new(cond.clone())),
-                }),
-                duration: DurationAst::ForAsLongAs(Box::new(cond)),
+        return some1(ins_opt1(ins_temp_static(
+            StaticAbilityAst::LookOrRevealRule {
+                rule: format!("play_with_hand_revealed:{}", who_raw.trim()),
+                filter: None,
+                follow_up: Vec::new(),
+                condition: Some(Box::new(cond.clone())),
             },
-        ])]);
+            DurationAst::ForAsLongAs(Box::new(cond)),
+        )));
     }
 
     // 8. Can't lose / can't win / can't gain life (Angel's Grace, Screaming Nemesis)
@@ -2754,15 +2357,15 @@ pub(super) fn parse_statics_and_restrictions_extended(
             "for the rest of the game" => DurationAst::Permanent,
             _ => return None,
         };
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::RuleOrCombatRestriction {
+        return some1(ins_temp_static(
+            StaticAbilityAst::RuleOrCombatRestriction {
                 subject: Some(Box::new(SubjectRefAst::Player(player))),
                 rule: rule_tail.0.to_string(),
                 filter: None,
                 condition: None,
-            }),
-            duration: rule_dur,
-        }]);
+            },
+            rule_dur,
+        ));
     }
 
     // 9. Permanent goad (Jon Irenicus, Shattered One)
@@ -2771,78 +2374,27 @@ pub(super) fn parse_statics_and_restrictions_extended(
         .or_else(|| low.strip_suffix("'s goaded for the rest of the game"))
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: "goaded".to_string(),
-            duration: DurationAst::Permanent,
-        }]);
-    }
-
-    // 10. Enters with counter and additive type
-    if let Some(after) = low.strip_prefix("it enters with a ")
-        && let Some((kind_raw, type_raw)) =
-            after
-                .split_once(" counter on it and is ")
-                .and_then(|(k, t)| {
-                    t.strip_suffix(" in addition to its other types")
-                        .map(|ty| (k, ty))
-                })
-    {
-        return Some(vec![
-            InstructionAst::PutCounters {
-                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                counter_kind: kind_raw.trim().to_string(),
-                count: Box::new(ValueExprAst::Const(1)),
-            },
-            InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::SetOrAddType {
-                    subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                    type_or_subtype: type_raw.trim().to_string(),
-                    additive: true,
-                    condition: None,
-                }),
-                duration: DurationAst::Permanent,
-            },
-        ]);
+        return some1(ins_combat_rule(subj, "goaded", DurationAst::Permanent));
     }
 
     // 11. Activation restrictions (Merseine, Capricopian, Withering Wisps)
     if low.starts_with("only ") && low.contains(" may activate this ability") {
-        return Some(vec![InstructionAst::AbilityRestriction {
-            restriction: low.to_string(),
-            condition: None,
-        }]);
+        return Some(vec![ins_ability_restr(low.to_string())]);
     }
     if let Some(val_raw) = low.strip_prefix("activate no more times each turn than ")
         && let Ok(val) = parse_value_expr(val_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::AbilityRestriction {
+        return some1(InstructionAst::AbilityRestriction {
             restriction: "max_activations_per_turn".to_string(),
-            condition: Some(Box::new(ConditionAst::Compare {
-                lhs: Box::new(ValueExprAst::EventCountThisTurn {
+            condition: Some(Box::new(cond_cmp(
+                ValueExprAst::EventCountThisTurn {
                     event: "ability_activations_this_turn".to_string(),
                     player: None,
-                }),
-                op: CompareOp::Lt,
-                rhs: Box::new(val),
-            })),
-        }]);
-    }
-
-    // 12. Alternative casting cost instruction (Cobra Trap)
-    if let Some(after) = low.strip_prefix("you may pay ")
-        && let Some(cost_raw) = after.strip_suffix(" rather than pay ~'s mana cost")
-        && let Ok(cost) = parse_cost_atom(&cost_raw.trim().to_ascii_uppercase(), vocab)
-    {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::AlternativeCastCost {
-                cost: vec![cost],
-                condition: None,
-                for_spells: None,
-                next_only: true,
-            }),
-            duration: DurationAst::Instant,
-        }]);
+                },
+                CompareOp::Lt,
+                val,
+            ))),
+        });
     }
 
     // 13. Sacrifice unless pay reduced mana cost (Flash)
@@ -2851,24 +2403,24 @@ pub(super) fn parse_statics_and_restrictions_extended(
             after.split_once(" unless you pay its mana cost reduced by ")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::Unless {
-            body: vec![InstructionAst::Sacrifice {
+        return some1(ins_unless(
+            vec![InstructionAst::Sacrifice {
                 player: PlayerRefAst::You,
-                count: Some(Box::new(ValueExprAst::Const(1))),
+                count: Some(vconst(1)),
                 subject: Box::new(subj),
                 except: None,
                 half: false,
                 rounding: None,
                 chooser: None,
             }],
-            unless_player: Some(PlayerRefAst::You),
-            unless_cost: Some(CostAtomAst::PayMana(format!(
+            Some(PlayerRefAst::You),
+            Some(CostAtomAst::PayMana(format!(
                 "its_mana_cost_minus_{}",
                 delta_raw.trim().to_ascii_uppercase()
             ))),
-            unless_action: None,
-            unless_condition: None,
-        }]);
+            None,
+            None,
+        ));
     }
 
     // 14. Modal token characteristics line (Outlaws' Merriment)
@@ -2877,29 +2429,25 @@ pub(super) fn parse_statics_and_restrictions_extended(
         && pt_tok.split('/').all(|p| p.parse::<u8>().is_ok())
         && rest.contains(" with ")
     {
-        return Some(vec![InstructionAst::TokenCharacteristicsChoice(
-            s.to_string(),
-        )]);
+        return some1(InstructionAst::TokenCharacteristicsChoice(s.to_string()));
     }
 
     // 15. "it's attacking <player>" (Midnight Crusader Shuttle)
     if let Some(who_raw) = low.strip_prefix("it's attacking ")
         && parse_player_ref(who_raw.trim()).is_some()
     {
-        return Some(vec![InstructionAst::EntersTappedRule {
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+        return some1(InstructionAst::EntersTappedRule {
+            subject: box_anaphora("it"),
             tapped: false,
             attacking: Some(who_raw.trim().to_string()),
             duration: DurationAst::UntilEndOfCombat,
-        }]);
+        });
     }
 
     // 16. "<subj> gains <kws> until end of turn, or until <cond>, whichever comes first" (Drop Tower)
     if let Some((before_or, until_part)) = low.split_once(" until end of turn, or until ")
         && let Some(cond_raw) = until_part.strip_suffix(", whichever comes first")
-        && let Some((subj_raw, kw_raw)) = before_or
-            .split_once(" gains ")
-            .or_else(|| before_or.split_once(" gain "))
+        && let Some((subj_raw, kw_raw)) = split_once_any(&before_or, &[" gains ", " gain "])
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
         && let Some(kws) = parse_keyword_list(kw_raw.trim(), vocab)
     {
@@ -2908,49 +2456,32 @@ pub(super) fn parse_statics_and_restrictions_extended(
             .unwrap_or_else(|| ConditionAst::EventOccurredThisTurn {
                 event: cond_raw.trim().to_string(),
             });
-        return Some(vec![InstructionAst::GrantKeywords {
-            subject: Box::new(subj),
-            keywords: kws,
-            duration: DurationAst::ForAsLongAs(Box::new(ConditionAst::Not(Box::new(cond)))),
-        }]);
-    }
-
-    // 17. "increase or decrease the result by <N>" (Night Shift of the Living Dead, Xenosquirrels)
-    if let Some(num_raw) = low.strip_prefix("increase or decrease the result by ")
-        && let Some(n) = parse_number_word(num_raw.trim())
-        && let Ok(delta) = i8::try_from(n)
-    {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::DieRollModifier {
-                cost: Vec::new(),
-                delta: Some(delta),
-                reroll: false,
-                once_each_turn: false,
-            }),
-            duration: DurationAst::Instant,
-        }]);
+        return some1(ins_grant_kw(
+            subj,
+            kws,
+            DurationAst::ForAsLongAs(Box::new(ConditionAst::Not(Box::new(cond)))),
+        ));
     }
 
     // 18. "you may activate ~'s loyalty ability <N> more times this turn" (Comet, Stellar Pup)
     if let Some(after) = low.strip_prefix("you may activate ")
         && let Some((subj_raw, rest)) = after.split_once("'s loyalty ability ")
-        && let Some(num_raw) = rest
-            .strip_suffix(" more times this turn")
-            .or_else(|| rest.strip_suffix(" more time this turn"))
+        && let Some(num_raw) =
+            strip_suffix_any(&rest, &[" more times this turn", " more time this turn"])
         && let Some(n) = parse_number_word(num_raw.trim())
         && let Ok(extra_times) = u8::try_from(n)
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::ActivationLimitOverride {
+        return some1(ins_temp_static(
+            StaticAbilityAst::ActivationLimitOverride {
                 ability_kind: "loyalty".to_string(),
                 subject: Box::new(subj),
                 extra_times,
                 instant_speed: false,
                 condition: None,
-            }),
-            duration: DurationAst::UntilEndOfTurn,
-        }]);
+            },
+            DurationAst::UntilEndOfTurn,
+        ));
     }
 
     None
@@ -2976,41 +2507,34 @@ pub(super) fn parse_damage_counters_tokens_extended(
         )
     {
         return Some(vec![
-            InstructionAst::DealDamage {
-                source: Box::new(SubjectRefAst::SelfObject),
-                target: Box::new(SubjectRefAst::AnyTarget),
-                amount: Box::new(v1),
-            },
-            InstructionAst::DealDamage {
-                source: Box::new(SubjectRefAst::SelfObject),
-                target: Box::new(SubjectRefAst::DistinctTarget {
+            ins_dmg(SubjectRefAst::SelfObject, SubjectRefAst::AnyTarget, v1),
+            ins_dmg(
+                SubjectRefAst::SelfObject,
+                SubjectRefAst::DistinctTarget {
                     ordinal: 2,
                     filter: Box::new(ObjectFilterAst::default()),
-                }),
-                amount: Box::new(v2),
-            },
-            InstructionAst::DealDamage {
-                source: Box::new(SubjectRefAst::SelfObject),
-                target: Box::new(SubjectRefAst::DistinctTarget {
+                },
+                v2,
+            ),
+            ins_dmg(
+                SubjectRefAst::SelfObject,
+                SubjectRefAst::DistinctTarget {
                     ordinal: 3,
                     filter: Box::new(ObjectFilterAst::default()),
-                }),
-                amount: Box::new(v3),
-            },
+                },
+                v3,
+            ),
         ]);
     }
 
     // 2. "~ deals double that damage [instead]" (Goblin Charbelcher)
     let no_instead = low.strip_suffix(" instead").unwrap_or(low);
     if no_instead == "~ deals double that damage" {
-        let ins = InstructionAst::DealDamage {
-            source: Box::new(SubjectRefAst::SelfObject),
-            target: Box::new(SubjectRefAst::Anaphora("that target".to_string())),
-            amount: Box::new(ValueExprAst::Mul(
-                Box::new(ValueExprAst::Const(2)),
-                Box::new(ValueExprAst::PriorResult),
-            )),
-        };
+        let ins = ins_dmg(
+            SubjectRefAst::SelfObject,
+            anaphora("that target"),
+            ValueExprAst::Mul(vconst(2), Box::new(ValueExprAst::PriorResult)),
+        );
         return Some(if no_instead.len() != low.len() {
             vec![InstructionAst::ReplaceEffect(vec![ins])]
         } else {
@@ -3020,14 +2544,12 @@ pub(super) fn parse_damage_counters_tokens_extended(
 
     // 3. "prevent the next <N> damage [this way] [instead]" (Elvish Healer, Pollen Remedy)
     if let Some(after) = no_instead.strip_prefix("prevent the next ")
-        && let Some(amt_raw) = after
-            .strip_suffix(" damage this way")
-            .or_else(|| after.strip_suffix(" damage"))
+        && let Some(amt_raw) = strip_suffix_any(&after, &[" damage this way", " damage"])
         && let Ok(amount) = parse_value_expr(amt_raw.trim(), vocab)
     {
         let ins = InstructionAst::PreventDamage {
             amount: Box::new(amount),
-            target: Box::new(SubjectRefAst::Anaphora("that target".to_string())),
+            target: box_anaphora("that target"),
             duration: DurationAst::UntilEndOfTurn,
         };
         return Some(if no_instead.len() != low.len() {
@@ -3046,15 +2568,11 @@ pub(super) fn parse_damage_counters_tokens_extended(
         } else {
             Rounding::Down
         };
-        return Some(vec![InstructionAst::GainPlayerCounters {
-            player: PlayerRefAst::You,
-            counter_kind: ck_raw.trim().to_string(),
-            count: Box::new(ValueExprAst::DivConst {
-                expr: Box::new(ValueExprAst::ChosenX),
-                denom: 2,
-                rounding,
-            }),
-        }]);
+        return some1(ins_player_counters(
+            PlayerRefAst::You,
+            ck_raw.trim().to_string(),
+            val_div(ValueExprAst::ChosenX, 2, rounding),
+        ));
     }
 
     // 5. "each creature gets twice -x/-x [dur]" (Nuclear Fallout)
@@ -3063,13 +2581,13 @@ pub(super) fn parse_damage_counters_tokens_extended(
         && let Some((dx, dy)) = pt_tok.split_once('/')
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::ModifyPT {
+        return some1(InstructionAst::ModifyPT {
             subject: Box::new(subj),
             dx: dx.to_string(),
             dy: dy.to_string(),
             duration: dur.clone(),
-            scale: Some(Box::new(ValueExprAst::Const(2))),
-        }]);
+            scale: Some(vconst(2)),
+        });
     }
 
     // 6. "the token enters with half that many <ck> counters on it, rounded down/up" (Ochre Jelly)
@@ -3081,21 +2599,15 @@ pub(super) fn parse_damage_counters_tokens_extended(
         } else {
             Rounding::Down
         };
-        return Some(vec![InstructionAst::PutCounters {
-            subject: Box::new(SubjectRefAst::Anaphora("the token".to_string())),
-            counter_kind: ck_raw.trim().to_string(),
-            count: Box::new(ValueExprAst::DivConst {
-                expr: Box::new(ValueExprAst::PriorResult),
-                denom: 2,
-                rounding,
-            }),
-        }]);
+        return some1(ins_counters(
+            anaphora("the token"),
+            ck_raw.trim().to_string(),
+            val_div(ValueExprAst::PriorResult, 2, rounding),
+        ));
     }
 
     // 7. Remove counters distributed from among all permanents (Sensational Spider-Man)
-    if let Some(after) = low
-        .strip_prefix("you may remove up to ")
-        .or_else(|| low.strip_prefix("remove up to "))
+    if let Some(after) = strip_prefix_any(&low, &["you may remove up to ", "remove up to "])
         && let Some((cnt_kind, flt_raw)) = after.split_once(" counters from among ")
         && let Some((cnt_raw, ck_raw)) = cnt_kind.split_once(' ')
     {
@@ -3114,7 +2626,7 @@ pub(super) fn parse_damage_counters_tokens_extended(
                 count: Some(Box::new(count)),
             };
             return Some(if low.starts_with("you may ") {
-                vec![InstructionAst::Optional(vec![ins])]
+                vec![ins_opt1(ins)]
             } else {
                 vec![ins]
             });
@@ -3123,10 +2635,7 @@ pub(super) fn parse_damage_counters_tokens_extended(
 
     let build_tok_ins = |controller: PlayerRefAst, rich: crate::filter::RichTokenCreationAst| {
         if rich.is_plain() {
-            InstructionAst::CreateToken {
-                controller,
-                token: rich.token,
-            }
+            ins_create_token(controller, rich.token)
         } else {
             InstructionAst::CreateQualifiedToken(Box::new(crate::ast::QualifiedTokenCreationAst {
                 controller,
@@ -3155,7 +2664,7 @@ pub(super) fn parse_damage_counters_tokens_extended(
         }
         return Some(vec![
             InstructionAst::RemoveCounters {
-                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                subject: box_anaphora("it"),
                 counter_kind: "all".to_string(),
                 all: true,
                 count: None,
@@ -3171,10 +2680,7 @@ pub(super) fn parse_damage_counters_tokens_extended(
         && let Some(sub_n) = parse_number_word(sub_raw.trim())
         && let Ok(mut rich) = parse_token_creation_rich(&format!("1 {tok_raw}"), vocab)
     {
-        let expr = ValueExprAst::Sub(
-            Box::new(ValueExprAst::ChosenX),
-            Box::new(ValueExprAst::Const(sub_n)),
-        );
+        let expr = ValueExprAst::Sub(Box::new(ValueExprAst::ChosenX), vconst(sub_n));
         match &mut rich.token {
             TokenSpecAst::Creature { count, .. }
             | TokenSpecAst::Predefined { count, .. }
@@ -3191,33 +2697,31 @@ pub(super) fn parse_damage_counters_tokens_extended(
         && let Ok(second_tok) = parse_token_creation_rich(tok_raw.trim(), vocab)
     {
         return Some(vec![
-            InstructionAst::CreateToken {
-                controller: PlayerRefAst::You,
-                token: TokenSpecAst::Predefined {
+            ins_create_token(
+                PlayerRefAst::You,
+                TokenSpecAst::Predefined {
                     name: "that token".to_string(),
-                    count: Box::new(ValueExprAst::Const(1)),
+                    count: vconst(1),
                     tapped: false,
                 },
-            },
+            ),
             build_tok_ins(PlayerRefAst::You, second_tok),
         ]);
     }
     if low.starts_with("create a ") && low.ends_with(" creature token with those characteristics") {
-        return Some(vec![InstructionAst::TokenCharacteristicsChoice(
-            s.to_string(),
-        )]);
+        return some1(InstructionAst::TokenCharacteristicsChoice(s.to_string()));
     }
     if let Some(after) = low.strip_prefix("create a token that's a copy of it attached to ") {
-        return Some(vec![InstructionAst::CreateToken {
-            controller: PlayerRefAst::You,
-            token: TokenSpecAst::Copy {
-                count: Box::new(ValueExprAst::Const(1)),
-                source: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+        return some1(ins_create_token(
+            PlayerRefAst::You,
+            TokenSpecAst::Copy {
+                count: vconst(1),
+                source: box_anaphora("it"),
                 tapped: false,
                 attacking: false,
                 exception: Some(format!("attached_to:{}", after.trim())),
             },
-        }]);
+        ));
     }
 
     // 11. Advantage/stored die rolls & result-scaled scry (Berserker's Frenzy, Centaur of Attention, Boing!)
@@ -3230,30 +2734,30 @@ pub(super) fn parse_damage_counters_tokens_extended(
                 sides_raw.parse::<u16>(),
             )
         {
-            return Some(vec![InstructionAst::RollDiceAndKeep {
+            return some1(InstructionAst::RollDiceAndKeep {
                 count: Box::new(count),
                 sides,
                 drop_lowest: 1,
                 store_on_self: false,
-            }]);
+            });
         }
         if let Some((cnt_raw, _)) =
             after.split_once(" six-sided dice and store those results on it")
             && let Ok(count) = parse_value_expr(cnt_raw.trim(), vocab)
         {
-            return Some(vec![InstructionAst::RollDiceAndKeep {
+            return some1(InstructionAst::RollDiceAndKeep {
                 count: Box::new(count),
                 sides: 6,
                 drop_lowest: 0,
                 store_on_self: true,
-            }]);
+            });
         }
     }
     if low == "scry a number of cards equal to the result" {
-        return Some(vec![InstructionAst::Scry {
+        return some1(InstructionAst::Scry {
             player: PlayerRefAst::You,
             count: Box::new(ValueExprAst::PriorResult),
-        }]);
+        });
     }
 
     // 12. Temporary type/P-T/ability grants (Soul Sculptor, Cycle of Life, Tetravus, Wild Shape, Gabriel Angelfire)
@@ -3266,8 +2770,8 @@ pub(super) fn parse_damage_counters_tokens_extended(
                 event: rest.trim().to_string(),
             }
         });
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::ContinuousLayerEffect {
+        return some1(ins_temp_static(
+            StaticAbilityAst::ContinuousLayerEffect {
                 subject: Box::new(subj),
                 set_types: Some("Enchantment".to_string()),
                 additive_types: false,
@@ -3277,9 +2781,9 @@ pub(super) fn parse_damage_counters_tokens_extended(
                 lose_keywords: Vec::new(),
                 lose_all_abilities: true,
                 condition: None,
-            }),
-            duration: DurationAst::ForAsLongAs(Box::new(ConditionAst::Not(Box::new(cond)))),
-        }]);
+            },
+            DurationAst::ForAsLongAs(Box::new(ConditionAst::Not(Box::new(cond)))),
+        ));
     }
     if let Some((subj_raw, rest)) = low.split_once(" has base power and toughness ")
         && let Some((pt_tok, _)) = rest.split_once(" until ")
@@ -3287,14 +2791,14 @@ pub(super) fn parse_damage_counters_tokens_extended(
     {
         let subj = parse_subject_or_target(subj_raw.trim(), vocab)
             .unwrap_or_else(|_| SubjectRefAst::Anaphora(subj_raw.trim().to_string()));
-        return Some(vec![InstructionAst::AnimateOrSetBasePT {
-            subject: Box::new(subj),
-            power: p.to_string(),
-            toughness: t.to_string(),
-            description: None,
-            keywords: Vec::new(),
-            duration: dur.clone(),
-        }]);
+        return some1(ins_animate(
+            subj,
+            p.to_string(),
+            t.to_string(),
+            None,
+            Vec::new(),
+            dur.clone(),
+        ));
     }
     if let Some(after) = low.strip_prefix("they each have ")
         && let Some((kw_raw, ab_raw)) = after.split_once(" and \"")
@@ -3303,12 +2807,12 @@ pub(super) fn parse_damage_counters_tokens_extended(
         let ab = ab_raw.trim_end_matches('"').to_string();
         return Some(vec![
             InstructionAst::GrantKeywords {
-                subject: Box::new(SubjectRefAst::Anaphora("they".to_string())),
+                subject: box_anaphora("they"),
                 keywords: kws,
                 duration: DurationAst::Permanent,
             },
             InstructionAst::GrantAbilityText {
-                subject: Box::new(SubjectRefAst::Anaphora("they".to_string())),
+                subject: box_anaphora("they"),
                 ability_text: ab,
                 compiled: None,
                 duration: DurationAst::Permanent,
@@ -3320,31 +2824,21 @@ pub(super) fn parse_damage_counters_tokens_extended(
     ) && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
         return Some(vec![
-            InstructionAst::AnimateOrSetBasePT {
-                subject: Box::new(subj.clone()),
-                power: "chosen".to_string(),
-                toughness: "chosen".to_string(),
-                description: Some("chosen creature type".to_string()),
-                keywords: Vec::new(),
-                duration: dur.clone(),
-            },
-            InstructionAst::GrantAbilityText {
-                subject: Box::new(subj),
-                ability_text: "that ability".to_string(),
-                compiled: None,
-                duration: dur.clone(),
-            },
+            ins_animate(
+                subj.clone(),
+                "chosen",
+                "chosen",
+                Some("chosen creature type".to_string()),
+                Vec::new(),
+                dur.clone(),
+            ),
+            ins_grant_ab(subj, "that ability", None, dur.clone()),
         ]);
     }
     if let Some((subj_raw, _)) = low.split_once(" gains that ability")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::GrantAbilityText {
-            subject: Box::new(subj),
-            ability_text: "that ability".to_string(),
-            compiled: None,
-            duration: dur.clone(),
-        }]);
+        return Some(vec![ins_grant_ab(subj, "that ability", None, dur.clone())]);
     }
 
     None
@@ -3360,22 +2854,22 @@ pub(super) fn parse_control_piles_combat_extended(
     // 1. Exchange text boxes / exchange control / redistribute life totals
     // (Exchange of Words, Cultural Exchange, Reverse the Sands)
     if low == "exchange the text boxes of those creatures" {
-        return Some(vec![InstructionAst::ExchangeTextBoxes {
-            left: Box::new(SubjectRefAst::Anaphora("first creature".to_string())),
-            right: Box::new(SubjectRefAst::Anaphora("second creature".to_string())),
-        }]);
+        return some1(InstructionAst::ExchangeTextBoxes {
+            left: box_anaphora("first creature"),
+            right: box_anaphora("second creature"),
+        });
     }
     if low == "those players exchange control of those creatures" {
-        return Some(vec![InstructionAst::Exchange {
+        return some1(InstructionAst::Exchange {
             kind: ExchangeKind::Control,
-            left: Box::new(SubjectRefAst::Anaphora("those creatures".to_string())),
+            left: box_anaphora("those creatures"),
             right: None,
-        }]);
+        });
     }
     if low == "redistribute any number of players' life totals" {
-        return Some(vec![InstructionAst::RedistributeLifeTotals {
+        return some1(InstructionAst::RedistributeLifeTotals {
             player: PlayerRefAst::You,
-        }]);
+        });
     }
 
     // 2. Gain control of chosen/owned permanents (Dack Fayden, Scrambleverse, Order of Succession, Herald of Leshrac, Expropriate)
@@ -3386,26 +2880,20 @@ pub(super) fn parse_control_piles_combat_extended(
             || rest == "the creature they chose"
             || rest == "each land they own that you control")
     {
-        return Some(vec![InstructionAst::GainControl {
+        return some1(ins_gain_control(
             controller,
-            subject: Box::new(SubjectRefAst::Anaphora(rest.to_string())),
-            duration: DurationAst::Permanent,
-        }]);
+            SubjectRefAst::Anaphora(rest.to_string()),
+            DurationAst::Permanent,
+        ));
     }
     if low == "choose a permanent owned by the voter and gain control of it" {
         return Some(vec![
             InstructionAst::ChooseFromGroup {
-                count: Box::new(ValueExprAst::Const(1)),
+                count: vconst(1),
                 random: false,
-                group: Box::new(SubjectRefAst::Anaphora(
-                    "permanent owned by the voter".to_string(),
-                )),
+                group: box_anaphora("permanent owned by the voter"),
             },
-            InstructionAst::GainControl {
-                controller: PlayerRefAst::You,
-                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                duration: DurationAst::Permanent,
-            },
+            ins_gain_control(PlayerRefAst::You, anaphora("it"), DurationAst::Permanent),
         ]);
     }
 
@@ -3419,11 +2907,7 @@ pub(super) fn parse_control_piles_combat_extended(
             .push(crate::ast::FilterPredicateAst::StateQualification(
                 "another_target_player_controls".to_string(),
             ));
-        return Some(vec![InstructionAst::ChooseFromGroup {
-            count: Box::new(ValueExprAst::PriorResult),
-            random: false,
-            group: Box::new(SubjectRefAst::Group(Box::new(flt))),
-        }]);
+        return some1(ins_choose_group(ValueExprAst::PriorResult, false, grp(flt)));
     }
     if let Some((who_raw, rest)) = low.split_once(" chooses ")
         && let Some(chooser) = parse_player_ref(who_raw.trim())
@@ -3435,18 +2919,14 @@ pub(super) fn parse_control_piles_combat_extended(
             )
         {
             if chooser == PlayerRefAst::You {
-                return Some(vec![InstructionAst::ChooseFromGroup {
-                    count: Box::new(ValueExprAst::Const(n)),
-                    random: false,
-                    group: Box::new(SubjectRefAst::Group(Box::new(flt))),
-                }]);
+                return some1(ins_choose_group(ValueExprAst::Const(n), false, grp(flt)));
             }
-            return Some(vec![InstructionAst::PlayerChooseFromGroup {
+            return some1(InstructionAst::PlayerChooseFromGroup {
                 chooser,
-                count: Box::new(ValueExprAst::Const(n)),
+                count: vconst(n),
                 random: false,
-                group: Box::new(SubjectRefAst::Group(Box::new(flt))),
-            }]);
+                group: Box::new(grp(flt)),
+            });
         }
         if let Some(flt_raw) = rest.strip_prefix("target ")
             && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
@@ -3456,35 +2936,33 @@ pub(super) fn parse_control_piles_combat_extended(
                 count: TargetCountAst::Exact(1),
             });
             if chooser == PlayerRefAst::You {
-                return Some(vec![InstructionAst::ChooseFromGroup {
-                    count: Box::new(ValueExprAst::Const(1)),
+                return some1(InstructionAst::ChooseFromGroup {
+                    count: vconst(1),
                     random: false,
                     group,
-                }]);
+                });
             }
-            return Some(vec![InstructionAst::PlayerChooseFromGroup {
+            return some1(InstructionAst::PlayerChooseFromGroup {
                 chooser,
-                count: Box::new(ValueExprAst::Const(1)),
+                count: vconst(1),
                 random: false,
                 group,
-            }]);
+            });
         }
     }
     if low == "choose a creature with that power" {
-        return Some(vec![InstructionAst::ChooseFromGroup {
-            count: Box::new(ValueExprAst::Const(1)),
+        return some1(InstructionAst::ChooseFromGroup {
+            count: vconst(1),
             random: false,
-            group: Box::new(SubjectRefAst::Anaphora(
-                "creature with that power".to_string(),
-            )),
-        }]);
+            group: box_anaphora("creature with that power"),
+        });
     }
     if low == "choose a different opponent" {
-        return Some(vec![InstructionAst::ChooseFromGroup {
-            count: Box::new(ValueExprAst::Const(1)),
-            random: false,
-            group: Box::new(SubjectRefAst::Player(PlayerRefAst::AnyOpponent)),
-        }]);
+        return some1(ins_choose_group(
+            ValueExprAst::Const(1),
+            false,
+            SubjectRefAst::Player(PlayerRefAst::AnyOpponent),
+        ));
     }
     if let Some(after) =
         low.strip_prefix("you choose from among the permanents that player controls ")
@@ -3496,11 +2974,11 @@ pub(super) fn parse_control_piles_combat_extended(
             }
         }
         if categories.len() >= 2 {
-            return Some(vec![InstructionAst::ChoosePerFilter {
+            return some1(InstructionAst::ChoosePerFilter {
                 player: PlayerRefAst::You,
                 categories,
                 sacrifice_rest: false,
-            }]);
+            });
         }
     }
 
@@ -3517,56 +2995,50 @@ pub(super) fn parse_control_piles_combat_extended(
     {
         let subj = parse_subject_or_target(flt_raw.trim(), vocab)
             .unwrap_or_else(|_| SubjectRefAst::Anaphora(flt_raw.trim().to_string()));
-        return Some(vec![InstructionAst::SeparateFilteredIntoPiles {
+        return some1(InstructionAst::SeparateFilteredIntoPiles {
             chooser,
             subject: Box::new(subj),
             pile_count,
             face_down_piles: 0,
-        }]);
+        });
     }
     if low == "one of their piles is chosen by one of their opponents of their choice" {
-        return Some(vec![InstructionAst::ChoosePile {
+        return some1(InstructionAst::ChoosePile {
             chooser: PlayerRefAst::AnyOpponent,
-        }]);
+        });
     }
     if low == "shuffle that pile and put it back on top of your library" {
-        return Some(vec![InstructionAst::PileAction {
-            action: "shuffle_to_library_top".to_string(),
-            pile: PileRefAst::ThatPile,
-            filter: None,
-        }]);
+        return some1(ins_pile_action(
+            "shuffle_to_library_top",
+            PileRefAst::ThatPile,
+            None,
+        ));
     }
     if low == "look at the cards in each pile" {
-        return Some(vec![InstructionAst::PileAction {
-            action: "look".to_string(),
-            pile: PileRefAst::EachPile,
-            filter: None,
-        }]);
+        return Some(vec![ins_pile_action("look", PileRefAst::EachPile, None)]);
     }
     if low == "turn a pile of your choice face up" {
-        return Some(vec![InstructionAst::PileAction {
-            action: "turn_face_up".to_string(),
-            pile: PileRefAst::ChosenPile,
-            filter: None,
-        }]);
+        return some1(ins_pile_action(
+            "turn_face_up",
+            PileRefAst::ChosenPile,
+            None,
+        ));
     }
     if low == "each player chooses one of their piles at random and sacrifices those permanents" {
-        return Some(vec![InstructionAst::PileAction {
-            action: "choose_random_and_sacrifice".to_string(),
-            pile: PileRefAst::ChosenPile,
-            filter: None,
-        }]);
+        return some1(ins_pile_action(
+            "choose_random_and_sacrifice",
+            PileRefAst::ChosenPile,
+            None,
+        ));
     }
 
     // 5. Combat actions, fights, sacrifices, goad, and blocker limits
     // (Ezuri's Predation, Tide of War, Vislor Turlough, Noctis, Stand or Fall, False Orders, Mirri, Yare)
     if low == "each of those tokens fights a different one of those creatures" {
-        return Some(vec![InstructionAst::Fight {
-            a: Box::new(SubjectRefAst::Anaphora("each of those tokens".to_string())),
-            b: Box::new(SubjectRefAst::Anaphora(
-                "different one of those creatures".to_string(),
-            )),
-        }]);
+        return some1(InstructionAst::Fight {
+            a: box_anaphora("each of those tokens"),
+            b: box_anaphora("different one of those creatures"),
+        });
     }
     if let Some(kind_raw) = low
         .strip_prefix("each ")
@@ -3574,20 +3046,15 @@ pub(super) fn parse_control_piles_combat_extended(
         && matches!(kind_raw, "attacking" | "blocking" | "blocked")
         && let Ok(flt) = parse_object_filter(&format!("{kind_raw} creatures"), vocab)
     {
-        return Some(vec![InstructionAst::Sacrifice {
-            player: PlayerRefAst::ItsController,
-            count: None,
-            subject: Box::new(SubjectRefAst::Each(Box::new(flt))),
-            except: None,
-            half: false,
-            rounding: None,
-            chooser: None,
-        }]);
+        return some1(ins_sac(
+            PlayerRefAst::ItsController,
+            SubjectRefAst::Each(Box::new(flt)),
+        ));
     }
-    if let Some((subj_raw, cond_raw)) = low
-        .split_once("'s goaded for as long as ")
-        .or_else(|| low.split_once(" is goaded for as long as "))
-        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
+    if let Some((subj_raw, cond_raw)) = split_once_any(
+        &low,
+        &["'s goaded for as long as ", " is goaded for as long as "],
+    ) && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
         let cond = parse_condition(cond_raw.trim(), vocab).ok().or_else(|| {
             let (who_raw, obj_raw) = cond_raw
@@ -3602,37 +3069,35 @@ pub(super) fn parse_control_piles_combat_extended(
             })
         });
         if let Some(cond) = cond {
-            return Some(vec![InstructionAst::CombatRuleMod {
-                subject: Box::new(subj),
-                rule: "goaded".to_string(),
-                duration: DurationAst::ForAsLongAs(Box::new(cond)),
-            }]);
+            return some1(ins_combat_rule(
+                subj,
+                "goaded",
+                DurationAst::ForAsLongAs(Box::new(cond)),
+            ));
         }
     }
     if let Some(subj_raw) = low.strip_suffix(" can't be blocked that combat")
         && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(subj),
-            rule: "CantBeBlocked".to_string(),
-            duration: DurationAst::UntilEndOfCombat,
-        }]);
+        return some1(ins_combat_rule(
+            subj,
+            "CantBeBlocked",
+            DurationAst::UntilEndOfCombat,
+        ));
     }
     if low == "only creatures in the chosen piles can block this turn" {
-        return Some(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(SubjectRefAst::Anaphora(
-                "creatures in the chosen piles".to_string(),
-            )),
-            rule: "only_chosen_piles_can_block".to_string(),
-            duration: DurationAst::UntilEndOfTurn,
-        }]);
+        return some1(ins_combat_rule(
+            anaphora("creatures in the chosen piles"),
+            "only_chosen_piles_can_block",
+            DurationAst::UntilEndOfTurn,
+        ));
     }
     if low == "have it block an attacking creature of your choice" {
-        return Some(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-            rule: "block_chosen_attacker".to_string(),
-            duration: DurationAst::UntilEndOfCombat,
-        }]);
+        return some1(ins_combat_rule(
+            anaphora("it"),
+            "block_chosen_attacker",
+            DurationAst::UntilEndOfCombat,
+        ));
     }
     if let Some((who_raw, rest)) = low.split_once(" can't block with more than ")
         && let Some((cnt_raw, _)) = rest.split_once(" creature")
@@ -3642,12 +3107,12 @@ pub(super) fn parse_control_piles_combat_extended(
         )
         && let Ok(max_blockers) = u8::try_from(n)
     {
-        return Some(vec![InstructionAst::ChangeBlockerLimit {
+        return some1(InstructionAst::ChangeBlockerLimit {
             subject: Box::new(SubjectRefAst::Player(player)),
             extra_blockers: None,
             max_blockers: Some(max_blockers),
             duration: dur.clone(),
-        }]);
+        });
     }
     if let Some((subj_raw, rest)) = low.split_once(" can block up to ")
         && let Some((cnt_raw, _)) = rest.split_once(" additional creature")
@@ -3656,12 +3121,12 @@ pub(super) fn parse_control_piles_combat_extended(
             parse_value_expr(cnt_raw.trim(), vocab),
         )
     {
-        return Some(vec![InstructionAst::ChangeBlockerLimit {
+        return some1(InstructionAst::ChangeBlockerLimit {
             subject: Box::new(subj),
             extra_blockers: Some(Box::new(extra)),
             max_blockers: None,
             duration: dur.clone(),
-        }]);
+        });
     }
 
     None
@@ -3690,19 +3155,17 @@ pub(super) fn parse_partitions_and_phasing(
         } else {
             dur.clone()
         };
-        return Some(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::BlockingPartitionConstraint {
+        return some1(ins_temp_static(
+            StaticAbilityAst::BlockingPartitionConstraint {
                 partition: ObjectPartitionKind::Sector,
                 same_partition_only: true,
-            }),
-            duration: eff_dur,
-        }]);
+            },
+            eff_dur,
+        ));
     }
 
     // 2. Raging River S1: "<chooser> divide(s) [all ]<flt> into a \"<l1>\" pile and a \"<l2>\" pile"
-    if let Some((who_raw, rest)) = low
-        .split_once(" divides ")
-        .or_else(|| low.split_once(" divide "))
+    if let Some((who_raw, rest)) = split_once_any(&low, &[" divides ", " divide "])
         && let Some((flt_raw, piles_raw)) = rest.split_once(" into ")
         && let Some(labels) = parse_two_quoted_piles(piles_raw.trim())
         && let Some(chooser) = parse_player_ref(who_raw.trim())
@@ -3712,7 +3175,7 @@ pub(super) fn parse_partitions_and_phasing(
             .strip_prefix("all ")
             .unwrap_or(flt_raw.trim());
         if let Ok(filter) = parse_object_filter(flt_clean, vocab) {
-            return Some(vec![InstructionAst::PartitionObjects {
+            return some1(InstructionAst::PartitionObjects {
                 chooser,
                 filter: Box::new(filter),
                 kind: ObjectPartitionKind::LabeledPiles(labels),
@@ -3720,22 +3183,8 @@ pub(super) fn parse_partitions_and_phasing(
                 any_number: false,
                 replaces_declare_blockers: false,
                 duration: DurationAst::UntilEndOfCombat,
-            }]);
+            });
         }
-    }
-
-    // 3. Raging River S2: "for each <flt>, choose \"<l1>\" or \"<l2>\""
-    if let Some(after_fe) = low.strip_prefix("for each ")
-        && let Some((flt_raw, choice_raw)) = after_fe.split_once(", choose ")
-        && let Some(labels) = parse_quoted_label_or_list(choice_raw.trim())
-        && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
-    {
-        return Some(vec![InstructionAst::AssignPartitionTag {
-            chooser: PlayerRefAst::You,
-            subject: Box::new(SubjectRefAst::Each(Box::new(flt))),
-            labels,
-            duration: DurationAst::UntilEndOfCombat,
-        }]);
     }
 
     // 4. Raging River S3: "<subj> can't be blocked [this combat|this turn] except by <flt1> and <flt2>"
@@ -3758,23 +3207,24 @@ pub(super) fn parse_partitions_and_phasing(
                 parse_object_filter(f2_raw.trim(), vocab),
             )
         {
-            return Some(vec![InstructionAst::TemporaryStatic {
-                static_ability: Box::new(StaticAbilityAst::CantBeBlockedExceptByAny {
+            return some1(ins_temp_static(
+                StaticAbilityAst::CantBeBlockedExceptByAny {
                     subject: Box::new(subject),
                     allowed_filters: vec![f1, f2],
                     condition: None,
-                }),
-                duration: eff_dur,
-            }]);
+                },
+                eff_dur,
+            ));
         }
     }
 
     // 5. Camouflage S2: "[this turn, ]instead of declaring blockers, <chooser> chooses any number of <flt> and divides them into a number of piles equal to the number of attacking creatures for whom that player is the defending player"
     let camo_body = low.strip_prefix("this turn, ").unwrap_or(low);
     if let Some(after_rep) = camo_body.strip_prefix("instead of declaring blockers, ")
-        && let Some((who_raw, rest)) = after_rep
-            .split_once(" chooses any number of ")
-            .or_else(|| after_rep.split_once(" choose any number of "))
+        && let Some((who_raw, rest)) = split_once_any(
+            &after_rep,
+            &[" chooses any number of ", " choose any number of "],
+        )
         && let Some((flt_raw, tail)) = rest.split_once(" and divides them into a number of piles ")
         && let Some(chooser) = parse_player_ref(who_raw.trim())
         && let Ok(filter) = parse_object_filter(flt_raw.trim(), vocab)
@@ -3785,7 +3235,7 @@ pub(super) fn parse_partitions_and_phasing(
             combat: Some(CombatState::Attacking),
             ..ObjectFilterAst::default()
         };
-        return Some(vec![InstructionAst::PartitionObjects {
+        return some1(InstructionAst::PartitionObjects {
             chooser,
             filter: Box::new(filter),
             kind: ObjectPartitionKind::CombatBlockerPiles,
@@ -3793,16 +3243,16 @@ pub(super) fn parse_partitions_and_phasing(
             any_number: true,
             replaces_declare_blockers: true,
             duration: DurationAst::UntilEndOfTurn,
-        }]);
+        });
     }
 
     // 6. Camouflage S3: "<flt> may likewise be put into additional piles"
     if let Some(flt_raw) = low.strip_suffix(" may likewise be put into additional piles")
         && let Ok(filter) = parse_object_filter(flt_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::AllowExtraPartitionMembership {
+        return some1(InstructionAst::AllowExtraPartitionMembership {
             filter: Box::new(filter),
-        }]);
+        });
     }
 
     // 7. Camouflage S4: "assign each pile to a different one of <subj> [at random]"
@@ -3816,11 +3266,11 @@ pub(super) fn parse_partitions_and_phasing(
             None => (core, false),
         };
         if let Ok(targets) = parse_subject_or_target(tgt_raw, vocab) {
-            return Some(vec![InstructionAst::AssignPilesToSubjects {
+            return some1(InstructionAst::AssignPilesToSubjects {
                 targets: Box::new(targets),
                 distinct,
                 random,
-            }]);
+            });
         }
     }
 
@@ -3831,13 +3281,10 @@ pub(super) fn parse_partitions_and_phasing(
     }
 
     // 9. Ferris Wheel S2: "<subj> phase(s) out until <roller> roll(s) [a ]<N> or less/greater [while rolling to visit your attractions]"
-    if let Some((subj_raw, until_raw)) = low
-        .split_once(" phases out until ")
-        .or_else(|| low.split_once(" phase out until "))
+    if let Some((subj_raw, until_raw)) =
+        split_once_any(&low, &[" phases out until ", " phase out until "])
         && let Ok(subject) = parse_subject_or_target(subj_raw.trim(), vocab)
-        && let Some((who_raw, roll_rest)) = until_raw
-            .split_once(" roll ")
-            .or_else(|| until_raw.split_once(" rolls "))
+        && let Some((who_raw, roll_rest)) = split_once_any(&until_raw, &[" roll ", " rolls "])
         && let Some(roller) = parse_player_ref(who_raw.trim())
     {
         let (roll_core, context) =
@@ -3846,16 +3293,10 @@ pub(super) fn parse_partitions_and_phasing(
             } else {
                 (roll_rest.trim(), DieRollContextAst::Any)
             };
-        let roll_core = roll_core
-            .strip_prefix("a ")
-            .or_else(|| roll_core.strip_prefix("an "))
-            .unwrap_or(roll_core);
+        let roll_core = strip_prefix_any(&roll_core, &["a ", "an "]).unwrap_or(roll_core);
         let (num_raw, op) = if let Some(n) = roll_core.strip_suffix(" or less") {
             (n.trim(), CompareOp::Le)
-        } else if let Some(n) = roll_core
-            .strip_suffix(" or greater")
-            .or_else(|| roll_core.strip_suffix(" or higher"))
-        {
+        } else if let Some(n) = strip_suffix_any(&roll_core, &[" or greater", " or higher"]) {
             (n.trim(), CompareOp::Ge)
         } else {
             (roll_core.trim(), CompareOp::Eq)
@@ -3863,13 +3304,13 @@ pub(super) fn parse_partitions_and_phasing(
         if let Some(n) = parse_number_word(num_raw)
             && let Ok(threshold) = u16::try_from(n)
         {
-            return Some(vec![InstructionAst::PhaseOutUntilDieRoll {
+            return some1(InstructionAst::PhaseOutUntilDieRoll {
                 subject: Box::new(subject),
                 roller,
                 context,
                 op,
                 threshold,
-            }]);
+            });
         }
     }
 
@@ -3885,22 +3326,21 @@ pub(super) fn parse_guessing_piles_and_combat_swaps(
     vocab: &Vocabulary,
 ) -> Option<Vec<InstructionAst>> {
     // 1. The Seventh Doctor: "<guesser> guess(es) whether <lhs> is greater/less than [or equal to] <rhs>"
-    if let Some((who_raw, cond_raw)) = low
-        .split_once(" guesses whether ")
-        .or_else(|| low.split_once(" guess whether "))
+    if let Some((who_raw, cond_raw)) =
+        split_once_any(&low, &[" guesses whether ", " guess whether "])
         && let Some(guesser) = parse_player_ref(who_raw.trim())
     {
         if let Some(cond) = parse_comparison_condition(cond_raw.trim(), vocab) {
-            return Some(vec![InstructionAst::GuessCondition {
+            return some1(InstructionAst::GuessCondition {
                 guesser,
                 condition: Box::new(cond),
-            }]);
+            });
         }
         if let Ok(cond) = parse_condition(cond_raw.trim(), vocab) {
-            return Some(vec![InstructionAst::GuessCondition {
+            return some1(InstructionAst::GuessCondition {
                 guesser,
                 condition: Box::new(cond),
-            }]);
+            });
         }
     }
 
@@ -3915,40 +3355,40 @@ pub(super) fn parse_guessing_piles_and_combat_swaps(
         )
         && let Ok(subject) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        return Some(vec![InstructionAst::ExileIntoVisibilityPiles {
+        return some1(InstructionAst::ExileIntoVisibilityPiles {
             chooser: PlayerRefAst::You,
             subject: Box::new(subject),
             piles: vec![v1, v2],
-        }]);
+        });
     }
 
     // 3. General Jarkeld: "each creature that's blocking exactly one of those attacking creatures stops blocking it and is blocking the other attacking creature"
     if low
         == "each creature that's blocking exactly one of those attacking creatures stops blocking it and is blocking the other attacking creature"
     {
-        return Some(vec![InstructionAst::SwapBlockerAssignments {
+        return some1(InstructionAst::SwapBlockerAssignments {
             perspective: CombatSwapPerspective::BlockedAttackers,
             remove_from_combat_first: false,
             exclusive_blockers_only: true,
-        }]);
+        });
     }
 
     // 4. Sorrow's Path S2 then-body: "remove both of them from combat"
     if low == "remove both of them from combat" {
-        return Some(vec![InstructionAst::RemoveFromCombat {
-            subject: Box::new(SubjectRefAst::Anaphora("both of them".to_string())),
-        }]);
+        return some1(InstructionAst::RemoveFromCombat {
+            subject: box_anaphora("both of them"),
+        });
     }
 
     // 5. Sorrow's Path S3: "each one then blocks all creatures the other was blocking"
     if low == "each one then blocks all creatures the other was blocking"
         || low == "each one blocks all creatures the other was blocking"
     {
-        return Some(vec![InstructionAst::SwapBlockerAssignments {
+        return some1(InstructionAst::SwapBlockerAssignments {
             perspective: CombatSwapPerspective::BlockingCreatures,
             remove_from_combat_first: false,
             exclusive_blockers_only: false,
-        }]);
+        });
     }
 
     None
