@@ -8,9 +8,10 @@ use crate::v2::lexer::TokenKind;
 use crate::v2::parser::{PResult, TokenStream, sep_by1, try_parse};
 use crate::v2::value::parse_value_expr;
 
-/// Parse a comma- or `and`-separated list of activation/additional costs (e.g. `{2}, {T}, Sacrifice ~`).
+/// Parse a comma- or `and`-separated list of activation/additional costs (e.g. `{2}, {T}, Sacrifice ~`,
+/// or `reveal a Dinosaur card from your hand or pay {1}`).
 pub fn parse_cost_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Cost>> {
-    sep_by1(ts, parse_cost_atom, |s| {
+    sep_by1(ts, parse_cost_or_alt, |s| {
         if s.eat_comma() {
             let _ = s.eat_word("and");
             Ok(())
@@ -20,6 +21,18 @@ pub fn parse_cost_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Cost>> {
             Err(s.err("expected `,` or `and` between costs"))
         }
     })
+}
+
+fn parse_cost_or_alt(ts: &mut TokenStream<'_>) -> PResult<Cost> {
+    let first = parse_cost_atom(ts)?;
+    let cp = ts.checkpoint();
+    if ts.eat_word("or")
+        && let Ok(alt) = try_parse(ts, parse_cost_atom)
+    {
+        return Ok(Cost::Or(Box::new(first), Box::new(alt)));
+    }
+    ts.restore(cp);
+    Ok(first)
 }
 
 /// Parse one strictly-typed [`Cost`] atom.
@@ -88,11 +101,35 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Ok(Cost::Sacrifice { count, filter });
     }
 
-    // `Exile ~` / `Exile <N> <filter> [from <zone>]`
+    // `Exert ~`
+    if ts.eat_word("exert") && ts.eat_tilde() {
+        return Ok(Cost::ExertSelf);
+    }
+
+    // `Collect evidence <N>`
+    if ts.eat_phrase(&["collect", "evidence"]) {
+        let amt = parse_value_expr(ts)?;
+        return Ok(Cost::CollectEvidence(amt));
+    }
+
+    // `Exile ~` / `Exile the top [N] card(s) of <zone>` / `Exile <N> <filter> [from <zone>]`
     if ts.eat_word("exile") {
         if ts.eat_tilde() {
             let _ = ts.eat_word("from") && try_parse(ts, parse_zone_ref).is_ok();
             return Ok(Cost::ExileSelf);
+        }
+        if ts.eat_phrase(&["the", "top"]) {
+            let count = if ts.eat_word("card") {
+                ValueExpr::Const(1)
+            } else {
+                let n = parse_value_expr(ts)?;
+                let _ = ts.eat_word("cards") || ts.eat_word("card");
+                n
+            };
+            if ts.eat_word("of") {
+                let zone = parse_zone_ref(ts)?;
+                return Ok(Cost::ExileTop { zone, count });
+            }
         }
         let count = if let Some(n) = ts.next_number(true) {
             ValueExpr::Const(n)
@@ -173,17 +210,28 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         });
     }
 
-    // `Remove <N> <kind> counter(s) from <subj>`
+    // `Remove <N | all | any number of> [<kind>] counter(s) from [among] <subj>`
     if ts.eat_word("remove") {
-        let count = if let Some(n) = ts.next_number(true) {
+        let count = if ts.eat_word("all") || ts.eat_phrase(&["any", "number", "of"]) {
+            ValueExpr::Var(crate::v2::ir::VarName::X)
+        } else if let Some(n) = ts.next_number(true) {
             ValueExpr::Const(n)
         } else if ts.eat_word("x") {
             ValueExpr::Var(crate::v2::ir::VarName::X)
         } else {
             ValueExpr::Const(1)
         };
-        let kind = parse_counter_kind(ts)?;
-        if (ts.eat_word("counter") || ts.eat_word("counters")) && ts.eat_word("from") {
+        let kind = if ts.eat_word("counter") || ts.eat_word("counters") {
+            crate::v2::ir::CounterKind::Any
+        } else {
+            let ck = parse_counter_kind(ts)?;
+            if !(ts.eat_word("counter") || ts.eat_word("counters")) {
+                return Err(ts.err("expected `counter(s)` in remove-counter cost"));
+            }
+            ck
+        };
+        if ts.eat_word("from") {
+            let _ = ts.eat_word("among");
             let subject = if ts.eat_tilde() {
                 None
             } else {
@@ -195,7 +243,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
                 subject,
             });
         }
-        return Err(ts.err("expected `counter(s) from <subj>` in remove-counter cost"));
+        return Err(ts.err("expected `from <subj>` in remove-counter cost"));
     }
 
     // `Put <N> <kind> counter(s) on <subj>`

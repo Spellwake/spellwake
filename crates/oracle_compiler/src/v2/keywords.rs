@@ -53,6 +53,18 @@ pub fn parse_keyword_kind(ts: &mut TokenStream<'_>) -> PResult<KeywordKind> {
     if ts.eat_phrase(&["commander", "ninjutsu"]) {
         return Ok(KeywordKind::NinjutsuCommander);
     }
+    if ts.eat_phrase(&["choose", "a", "background"]) {
+        return Ok(KeywordKind::ChooseABackground);
+    }
+    if ts.eat_phrase(&["doctor's", "companion"]) {
+        return Ok(KeywordKind::DoctorsCompanion);
+    }
+    if ts.eat_phrase(&["friends", "forever"]) {
+        return Ok(KeywordKind::FriendsForever);
+    }
+    if ts.eat_phrase(&["job", "select"]) {
+        return Ok(KeywordKind::JobSelect);
+    }
     if ts.eat_phrase(&["for", "mirrodin"]) {
         if matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Bang)) {
             ts.next_tok();
@@ -371,6 +383,16 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
             .next_number(false)
             .and_then(|n| u16::try_from(n).ok())
             .map(KeywordParam::Number),
+        KeywordKind::Splice => {
+            if ts.eat_word("onto")
+                && let Ok(flt) = try_parse(ts, parse_object_filter)
+                && let Ok(costs) = try_parse(ts, parse_cost_list)
+            {
+                Some(KeywordParam::FilterAndCost(Box::new(flt), costs))
+            } else {
+                None
+            }
+        }
         KeywordKind::Affinity => {
             if ts.eat_word("for") {
                 opt(ts, parse_object_filter).map(|f| KeywordParam::Filter(Box::new(f)))
@@ -390,6 +412,24 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
             let _ = ts.eat_word("a") || ts.eat_word("an");
             opt(ts, parse_object_filter).map(|f| KeywordParam::Filter(Box::new(f)))
         }
+        KeywordKind::Partner => {
+            if ts.eat_word("with") {
+                let mut parts = Vec::new();
+                while let Some(w) = ts.next_word() {
+                    parts.push(w);
+                    if ts.eat_comma() {
+                        parts.push(",");
+                    }
+                }
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(KeywordParam::PartnerName(parts.join(" ")))
+                }
+            } else {
+                None
+            }
+        }
         _ => None,
     };
     Ok(KeywordSpec { kind, param })
@@ -401,6 +441,12 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
     }
     if ts.eat_word("everything") {
         return Some(KeywordParam::Everything);
+    }
+    if ts.eat_phrase(&["the", "color", "of", "your", "choice"])
+        || ts.eat_phrase(&["a", "color", "of", "your", "choice"])
+        || ts.eat_phrase(&["the", "chosen", "color"])
+    {
+        return Some(KeywordParam::ChosenColor);
     }
     let mut colors = ColorMask::EMPTY;
     let cp = ts.checkpoint();
