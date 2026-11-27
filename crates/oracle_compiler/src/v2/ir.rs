@@ -286,6 +286,36 @@ pub enum KeywordKind {
     DoctorsCompanion,
     FriendsForever,
     JobSelect,
+    MoreThanMeetsTheEye,
+    LivingMetal,
+    Soulshift,
+    Firebending,
+    Replicate,
+    Sneak,
+    Teamwork,
+    Mayhem,
+    Amplify,
+    Gift,
+    Provoke,
+    Transmute,
+    Increment,
+    Paradigm,
+    Offering,
+    Haunt,
+    Storied,
+    Tiered,
+    WebSlinging,
+}
+
+/// Typed Bloomburrow Gift kind (`Gift a card`, `Gift a Treasure`, `Gift a tapped Fish`, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GiftKind {
+    Card,
+    Treasure,
+    Food,
+    TappedFish,
+    Octopus,
+    ExtraTurn,
 }
 
 /// Optional typed parameter on a keyword (e.g. `Equip {2}`, `Ward {1}`, `Protection from red`).
@@ -294,11 +324,15 @@ pub enum KeywordParam {
     Cost(Vec<Cost>),
     Number(u16),
     NumberAndCost(u16, Vec<Cost>),
+    CostAndBasePt(Vec<Cost>, i32, i32),
     FilterAndCost(Box<ObjectFilter>, Vec<Cost>),
     Filter(Box<ObjectFilter>),
     Color(ColorMask),
     ChosenColor,
     Everything,
+    Gift(GiftKind),
+    VariableX,
+    VariableXBound(Box<ValueExpr>),
     PartnerName(String),
 }
 
@@ -405,6 +439,7 @@ pub struct ZoneRef {
 pub enum LibraryPosition {
     Top,
     Bottom,
+    TopOrBottom,
     Shuffled,
     FromTop(u16),
 }
@@ -461,6 +496,17 @@ impl FilterFlags {
     pub const EXILED_WITH_SELF: Self = Self(1 << 15);
     pub const LKI_PAST_TENSE: Self = Self(1 << 16);
     pub const TRANSFORMED: Self = Self(1 << 17);
+    pub const KICKED: Self = Self(1 << 18);
+    pub const GOADED: Self = Self(1 << 19);
+    pub const SUSPECTED: Self = Self(1 << 20);
+    pub const WARPED: Self = Self(1 << 21);
+    pub const SUSPENDED: Self = Self(1 << 22);
+    pub const DIFFERENT_POWERS: Self = Self(1 << 23);
+    pub const HAS_ADVENTURE: Self = Self(1 << 24);
+    pub const HAS_X_IN_MANA_COST: Self = Self(1 << 25);
+    pub const AT_RANDOM: Self = Self(1 << 26);
+    pub const SINGLE_TARGET: Self = Self(1 << 27);
+    pub const BOTH_COLORS: Self = Self(1 << 28);
 
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
@@ -490,8 +536,12 @@ pub enum PriorActionKind {
     MilledThisWay,
     TappedThisWay,
     DealtDamageThisWay,
+    DamagePreventedThisWay,
     EnergyPaidThisWay,
     SearchedThisWay,
+    CreatedThisWay,
+    CastThisWay,
+    ExcessDamageThisWay,
     ThatMany,
 }
 
@@ -546,6 +596,7 @@ pub enum FilterPredicate {
     DrawnThisTurn,
     NamedSelf,
     DealtDamageBySelfThisTurn,
+    KickedWith(ManaCost),
     GreatestStat {
         stat: StatKind,
         scope: Box<ObjectFilter>,
@@ -654,7 +705,9 @@ pub enum AnaphoraRef {
     DestroyedObject,
     DiscardedObject,
     TheCopy,
+    TheCopies,
     RevealedCard,
+    SameTarget,
 }
 
 /// Strictly-typed subject/target reference.
@@ -687,6 +740,11 @@ pub enum SubjectRef {
         player: PlayerRef,
         source: Box<ObjectFilter>,
         this_game: bool,
+    },
+    PlayerWhoControls {
+        player: PlayerRef,
+        filter: Box<ObjectFilter>,
+        min_count: u16,
     },
 }
 
@@ -757,6 +815,16 @@ pub enum ValueExpr {
         exclude_first: bool,
     },
     ManaSpentFromFilter(Box<ObjectFilter>),
+    Speed(PlayerRef),
+    SnowManaSpent,
+    DistinctManaValues(ZoneRef),
+    ManaPaidThisWay,
+    ColorsOfManaSpent,
+    TargetsBeyondFirst,
+    CommanderCastCount(PlayerRef),
+    DamageDealtToOpponentsThisTurn {
+        noncombat_only: bool,
+    },
     Add(Box<ValueExpr>, Box<ValueExpr>),
     Sub(Box<ValueExpr>, Box<ValueExpr>),
     Mul(Box<ValueExpr>, Box<ValueExpr>),
@@ -791,6 +859,8 @@ pub enum ObjectStateKind {
     Paired,
     Saddled,
     AttackedOrBlockedThisTurn,
+    Monstrous,
+    AttackingAlone,
 }
 
 /// Strictly-typed boolean condition.
@@ -852,6 +922,64 @@ pub enum ConditionExpr {
     GiftWasPromised,
     WasBargained,
     WonCoinFlip,
+    AttackedThisTurn(PlayerRef),
+    IsMonarch(PlayerRef),
+    HasFullParty(PlayerRef),
+    ManaSpentCompare {
+        op: CompareOp,
+        value: Box<ValueExpr>,
+    },
+    ColoredManaSpent {
+        color: ColorMask,
+        min_count: u8,
+    },
+    PlayerPoisoned(PlayerRef),
+    SubjectCombatWith {
+        subject: Box<SubjectRef>,
+        other: Box<ObjectFilter>,
+    },
+    PermanentEnteredThisTurn {
+        filter: Box<ObjectFilter>,
+        controller: PlayerRef,
+        min_count: u16,
+    },
+    CardsLeftGraveyardThisTurn(PlayerRef),
+    LandEnteredThisTurn(PlayerRef),
+    AttackedThisStep(PlayerRef),
+    DamageDealtToSubjectThisTurn {
+        subject: Box<SubjectRef>,
+        min_damage: u16,
+    },
+    RemainsExiled(Box<SubjectRef>),
+    NotCastOrNoManaSpent(Box<SubjectRef>),
+    ManaCostSpent(ManaCost),
+    LibraryEmpty(PlayerRef),
+    CompletedDungeon(PlayerRef),
+    KickedWith(ManaCost),
+    CastUsingTeamwork,
+    TributeNotPaid,
+    AdditionalCostPaid,
+    DescendedThisTurn(PlayerRef),
+    CastSpellFromHandThisTurn(PlayerRef),
+    ControlsCommander(PlayerRef),
+    PlayersLostGame {
+        min_count: u8,
+    },
+    ResolutionCountThisTurn(u8),
+    SharesTypeWith {
+        subject: Box<SubjectRef>,
+        other: Box<SubjectRef>,
+        kind: SharedProperty,
+    },
+    HasGreaterStatThan {
+        subject: Box<SubjectRef>,
+        other: Box<SubjectRef>,
+        stat: Option<StatKind>,
+    },
+    SubjectAttachedTo {
+        subject: Box<SubjectRef>,
+        target: Box<ObjectFilter>,
+    },
     ManaSpentNoColor,
     FirstTimeEachTurn,
     PriorActionMatched {
@@ -888,6 +1016,8 @@ pub enum ConditionExpr {
     IsFirstCombatPhase,
     ControlsSelf,
     IsYourTurn,
+    IsDay,
+    IsNight,
     WasKicked,
     WasCastFromHand,
     YouCastIt,
@@ -907,6 +1037,7 @@ pub enum Duration {
     UntilSourceLeaves,
     ForAsLongAs(Box<ConditionExpr>),
     ForAsLongAsExiled,
+    ForTheRestOfTheGame,
     Permanent,
 }
 
@@ -921,10 +1052,22 @@ pub enum ManaSpec {
     },
     DifferentColors(ValueExpr),
     ChosenColor(ValueExpr),
+    ThatColor(ValueExpr),
+    Either(Box<ManaSpec>, Box<ManaSpec>),
     Scaled {
         base: Box<ManaSpec>,
         scale: ValueExpr,
     },
+}
+
+/// Typed mana spend purpose for `Spend this mana only to ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ManaSpendPurpose {
+    CastSpells(Option<ObjectFilter>),
+    CastFromZone(ZoneKind),
+    ActivateAbilities(Option<ObjectFilter>),
+    Foretell,
+    AnyOf(Vec<ManaSpendPurpose>),
 }
 
 /// Typed mana spend restriction.
@@ -943,6 +1086,7 @@ pub enum CopyException {
     AddTypes(CardTypeMask),
     AddAbility(Box<CompiledFaceV2>),
     HasThisAbility,
+    KeepOwnName,
     SetBasePTAndTypes {
         power: Option<i32>,
         toughness: Option<i32>,
@@ -957,8 +1101,8 @@ pub enum CopyException {
 pub enum TokenSpec {
     Predefined(PredefinedToken),
     Creature {
-        power: ValueExpr,
-        toughness: ValueExpr,
+        power: Option<ValueExpr>,
+        toughness: Option<ValueExpr>,
         colors: ColorMask,
         card_types: CardTypeMask,
         subtypes: Vec<String>,
@@ -1000,6 +1144,10 @@ pub enum PredefinedToken {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Cost {
     Mana(ManaCost),
+    ScaledMana {
+        base: ManaCost,
+        scale: ValueExpr,
+    },
     TapSelf,
     UntapSelf,
     PayLife(ValueExpr),
@@ -1049,7 +1197,26 @@ pub enum Cost {
         zone: ZoneRef,
         count: ValueExpr,
     },
+    UnattachSelf,
+    Blight(ValueExpr),
+    Waterbend(ManaCost),
+    PutZone {
+        subject: SubjectRef,
+        dest: ZoneDest,
+    },
+    ChooseObject(SubjectRef),
+    Forage,
+    PayAnyAmountLife,
+    PayAnyAmountMana,
     Or(Box<Cost>, Box<Cost>),
+}
+
+/// Specific combat sub-step for timing restrictions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CombatStepKind {
+    DeclareAttackers,
+    DeclareBlockers,
+    CombatDamage,
 }
 
 /// Typed activation/cast timing restriction.
@@ -1065,6 +1232,8 @@ pub enum ActivationRestriction {
     Once,
     OnlyIf(Box<ConditionExpr>),
     AllowedPlayer(PlayerRef),
+    ControlledContinuously,
+    DuringCombatStep(CombatStepKind),
 }
 
 /// Typed life adjustment kind.
@@ -1184,6 +1353,8 @@ pub enum ObjectMutation {
     CantBlockSubject(Box<SubjectRef>),
     CantAttackOrBlock,
     CantBeBlocked,
+    CantBeBlockedBy(Box<ObjectFilter>),
+    CantBeBlockedExceptBy(Box<ObjectFilter>),
     CantBeRegenerated,
     CantBeCountered,
     Regenerate,
@@ -1198,6 +1369,17 @@ pub enum ObjectMutation {
     Detain,
     PhaseOut,
     RetainTypes(CardTypeMask),
+    Prepare,
+    Monstrosity(ValueExpr),
+    MustBlockThisTurn(Option<Box<SubjectRef>>),
+    AssignsNoCombatDamage,
+    SwitchPowerAndToughness,
+    RemoveFromCombat,
+    BecomeChosenType(CharacteristicKind),
+    Endure(ValueExpr),
+    Flip,
+    ExploreCount(ValueExpr),
+    RetargetTo(Box<SubjectRef>),
 }
 
 /// Typed player mutation kind.
@@ -1205,6 +1387,7 @@ pub enum ObjectMutation {
 pub enum PlayerMutation {
     AddMana(ManaSpec),
     AddManaSpendRestriction(ManaSpendRule),
+    AddManaSpendPurpose(ManaSpendPurpose),
     AddManaSpendRider {
         spell_filter: ObjectFilter,
         rider: Vec<Effect>,
@@ -1241,6 +1424,8 @@ pub enum PlayerMutation {
         count: u8,
     },
     FlipCoin,
+    Learn,
+    Clash,
     BecomeMonarch,
     ExtraTurn,
     SkipNextTurn,
@@ -1258,6 +1443,27 @@ pub enum PlayerMutation {
         free: bool,
     },
     CreateEmblem(Box<CompiledFaceV2>),
+    TakeInitiative,
+    OpenAttraction,
+    KeepManaAcrossSteps,
+    RepeatProcessOnce,
+    Empower {
+        planeswalker: String,
+        amount: ValueExpr,
+    },
+    Earthbend(ValueExpr),
+    Recruit,
+    FlashbackCostEqualsManaCost,
+    SpendManaAsAnyType,
+    ChangeTarget {
+        subject: Box<SubjectRef>,
+        new_target: Option<Box<SubjectRef>>,
+    },
+    NoMaxHandSize,
+    SpendOnlyColorOnX(ColorMask),
+    ChooseSameModeMultiple,
+    XCantBeZero,
+    KeepManaColorAcrossSteps(ColorMask),
 }
 
 /// Typed modal choice count.
@@ -1278,7 +1484,11 @@ pub enum CharacteristicKind {
     CardType,
     Color,
     CardName,
+    NonlandCardName,
     BasicLandType,
+    BasicLandTypes(u8),
+    OddOrEven,
+    BinaryMode,
     Number,
 }
 
@@ -1324,8 +1534,11 @@ pub enum ForEachDomain {
     Player(PlayerRef),
     PlayersMatching(Box<SubjectRef>),
     EachPlayerWhoCant(PlayerRef),
+    EachPlayerWhoDoes(PlayerRef),
     GraveyardWith(Box<ObjectFilter>),
     Object(Box<ObjectFilter>),
+    ColorAmong(Box<ObjectFilter>),
+    CardType,
     Count(ValueExpr),
 }
 
@@ -1343,6 +1556,9 @@ pub enum StepOwner {
     ThatPlayer,
     DefendingPlayer,
     EnchantedController,
+    ChosenPlayer,
+    ThatCombat,
+    ThatTurn,
 }
 
 /// Delayed trigger specification.
@@ -1467,6 +1683,9 @@ pub enum Effect {
         player: PlayerRef,
         body: Vec<Effect>,
     },
+    ExchangeControl {
+        subject: SubjectRef,
+    },
     Restriction(Vec<ActivationRestriction>),
 }
 
@@ -1479,10 +1698,13 @@ pub enum RuleRestrictionKind {
     CantAttackOrBlock,
     CantBeBlocked,
     CantBeCountered,
+    CantBeCast,
     CantBeTargetedBy(Box<ObjectFilter>),
     CantBeBlockedBy(Box<ObjectFilter>),
     CantBeBlockedExceptBy(Box<ObjectFilter>),
     CantBeBlockedByMoreThan(u8),
+    CantBeBlockedExceptByCount(u8),
+    CantAttackTarget(Box<SubjectRef>),
     CantAttackUnlessDefendingControls(Box<ObjectFilter>),
     CantAttackUnless(Box<ConditionExpr>),
     CantBlockUnless(Box<ConditionExpr>),
@@ -1490,7 +1712,11 @@ pub enum RuleRestrictionKind {
     CanBlockOnly(Box<ObjectFilter>),
     DamageCantBePrevented,
     ActivatedAbilitiesCantBeActivated,
+    MustBeBlocked,
     AreGoaded,
+    CantAttackAlone,
+    CantBlockAlone,
+    CantAttackOrBlockAlone,
 }
 
 /// Typed player-level static restriction kind.
@@ -1503,7 +1729,12 @@ pub enum PlayerRestrictionKind {
     CantGainLife,
     CantSearchLibraries,
     CantDrawMoreThanOne,
+    CantCastMoreThanOnePerTurn,
+    CantUntapMoreThan(u8),
     NoMaxHandSize,
+    CantWinGame,
+    CantLoseGame,
+    CantPlayFromHand,
 }
 
 /// Typed static ability.
@@ -1610,6 +1841,9 @@ pub enum StaticAbility {
         count: u8,
         condition: Option<ConditionExpr>,
     },
+    CanBlockAnyNumber {
+        subject: SubjectRef,
+    },
     CastFromZone {
         player: PlayerRef,
         subject: SubjectRef,
@@ -1663,7 +1897,104 @@ pub enum StaticAbility {
         condition: Option<ConditionExpr>,
     },
     ClassLevelHeader(u8),
+    LevelBand {
+        min: u8,
+        max: Option<u8>,
+    },
+    LevelBasePT(i32, i32),
+    MaxHandSizeDelta {
+        player: PlayerRef,
+        delta: i16,
+    },
+    MaxAttackersPerCombat {
+        max: u8,
+        target: Option<SubjectRef>,
+    },
+    DoubleDamageStatic {
+        source: ObjectFilter,
+    },
+    CastAsThoughFlashWithExtraCost {
+        player: PlayerRef,
+        filter: ObjectFilter,
+        extra_cost: Cost,
+    },
+    EntersUntappedStatic {
+        subject: SubjectRef,
+        condition: Option<ConditionExpr>,
+    },
+    EntersDontTrigger {
+        filter: ObjectFilter,
+    },
+    UntapDuringEachOtherUntap {
+        subject: SubjectRef,
+    },
+    DontLoseForZeroLife,
+    EntersUnderOpponentControl,
+    AdditionalTypesChosen {
+        subject: SubjectRef,
+    },
+    AlsoAttacksIfAble {
+        trigger_filter: ObjectFilter,
+    },
+    RevealOpeningHand {
+        effect: Vec<Effect>,
+    },
+    AppliesInAllZones,
     EntersPrepared,
+    OncePerTurnCast {
+        player: PlayerRef,
+        filter: ObjectFilter,
+        zone: Option<ZoneRef>,
+        free: bool,
+        alt_cost: Option<Vec<Cost>>,
+    },
+    FirstSpellFree {
+        player: PlayerRef,
+    },
+    PlayWithTopRevealed {
+        player: PlayerRef,
+    },
+    AnyNumberInDeck,
+    MaxHandSize {
+        player: PlayerRef,
+        value: ValueExpr,
+    },
+    AssignDamageByToughness {
+        subject: SubjectRef,
+        condition: Option<ConditionExpr>,
+    },
+    AssignDamageAsUnblocked {
+        subject: SubjectRef,
+    },
+    AllMustBlock {
+        subject: SubjectRef,
+    },
+    DraftFaceUp,
+    AttackTax {
+        target: SubjectRef,
+        cost: Cost,
+        per_creature: bool,
+    },
+    AdditionalTriggerOnAbility {
+        source_filter: ObjectFilter,
+        extra_count: u8,
+    },
+    CastWithoutPaying {
+        player: PlayerRef,
+        subject: SubjectRef,
+        condition: Option<ConditionExpr>,
+    },
+    RetainAttachment,
+    CostReductionRule,
+    IgnoreKeywordForBlocking {
+        subject: SubjectRef,
+        keyword: KeywordKind,
+    },
+    CrewPowerBonus(i32),
+    AlternativeCostForFilter {
+        cost: Vec<Cost>,
+        filter: ObjectFilter,
+    },
     BindVariable {
         var: VarName,
         expr: ValueExpr,
@@ -1699,6 +2030,21 @@ pub enum Replacement {
         controller: PlayerRef,
         factor: u8,
     },
+    BonusTokens {
+        filter: Option<ObjectFilter>,
+        controller: PlayerRef,
+        bonus: Box<TokenSpec>,
+        bonus_count: ValueExpr,
+    },
+    SkipStepReplacement {
+        player: PlayerRef,
+        step: TurnStepAst,
+        optional: bool,
+    },
+    EscapesWithCounters {
+        kind: CounterKind,
+        count: ValueExpr,
+    },
     MultiplyCounters {
         filter: ObjectFilter,
         factor: u8,
@@ -1721,6 +2067,44 @@ pub enum Replacement {
     },
     PreventDamageReplacement {
         target: SubjectRef,
+    },
+    PreventDamageWithRider {
+        target: SubjectRef,
+        condition: Option<ConditionExpr>,
+        rider: Vec<Effect>,
+    },
+    PreventAllButDamage {
+        source: Option<ObjectFilter>,
+        target: Option<SubjectRef>,
+        remaining: u16,
+    },
+    RedirectAllDamage {
+        from: SubjectRef,
+        to: SubjectRef,
+    },
+    OpeningHandOnBattlefield,
+    MultiplyMill {
+        player: PlayerRef,
+        factor: u8,
+    },
+    ExploreAgain {
+        filter: ObjectFilter,
+    },
+    BecomesDayOnEnter,
+    NextDamageReplacement {
+        source: Option<ObjectFilter>,
+        target: Option<SubjectRef>,
+        instead: Vec<Effect>,
+    },
+    RedirectNextDamage {
+        amount: ValueExpr,
+        from: SubjectRef,
+        to: SubjectRef,
+    },
+    PreventFixedDamage {
+        source: Option<ObjectFilter>,
+        target: Option<SubjectRef>,
+        amount: ValueExpr,
     },
     ConditionalEnters {
         condition: ConditionExpr,
@@ -1762,6 +2146,10 @@ pub enum TriggerEvent {
         target: Option<SubjectRef>,
     },
     StepBegins {
+        step: TurnStepAst,
+        owner: StepOwner,
+    },
+    StepEnds {
         step: TurnStepAst,
         owner: StepOwner,
     },
@@ -1886,6 +2274,64 @@ pub enum TriggerEvent {
     BecomesCrewed {
         subject: SubjectRef,
     },
+    RingTemptsYou,
+    CardPlayed {
+        player: PlayerRef,
+        filter: ObjectFilter,
+    },
+    ScryOrSurveil {
+        player: PlayerRef,
+    },
+    BecomesAttached {
+        subject: SubjectRef,
+        target: ObjectFilter,
+    },
+    ForcedDiscard {
+        player: PlayerRef,
+        subject: SubjectRef,
+    },
+    CountersThreshold {
+        subject: SubjectRef,
+        kind: CounterKind,
+        min_count: u16,
+    },
+    CounterRemoved {
+        subject: SubjectRef,
+        kind: CounterKind,
+        while_exiled: bool,
+    },
+    MultipleCreaturesAttack {
+        min_count: u8,
+    },
+    BecomesUnattached {
+        subject: SubjectRef,
+    },
+    DiesOrHauntedDies {
+        subject: SubjectRef,
+    },
+    Scry {
+        player: PlayerRef,
+    },
+    Surveil {
+        player: PlayerRef,
+    },
+    Mutates {
+        subject: SubjectRef,
+    },
+    CrewsVehicle {
+        subject: SubjectRef,
+    },
+    ActivateExhaust {
+        player: PlayerRef,
+    },
+    TapOpponentCreature {
+        player: PlayerRef,
+        filter: ObjectFilter,
+    },
+    CreateOrSacrificeToken {
+        player: PlayerRef,
+    },
+    NoCreaturesOnBattlefield,
 }
 
 /// Trigger specification (one or more events + optional intervening-if).
@@ -1900,6 +2346,20 @@ pub struct TriggerSpec {
 pub enum LoyaltyDelta {
     Fixed(i16),
     MinusX,
+}
+
+/// Typed payload for a sticker row (`{TK}{TK} — 1/5` or `{TK}{TK}{TK} — Whenever ...`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StickerPayload {
+    BasePt(i32, i32),
+    Face(Box<CompiledFaceV2>),
+}
+
+/// Typed payload for a die-roll table or Station threshold row (`1—9 | ...`, `9+ | ...`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TableRowPayload {
+    Effects(Vec<Effect>),
+    Face(Box<CompiledFaceV2>),
 }
 
 /// Compiled card ability.
@@ -1922,4 +2382,16 @@ pub enum Ability {
         chapters: Vec<u8>,
         body: Vec<Effect>,
     },
+    TableRow {
+        min: u16,
+        max: Option<u16>,
+        open_ended: bool,
+        payload: TableRowPayload,
+    },
+    StickerRow {
+        ticket_cost: u8,
+        payload: StickerPayload,
+    },
+    CaseSolveCondition(ConditionExpr),
+    CaseSolved(Box<CompiledFaceV2>),
 }

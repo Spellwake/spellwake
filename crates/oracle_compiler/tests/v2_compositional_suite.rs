@@ -994,8 +994,8 @@ fn v2_real_magic_card_corpus_sample_and_iconic_staples() {
 
     // Honest strict fail-closed coverage floor on the 103 hardest real Magic cards.
     assert!(
-        summary.strictly_compiled_cards >= 37,
-        "expected >= 37/103 strictly compiled real cards in v2, got {}/{}",
+        summary.strictly_compiled_cards >= 50,
+        "expected >= 50/103 strictly compiled real cards in v2, got {}/{}",
         summary.strictly_compiled_cards,
         summary.total_cards
     );
@@ -1244,5 +1244,284 @@ fn v2_wave2_compositional_grammar_deep_ir_assertions() {
                     ..
                 }]
             )
+    ));
+}
+
+/// 6. Deep Wave 3 compositional IR assertions covering damage/draw/discard replacements,
+///    mid-sentence `where X is` bindings, multi-quote copy tokens, static animations,
+///    replacement damage without repeated target, Station/Roll tables, Cases, Stickers,
+///    Level Up bands + bare P/T, Firebending X bounds, Chroma, and Adamant.
+#[test]
+fn v2_wave3_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        AnaphoraRef, ConditionExpr, CopyException, KeywordKind, KeywordParam, Replacement,
+        TokenSpec,
+    };
+
+    let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("content")
+        .join("tests")
+        .join("fixtures")
+        .join("creature-vocabulary.input.json");
+    let vocab = Vocabulary::load_from_file(&vocab_path).expect("load CR creature vocabulary");
+
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "Dictate of the Twin Gods",
+            "Enchantment",
+            "Flash\nIf a source would deal damage to a permanent or player, it deals double that damage to that permanent or player instead.",
+        ),
+        (
+            "Nine Lives",
+            "Enchantment",
+            "Hexproof\nIf a source would deal damage to you, prevent that damage and put an incarnation counter on Nine Lives.\nWhen there are nine or more incarnation counters on Nine Lives, exile it.\nWhen Nine Lives leaves the battlefield, you lose the game.",
+        ),
+        (
+            "Akoum Hellkite",
+            "Creature — Dragon",
+            "Flying\nLandfall — Whenever a land you control enters, Akoum Hellkite deals 1 damage to any target. If that land is a Mountain, Akoum Hellkite deals 2 damage instead.",
+        ),
+        (
+            "Minion Reflector",
+            "Artifact",
+            "Whenever a nontoken creature you control enters, you may pay {2}. If you do, create a token that's a copy of that creature, except it has haste and \"At the beginning of the end step, sacrifice this permanent.\"",
+        ),
+        (
+            "Collective Voyage",
+            "Sorcery",
+            "Starting with you, each player may pay any amount of mana. Each player searches their library for up to X basic land cards, where X is the total amount of mana paid this way, puts them onto the battlefield tapped, then shuffles.",
+        ),
+        (
+            "Ensoul Artifact",
+            "Enchantment — Aura",
+            "Enchant artifact\nEnchanted artifact is a creature with base power and toughness 5/5 in addition to its other types.",
+        ),
+        (
+            "Ashiok's Erasure",
+            "Enchantment",
+            "Flash\nWhen Ashiok's Erasure enters, exile target spell.\nYour opponents can't cast spells with the same name as the exiled card.\nWhen Ashiok's Erasure leaves the battlefield, return the exiled card to its owner's hand.",
+        ),
+        (
+            "Counterbalance",
+            "Enchantment",
+            "Whenever an opponent casts a spell, you may reveal the top card of your library. If you do, counter that spell if it has the same mana value as the revealed card.",
+        ),
+        (
+            "Gerrard's Hourglass Pendant",
+            "Legendary Artifact",
+            "Flash\nIf a player would begin an extra turn, that player skips that turn instead.\n{4}, {T}, Exile Gerrard's Hourglass Pendant: Return to the battlefield tapped all artifact, creature, enchantment, and land cards in your graveyard that were put there from the battlefield this turn.",
+        ),
+        (
+            "Teferi's Ageless Insight",
+            "Legendary Enchantment",
+            "If you would draw a card except the first one you draw in each of your draw steps, draw two cards instead.",
+        ),
+        (
+            "Loxodon Smiter",
+            "Creature — Elephant Soldier",
+            "This spell can't be countered.\nIf a spell or ability an opponent controls causes you to discard Loxodon Smiter, put it onto the battlefield instead of putting it into your graveyard.",
+        ),
+        (
+            "Leyline of Sanctity",
+            "Enchantment",
+            "If Leyline of Sanctity is in your opening hand, you may begin the game with it on the battlefield.\nYou have hexproof.",
+        ),
+        (
+            "Case of the Locked Hothouse",
+            "Enchantment — Case",
+            "You may play an additional land on each of your turns.\nTo solve — You control seven or more lands.\nSolved — You may look at the top card of your library any time, and you may play lands and cast creature and enchantment spells from the top of your library.",
+        ),
+        (
+            "Zulaport Enforcer",
+            "Creature — Human Warrior",
+            "Level up {4}\nLEVEL 1-2\n3/3\nLEVEL 3+\n5/5\nZulaport Enforcer can't be blocked except by black creatures.",
+        ),
+        (
+            "Firebending Student",
+            "Creature — Human Monk",
+            "Prowess\nFirebending X, where X is Firebending Student's power.",
+        ),
+        (
+            "Heartlash Cinder",
+            "Creature — Elemental Warrior",
+            "Haste\nChroma — When Heartlash Cinder enters, it gets +X/+0 until end of turn, where X is the number of red mana symbols in the mana costs of permanents you control.",
+        ),
+        (
+            "Rally for the Throne",
+            "Instant",
+            "Create two 1/1 white Human creature tokens.\nAdamant — If at least three white mana was spent to cast this spell, you gain 1 life for each creature you control.",
+        ),
+        (
+            "Station Vessel",
+            "Artifact — Spacecraft",
+            "Station\n9+ | Flying, vigilance",
+        ),
+        (
+            "Treasure Chest Roll",
+            "Sorcery",
+            "Roll a d20.\n1—9 | Draw a card.\n10—19 | Create three Treasure tokens.\n20 | Draw three cards.",
+        ),
+        (
+            "Sticker Sheet Sample",
+            "Stickers",
+            "{TK}{TK} — 4/4\n{TK}{TK}{TK} — Whenever this creature attacks, draw a card.",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in cases {
+        let card = CardInput {
+            oracle_id: name,
+            name,
+            layout: "normal",
+            faces: vec![FaceInput {
+                name,
+                type_line,
+                oracle_text,
+            }],
+        };
+        let compiled = compile_card_v2(&card, &vocab);
+        assert!(
+            compiled.strictly_compiled,
+            "Wave 3 card `{name}` failed strict v2 compilation: {:#?}",
+            compiled.faces[0].errors
+        );
+    }
+
+    // Deep IR spot checks:
+    // 1. Dictate of the Twin Gods -> Replacement::ModifyDamage with factor == 2
+    let dictate = compile_card_v2(
+        &CardInput {
+            oracle_id: "dictate",
+            name: "Dictate of the Twin Gods",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Dictate of the Twin Gods",
+                type_line: "Enchantment",
+                oracle_text: "If a source would deal damage to a permanent or player, it deals double that damage to that permanent or player instead.",
+            }],
+        },
+        &vocab,
+    );
+    assert!(matches!(
+        dictate.faces[0].replacements.as_slice(),
+        [Replacement::ModifyDamage {
+            factor: 2,
+            add: 0,
+            ..
+        }]
+    ));
+
+    // 2. Akoum Hellkite -> BranchCondition with ReplacePrevious(DealDamage { target: SameTarget, amount: Const(2) })
+    let hellkite = compile_card_v2(
+        &CardInput {
+            oracle_id: "hellkite",
+            name: "Akoum Hellkite",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Akoum Hellkite",
+                type_line: "Creature — Dragon",
+                oracle_text: "Landfall — Whenever a land you control enters, Akoum Hellkite deals 1 damage to any target. If that land is a Mountain, Akoum Hellkite deals 2 damage instead.",
+            }],
+        },
+        &vocab,
+    );
+    assert!(matches!(
+        hellkite.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [
+                    Effect::DealDamage { target: SubjectRef::AnyTarget, .. },
+                    Effect::BranchCondition { then_body, .. }
+                ] if matches!(
+                    then_body.as_slice(),
+                    [Effect::ReplacePrevious(inner)]
+                        if matches!(
+                            inner.as_slice(),
+                            [Effect::DealDamage {
+                                target: SubjectRef::Anaphora(AnaphoraRef::SameTarget),
+                                ..
+                            }]
+                        )
+                )
+            )
+    ));
+
+    // 3. Minion Reflector -> CopyOf token with BOTH AddKeywords(Haste) AND compiled AddAbility
+    let reflector = compile_card_v2(
+        &CardInput {
+            oracle_id: "reflector",
+            name: "Minion Reflector",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Minion Reflector",
+                type_line: "Artifact",
+                oracle_text: "Whenever a nontoken creature you control enters, you may pay {2}. If you do, create a token that's a copy of that creature, except it has haste and \"At the beginning of the end step, sacrifice this permanent.\"",
+            }],
+        },
+        &vocab,
+    );
+    assert!(matches!(
+        reflector.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                &body[1],
+                Effect::IfPrevious { succeeded: true, body: inner }
+                    if matches!(
+                        inner.as_slice(),
+                        [Effect::CreateToken {
+                            spec: TokenSpec::CopyOf { exceptions, .. },
+                            ..
+                        }] if matches!(
+                            exceptions.as_slice(),
+                            [CopyException::AddKeywords(_), CopyException::AddAbility(ab)] if ab.is_ok()
+                        )
+                    )
+            )
+    ));
+
+    // 4. Firebending Student -> KeywordParam::VariableXBound(ObjectStat(Self, Power))
+    let student = compile_card_v2(
+        &CardInput {
+            oracle_id: "student",
+            name: "Firebending Student",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Firebending Student",
+                type_line: "Creature — Human Monk",
+                oracle_text: "Firebending X, where X is Firebending Student's power.",
+            }],
+        },
+        &vocab,
+    );
+    assert!(matches!(
+        student.faces[0].keywords.as_slice(),
+        [spellwake_oracle_compiler::v2::ir::KeywordSpec {
+            kind: KeywordKind::Firebending,
+            param: Some(KeywordParam::VariableXBound(_)),
+        }]
+    ));
+
+    // 5. Rally for the Throne -> Adamant ConditionExpr::ColoredManaSpent
+    let rally = compile_card_v2(
+        &CardInput {
+            oracle_id: "rally",
+            name: "Rally for the Throne",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Rally for the Throne",
+                type_line: "Instant",
+                oracle_text: "Create two 1/1 white Human creature tokens.\nAdamant — If at least three white mana was spent to cast this spell, you gain 1 life for each creature you control.",
+            }],
+        },
+        &vocab,
+    );
+    assert!(matches!(
+        &rally.faces[0].spell_effects[1],
+        Effect::BranchCondition {
+            condition: ConditionExpr::ColoredManaSpent { min_count: 3, .. },
+            ..
+        }
     ));
 }
