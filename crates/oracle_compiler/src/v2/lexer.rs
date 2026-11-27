@@ -447,6 +447,7 @@ pub fn parse_mana_symbol(inner: &str) -> Option<ManaSymbol> {
         "E" => Some(ManaSymbol::Energy),
         "TK" => Some(ManaSymbol::Ticket),
         "P" => Some(ManaSymbol::Pawprint),
+        "H" => Some(ManaSymbol::AnyPhyrexian),
         other => other.parse::<u16>().ok().map(ManaSymbol::Generic),
     }
 }

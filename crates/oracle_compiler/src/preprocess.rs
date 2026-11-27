@@ -636,14 +636,26 @@ pub fn split_top_level<'a>(text: &'a str, sep: &str) -> Vec<&'a str> {
     out
 }
 
-/// Split an activated ability `<cost>: <effect>` on the first `:` outside double quotes.
+/// Split an activated ability `<cost>: <effect>` on the first `:` outside double or single quotes.
 #[must_use]
 pub fn split_cost_and_effect(line: &str) -> Option<(&str, &str)> {
+    let bytes = line.as_bytes();
     let mut in_quotes = false;
+    let mut in_single_quotes = false;
     for (idx, ch) in line.char_indices() {
         if ch == '"' {
             in_quotes = !in_quotes;
-        } else if ch == ':' && !in_quotes {
+        } else if ch == '\'' && !in_quotes {
+            let prev_is_space = idx == 0 || bytes[idx - 1].is_ascii_whitespace();
+            let next_is_boundary = idx + 1 >= bytes.len()
+                || bytes[idx + 1].is_ascii_whitespace()
+                || matches!(bytes[idx + 1], b'.' | b',' | b';' | b'"' | b')');
+            if !in_single_quotes && prev_is_space {
+                in_single_quotes = true;
+            } else if in_single_quotes && next_is_boundary {
+                in_single_quotes = false;
+            }
+        } else if ch == ':' && !in_quotes && !in_single_quotes {
             let left = line[..idx].trim();
             let right = line[idx + 1..].trim();
             if left.is_empty() || right.is_empty() {

@@ -335,6 +335,63 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                 duration: Duration::UntilEndOfTurn,
             });
         }
+        // Optional trailing `and gains <kws> [until end of turn]` after duration (`Chorus of Might`, `Battlegate Mimic`, `Flayer of Loyalties`)
+        {
+            let gcp = ts.checkpoint();
+            if (ts.eat_phrase(&["and", "gains"]) || ts.eat_phrase(&["and", "gain"]))
+                && let Ok((kws, _)) = try_parse(ts, parse_keyword_list)
+            {
+                let gdur = parse_trailing_duration(ts).unwrap_or_else(|| duration.clone());
+                out.push(Effect::MutateObject {
+                    subject: subject.clone(),
+                    mutation: ObjectMutation::GrantKeywords(kws),
+                    duration: gdur,
+                });
+            } else {
+                ts.restore(gcp);
+            }
+        }
+        // Optional trailing `and becomes a/an <sub/type> [until end of turn]` (`Wishful Merfolk` + 10+ cards)
+        {
+            let bcp = ts.checkpoint();
+            if (ts.eat_phrase(&["and", "becomes"]) || ts.eat_phrase(&["and", "become"])) && {
+                let _ = ts.eat_word("a") || ts.eat_word("an");
+                true
+            } {
+                let mut add_types = CardTypeMask::EMPTY;
+                let mut subtypes = Vec::new();
+                while let Some(w) = ts.peek_word() {
+                    let low = w.to_ascii_lowercase();
+                    if let Some(ct) = lookup_card_type(&low) {
+                        ts.next_word();
+                        add_types = add_types.union(ct);
+                    } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+                        ts.next_word();
+                        subtypes.push(sub.to_string());
+                    } else {
+                        break;
+                    }
+                }
+                if !add_types.is_empty() || !subtypes.is_empty() {
+                    let bdur = parse_trailing_duration(ts).unwrap_or_else(|| duration.clone());
+                    out.push(Effect::MutateObject {
+                        subject: subject.clone(),
+                        mutation: ObjectMutation::BecomeCreatureTypes {
+                            subtypes,
+                            add_types,
+                            keep_existing_types: false,
+                            base_pt: None,
+                            keywords: Vec::new(),
+                        },
+                        duration: bdur,
+                    });
+                } else {
+                    ts.restore(bcp);
+                }
+            } else {
+                ts.restore(bcp);
+            }
+        }
         // Optional trailing `and deals <amt> damage to <tgt>` (`Wormwood Dryad`)
         {
             let dcp = ts.checkpoint();
@@ -523,6 +580,63 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                 duration: Duration::UntilEndOfTurn,
             });
         }
+        // Optional trailing `and gains <kws> [until end of turn]` after duration (`Chorus of Might`, `Battlegate Mimic`, `Flayer of Loyalties`)
+        {
+            let gcp = ts.checkpoint();
+            if (ts.eat_phrase(&["and", "gains"]) || ts.eat_phrase(&["and", "gain"]))
+                && let Ok((kws, _)) = try_parse(ts, parse_keyword_list)
+            {
+                let gdur = parse_trailing_duration(ts).unwrap_or_else(|| duration.clone());
+                out.push(Effect::MutateObject {
+                    subject: subject.clone(),
+                    mutation: ObjectMutation::GrantKeywords(kws),
+                    duration: gdur,
+                });
+            } else {
+                ts.restore(gcp);
+            }
+        }
+        // Optional trailing `and becomes a/an <sub/type> [until end of turn]` (`Wishful Merfolk` + 10+ cards)
+        {
+            let bcp = ts.checkpoint();
+            if (ts.eat_phrase(&["and", "becomes"]) || ts.eat_phrase(&["and", "become"])) && {
+                let _ = ts.eat_word("a") || ts.eat_word("an");
+                true
+            } {
+                let mut add_types = CardTypeMask::EMPTY;
+                let mut subtypes = Vec::new();
+                while let Some(w) = ts.peek_word() {
+                    let low = w.to_ascii_lowercase();
+                    if let Some(ct) = lookup_card_type(&low) {
+                        ts.next_word();
+                        add_types = add_types.union(ct);
+                    } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+                        ts.next_word();
+                        subtypes.push(sub.to_string());
+                    } else {
+                        break;
+                    }
+                }
+                if !add_types.is_empty() || !subtypes.is_empty() {
+                    let bdur = parse_trailing_duration(ts).unwrap_or_else(|| duration.clone());
+                    out.push(Effect::MutateObject {
+                        subject: subject.clone(),
+                        mutation: ObjectMutation::BecomeCreatureTypes {
+                            subtypes,
+                            add_types,
+                            keep_existing_types: false,
+                            base_pt: None,
+                            keywords: Vec::new(),
+                        },
+                        duration: bdur,
+                    });
+                } else {
+                    ts.restore(bcp);
+                }
+            } else {
+                ts.restore(bcp);
+            }
+        }
         // Optional trailing `and deals <amt> damage to <tgt>` (`Wormwood Dryad`)
         {
             let dcp = ts.checkpoint();
@@ -552,10 +666,22 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         }]);
     }
     if ts.eat_phrase(&["enters", "with"]) || ts.eat_phrase(&["enter", "with"]) {
-        let count = parse_value_expr(ts)?;
-        let additional = ts.eat_word("additional");
+        let mut additional = false;
+        let count = if ts.eat_phrase(&["an", "additional"]) {
+            additional = true;
+            ValueExpr::Const(1)
+        } else if ts.eat_word("a") || ts.eat_word("an") {
+            ValueExpr::Const(1)
+        } else {
+            parse_value_expr(ts)?
+        };
+        if ts.eat_word("additional") {
+            additional = true;
+        }
         let kind = parse_counter_kind(ts)?;
-        if (ts.eat_word("counters") || ts.eat_word("counter")) && ts.eat_phrase(&["on", "it"]) {
+        if (ts.eat_word("counters") || ts.eat_word("counter"))
+            && (ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]))
+        {
             return Ok(vec![Effect::ApplyReplacement {
                 replacement: Box::new(Replacement::EntersWithCounters {
                     subject: Some(subject),
@@ -568,38 +694,161 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         }
     }
 
-    // 4b. `<subj> has/have base power and toughness <P>/<T> [dur]` OR `<subj> has/have "<quoted ability>" [dur]` OR `<subj> has/have <kws> [dur]`
+    // 4b. `<subj> has/have base power and toughness <P>/<T> [dur]` OR `<subj> has/have base power/toughness <N> [dur]` OR `<subj> has/have "<quoted ability>" [dur]` OR `<subj> has/have <kws> [dur]`
     if ts.eat_word("has") || ts.eat_word("have") {
         if ts.eat_phrase(&["base", "power", "and", "toughness"]) {
-            if let Some((power, toughness)) = ts.next_base_pt() {
+            let pt_pair = if let Some((power, toughness)) = ts.next_base_pt() {
+                Some((ValueExpr::Const(power), ValueExpr::Const(toughness)))
+            } else if ts.eat_word("x")
+                && matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Slash))
+            {
+                ts.next_tok();
+                if ts.eat_word("x") {
+                    Some((
+                        ValueExpr::Var(crate::v2::ir::VarName::X),
+                        ValueExpr::Var(crate::v2::ir::VarName::X),
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some((power, toughness)) = pt_pair {
+                let mut duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+                let mut out = vec![Effect::MutateObject {
+                    subject: subject.clone(),
+                    mutation: ObjectMutation::SetDynamicBasePT {
+                        power,
+                        toughness,
+                        add_types: CardTypeMask::EMPTY,
+                        keep_existing_types: true,
+                    },
+                    duration: duration.clone(),
+                }];
+                loop {
+                    let tcp = ts.checkpoint();
+                    let _ = ts.eat_comma();
+                    let _ = ts.eat_word("and");
+                    if ts.eat_phrase(&["gains", "all", "creature", "types"])
+                        || ts.eat_phrase(&["gain", "all", "creature", "types"])
+                    {
+                        out.push(Effect::ApplyContinuous {
+                            effect: Box::new(StaticAbility::AllCreatureTypes {
+                                subject: subject.clone(),
+                            }),
+                            duration: duration.clone(),
+                        });
+                        continue;
+                    }
+                    ts.restore(tcp);
+                    let _ = ts.eat_comma();
+                    let _ = ts.eat_word("and");
+                    if (ts.eat_word("gains")
+                        || ts.eat_word("gain")
+                        || ts.eat_word("has")
+                        || ts.eat_word("have"))
+                        && let Ok((kws, _)) = try_parse(ts, parse_keyword_list)
+                    {
+                        let gdur = parse_trailing_duration(ts).unwrap_or_else(|| duration.clone());
+                        if gdur != duration {
+                            duration = gdur.clone();
+                        }
+                        out.push(Effect::MutateObject {
+                            subject: subject.clone(),
+                            mutation: ObjectMutation::GrantKeywords(kws),
+                            duration: gdur,
+                        });
+                        continue;
+                    }
+                    ts.restore(tcp);
+                    let _ = ts.eat_comma();
+                    let _ = ts.eat_word("and");
+                    if ts.eat_phrase(&["can't", "be", "blocked"]) {
+                        let bdur = parse_trailing_duration(ts).unwrap_or_else(|| duration.clone());
+                        out.push(Effect::MutateObject {
+                            subject: subject.clone(),
+                            mutation: ObjectMutation::CantBeBlocked,
+                            duration: bdur,
+                        });
+                        continue;
+                    }
+                    ts.restore(tcp);
+                    let _ = ts.eat_comma();
+                    let _ = ts.eat_word("and");
+                    if (ts.eat_phrase(&["isn't", "a"])
+                        || ts.eat_phrase(&["isn't", "an"])
+                        || ts.eat_word("aren't"))
+                        && let Some(w) = ts.peek_word()
+                        && ts.vocab.lookup_subtype(&w.to_ascii_lowercase()).is_some()
+                    {
+                        ts.next_word();
+                        out.push(Effect::MutateObject {
+                            subject: subject.clone(),
+                            mutation: ObjectMutation::BecomeCreatureTypes {
+                                subtypes: Vec::new(),
+                                add_types: CardTypeMask::EMPTY,
+                                keep_existing_types: false,
+                                base_pt: None,
+                                keywords: Vec::new(),
+                            },
+                            duration: duration.clone(),
+                        });
+                        continue;
+                    }
+                    ts.restore(tcp);
+                    break;
+                }
+                if let Some(fdur) = parse_trailing_duration(ts) {
+                    for eff in &mut out {
+                        if let Effect::MutateObject { duration: d, .. } = eff {
+                            *d = fdur.clone();
+                        }
+                    }
+                }
+                return Ok(out);
+            }
+        }
+        {
+            let bpcp = ts.checkpoint();
+            if ts.eat_phrase(&["base", "power"])
+                && let Some(p) = ts.next_number(false)
+            {
                 let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
                 return Ok(vec![Effect::MutateObject {
                     subject,
                     mutation: ObjectMutation::SetDynamicBasePT {
-                        power: ValueExpr::Const(power),
-                        toughness: ValueExpr::Const(toughness),
+                        power: ValueExpr::Const(p),
+                        toughness: ValueExpr::ObjectStat {
+                            subject: Box::new(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It)),
+                            stat: crate::ast::StatKind::Toughness,
+                        },
                         add_types: CardTypeMask::EMPTY,
                         keep_existing_types: true,
                     },
                     duration,
                 }]);
             }
-            if ts.eat_word("x") && matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Slash)) {
-                ts.next_tok();
-                if ts.eat_word("x") {
-                    let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-                    return Ok(vec![Effect::MutateObject {
-                        subject,
-                        mutation: ObjectMutation::SetDynamicBasePT {
-                            power: ValueExpr::Var(crate::v2::ir::VarName::X),
-                            toughness: ValueExpr::Var(crate::v2::ir::VarName::X),
-                            add_types: CardTypeMask::EMPTY,
-                            keep_existing_types: true,
+            ts.restore(bpcp);
+            if ts.eat_phrase(&["base", "toughness"])
+                && let Some(t) = ts.next_number(false)
+            {
+                let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+                return Ok(vec![Effect::MutateObject {
+                    subject,
+                    mutation: ObjectMutation::SetDynamicBasePT {
+                        power: ValueExpr::ObjectStat {
+                            subject: Box::new(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It)),
+                            stat: crate::ast::StatKind::Power,
                         },
-                        duration,
-                    }]);
-                }
+                        toughness: ValueExpr::Const(t),
+                        add_types: CardTypeMask::EMPTY,
+                        keep_existing_types: true,
+                    },
+                    duration,
+                }]);
             }
+            ts.restore(bpcp);
         }
         if let Some(quoted) = ts.next_quoted() {
             let compiled = compile_face_v2(
@@ -636,7 +885,8 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
 
     // 5. `<subj> becomes ...` (`a copy of <src>`, `the color of your choice`, `a <Subtypes/Types> [with base power and toughness P/T] [with <kws>] [dur]`)
     if ts.eat_word("becomes") || ts.eat_word("become") {
-        if ts.eat_phrase(&["the", "color", "of", "your", "choice"])
+        if ts.eat_phrase(&["the", "color", "or", "colors", "of", "your", "choice"])
+            || ts.eat_phrase(&["the", "color", "of", "your", "choice"])
             || ts.eat_phrase(&["the", "color", "of", "its", "controller's", "choice"])
         {
             let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
@@ -675,39 +925,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         }
         if ts.eat_phrase(&["a", "copy", "of"]) || ts.eat_phrase(&["copies", "of"]) {
             let source = parse_subject_ref(ts)?;
-            let mut exceptions = Vec::new();
-            let ecp = ts.checkpoint();
-            if ts.eat_comma() && ts.eat_word("except") {
-                loop {
-                    let icp = ts.checkpoint();
-                    if ts.eat_phrase(&["it", "has", "this", "ability"])
-                        || ts.eat_phrase(&["they", "have", "this", "ability"])
-                    {
-                        exceptions.push(crate::v2::ir::CopyException::HasThisAbility);
-                    } else if ts.eat_phrase(&["its", "name", "is"]) && ts.eat_tilde() {
-                        exceptions.push(crate::v2::ir::CopyException::KeepOwnName);
-                    } else if ts.eat_phrase(&["it", "isn't", "legendary"])
-                        || ts.eat_phrase(&["it's", "not", "legendary"])
-                    {
-                        exceptions.push(crate::v2::ir::CopyException::NotLegendary);
-                    } else if (ts.eat_phrase(&["it", "has"]) || ts.eat_word("has"))
-                        && let Ok((kws, _)) = try_parse(ts, parse_keyword_list)
-                    {
-                        exceptions.push(crate::v2::ir::CopyException::AddKeywords(kws));
-                    } else {
-                        ts.restore(icp);
-                        break;
-                    }
-                    let scp = ts.checkpoint();
-                    if !ts.eat_comma() && !ts.eat_word("and") {
-                        ts.restore(scp);
-                        break;
-                    }
-                }
-                if exceptions.is_empty() {
-                    ts.restore(ecp);
-                }
-            }
+            let exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
             let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
             return Ok(vec![Effect::MutateObject {
                 subject,
@@ -721,6 +939,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         let _ = ts.eat_word("a") || ts.eat_word("an");
         let mut base_pt = ts.next_base_pt();
         let mut add_types = CardTypeMask::EMPTY;
+        let mut colors = crate::ast::ColorMask::EMPTY;
         let mut subtypes = Vec::new();
         while let Some(w) = ts.peek_word() {
             let low = w.to_ascii_lowercase();
@@ -730,7 +949,19 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
                 ts.next_word();
                 subtypes.push(sub.to_string());
-            } else if lookup_color(&low).is_some() || low == "and" {
+            } else if let Some(c) = lookup_color(&low) {
+                ts.next_word();
+                colors = colors.union(c);
+            } else if low == "and"
+                && ts.peek_n(1).is_some_and(|t| {
+                    matches!(t.kind, TokenKind::Word(nw) if {
+                        let nl = nw.to_ascii_lowercase();
+                        lookup_color(&nl).is_some()
+                            || lookup_card_type(&nl).is_some()
+                            || ts.vocab.lookup_subtype(&nl).is_some()
+                    })
+                })
+            {
                 ts.next_word();
             } else {
                 break;
@@ -741,8 +972,34 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         ]) || ts.eat_phrase(&[
             "in", "addition", "to", "their", "other", "colors", "and", "types",
         ]) || ts
-            .eat_phrase(&["in", "addition", "to", "its", "other", "types"])
+            .eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
+            || ts.eat_phrase(&[
+                "in", "addition", "to", "their", "other", "creature", "types",
+            ])
+            || ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"])
             || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"]);
+        let keep_existing_colors = ts
+            .eat_phrase(&["in", "addition", "to", "its", "other", "colors"])
+            || ts.eat_phrase(&["in", "addition", "to", "their", "other", "colors"]);
+        if subtypes.is_empty() && add_types.is_empty() && base_pt.is_none() && !colors.is_empty() {
+            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+            let mut out = vec![Effect::MutateObject {
+                subject: subject.clone(),
+                mutation: ObjectMutation::BecomeColors {
+                    colors,
+                    keep_existing_colors: keep_existing_colors || keep_existing_types,
+                },
+                duration: duration.clone(),
+            }];
+            if ts.eat_phrase(&["and", "attacks", "this", "turn", "if", "able"]) {
+                out.push(Effect::MutateObject {
+                    subject,
+                    mutation: ObjectMutation::MustAttackEachCombat,
+                    duration: Duration::UntilEndOfTurn,
+                });
+            }
+            return Ok(out);
+        }
         if ts.eat_phrase(&[
             "and",
             "has",
@@ -846,11 +1103,18 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                 "in", "addition", "to", "its", "other", "colors", "and", "types",
             ]) || ts.eat_phrase(&[
                 "in", "addition", "to", "their", "other", "colors", "and", "types",
-            ]) || ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"])
+            ]) || ts.eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
+                || ts.eat_phrase(&[
+                    "in", "addition", "to", "their", "other", "creature", "types",
+                ])
+                || ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"])
                 || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"])
             {
                 keep_existing_types = true;
             }
+            let duration = parse_trailing_duration(ts).unwrap_or(duration);
+            let loses_abilities = ts.eat_phrase(&["and", "has", "no", "abilities"])
+                || ts.eat_phrase(&["and", "loses", "all", "abilities"]);
             let mut out = vec![Effect::MutateObject {
                 subject: subject.clone(),
                 mutation: ObjectMutation::BecomeCreatureTypes {
@@ -862,6 +1126,13 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                 },
                 duration: duration.clone(),
             }];
+            if loses_abilities {
+                out.push(Effect::MutateObject {
+                    subject: subject.clone(),
+                    mutation: ObjectMutation::RemoveAllAbilities,
+                    duration: duration.clone(),
+                });
+            }
             if let Some(ab) = extra_ability {
                 out.push(Effect::MutateObject {
                     subject: subject.clone(),
@@ -871,10 +1142,26 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             }
             if let Some(ct) = retained_type {
                 out.push(Effect::MutateObject {
-                    subject,
+                    subject: subject.clone(),
                     mutation: ObjectMutation::RetainTypes(ct),
-                    duration,
+                    duration: duration.clone(),
                 });
+            }
+            // Optional post-duration `and gains <kws> [until end of turn]` (`Gideon`, `Water Wings`, `March from Velis Vel`)
+            {
+                let gcp = ts.checkpoint();
+                if (ts.eat_phrase(&["and", "gains"]) || ts.eat_phrase(&["and", "gain"]))
+                    && let Ok((kws, _)) = try_parse(ts, parse_keyword_list)
+                {
+                    let gdur = parse_trailing_duration(ts).unwrap_or(duration);
+                    out.push(Effect::MutateObject {
+                        subject,
+                        mutation: ObjectMutation::GrantKeywords(kws),
+                        duration: gdur,
+                    });
+                } else {
+                    ts.restore(gcp);
+                }
             }
             return Ok(out);
         }
@@ -939,12 +1226,16 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
     {
         let bcp = ts.checkpoint();
         if ts.eat_word("blocks") || ts.eat_word("block") {
-            let blocked_tgt = if ts.peek_phrase(&["this", "turn", "if", "able"]) {
+            let blocked_tgt = if ts.peek_phrase(&["this", "turn", "if", "able"])
+                || ts.peek_phrase(&["this", "combat", "if", "able"])
+            {
                 None
             } else {
                 opt(ts, parse_subject_ref).map(Box::new)
             };
-            if ts.eat_phrase(&["this", "turn", "if", "able"]) {
+            if ts.eat_phrase(&["this", "turn", "if", "able"])
+                || ts.eat_phrase(&["this", "combat", "if", "able"])
+            {
                 return Ok(vec![Effect::MutateObject {
                     subject,
                     mutation: ObjectMutation::MustBlockThisTurn(blocked_tgt),
@@ -1037,10 +1328,12 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         && (ts.eat_phrase(&["its", "controller's", "next", "untap", "step"])
             || ts.eat_phrase(&["their", "controller's", "next", "untap", "step"])
             || ts.eat_phrase(&["their", "controllers'", "next", "untap", "steps"])
+            || ts.eat_phrase(&["that", "player's", "next", "untap", "step"])
             || ts.eat_phrase(&["your", "next", "untap", "step"])
             || ts.eat_phrase(&["its", "controller's", "untap", "step"])
             || ts.eat_phrase(&["their", "controller's", "untap", "step"])
             || ts.eat_phrase(&["their", "controllers'", "untap", "steps"])
+            || ts.eat_phrase(&["that", "player's", "untap", "step"])
             || ts.eat_phrase(&["your", "untap", "step"]))
     {
         let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilYourNextTurn);
@@ -1051,15 +1344,101 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         }]);
     }
 
-    // 9. `<subj> loses/lose [all abilities | [your choice of] <kws>] [duration]`
+    // 9. `<subj> loses/lose [all abilities [and becomes ...] | [your choice of] <kws>] [duration]`
     if ts.eat_word("loses") || ts.eat_word("lose") {
         if ts.eat_phrase(&["all", "abilities"]) {
-            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-            return Ok(vec![Effect::MutateObject {
-                subject,
+            let mut duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+            let mut out = vec![Effect::MutateObject {
+                subject: subject.clone(),
                 mutation: ObjectMutation::RemoveAllAbilities,
-                duration,
-            }]);
+                duration: duration.clone(),
+            }];
+            {
+                let bcp = ts.checkpoint();
+                if ts.eat_phrase(&["and", "becomes"]) || ts.eat_phrase(&["and", "become"]) {
+                    let _ = ts.eat_word("a") || ts.eat_word("an");
+                    let mut base_pt = ts.next_base_pt();
+                    let mut add_types = CardTypeMask::EMPTY;
+                    let mut colors = crate::ast::ColorMask::EMPTY;
+                    let mut subtypes = Vec::new();
+                    while let Some(w) = ts.peek_word() {
+                        let low = w.to_ascii_lowercase();
+                        if let Some(ct) = lookup_card_type(&low) {
+                            ts.next_word();
+                            add_types = add_types.union(ct);
+                        } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+                            ts.next_word();
+                            subtypes.push(sub.to_string());
+                        } else if let Some(c) = lookup_color(&low) {
+                            ts.next_word();
+                            colors = colors.union(c);
+                        } else if low == "and"
+                            && ts.peek_n(1).is_some_and(|t| {
+                                matches!(t.kind, TokenKind::Word(nw) if {
+                                    let nl = nw.to_ascii_lowercase();
+                                    lookup_color(&nl).is_some()
+                                        || lookup_card_type(&nl).is_some()
+                                        || ts.vocab.lookup_subtype(&nl).is_some()
+                                })
+                            })
+                        {
+                            ts.next_word();
+                        } else {
+                            break;
+                        }
+                    }
+                    if base_pt.is_none()
+                        && ts.eat_phrase(&["with", "base", "power", "and", "toughness"])
+                    {
+                        base_pt = ts.next_base_pt();
+                    }
+                    let keep_existing_types = ts
+                        .eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
+                        || ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"])
+                        || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"]);
+                    if !add_types.is_empty()
+                        || !subtypes.is_empty()
+                        || !colors.is_empty()
+                        || base_pt.is_some()
+                    {
+                        let bdur = parse_trailing_duration(ts).unwrap_or_else(|| duration.clone());
+                        if bdur != duration {
+                            duration = bdur.clone();
+                            out[0] = Effect::MutateObject {
+                                subject: subject.clone(),
+                                mutation: ObjectMutation::RemoveAllAbilities,
+                                duration: duration.clone(),
+                            };
+                        }
+                        if !colors.is_empty() {
+                            out.push(Effect::MutateObject {
+                                subject: subject.clone(),
+                                mutation: ObjectMutation::BecomeColors {
+                                    colors,
+                                    keep_existing_colors: false,
+                                },
+                                duration: bdur.clone(),
+                            });
+                        }
+                        out.push(Effect::MutateObject {
+                            subject,
+                            mutation: ObjectMutation::BecomeCreatureTypes {
+                                subtypes,
+                                add_types,
+                                keep_existing_types,
+                                base_pt,
+                                keywords: Vec::new(),
+                            },
+                            duration: bdur,
+                        });
+                    } else {
+                        ts.restore(bcp);
+                    }
+                } else {
+                    ts.restore(bcp);
+                }
+            }
+            return Ok(out);
         }
         let _ = ts.eat_phrase(&["your", "choice", "of"]);
         let (kws, _) = parse_keyword_list(ts)?;

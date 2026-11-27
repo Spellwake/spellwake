@@ -91,21 +91,29 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Err(ts.err("expected `life`, energy, or mana after `pay`"));
     }
 
-    // `Sacrifice ~` / `Sacrifice it` / `Sacrifice [any number of | one or more | N] <filter>`
+    // `Behold a/an <flt>` (`Osseous Exhale`, Tarkir Dragonstorm)
+    if ts.eat_word("behold") {
+        let filter = parse_object_filter(ts)?;
+        return Ok(Cost::Behold(filter));
+    }
+
+    // `Sacrifice ~` / `Sacrifice it` / `Sacrifice [all | any number of | one or more | N] <filter>`
     if ts.eat_word("sacrifice") {
         if ts.eat_tilde() || ts.eat_word("it") {
             return Ok(Cost::SacrificeSelf);
         }
-        let count =
-            if ts.eat_phrase(&["any", "number", "of"]) || ts.eat_phrase(&["one", "or", "more"]) {
-                ValueExpr::Var(crate::v2::ir::VarName::X)
-            } else if let Some(n) = ts.next_number(true) {
-                ValueExpr::Const(n)
-            } else if ts.eat_word("x") {
-                ValueExpr::Var(crate::v2::ir::VarName::X)
-            } else {
-                ValueExpr::Const(1)
-            };
+        let count = if ts.eat_word("all")
+            || ts.eat_phrase(&["any", "number", "of"])
+            || ts.eat_phrase(&["one", "or", "more"])
+        {
+            ValueExpr::Var(crate::v2::ir::VarName::X)
+        } else if let Some(n) = ts.next_number(true) {
+            ValueExpr::Const(n)
+        } else if ts.eat_word("x") {
+            ValueExpr::Var(crate::v2::ir::VarName::X)
+        } else {
+            ValueExpr::Const(1)
+        };
         let filter = parse_object_filter(ts)?;
         return Ok(Cost::Sacrifice { count, filter });
     }
@@ -182,6 +190,24 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
             filter,
             from,
         });
+    }
+
+    // `Untap <N> [tapped] <filter>` (`Crackleburr`, etc.)
+    if ts.eat_word("untap") {
+        if ts.eat_tilde() {
+            return Ok(Cost::UntapSelf);
+        }
+        let count = if ts.eat_phrase(&["any", "number", "of"]) {
+            ValueExpr::Var(crate::v2::ir::VarName::X)
+        } else if let Some(n) = ts.next_number(true) {
+            ValueExpr::Const(n)
+        } else if ts.eat_word("x") {
+            ValueExpr::Var(crate::v2::ir::VarName::X)
+        } else {
+            ValueExpr::Const(1)
+        };
+        let filter = parse_object_filter(ts)?;
+        return Ok(Cost::UntapTapped { count, filter });
     }
 
     // `Tap ~` / `Tap <N> untapped <filter>`
@@ -275,6 +301,21 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
             }
             ck
         };
+        // Optional `or a/an <kind2> counter` (`Ion Storm`)
+        let mut kind2_opt = None;
+        {
+            let ocp = ts.checkpoint();
+            if ts.eat_word("or") {
+                let _ = ts.eat_word("a") || ts.eat_word("an");
+                if let Ok(ck2) = try_parse(ts, parse_counter_kind)
+                    && (ts.eat_word("counter") || ts.eat_word("counters"))
+                {
+                    kind2_opt = Some(ck2);
+                } else {
+                    ts.restore(ocp);
+                }
+            }
+        }
         if ts.eat_word("from") {
             let _ = ts.eat_word("among");
             let subject = if ts.eat_tilde() {
@@ -282,6 +323,13 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
             } else {
                 Some(parse_subject_ref(ts)?)
             };
+            if let Some(kind2) = kind2_opt {
+                return Ok(Cost::RemoveEitherCounter {
+                    kind1: kind,
+                    kind2,
+                    subject,
+                });
+            }
             return Ok(Cost::RemoveCounters {
                 kind,
                 count,
