@@ -1301,9 +1301,9 @@ fn last_instruction_created_tokens_local(ops: &[Instruction]) -> bool {
             Some(Instruction::MutateObject(spec))
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
-                        | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
-                        | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                    spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(_))
+                        | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAndAttach { .. })
+                        | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAuraAttached { .. })
                 ) || matches!(
                     spec.source,
                     spellwake_engine::toolbox::ObjectQuery::CreatedTokens
@@ -2727,7 +2727,9 @@ pub(super) fn lower_resolution_pay_cost_ops(
                         category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                         hidden: false,
                     },
-                    spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                    spellwake_engine::toolbox::ObjectMutation::TapState(
+                        spellwake_engine::toolbox::TapStateOp::Set(true),
+                    ),
                 ),
             ))])
         }
@@ -2766,7 +2768,9 @@ pub(super) fn lower_resolution_pay_cost_ops(
                         category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                         hidden: false,
                     },
-                    spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                    spellwake_engine::toolbox::ObjectMutation::TapState(
+                        spellwake_engine::toolbox::TapStateOp::Set(false),
+                    ),
                 ),
             ))])
         }

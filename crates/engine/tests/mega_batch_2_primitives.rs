@@ -126,10 +126,12 @@ fn divide_damage_expr_and_up_to_x_target_count_enforce_bounds() {
             vec![Instruction::MutateObject(Box::new(
                 spellwake_engine::toolbox::MutateObjectSpec::all(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
-                    spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                        kind: spellwake_engine::effects::CounterKind::PlusOne,
-                        amount: ValueExpr::literal(1),
-                    },
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Add {
+                            kind: spellwake_engine::effects::CounterKind::PlusOne,
+                            amount: ValueExpr::literal(1),
+                        },
+                    ),
                 ),
             ))],
         )

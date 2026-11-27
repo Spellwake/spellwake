@@ -489,7 +489,7 @@ fn ensure_target_power_consumed(builder: &mut BodyBuilder, obj: &ObjectFilter) {
                     Instruction::MutateObject(spec)
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                            spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                         )
                 )
         })
@@ -848,7 +848,9 @@ fn has_prior_non_attached_object_op(op: &Instruction) -> bool {
         Instruction::MutateObject(spec)
             if matches!(
                 spec.op,
-                spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
+                spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                    spellwake_engine::toolbox::TokenAttachOp::CreateCopy(_)
+                )
             ) =>
         {
             true
@@ -1083,9 +1085,9 @@ fn has_prior_token_creation(ops: &[Instruction]) -> bool {
                 Instruction::MutateObject(spec)
                     if matches!(
                         spec.op,
-                        spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
-                            | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
-                            | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                        spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(_))
+                            | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAndAttach { .. })
+                            | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAuraAttached { .. })
                     )
             )
     })
@@ -1160,21 +1162,25 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             };
             sel_x
                 || match &spec.op {
-                    spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
-                    | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
-                        amount, ..
-                    }
-                    | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Add { amount, .. },
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Remove { amount, .. },
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                        spellwake_engine::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+                    )
                     | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount }
-                    | spellwake_engine::toolbox::ObjectMutation::Connive { count: amount } => {
-                        value_expr_uses_chosen_x(amount)
-                    }
-                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
-                        value_expr_uses_chosen_x(&copy.count)
-                    }
-                    spellwake_engine::toolbox::ObjectMutation::MoveCounters { amount, .. } => {
-                        amount.as_ref().is_some_and(value_expr_uses_chosen_x)
-                    }
+                    | spellwake_engine::toolbox::ObjectMutation::Connive {
+                        count: Some(amount),
+                    } => value_expr_uses_chosen_x(amount),
+                    spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                        spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy),
+                    ) => value_expr_uses_chosen_x(&copy.count),
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Move { amount, .. },
+                    ) => amount.as_ref().is_some_and(value_expr_uses_chosen_x),
                     _ => false,
                 }
         }
@@ -1233,17 +1239,32 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             )
         }
         Instruction::MutatePlayer(spec) => match &spec.op {
-            spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-            | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
-            | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
-            | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
-            | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
-            | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
-            | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
-            | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
-            | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount }
+            spellwake_engine::toolbox::PlayerMutation::Counter { amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Scry(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Surveil(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Mill(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::ManifestTop(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::Incubate { count: amount },
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::Blight { amount },
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::CollectEvidence { minimum: amount },
+            )
             | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(amount)
-            | spellwake_engine::toolbox::PlayerMutation::RollDie { count: amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                spellwake_engine::toolbox::RandomEventOp::RollDie { count: amount, .. },
+            )
             | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles {
                 count: amount, ..
             } => value_expr_uses_chosen_x(amount),
@@ -1323,7 +1344,7 @@ fn try_append_fixed_first_target_parts(
                             Instruction::MutateObject(spec)
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                    spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                                 )
                         )
                     })
@@ -1399,9 +1420,9 @@ fn last_instruction_created_tokens(ops: &[Instruction]) -> bool {
             Some(Instruction::MutateObject(spec))
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
-                        | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
-                        | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                    spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(_))
+                        | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAndAttach { .. })
+                        | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAuraAttached { .. })
                 ) || matches!(
                     spec.source,
                     spellwake_engine::toolbox::ObjectQuery::CreatedTokens

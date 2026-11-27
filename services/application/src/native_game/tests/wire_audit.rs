@@ -201,19 +201,21 @@ fn collect_body_counter_kinds(body: &ExecutableBody, out: &mut Vec<CounterKind>)
     for op in &body.instructions {
         match op {
             Instruction::MutateObject(spec) => match &spec.op {
-                spellwake_engine::toolbox::ObjectMutation::AddCounters { kind, .. } => {
+                spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Add { kind, .. },
+                ) => {
                     out.push(*kind);
                 }
-                spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
-                    kind: Some(kind),
-                    ..
-                }
-                | spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind: Some(kind) }
-                | spellwake_engine::toolbox::ObjectMutation::DoubleCounters { kind: Some(kind) }
-                | spellwake_engine::toolbox::ObjectMutation::MoveCounters {
-                    kind: Some(kind),
-                    ..
-                } => out.push(*kind),
+                spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Remove {
+                        kind: Some(kind), ..
+                    }
+                    | spellwake_engine::toolbox::CounterOp::Clear { kind: Some(kind) }
+                    | spellwake_engine::toolbox::CounterOp::Double { kind: Some(kind) }
+                    | spellwake_engine::toolbox::CounterOp::Move {
+                        kind: Some(kind), ..
+                    },
+                ) => out.push(*kind),
                 _ => {}
             },
             Instruction::ZoneOp(spec) => {
@@ -683,8 +685,10 @@ fn gate3_headless_four_player_corpus_execution_smoke() {
                     Instruction::MutatePlayer(spec)
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::PlayerMutation::Scry(_)
-                                | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
+                            spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                                spellwake_engine::toolbox::LibraryTopAction::Scry(_)
+                                    | spellwake_engine::toolbox::LibraryTopAction::Surveil(_)
+                            )
                         )
                 )
             }),

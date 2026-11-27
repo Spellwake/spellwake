@@ -8813,10 +8813,10 @@ impl EffectWindow {
             return false;
         }
         if let [Instruction::MutateObject(spec)] = body.instructions.as_slice()
-            && let crate::toolbox::ObjectMutation::Attach {
+            && let crate::toolbox::ObjectMutation::Attach(crate::toolbox::AttachOp::ToObject {
                 ability: Some(ability),
                 ..
-            } = &spec.op
+            }) = &spec.op
             && !matches!(target, TargetRef::Object(id) if evaluated.get(id).is_some_and(|object| object.controller == Some(controller) && object.has_type(ability.host_type())))
         {
             return false;
@@ -10514,10 +10514,11 @@ impl EffectWindow {
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    crate::toolbox::PlayerMutation::Populate
-                        | crate::toolbox::PlayerMutation::Bolster(_)
-                        | crate::toolbox::PlayerMutation::Amass { .. }
-                        | crate::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Populate
+                            | crate::toolbox::PlayerKeywordAction::Bolster(_)
+                            | crate::toolbox::PlayerKeywordAction::Amass { .. }
+                    ) | crate::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
                         | crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
                 ) =>
             {
@@ -10600,9 +10601,10 @@ impl EffectWindow {
                         .is_some_and(|value| value.zone() == ObjectZone::Battlefield),
                     TargetRef::Player(_) | TargetRef::Stack(_) => false,
                 },
-                crate::toolbox::ObjectMutation::Attach {
-                    ability: Some(_), ..
-                } => true,
+                crate::toolbox::ObjectMutation::Attach(crate::toolbox::AttachOp::ToObject {
+                    ability: Some(_),
+                    ..
+                }) => true,
                 _ => false,
             },
             Instruction::DealDamage(spec) => match &spec.recipients {

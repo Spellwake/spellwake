@@ -35,7 +35,9 @@ pub(super) fn fall_from_favor(card: &InventoryCard, profile: Profile) -> Option<
             vec![
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
                     spellwake_engine::toolbox::ObjectQuery::AttachedHost,
-                    spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                    spellwake_engine::toolbox::ObjectMutation::TapState(
+                        spellwake_engine::toolbox::TapStateOp::Set(true),
+                    ),
                 ),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::become_monarch(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(

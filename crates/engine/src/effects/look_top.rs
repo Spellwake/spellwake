@@ -224,7 +224,12 @@ impl EffectWindow {
         let is_may_reveal_library_top = matches!(
             instruction,
             Instruction::MutatePlayer(spec)
-                if matches!(spec.op, crate::toolbox::PlayerMutation::MayRevealLibraryTop)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::LibraryTop(
+                        crate::toolbox::LibraryTopAction::MayRevealTop
+                    )
+                )
         );
         let (count, filter, required, reveal, battlefield_tapped, battlefield_else_hand): (
             u8,

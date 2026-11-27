@@ -2637,7 +2637,7 @@ fn body_has_empty_die_roll(body: &ExecutableBody) -> bool {
             Instruction::MutatePlayer(spec)
                 if matches!(
                     &spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::RollDie { bands, .. }
+                    spellwake_engine::toolbox::PlayerMutation::RandomEvent(spellwake_engine::toolbox::RandomEventOp::RollDie { bands, .. })
                         if bands.is_empty()
                 )
         )
@@ -2687,10 +2687,12 @@ fn attach_die_roll_bands_in_body(
     let mut attached = false;
     for op in &mut body.instructions {
         if let Instruction::MutatePlayer(spec) = op
-            && let spellwake_engine::toolbox::PlayerMutation::RollDie {
-                bands: target_bands,
-                ..
-            } = &mut spec.op
+            && let spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                spellwake_engine::toolbox::RandomEventOp::RollDie {
+                    bands: target_bands,
+                    ..
+                },
+            ) = &mut spec.op
             && target_bands.is_empty()
         {
             *target_bands = bands.to_vec();

@@ -34,13 +34,14 @@ use spellwake_engine::{
     },
     targets::TargetRef,
     toolbox::{
-        AdjustLifeSpec, ApplyContinuousSpec, BindingId, ChoiceCategory, ConditionExpr,
-        ContinuousPayload, DamageSourceQuery, DamageTargetQuery, DealDamageSpec, DrawCardsSpec,
-        GraveyardSemantics, LifeOp, MutateObjectSpec, MutatePlayerSpec, ObjectMutation,
-        ObjectQuery, PlayerSelector, PromptChoiceReply, PromptChoiceSpec, PromptDomain, QuerySlice,
-        QueryZone, ResolvedPromptDomain, SideDeck, SideDeckKind, SideDeckOpKind, SideDeckOpSpec,
+        AdjustLifeSpec, ApplyContinuousSpec, AttachOp, BindingId, ChoiceCategory, ConditionExpr,
+        ContinuousPayload, ControlOp, CounterOp, DamageSourceQuery, DamageTargetQuery,
+        DealDamageSpec, DrawCardsSpec, GraveyardSemantics, LifeOp, MutateObjectSpec,
+        MutatePlayerSpec, ObjectMutation, ObjectQuery, OrientationOp, PlayerSelector,
+        PromptChoiceReply, PromptChoiceSpec, PromptDomain, QuerySlice, QueryZone,
+        ResolvedPromptDomain, SideDeck, SideDeckKind, SideDeckOpKind, SideDeckOpSpec,
         StateTrackKey, StateTrackKeySpec, StateTrackOp, StateTrackScope, TagKey, TagValue,
-        ZoneController, ZoneDest, ZoneOpSpec, ZoneSelection,
+        TapStateOp, ZoneController, ZoneDest, ZoneOpSpec, ZoneSelection,
     },
     turn::Step,
 };
@@ -1017,21 +1018,21 @@ fn mutate_object_tap_untap_toggle_and_skip_next_untap() {
                 QueryZone::Battlefield,
                 ObjectFilter::creature().controlled(),
             ),
-            ObjectMutation::SetTapped(true),
+            ObjectMutation::TapState(TapStateOp::Set(true)),
         )))],
         &vocab,
     );
     let toggle_all = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::creature()),
-            ObjectMutation::ToggleTapped,
+            ObjectMutation::TapState(TapStateOp::Toggle),
         )))],
         &vocab,
     );
     let untap_opposing = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::creature().opposing()),
-            ObjectMutation::SetTapped(false),
+            ObjectMutation::TapState(TapStateOp::Set(false)),
         )))],
         &vocab,
     );
@@ -1039,7 +1040,7 @@ fn mutate_object_tap_untap_toggle_and_skip_next_untap() {
         vec![
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::creature().opposing()),
-                ObjectMutation::SetTapped(true),
+                ObjectMutation::TapState(TapStateOp::Set(true)),
             ))),
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 ObjectQuery::zone(
@@ -1048,7 +1049,7 @@ fn mutate_object_tap_untap_toggle_and_skip_next_untap() {
                         .opposing()
                         .with_keyword(KeywordAbility::Flying),
                 ),
-                ObjectMutation::SkipNextUntap,
+                ObjectMutation::TapState(TapStateOp::SkipNextUntap),
             ))),
         ],
         &vocab,
@@ -1182,7 +1183,7 @@ fn mutate_object_phase_out_regenerate_goad_and_exert() {
                     .opposing()
                     .with_keyword(KeywordAbility::Flying),
             ),
-            ObjectMutation::PhaseOut,
+            ObjectMutation::Orientation(OrientationOp::PhaseOut),
         )))],
         &vocab,
     );
@@ -1195,7 +1196,7 @@ fn mutate_object_phase_out_regenerate_goad_and_exert() {
                         .controlled()
                         .with_keyword(KeywordAbility::Vigilance),
                 ),
-                ObjectMutation::SetTapped(true),
+                ObjectMutation::TapState(TapStateOp::Set(true)),
             ))),
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 ObjectQuery::zone(
@@ -1204,7 +1205,7 @@ fn mutate_object_phase_out_regenerate_goad_and_exert() {
                         .controlled()
                         .with_keyword(KeywordAbility::Vigilance),
                 ),
-                ObjectMutation::Exert,
+                ObjectMutation::TapState(TapStateOp::Exert),
             ))),
         ],
         &vocab,
@@ -1219,6 +1220,7 @@ fn mutate_object_phase_out_regenerate_goad_and_exert() {
             ),
             ObjectMutation::Goad {
                 by: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                permanent: false,
             },
         )))],
         &vocab,
@@ -1365,21 +1367,21 @@ fn mutate_object_counters_add_remove_clear_double_move_and_add_one_of_each() {
         vec![
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 flyer_query(),
-                ObjectMutation::AddCounters {
+                ObjectMutation::Counters(CounterOp::Add {
                     kind: CounterKind::PlusOne,
                     amount: ValueExpr::literal(2),
-                },
+                }),
             ))),
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 flyer_query(),
-                ObjectMutation::AddCounters {
+                ObjectMutation::Counters(CounterOp::Add {
                     kind: CounterKind::Charge,
                     amount: ValueExpr::literal(1),
-                },
+                }),
             ))),
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 flyer_query(),
-                ObjectMutation::AddOneOfEachCounterKind,
+                ObjectMutation::Counters(CounterOp::AddOneOfEach),
             ))),
         ],
         &vocab,
@@ -1387,9 +1389,9 @@ fn mutate_object_counters_add_remove_clear_double_move_and_add_one_of_each() {
     let double_plus_one = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             flyer_query(),
-            ObjectMutation::DoubleCounters {
+            ObjectMutation::Counters(CounterOp::Double {
                 kind: Some(CounterKind::PlusOne),
-            },
+            }),
         )))],
         &vocab,
     );
@@ -1397,18 +1399,18 @@ fn mutate_object_counters_add_remove_clear_double_move_and_add_one_of_each() {
         vec![
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 flyer_query(),
-                ObjectMutation::RemoveCounters {
+                ObjectMutation::Counters(CounterOp::Remove {
                     kind: Some(CounterKind::PlusOne),
                     amount: ValueExpr::literal(2),
-                },
+                }),
             ))),
             Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 flyer_query(),
-                ObjectMutation::MoveCounters {
+                ObjectMutation::Counters(CounterOp::Move {
                     to: vanilla_query(),
                     kind: Some(CounterKind::PlusOne),
                     amount: Some(ValueExpr::literal(3)),
-                },
+                }),
             ))),
         ],
         &vocab,
@@ -1416,7 +1418,7 @@ fn mutate_object_counters_add_remove_clear_double_move_and_add_one_of_each() {
     let clear_all = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             flyer_query(),
-            ObjectMutation::ClearCounters { kind: None },
+            ObjectMutation::Counters(CounterOp::Clear { kind: None }),
         )))],
         &vocab,
     );
@@ -1502,30 +1504,30 @@ fn mutate_object_attach_unattach_and_gain_control() {
     let attach_spell = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::artifact()),
-            ObjectMutation::Attach {
+            ObjectMutation::Attach(AttachOp::ToObject {
                 host: Box::new(ObjectQuery::zone(
                     QueryZone::Battlefield,
                     ObjectFilter::creature().controlled(),
                 )),
                 ability: None,
-            },
+            }),
         )))],
         &vocab,
     );
     let unattach_spell = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::artifact()),
-            ObjectMutation::Unattach,
+            ObjectMutation::Attach(AttachOp::Unattach),
         )))],
         &vocab,
     );
     let steal_spell = sorcery(
         vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
             ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::creature().opposing()),
-            ObjectMutation::GainControl {
+            ObjectMutation::Control(ControlOp::Gain {
                 controller: PlayerSelector::Resolving(ResolvingPlayer::Controller),
                 duration: ResolvedDuration::UntilEndOfTurn,
-            },
+            }),
         )))],
         &vocab,
     );
@@ -1583,7 +1585,7 @@ fn mutate_object_interactive_prompt_selection() {
                     category: ChoiceCategory::Generic,
                     hidden: false,
                 },
-                ObjectMutation::SetTapped(true),
+                ObjectMutation::TapState(TapStateOp::Set(true)),
             ),
         ))],
         &vocab,
@@ -2186,10 +2188,10 @@ fn phase5_custom_player_counters_and_exile_with_counters() {
                     Instruction::ZoneOp(Box::new(exile_spec)),
                     Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                         ObjectQuery::Bound(BindingId(1)),
-                        ObjectMutation::AddCounters {
+                        ObjectMutation::Counters(CounterOp::Add {
                             kind: void_counter,
                             amount: ValueExpr::literal(2),
-                        },
+                        }),
                     ))),
                 ],
             ),
@@ -3651,7 +3653,7 @@ fn phase14_mutate_object_goad_permanent_persists_across_turns() {
     );
     assert!(
         state.execution().is_goaded_by(target_id, P0),
-        "ObjectMutation::GoadPermanent must persist past the goader's next turn start"
+        "ObjectMutation::Goad {{ permanent: true }} must persist past the goader's next turn start"
     );
 }
 
@@ -3667,7 +3669,7 @@ fn phase15_per_extra_target_cost_strive_charges_for_second_target() {
             BodyTarget::FilteredPermanent(ObjectFilter::creature()),
             vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 ObjectQuery::Targets,
-                ObjectMutation::SetTapped(true),
+                ObjectMutation::TapState(TapStateOp::Set(true)),
             )))],
         )
         .with_permanent_target_bounds(1, u16::MAX),

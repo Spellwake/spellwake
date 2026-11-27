@@ -1364,10 +1364,12 @@ fn partner_cast_trigger(
             vec![Instruction::MutateObject(Box::new(
                 spellwake_engine::toolbox::MutateObjectSpec::all(
                     spellwake_engine::toolbox::ObjectQuery::Source,
-                    spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                        kind: spellwake_engine::effects::CounterKind::PlusOne,
-                        amount: spellwake_engine::program::ValueExpr::literal(1),
-                    },
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Add {
+                            kind: spellwake_engine::effects::CounterKind::PlusOne,
+                            amount: spellwake_engine::program::ValueExpr::literal(1),
+                        },
+                    ),
                 ),
             ))],
         ),

@@ -4605,10 +4605,12 @@ impl EffectWindow {
         for idx in outer_indices {
             match &mut instructions[idx] {
                 Instruction::MutatePlayer(spec) => match &mut spec.op {
-                    crate::toolbox::PlayerMutation::FlipCoins {
-                        lose_destination: Some(destination),
-                        ..
-                    } => remap(destination),
+                    crate::toolbox::PlayerMutation::RandomEvent(
+                        crate::toolbox::RandomEventOp::FlipCoins {
+                            lose_destination: Some(destination),
+                            ..
+                        },
+                    ) => remap(destination),
                     crate::toolbox::PlayerMutation::OfferSourceCounters {
                         placed_destination,
                         declined_destination,

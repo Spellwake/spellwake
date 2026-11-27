@@ -16845,10 +16845,10 @@ fn lower_anaphora_cost_modifier(
                             Instruction::MutateObject(spec)
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::ObjectMutation::Attach {
+                                    spellwake_engine::toolbox::ObjectMutation::Attach(spellwake_engine::toolbox::AttachOp::ToObject {
                                         ability: Some(AttachAbility::Equip),
                                         ..
-                                    }
+                                    })
                                 )
                         )
                     })

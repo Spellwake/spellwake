@@ -560,10 +560,10 @@ fn compile_face(
                         Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::all(
                                 spellwake_engine::toolbox::ObjectQuery::Source,
-                                spellwake_engine::toolbox::ObjectMutation::Attach {
+                                spellwake_engine::toolbox::ObjectMutation::Attach(spellwake_engine::toolbox::AttachOp::ToObject {
                                     host: Box::new(spellwake_engine::toolbox::ObjectQuery::Targets),
                                     ability: None,
-                                },
+                                }),
                             ),
                         )),
                     ],

@@ -7697,20 +7697,28 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
     instructions.iter().rev().find_map(|op| match op {
         Instruction::DrawCards(spec) => find_value_expr_cost_object_ref(&spec.amount),
         Instruction::MutateObject(spec) => match &spec.op {
-            spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
-            | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. }
-            | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+            spellwake_engine::toolbox::ObjectMutation::Counters(
+                spellwake_engine::toolbox::CounterOp::Add { amount, .. },
+            )
+            | spellwake_engine::toolbox::ObjectMutation::Counters(
+                spellwake_engine::toolbox::CounterOp::Remove { amount, .. },
+            )
+            | spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                spellwake_engine::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+            )
             | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount }
-            | spellwake_engine::toolbox::ObjectMutation::Connive { count: amount } => {
-                find_value_expr_cost_object_ref(amount)
-            }
-            spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
-                find_value_expr_cost_object_ref(&copy.count)
-            }
-            spellwake_engine::toolbox::ObjectMutation::MoveCounters {
-                amount: Some(amount),
-                ..
+            | spellwake_engine::toolbox::ObjectMutation::Connive {
+                count: Some(amount),
             } => find_value_expr_cost_object_ref(amount),
+            spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy),
+            ) => find_value_expr_cost_object_ref(&copy.count),
+            spellwake_engine::toolbox::ObjectMutation::Counters(
+                spellwake_engine::toolbox::CounterOp::Move {
+                    amount: Some(amount),
+                    ..
+                },
+            ) => find_value_expr_cost_object_ref(amount),
             _ => None,
         },
         Instruction::ApplyContinuous(spec) => match &spec.payload {
@@ -7746,17 +7754,32 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
             _ => None,
         }),
         Instruction::MutatePlayer(spec) => match &spec.op {
-            spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-            | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
-            | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
-            | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
-            | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
-            | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
-            | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
-            | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
-            | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount }
+            spellwake_engine::toolbox::PlayerMutation::Counter { amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Mill(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Scry(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::Surveil(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                spellwake_engine::toolbox::LibraryTopAction::ManifestTop(amount),
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::Incubate { count: amount },
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::Blight { amount },
+            )
+            | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                spellwake_engine::toolbox::PlayerKeywordAction::CollectEvidence { minimum: amount },
+            )
             | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(amount)
-            | spellwake_engine::toolbox::PlayerMutation::RollDie { count: amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                spellwake_engine::toolbox::RandomEventOp::RollDie { count: amount, .. },
+            )
             | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles {
                 count: amount, ..
             } => find_value_expr_cost_object_ref(amount),
@@ -7792,7 +7815,7 @@ fn has_prior_reveal_top(context: Option<(&BodyBuilder, bool)>) -> bool {
                 Instruction::MutatePlayer(spec)
                     if matches!(
                         spec.op,
-                        spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                        spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::MayRevealTop)
                     )
             )
         })
@@ -8881,7 +8904,7 @@ fn lower_value_expr_inner(
                     (PriorActionRefKind::TappedThisWay, Instruction::MutateObject(spec))
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(true)
+                            spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(true))
                         )
                 ) || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(last_ins)
                     .is_some_and(|spec| match kind {
@@ -9388,7 +9411,7 @@ fn lower_value_expr_inner(
                                 Instruction::MutatePlayer(spec)
                                     if matches!(
                                         spec.op,
-                                        spellwake_engine::toolbox::PlayerMutation::Mill(_)
+                                        spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::Mill(_))
                                     )
                             )
                         })
@@ -9656,7 +9679,7 @@ fn lower_value_expr_inner(
                                 Instruction::MutateObject(spec)
                                     if matches!(
                                         spec.op,
-                                        spellwake_engine::toolbox::ObjectMutation::AddCounters { .. }
+                                        spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { .. })
                                     ) && (matches!(
                                         spec.source,
                                         spellwake_engine::toolbox::ObjectQuery::Source

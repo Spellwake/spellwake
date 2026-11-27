@@ -4283,43 +4283,45 @@ impl Body {
                         "Tap" => instructions.push(Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
-                                spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                                spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(true)),
                             ),
                         ))),
                         "ToggleTap" => instructions.push(Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
-                                spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                                spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Toggle),
                             ),
                         ))),
                         "TapAndSkipNextUntap" => {
                             instructions.push(Instruction::MutateObject(Box::new(
                                 spellwake_engine::toolbox::MutateObjectSpec::all(
                                     spellwake_engine::toolbox::ObjectQuery::Targets,
-                                    spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                                    spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(true)),
                                 ),
                             )));
                             instructions.push(Instruction::MutateObject(Box::new(
                                 spellwake_engine::toolbox::MutateObjectSpec::all(
                                     spellwake_engine::toolbox::ObjectQuery::Targets,
-                                    spellwake_engine::toolbox::ObjectMutation::SkipNextUntap,
+                                    spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::SkipNextUntap),
                                 ),
                             )));
                         }
                         "Untap" => instructions.push(Instruction::MutateObject(Box::new(
                             spellwake_engine::toolbox::MutateObjectSpec::all(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
-                                spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                                spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(false)),
                             ),
                         ))),
                         "PutPlusOneCounter" | "PutPlusOneCounterOnOthers" => {
                             instructions.push(Instruction::MutateObject(Box::new(
                                 spellwake_engine::toolbox::MutateObjectSpec::all(
                                     spellwake_engine::toolbox::ObjectQuery::Targets,
-                                    spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                                        kind: spellwake_engine::effects::CounterKind::PlusOne,
-                                        amount: ValueExpr::literal(1),
-                                    },
+                                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                                        spellwake_engine::toolbox::CounterOp::Add {
+                                            kind: spellwake_engine::effects::CounterKind::PlusOne,
+                                            amount: ValueExpr::literal(1),
+                                        },
+                                    ),
                                 ),
                             )));
                         }
@@ -4334,10 +4336,12 @@ impl Body {
                                             spellwake_engine::program::ObjectFilter::creature(),
                                         ),
                                     },
-                                    spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                                        kind: spellwake_engine::effects::CounterKind::PlusOne,
-                                        amount: ValueExpr::literal(1),
-                                    },
+                                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                                        spellwake_engine::toolbox::CounterOp::Add {
+                                            kind: spellwake_engine::effects::CounterKind::PlusOne,
+                                            amount: ValueExpr::literal(1),
+                                        },
+                                    ),
                                 ),
                             )));
                             instructions.push(Instruction::MutateObject(Box::new(
@@ -4352,10 +4356,12 @@ impl Body {
                                             ),
                                         ),
                                     },
-                                    spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                                        kind: spellwake_engine::effects::CounterKind::Loyalty,
-                                        amount: ValueExpr::literal(1),
-                                    },
+                                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                                        spellwake_engine::toolbox::CounterOp::Add {
+                                            kind: spellwake_engine::effects::CounterKind::Loyalty,
+                                            amount: ValueExpr::literal(1),
+                                        },
+                                    ),
                                 ),
                             )));
                         }
@@ -4474,7 +4480,12 @@ impl Body {
                     Op::ExtraCombatSubtype {subtype} => Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::additional_combat(spellwake_engine::program::CombatUntapGroup::SourceAndControlledSubtype(creature_types::id(subtype,vocabulary)?)))),
                     Op::TakeExtraTurn {} => Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::take_extra_turn(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller)))),
                     Op::DisallowDamagePreventionThisTurn {} => {
-                        Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::disallow_damage_prevention()))
+                        Instruction::ApplyContinuous(Box::new(
+                            spellwake_engine::toolbox::ApplyContinuousSpec::temporary_rule(
+                                spellwake_engine::program::TemporaryRuleKind::DamageCantBePrevented,
+                                spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                            ),
+                        ))
                     }
                     Op::GrantNoMaxHandSizeRestOfGame {} => {
                         Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec { selector: None, payload: spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(Box::new(spellwake_engine::program::TemporaryRuleKind::TemporaryStatic { ability: Box::new(spellwake_engine::characteristics::StaticContinuousAbility::DrawRule { id: spellwake_engine::characteristics::StaticAbilityId(1), rule: spellwake_engine::characteristics::StaticDrawRule::NoMaximumHandSize }), condition: None, one_shot: false })), duration: spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration, condition: None, one_shot: false, as_emblem: None, emblem_label: None }))
@@ -4521,10 +4532,10 @@ impl Body {
                     Op::CreateOpponentUpkeepDamageEmblems { amount } => Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::emblem(spellwake_engine::toolbox::PlayerSelector::Group(spellwake_engine::program::AffectedPlayers::EachOpponent), spellwake_engine::emblem::EmblemDefinition::UpkeepDamage { amount }))),
                     Op::CreateOpponentSpellcastDamageEmblems { amount, noncreature_only } => Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::emblem(spellwake_engine::toolbox::PlayerSelector::Group(spellwake_engine::program::AffectedPlayers::EachOpponent), spellwake_engine::emblem::EmblemDefinition::SpellcastDamage { amount, noncreature_only }))),
                     Op::CreateOpponentCreatureBonusEmblems { power_toughness, keywords } => Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::emblem(spellwake_engine::toolbox::PlayerSelector::Group(spellwake_engine::program::AffectedPlayers::EachOpponent), spellwake_engine::emblem::EmblemDefinition::ControlledCreatureBonus { power_toughness: power_toughness.into(), keywords: keyword_set(keywords)? }))),
-                    Op::UntapControlledLands {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::land().controlled()))), spellwake_engine::toolbox::ObjectMutation::SetTapped(false)))),
-                    Op::GiveControlOfAbilitySource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::GainControl { controller: spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::TargetPlayer), duration: spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration }))),
+                    Op::UntapControlledLands {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::land().controlled()))), spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(false))))),
+                    Op::GiveControlOfAbilitySource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Control(spellwake_engine::toolbox::ControlOp::Gain { controller: spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::TargetPlayer), duration: spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration })))),
                     Op::ChangeAbilitySource {parts, duration} => Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(spellwake_engine::toolbox::ObjectQuery::Source, ResolvedPartsSpec(parts.into_iter().map(|p|p.native(vocabulary)).collect::<Result<Vec<_>,_>>()?), duration.into()))),
-                    Op::DoubleCountersOnTargets {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::DoubleCounters { kind: None }))),
+                    Op::DoubleCountersOnTargets {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Double { kind: None })))),
                     Op::Proliferate {} => Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::proliferate())),
                     Op::ManifestTop {player,amount}=>Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::manifest_top(player.into(),amount.native(vocabulary)?))),
                     Op::PutHandPermanentsOntoBattlefield {
@@ -4770,9 +4781,9 @@ impl Body {
                     )),
                     Op::ReturnSourceToHand {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ZoneDest::Hand))),
                     Op::RelatedPlayerLosesHalfLife {} => Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::lose_half(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::UniqueRelatedPlayer), true))),
-                    Op::PutCountersOnControlledCreatures {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().controlled()))), spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::PlusOne, amount: ValueExpr::Literal(1.into()) }))),
+                    Op::PutCountersOnControlledCreatures {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().controlled()))), spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { kind: spellwake_engine::effects::CounterKind::PlusOne, amount: ValueExpr::Literal(1.into()) })))),
                     Op::PutCountersOnControlledSubtype { subtype } => {
-                        Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().controlled().with_subtype(creature_types::id(subtype, vocabulary)?)))), spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::PlusOne, amount: ValueExpr::Literal(1.into()) })))
+                        Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().controlled().with_subtype(creature_types::id(subtype, vocabulary)?)))), spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { kind: spellwake_engine::effects::CounterKind::PlusOne, amount: ValueExpr::Literal(1.into()) }))))
                     }
                     Op::PayControllerLife {amount} => Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::pay(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller), spellwake_engine::program::ValueExpr::literal(i64::from(amount))))),
                     Op::Encore {} => Instruction::StackOp(Box::new(
@@ -4802,22 +4813,24 @@ impl Body {
                             )))],
                         )),
                     },
-                    Op::PutCountersOnOtherCreatures {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().controlled().other_than_ability_source()))), spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::PlusOne, amount: ValueExpr::Literal(1.into()) }))),
+                    Op::PutCountersOnOtherCreatures {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().controlled().other_than_ability_source()))), spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { kind: spellwake_engine::effects::CounterKind::PlusOne, amount: ValueExpr::Literal(1.into()) })))),
                     Op::PutNamedCounterOnSource { kind, amount } => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
                         spellwake_engine::toolbox::ObjectQuery::Source,
-                        spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                            kind: spellwake_engine::effects::CounterKind::PERMANENT.into_iter()
-                                .find(|value| format!("{value:?}") == kind).ok_or("unknown permanent counter")?,
-                            amount: ValueExpr::Literal(i64::from(amount.unwrap_or(1)).into()),
-                        },
+                        spellwake_engine::toolbox::ObjectMutation::Counters(
+                            spellwake_engine::toolbox::CounterOp::Add {
+                                kind: spellwake_engine::effects::CounterKind::PERMANENT.into_iter()
+                                    .find(|value| format!("{value:?}") == kind).ok_or("unknown permanent counter")?,
+                                amount: ValueExpr::Literal(i64::from(amount.unwrap_or(1)).into()),
+                            },
+                        ),
                     ))),
-                    Op::PutBlessingCounterOnSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::Blessing, amount: ValueExpr::Literal(1.into()) }))),
-                    Op::PutChargeCounterOnSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::Charge, amount: ValueExpr::Literal(1.into()) }))),
-                    Op::PutQuestCounterOnSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::Quest, amount: ValueExpr::Literal(1.into()) }))),
-                    Op::PutStorageCounterOnSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::Storage, amount: ValueExpr::Literal(1.into()) }))),
-                    Op::UntapAbilitySource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::SetTapped(false)))),
-                    Op::TapAbilitySource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::SetTapped(true)))),
-                    Op::TransformSubtype { subtype } => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Battlefield, spellwake_engine::program::ObjectFilter::creature().with_subtype(creature_types::id(subtype, vocabulary)?)), spellwake_engine::toolbox::ObjectMutation::Transform))),
+                    Op::PutBlessingCounterOnSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { kind: spellwake_engine::effects::CounterKind::Blessing, amount: ValueExpr::Literal(1.into()) })))),
+                    Op::PutChargeCounterOnSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { kind: spellwake_engine::effects::CounterKind::Charge, amount: ValueExpr::Literal(1.into()) })))),
+                    Op::PutQuestCounterOnSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { kind: spellwake_engine::effects::CounterKind::Quest, amount: ValueExpr::Literal(1.into()) })))),
+                    Op::PutStorageCounterOnSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { kind: spellwake_engine::effects::CounterKind::Storage, amount: ValueExpr::Literal(1.into()) })))),
+                    Op::UntapAbilitySource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(false))))),
+                    Op::TapAbilitySource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(true))))),
+                    Op::TransformSubtype { subtype } => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Battlefield, spellwake_engine::program::ObjectFilter::creature().with_subtype(creature_types::id(subtype, vocabulary)?)), spellwake_engine::toolbox::ObjectMutation::Orientation(spellwake_engine::toolbox::OrientationOp::Transform)))),
                     Op::ReturnOwnGraveyardCardsOfTypeToHand { kind } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), spellwake_engine::program::ObjectFilter::from_clause(spellwake_engine::program::ObjectClause::any().any_types(spellwake_engine::program::CardTypeMask::from_card_type(card_type(&kind)?)))), spellwake_engine::toolbox::ZoneDest::Hand))),
                     Op::ExileTargetWithLink { group } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Exile { face_down: false, viewer: None, link_to_source: false, delayed_return: None, link_group: Some(group.into()) }))),
                     Op::ReturnCardsExiledWithLink { group } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::LinkedExile { group: Some(group.into()) }, spellwake_engine::toolbox::ZoneDest::battlefield(spellwake_engine::toolbox::ZoneController::Owner)))),
@@ -4835,23 +4848,23 @@ impl Body {
                                     spellwake_engine::program::ObjectFilter::instant_or_sorcery(),
                                 )
                             },
-                            spellwake_engine::toolbox::ObjectMutation::GrantFlashback,
+                            spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::GrantFlashback),
                         ),
                     )),
-                    Op::TransformSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Transform))),
+                    Op::TransformSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Orientation(spellwake_engine::toolbox::OrientationOp::Transform)))),
                     Op::RegenerateSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Regenerate))),
-                    Op::RemoveTargetFromCombat {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::RemoveFromCombat))),
+                    Op::RemoveTargetFromCombat {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::Combat(spellwake_engine::toolbox::ObjectCombatOp::RemoveFromCombat)))),
                     Op::RegenerateControlledSubtype { subtype } => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
                         spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().controlled().with_subtype(creature_types::id(subtype, vocabulary)?)))),
                         spellwake_engine::toolbox::ObjectMutation::Regenerate,
                     ))),
                     Op::RequireTargetAttack {} => Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec { selector: Some(spellwake_engine::toolbox::ObjectQuery::Targets), payload: spellwake_engine::toolbox::ContinuousPayload::CombatAction(spellwake_engine::program::CombatActionKind::MustAttack), duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn, condition: None, one_shot: false, as_emblem: None, emblem_label: None })),
-                    Op::GoadTarget {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::Goad { by: spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller) }))),
-                    Op::GoadOtherPlayersCreatures {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().not_controlled()))), spellwake_engine::toolbox::ObjectMutation::Goad { by: spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller) }))),
+                    Op::GoadTarget {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::Goad { by: spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller), permanent: false }))),
+                    Op::GoadOtherPlayersCreatures {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().not_controlled()))), spellwake_engine::toolbox::ObjectMutation::Goad { by: spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller), permanent: false }))),
                     Op::ExtortDrain {} => Instruction::MutatePlayer(Box::new(
                         spellwake_engine::toolbox::MutatePlayerSpec::extort_drain(),
                     )),
-                    Op::TapEnchantedCreature {}=>Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::AttachedHost, spellwake_engine::toolbox::ObjectMutation::SetTapped(true)))),
+                    Op::TapEnchantedCreature {}=>Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::AttachedHost, spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(true))))),
                     Op::RequireMonarch { opponent } => Instruction::MutatePlayer(Box::new(
                         spellwake_engine::toolbox::MutatePlayerSpec::require_condition(
                             spellwake_engine::program::InterveningCondition::Monarch { opponent },
@@ -4958,7 +4971,7 @@ impl Body {
                         "Source" => spellwake_engine::toolbox::ObjectQuery::Source,
                         "ControlledLands" => spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::land().controlled()))),
                         _ => return Err(format!("unknown phasing subject {subject}")),
-                    }, spellwake_engine::toolbox::ObjectMutation::PhaseOut))),
+                    }, spellwake_engine::toolbox::ObjectMutation::Orientation(spellwake_engine::toolbox::OrientationOp::PhaseOut)))),
                     Op::AddRestrictedManaChoice { colors } => Instruction::MutatePlayer(Box::new(
                         spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
                             spellwake_engine::program::ResolvingPlayer::Controller,
@@ -5086,9 +5099,9 @@ impl Body {
                         ),
                     )),
                     Op::PutCountersOnSource { amount } => {
-                        Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::PlusOne, amount: ValueExpr::Literal(amount) })))
+                        Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { kind: spellwake_engine::effects::CounterKind::PlusOne, amount: ValueExpr::Literal(amount) }))))
                     }
-                    Op::Unattach {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Unattach))),
+                    Op::Unattach {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Attach(spellwake_engine::toolbox::AttachOp::Unattach)))),
                     Op::Fortify {} => Instruction::MutateObject(Box::new(
                         spellwake_engine::toolbox::MutateObjectSpec::attach_ability(
                             spellwake_engine::attachment::AttachAbility::Fortify,
@@ -5175,8 +5188,8 @@ impl Body {
                             },
                         ),
                     )),
-                    Op::PutIndestructibleCounter {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::Indestructible, amount: ValueExpr::Literal(1.into()) }))),
-                    Op::PutLoyaltyCounter {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::Loyalty, amount: ValueExpr::Literal(1.into()) }))),
+                    Op::PutIndestructibleCounter {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { kind: spellwake_engine::effects::CounterKind::Indestructible, amount: ValueExpr::Literal(1.into()) })))),
+                    Op::PutLoyaltyCounter {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { kind: spellwake_engine::effects::CounterKind::Loyalty, amount: ValueExpr::Literal(1.into()) })))),
                     Op::GrantProtectionChosenColor { for_controller_and_permanents } => Instruction::ApplyContinuous(Box::new(
                         spellwake_engine::toolbox::ApplyContinuousSpec::chosen_color_protection(
                             if for_controller_and_permanents { spellwake_engine::program::ProtectionRecipients::ControllerAndPermanents }
@@ -5193,10 +5206,12 @@ impl Body {
                         };
                         Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
-                            spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                                kind,
-                                amount: ValueExpr::Literal(amount),
-                            },
+                            spellwake_engine::toolbox::ObjectMutation::Counters(
+                                spellwake_engine::toolbox::CounterOp::Add {
+                                    kind,
+                                    amount: ValueExpr::Literal(amount),
+                                },
+                            ),
                         )))
                     }
                     Op::MayRevealLibraryTop {} => Instruction::MutatePlayer(Box::new(
@@ -10819,16 +10834,18 @@ pub fn body(value: &ExecutableBody) -> Value {
                 }
             }
             Instruction::MutateObject(spec) => {
-                use spellwake_engine::toolbox::ObjectMutation;
+                use spellwake_engine::toolbox::{
+                    AttachOp, KeywordZoneOp, ObjectMutation, ObjectStateMarkerOp, TokenAttachOp,
+                };
                 match &spec.op {
-                    ObjectMutation::Attach {
+                    ObjectMutation::Attach(AttachOp::ToObject {
                         ability: Some(kind),
                         ..
-                    } => json!({"op":format!("{kind:?}")}),
-                    ObjectMutation::CreateTokenAndAttach { definition } => {
+                    }) => json!({"op":format!("{kind:?}")}),
+                    ObjectMutation::TokenAttach(TokenAttachOp::CreateAndAttach { definition }) => {
                         json!({"op":"CreateTokenAndAttach","definition":token_definition(definition)})
                     }
-                    ObjectMutation::RememberPermanentTarget => {
+                    ObjectMutation::StateMarker(ObjectStateMarkerOp::RememberPermanentTarget) => {
                         json!({"op":"RememberPermanentTarget"})
                     }
                     ObjectMutation::ResolveKeywordTrigger(keyword) => match keyword {
@@ -10876,7 +10893,7 @@ pub fn body(value: &ExecutableBody) -> Value {
                             json!({"op":"Soulshift","maximum":maximum})
                         }
                     },
-                    ObjectMutation::ExileDefeatedSiege => json!({"op":"ExileDefeatedSiege"}),
+                    ObjectMutation::KeywordZoneAction(KeywordZoneOp::ExileDefeatedSiege) => json!({"op":"ExileDefeatedSiege"}),
                     ObjectMutation::ResolveGrowth(k) => match k {
                         spellwake_engine::program::GrowthKeyword::Increment => {
                             json!({"op":"Increment"})
@@ -10890,8 +10907,12 @@ pub fn body(value: &ExecutableBody) -> Value {
                             json!({"op":"Backup","amount":amount,"printed_below":keywords(printed_below)})
                         }
                     },
-                    ObjectMutation::SacrificeEvoked => json!({"op":"SacrificeEvoked"}),
-                    ObjectMutation::SacrificeStateTriggerSource => {
+                    ObjectMutation::KeywordZoneAction(KeywordZoneOp::SacrificeEvoked) => {
+                        json!({"op":"SacrificeEvoked"})
+                    }
+                    ObjectMutation::KeywordZoneAction(
+                        KeywordZoneOp::SacrificeStateTriggerSource,
+                    ) => {
                         json!({"op":"SacrificeStateTriggerSource"})
                     }
                     ObjectMutation::ResolvePowerAbility(kind) => {
@@ -10950,15 +10971,26 @@ pub fn body(value: &ExecutableBody) -> Value {
                 }
             }
             Instruction::MutatePlayer(spec) => {
-                use spellwake_engine::toolbox::PlayerMutation;
+                use spellwake_engine::toolbox::{
+                    LibraryTopAction, PlayerKeywordAction, PlayerMutation,
+                };
                 match (&spec.op, spec.resolving_player()) {
-                    (PlayerMutation::Scry(amount), Some(player)) => {
+                    (
+                        PlayerMutation::LibraryTop(LibraryTopAction::Scry(amount)),
+                        Some(player),
+                    ) => {
                         json!({"op":"Scry","player":format!("{player:?}"),"amount":instruction_amount(amount)})
                     }
-                    (PlayerMutation::Surveil(amount), Some(player)) => {
+                    (
+                        PlayerMutation::LibraryTop(LibraryTopAction::Surveil(amount)),
+                        Some(player),
+                    ) => {
                         json!({"op":"Surveil","player":format!("{player:?}"),"amount":instruction_amount(amount)})
                     }
-                    (PlayerMutation::Mill(amount), Some(player)) => {
+                    (
+                        PlayerMutation::LibraryTop(LibraryTopAction::Mill(amount)),
+                        Some(player),
+                    ) => {
                         json!({"op":"Mill","player":format!("{player:?}"),"amount":instruction_amount(amount)})
                     }
                     (
@@ -11015,7 +11047,7 @@ pub fn body(value: &ExecutableBody) -> Value {
                     (PlayerMutation::SacrificeRandomUntilLand, _) => {
                         json!({"op":"SacrificeRandomUntilLand"})
                     }
-                    (PlayerMutation::ExtortDrain, _) => json!({"op":"ExtortDrain"}),
+                    (PlayerMutation::KeywordAction(PlayerKeywordAction::ExtortDrain), _) => json!({"op":"ExtortDrain"}),
                     (
                         PlayerMutation::ChooseRevealedHandCard {
                             minimum_mana_value,
@@ -11035,7 +11067,7 @@ pub fn body(value: &ExecutableBody) -> Value {
                         }
                         wire
                     }
-                    (PlayerMutation::MayRevealLibraryTop, _) => {
+                    (PlayerMutation::LibraryTop(LibraryTopAction::MayRevealTop), _) => {
                         json!({"op":"MayRevealLibraryTop"})
                     }
                     _ => json!({"op":"MutatePlayer","spec":format!("{spec:?}")}),

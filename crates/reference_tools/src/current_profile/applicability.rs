@@ -427,24 +427,27 @@ native!(ExecutableBody, self, {
         Instruction::MutatePlayer(spec)
             if matches!(
                 spec.op,
-                spellwake_engine::toolbox::PlayerMutation::CollectEvidence { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::Blight { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::Populate
-                    | spellwake_engine::toolbox::PlayerMutation::AdditionalLoyaltyActivation
-                    | spellwake_engine::toolbox::PlayerMutation::WatchNextSpellOrLoyalty { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::AdditionalCombat { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::Proliferate
-                    | spellwake_engine::toolbox::PlayerMutation::Scry(_)
-                    | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
-                    | spellwake_engine::toolbox::PlayerMutation::Mill(_)
-                    | spellwake_engine::toolbox::PlayerMutation::Bolster(_)
-                    | spellwake_engine::toolbox::PlayerMutation::Amass { .. }
+                spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                    spellwake_engine::toolbox::PlayerKeywordAction::CollectEvidence { .. }
+                        | spellwake_engine::toolbox::PlayerKeywordAction::Blight { .. }
+                        | spellwake_engine::toolbox::PlayerKeywordAction::Populate
+                        | spellwake_engine::toolbox::PlayerKeywordAction::Proliferate
+                        | spellwake_engine::toolbox::PlayerKeywordAction::Bolster(_)
+                        | spellwake_engine::toolbox::PlayerKeywordAction::Amass { .. }
+                        | spellwake_engine::toolbox::PlayerKeywordAction::ExtortDrain
+                ) | spellwake_engine::toolbox::PlayerMutation::TurnFlow(
+                    spellwake_engine::toolbox::TurnFlowOp::AdditionalLoyaltyActivation
+                        | spellwake_engine::toolbox::TurnFlowOp::AdditionalCombat { .. }
+                ) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::ManifestTop(_)
+                        | spellwake_engine::toolbox::LibraryTopAction::Scry(_)
+                        | spellwake_engine::toolbox::LibraryTopAction::Surveil(_)
+                        | spellwake_engine::toolbox::LibraryTopAction::Mill(_)
+                        | spellwake_engine::toolbox::LibraryTopAction::MayRevealTop
+                ) | spellwake_engine::toolbox::PlayerMutation::WatchNextSpellOrLoyalty { .. }
                     | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_)
                     | spellwake_engine::toolbox::PlayerMutation::OfferSourceCounters { .. }
                     | spellwake_engine::toolbox::PlayerMutation::RequireCondition(_)
-                    | spellwake_engine::toolbox::PlayerMutation::ExtortDrain
-                    | spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
                     | spellwake_engine::toolbox::PlayerMutation::ChooseRevealedHandCard { .. }
                     | spellwake_engine::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
                     | spellwake_engine::toolbox::PlayerMutation::SacrificeRandomUntilLand
@@ -455,32 +458,43 @@ native!(ExecutableBody, self, {
         Instruction::MutateObject(spec)
             if matches!(
                 spec.op,
-                spellwake_engine::toolbox::ObjectMutation::DistributeCounters { .. }
-                    | spellwake_engine::toolbox::ObjectMutation::Explore
-                    | spellwake_engine::toolbox::ObjectMutation::AdvanceClassLevel(_)
-                    | spellwake_engine::toolbox::ObjectMutation::SolveCase
-                    | spellwake_engine::toolbox::ObjectMutation::SetPrepared
-                    | spellwake_engine::toolbox::ObjectMutation::ReselectAttackDefender
-                    | spellwake_engine::toolbox::ObjectMutation::SoulbondPair { .. }
-                    | spellwake_engine::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Distribute { .. }
+                ) | spellwake_engine::toolbox::ObjectMutation::Explore
+                    | spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                        spellwake_engine::toolbox::ObjectStateMarkerOp::AdvanceClassLevel(_)
+                            | spellwake_engine::toolbox::ObjectStateMarkerOp::SolveCase
+                            | spellwake_engine::toolbox::ObjectStateMarkerOp::SetPrepared
+                            | spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::Combat(
+                        spellwake_engine::toolbox::ObjectCombatOp::ReselectAttackDefender
+                            | spellwake_engine::toolbox::ObjectCombatOp::SoulbondPair { .. }
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                        spellwake_engine::toolbox::TokenAttachOp::CreateAuraAttached { .. }
+                            | spellwake_engine::toolbox::TokenAttachOp::CreateAndAttach { .. }
+                    )
                     | spellwake_engine::toolbox::ObjectMutation::Ninjutsu
                     | spellwake_engine::toolbox::ObjectMutation::Unearth
                     | spellwake_engine::toolbox::ObjectMutation::Myriad
-                    | spellwake_engine::toolbox::ObjectMutation::ScheduleArtifactReturn(_)
-                    | spellwake_engine::toolbox::ObjectMutation::ExileUnearthed(_)
+                    | spellwake_engine::toolbox::ObjectMutation::KeywordZoneAction(
+                        spellwake_engine::toolbox::KeywordZoneOp::ScheduleArtifactReturn(_)
+                            | spellwake_engine::toolbox::KeywordZoneOp::ExileUnearthed(_)
+                            | spellwake_engine::toolbox::KeywordZoneOp::ExileDefeatedSiege
+                            | spellwake_engine::toolbox::KeywordZoneOp::SacrificeEvoked
+                            | spellwake_engine::toolbox::KeywordZoneOp::SacrificeStateTriggerSource
+                    )
                     | spellwake_engine::toolbox::ObjectMutation::ResolveTransfer(_)
-                    | spellwake_engine::toolbox::ObjectMutation::ExileDefeatedSiege
                     | spellwake_engine::toolbox::ObjectMutation::ResolveGrowth(_)
                     | spellwake_engine::toolbox::ObjectMutation::ResolveCounterKeyword(_)
-                    | spellwake_engine::toolbox::ObjectMutation::SacrificeEvoked
-                    | spellwake_engine::toolbox::ObjectMutation::SacrificeStateTriggerSource
                     | spellwake_engine::toolbox::ObjectMutation::ResolveKeywordTrigger(_)
-                    | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
-                    | spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
                     | spellwake_engine::toolbox::ObjectMutation::ResolvePowerAbility(_)
-                    | spellwake_engine::toolbox::ObjectMutation::Attach {
-                        ability: Some(_), ..
-                    }
+                    | spellwake_engine::toolbox::ObjectMutation::Attach(
+                        spellwake_engine::toolbox::AttachOp::ToObject {
+                            ability: Some(_), ..
+                        }
+                    )
             ) =>
         {
             Err(ApplicabilityError)

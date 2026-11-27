@@ -461,19 +461,26 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
             }
             Instruction::MutatePlayer(spec) => match &mut spec.op {
-                crate::toolbox::PlayerMutation::AddCounter { amount, .. }
-                | crate::toolbox::PlayerMutation::PayCounter { amount, .. }
-                | crate::toolbox::PlayerMutation::Scry(amount)
-                | crate::toolbox::PlayerMutation::Surveil(amount)
-                | crate::toolbox::PlayerMutation::Mill(amount)
-                | crate::toolbox::PlayerMutation::CollectEvidence { minimum: amount }
-                | crate::toolbox::PlayerMutation::Blight { amount } => {
+                crate::toolbox::PlayerMutation::Counter { amount, .. }
+                | crate::toolbox::PlayerMutation::LibraryTop(
+                    crate::toolbox::LibraryTopAction::Scry(amount)
+                    | crate::toolbox::LibraryTopAction::Surveil(amount)
+                    | crate::toolbox::LibraryTopAction::Mill(amount)
+                    | crate::toolbox::LibraryTopAction::ManifestTop(amount),
+                )
+                | crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::CollectEvidence { minimum: amount }
+                    | crate::toolbox::PlayerKeywordAction::Blight { amount }
+                    | crate::toolbox::PlayerKeywordAction::Incubate { count: amount },
+                ) => {
                     rewrite_amount(amount);
                 }
                 crate::toolbox::PlayerMutation::Behold { filter, .. } => {
                     filter.rewrite_creature_type(change.from, change.to);
                 }
-                crate::toolbox::PlayerMutation::Amass { subtype: kind, .. } => {
+                crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::Amass { subtype: kind, .. },
+                ) => {
                     word(change, kind);
                 }
                 crate::toolbox::PlayerMutation::AddMana(yield_kind) => {
@@ -506,16 +513,20 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 crate::toolbox::PlayerMutation::RevealTopTwoPiles { count, .. } => {
                     rewrite_amount(count);
                 }
-                crate::toolbox::PlayerMutation::RollDie { bands, .. } => {
+                crate::toolbox::PlayerMutation::RandomEvent(
+                    crate::toolbox::RandomEventOp::RollDie { bands, .. },
+                ) => {
                     for band in bands {
                         body(change, &mut band.body);
                     }
                 }
-                crate::toolbox::PlayerMutation::FlipCoins {
-                    win_body,
-                    lose_body,
-                    ..
-                } => {
+                crate::toolbox::PlayerMutation::RandomEvent(
+                    crate::toolbox::RandomEventOp::FlipCoins {
+                        win_body,
+                        lose_body,
+                        ..
+                    },
+                ) => {
                     if let Some(inner) = win_body {
                         body(change, inner);
                     }
@@ -539,21 +550,29 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::MutateObject(spec) => {
                 rewrite_object_query(change, &mut spec.source);
                 match &mut spec.op {
-                    crate::toolbox::ObjectMutation::AddCounters { amount, .. }
-                    | crate::toolbox::ObjectMutation::RemoveCounters { amount, .. }
-                    | crate::toolbox::ObjectMutation::BecomeMonstrous { amount }
-                    | crate::toolbox::ObjectMutation::Earthbend { amount }
-                    | crate::toolbox::ObjectMutation::MoveCounters {
-                        amount: Some(amount),
-                        ..
-                    } => rewrite_amount(amount),
-                    crate::toolbox::ObjectMutation::CreateAuraTokenAttached {
-                        definition, ..
+                    crate::toolbox::ObjectMutation::Counters(
+                        crate::toolbox::CounterOp::Add { amount, .. }
+                        | crate::toolbox::CounterOp::Remove { amount, .. }
+                        | crate::toolbox::CounterOp::Move {
+                            amount: Some(amount),
+                            ..
+                        },
+                    )
+                    | crate::toolbox::ObjectMutation::StateMarker(
+                        crate::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+                    )
+                    | crate::toolbox::ObjectMutation::Earthbend { amount } => {
+                        rewrite_amount(amount)
                     }
-                    | crate::toolbox::ObjectMutation::CreateTokenAndAttach { definition } => {
+                    crate::toolbox::ObjectMutation::TokenAttach(
+                        crate::toolbox::TokenAttachOp::CreateAuraAttached { definition, .. }
+                        | crate::toolbox::TokenAttachOp::CreateAndAttach { definition },
+                    ) => {
                         definition.rewrite_creature_types(change);
                     }
-                    crate::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
+                    crate::toolbox::ObjectMutation::TokenAttach(
+                        crate::toolbox::TokenAttachOp::CreateCopy(copy),
+                    ) => {
                         rewrite_amount(&mut copy.count);
                         words(change, &mut copy.extra_subtypes);
                         for ability in &mut copy.extra_activated {
@@ -569,10 +588,14 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                             rewrite_mana_output(change, &mut mana.output);
                         }
                     }
-                    crate::toolbox::ObjectMutation::Attach { host, .. } => {
+                    crate::toolbox::ObjectMutation::Attach(
+                        crate::toolbox::AttachOp::ToObject { host, .. },
+                    ) => {
                         rewrite_object_query(change, host);
                     }
-                    crate::toolbox::ObjectMutation::ExchangeControl { other } => {
+                    crate::toolbox::ObjectMutation::Control(
+                        crate::toolbox::ControlOp::Exchange { other },
+                    ) => {
                         rewrite_object_query(change, other);
                     }
                     _ => {}

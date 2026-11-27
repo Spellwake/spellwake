@@ -486,76 +486,79 @@ impl DealDamageSpec {
     }
 }
 
-/// Player-level state transition executed by [`MutatePlayerSpec`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PlayerMutation {
-    AddCounter {
-        kind: CounterKind,
-        amount: ValueExpr,
-    },
-    PayCounter {
-        kind: CounterKind,
-        amount: ValueExpr,
-    },
-    WinGame,
-    LoseGame,
-    DrawGame,
+/// Game-ending outcomes executed by [`PlayerMutation::GameOutcome`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerGameOutcome {
+    Win,
+    Lose,
+    Draw,
+}
+
+/// Turn-structure mutations executed by [`PlayerMutation::TurnFlow`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnFlowOp {
     TakeExtraTurn,
     EndTurn,
-    BecomeMonarch,
-    Ascend,
-    IncreaseSpeed,
-    SetDayNight(DayNight),
-    DisallowDamagePreventionThisTurn,
-    /// Grant an additional loyalty ability activation this turn.
-    AdditionalLoyaltyActivation,
     /// Schedule an additional combat phase after this phase (`untap` specifies which creatures untap).
     AdditionalCombat {
         untap: CombatUntapGroup,
     },
-    /// Watch the next spell or loyalty ability (`loyalty_only`: next loyalty only vs spell or loyalty twice).
-    WatchNextSpellOrLoyalty {
-        loyalty_only: bool,
-    },
+    /// Grant an additional loyalty ability activation this turn.
+    AdditionalLoyaltyActivation,
+}
+
+/// Player designation and global-clock mutations executed by [`PlayerMutation::Designation`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerDesignationOp {
+    BecomeMonarch,
+    Ascend,
+    IncreaseSpeed,
+    SetDayNight(DayNight),
     /// Take the initiative and venture into Undercity (CR 725).
     TakeInitiative,
-    /// Venture into a dungeon (CR 701.46; `undercity` forces Undercity).
-    VentureIntoDungeon {
-        undercity: bool,
-    },
     /// The Ring tempts you (CR 701.52).
     RingTemptsYou,
-    /// Select the player with highest/lowest life total into `chosen_player`.
-    SelectExtremeLife {
-        highest: bool,
-        tie_mode: ExtremeLifeTieMode,
-    },
-    /// Choose one of `last_moved_objects` into `last_moved_objects`.
-    ChooseOneLastMoved,
-    /// Behold a permanent/hand card matching `filter` (`optional` allows declining).
-    Behold {
-        filter: Box<ObjectFilter>,
-        optional: bool,
-    },
-    /// Manifest the top `amount` cards of library (CR 701.34).
-    ManifestTop {
-        amount: ValueExpr,
-    },
+}
+
+/// Top-of-library manipulation actions executed by [`PlayerMutation::LibraryTop`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LibraryTopAction {
+    /// Scry N (CR 701.18).
+    Scry(ValueExpr),
+    /// Surveil N (CR 701.42).
+    Surveil(ValueExpr),
+    /// Mill N (CR 701.13).
+    Mill(ValueExpr),
+    /// Optionally reveal the top card of controller's library.
+    MayRevealTop,
+    /// Manifest the top N cards of library (CR 701.34).
+    ManifestTop(ValueExpr),
     /// Manifest dread (CR 701.62).
     ManifestDread,
-    /// Incubate `count` (CR 701.51).
-    Incubate {
+}
+
+/// Dice-rolling and coin-flipping actions executed by [`PlayerMutation::RandomEvent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RandomEventOp {
+    /// Roll `count` dice with `sides` faces, combine via `mode`, and splice matching `bands` (CR 706).
+    RollDie {
+        sides: std::num::NonZeroU16,
         count: ValueExpr,
+        mode: DieRollMode,
+        bands: Vec<DieRollBand>,
     },
-    /// Demonstrate (CR 702.144).
-    Demonstrate,
-    /// Ripple N (CR 702.60).
-    Ripple(u8),
-    /// Vote on `options` (`secret` hides votes until reveal).
-    Vote {
-        options: Vec<String>,
-        secret: bool,
+    /// Flip coins using `mode` with optional win/lose bodies or lose jump destination (CR 705).
+    FlipCoins {
+        mode: CoinFlipMode,
+        win_body: Option<Box<ExecutableBody>>,
+        lose_body: Option<Box<ExecutableBody>>,
+        lose_destination: Option<usize>,
     },
+}
+
+/// Keyword actions executed by [`PlayerMutation::KeywordAction`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlayerKeywordAction {
     /// Proliferate (CR 701.27).
     Proliferate,
     /// Clash with an opponent (CR 701.23).
@@ -571,39 +574,60 @@ pub enum PlayerMutation {
         amount: u16,
     },
     /// Blight N (choose a controlled creature to get N -1/-1 counters).
-    Blight {
-        amount: ValueExpr,
-    },
+    Blight { amount: ValueExpr },
     /// Collect evidence N (CR 701.59).
-    CollectEvidence {
-        minimum: ValueExpr,
-    },
-    /// Add mana to the selected player's mana pool.
-    AddMana(EffectManaYield),
-    /// Scry N (CR 701.18).
-    Scry(ValueExpr),
-    /// Surveil N (CR 701.42).
-    Surveil(ValueExpr),
-    /// Mill N (CR 701.13).
-    Mill(ValueExpr),
+    CollectEvidence { minimum: ValueExpr },
+    /// Incubate `count` (CR 701.51).
+    Incubate { count: ValueExpr },
+    /// Demonstrate (CR 702.144).
+    Demonstrate,
+    /// Ripple N (CR 702.60).
+    Ripple(u8),
     /// Extort (CR 702.101): optionally pay {W/B}, each opponent loses 1 life and you gain that much.
     ExtortDrain,
-    /// Roll `count` dice with `sides` faces, combine via `mode`, and splice matching `bands` (CR 706).
-    RollDie {
-        sides: std::num::NonZeroU16,
-        count: ValueExpr,
-        mode: DieRollMode,
-        bands: Vec<DieRollBand>,
+}
+
+/// Player-level state transition executed by [`MutatePlayerSpec`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlayerMutation {
+    /// Add (`pay: false`) or pay/remove (`pay: true`) player counters of `kind`.
+    Counter {
+        kind: CounterKind,
+        amount: ValueExpr,
+        pay: bool,
     },
-    /// Flip coins using `mode` with optional win/lose bodies or lose jump destination (CR 705).
-    FlipCoins {
-        mode: CoinFlipMode,
-        win_body: Option<Box<ExecutableBody>>,
-        lose_body: Option<Box<ExecutableBody>>,
-        lose_destination: Option<usize>,
+    /// Win, lose, or draw the game.
+    GameOutcome(PlayerGameOutcome),
+    /// Turn-structure mutation (extra turn, end turn, additional combat, extra loyalty activation).
+    TurnFlow(TurnFlowOp),
+    /// Designation or global-clock mutation (monarch, ascend, speed, day/night, initiative, Ring).
+    Designation(PlayerDesignationOp),
+    /// Venture into a dungeon (CR 701.46; `undercity` forces Undercity).
+    VentureIntoDungeon { undercity: bool },
+    /// Top-of-library manipulation (scry, surveil, mill, reveal top, manifest, manifest dread).
+    LibraryTop(LibraryTopAction),
+    /// Random event resolution (roll dice or flip coins).
+    RandomEvent(RandomEventOp),
+    /// Add mana to the selected player's mana pool.
+    AddMana(EffectManaYield),
+    /// Player keyword action (proliferate, clash, bolster, populate, amass, blight, etc.).
+    KeywordAction(PlayerKeywordAction),
+    /// Watch the next spell or loyalty ability (`loyalty_only`: next loyalty only vs spell or loyalty twice).
+    WatchNextSpellOrLoyalty { loyalty_only: bool },
+    /// Select the player with highest/lowest life total into `chosen_player`.
+    SelectExtremeLife {
+        highest: bool,
+        tie_mode: ExtremeLifeTieMode,
     },
-    /// Optionally reveal the top card of controller's library.
-    MayRevealLibraryTop,
+    /// Choose one of `last_moved_objects` into `last_moved_objects`.
+    ChooseOneLastMoved,
+    /// Behold a permanent/hand card matching `filter` (`optional` allows declining).
+    Behold {
+        filter: Box<ObjectFilter>,
+        optional: bool,
+    },
+    /// Vote on `options` (`secret` hides votes until reveal).
+    Vote { options: Vec<String>, secret: bool },
     /// Offer controller to place `amount` counters on source, branching to `placed_destination` or `declined_destination`.
     OfferSourceCounters {
         amount: spellwake_contracts::RulesInteger,
@@ -646,52 +670,45 @@ impl PlayerMutation {
     #[must_use]
     pub fn uses_target(&self) -> bool {
         match self {
-            Self::AddCounter { amount, .. }
-            | Self::PayCounter { amount, .. }
-            | Self::ManifestTop { amount }
-            | Self::Incubate { count: amount }
-            | Self::Blight { amount }
-            | Self::CollectEvidence { minimum: amount }
-            | Self::Scry(amount)
-            | Self::Surveil(amount)
-            | Self::Mill(amount) => amount.uses_target(),
+            Self::Counter { amount, .. }
+            | Self::LibraryTop(
+                LibraryTopAction::Scry(amount)
+                | LibraryTopAction::Surveil(amount)
+                | LibraryTopAction::Mill(amount)
+                | LibraryTopAction::ManifestTop(amount),
+            )
+            | Self::KeywordAction(
+                PlayerKeywordAction::Incubate { count: amount }
+                | PlayerKeywordAction::Blight { amount }
+                | PlayerKeywordAction::CollectEvidence { minimum: amount },
+            ) => amount.uses_target(),
             Self::Behold { filter, .. } => crate::toolbox::query::filter_uses_target(filter),
             Self::AddMana(yield_kind) => yield_kind.uses_target(),
-            Self::WinGame
-            | Self::LoseGame
-            | Self::DrawGame
-            | Self::TakeExtraTurn
-            | Self::EndTurn
-            | Self::BecomeMonarch
-            | Self::Ascend
-            | Self::IncreaseSpeed
-            | Self::SetDayNight(_)
-            | Self::DisallowDamagePreventionThisTurn
-            | Self::AdditionalLoyaltyActivation
-            | Self::AdditionalCombat { .. }
-            | Self::WatchNextSpellOrLoyalty { .. }
-            | Self::TakeInitiative
+            Self::GameOutcome(_)
+            | Self::TurnFlow(_)
+            | Self::Designation(_)
             | Self::VentureIntoDungeon { .. }
-            | Self::RingTemptsYou
+            | Self::LibraryTop(LibraryTopAction::MayRevealTop | LibraryTopAction::ManifestDread)
+            | Self::KeywordAction(
+                PlayerKeywordAction::Proliferate
+                | PlayerKeywordAction::Clash
+                | PlayerKeywordAction::Bolster(_)
+                | PlayerKeywordAction::Populate
+                | PlayerKeywordAction::Amass { .. }
+                | PlayerKeywordAction::Demonstrate
+                | PlayerKeywordAction::Ripple(_)
+                | PlayerKeywordAction::ExtortDrain,
+            )
+            | Self::WatchNextSpellOrLoyalty { .. }
             | Self::SelectExtremeLife { .. }
             | Self::ChooseOneLastMoved
-            | Self::ManifestDread
-            | Self::Demonstrate
-            | Self::Ripple(_)
             | Self::Vote { .. }
-            | Self::Proliferate
-            | Self::Clash
-            | Self::Bolster(_)
-            | Self::Populate
-            | Self::Amass { .. }
-            | Self::ExtortDrain
-            | Self::MayRevealLibraryTop
             | Self::OfferSourceCounters { .. }
             | Self::RequireCondition(_) => false,
             Self::SacrificeRandomUntilLand
             | Self::ExileOnePerPlayerUntilSourceLeaves
             | Self::ChooseRevealedHandCard { .. } => true,
-            Self::RollDie { count, bands, .. } => {
+            Self::RandomEvent(RandomEventOp::RollDie { count, bands, .. }) => {
                 count.uses_target()
                     || bands.iter().any(|b| {
                         b.body
@@ -700,12 +717,12 @@ impl PlayerMutation {
                             .any(crate::program::Instruction::uses_mode_target)
                     })
             }
-            Self::FlipCoins {
+            Self::RandomEvent(RandomEventOp::FlipCoins {
                 mode,
                 win_body,
                 lose_body,
                 ..
-            } => {
+            }) => {
                 matches!(mode, CoinFlipMode::Count(v) if v.uses_target())
                     || win_body.as_deref().is_some_and(|b| {
                         b.instructions
@@ -751,26 +768,29 @@ impl PlayerMutation {
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
         match self {
-            Self::AddCounter { amount, .. }
-            | Self::PayCounter { amount, .. }
-            | Self::ManifestTop { amount }
-            | Self::Incubate { count: amount }
-            | Self::Blight { amount }
-            | Self::CollectEvidence { minimum: amount }
-            | Self::Scry(amount)
-            | Self::Surveil(amount)
-            | Self::Mill(amount) => amount
+            Self::Counter { amount, .. }
+            | Self::LibraryTop(
+                LibraryTopAction::Scry(amount)
+                | LibraryTopAction::Surveil(amount)
+                | LibraryTopAction::Mill(amount)
+                | LibraryTopAction::ManifestTop(amount),
+            )
+            | Self::KeywordAction(
+                PlayerKeywordAction::Incubate { count: amount }
+                | PlayerKeywordAction::Blight { amount }
+                | PlayerKeywordAction::CollectEvidence { minimum: amount },
+            ) => amount
                 .validate_vocabulary(vocabulary)
                 .map_err(|_| DefinitionError::InvalidInstruction),
             Self::Behold { filter, .. } => filter.validate_vocabulary(vocabulary),
-            Self::Amass { army, subtype, .. } => {
+            Self::KeywordAction(PlayerKeywordAction::Amass { army, subtype, .. }) => {
                 if vocabulary.label(*army).is_none() || vocabulary.label(*subtype).is_none() {
                     return Err(DefinitionError::ForeignCreatureType);
                 }
                 Ok(())
             }
             Self::AddMana(yield_kind) => yield_kind.validate_vocabulary(vocabulary),
-            Self::RollDie { count, .. }
+            Self::RandomEvent(RandomEventOp::RollDie { count, .. })
             | Self::RevealTopTwoPiles { count, .. }
             | Self::BindResolutionX(count) => count
                 .validate_vocabulary(vocabulary)
@@ -805,7 +825,14 @@ impl MutatePlayerSpec {
         kind: CounterKind,
         amount: ValueExpr,
     ) -> Self {
-        Self::new(players, PlayerMutation::AddCounter { kind, amount })
+        Self::new(
+            players,
+            PlayerMutation::Counter {
+                kind,
+                amount,
+                pay: false,
+            },
+        )
     }
 
     #[must_use]
@@ -814,50 +841,63 @@ impl MutatePlayerSpec {
         kind: CounterKind,
         amount: ValueExpr,
     ) -> Self {
-        Self::new(players, PlayerMutation::PayCounter { kind, amount })
+        Self::new(
+            players,
+            PlayerMutation::Counter {
+                kind,
+                amount,
+                pay: true,
+            },
+        )
     }
 
     #[must_use]
     pub const fn win_game(players: PlayerSelector) -> Self {
-        Self::new(players, PlayerMutation::WinGame)
+        Self::new(players, PlayerMutation::GameOutcome(PlayerGameOutcome::Win))
     }
 
     #[must_use]
     pub const fn lose_game(players: PlayerSelector) -> Self {
-        Self::new(players, PlayerMutation::LoseGame)
+        Self::new(
+            players,
+            PlayerMutation::GameOutcome(PlayerGameOutcome::Lose),
+        )
     }
 
     #[must_use]
     pub const fn draw_game() -> Self {
         Self::new(
             PlayerSelector::Group(crate::program::AffectedPlayers::EachPlayer),
-            PlayerMutation::DrawGame,
+            PlayerMutation::GameOutcome(PlayerGameOutcome::Draw),
         )
     }
 
     #[must_use]
     pub const fn take_extra_turn(players: PlayerSelector) -> Self {
-        Self::new(players, PlayerMutation::TakeExtraTurn)
+        Self::new(players, PlayerMutation::TurnFlow(TurnFlowOp::TakeExtraTurn))
     }
 
     #[must_use]
     pub const fn end_turn() -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::EndTurn,
+            PlayerMutation::TurnFlow(TurnFlowOp::EndTurn),
         )
     }
 
     #[must_use]
     pub const fn become_monarch(players: PlayerSelector) -> Self {
-        Self::new(players, PlayerMutation::BecomeMonarch)
+        Self::new(
+            players,
+            PlayerMutation::Designation(PlayerDesignationOp::BecomeMonarch),
+        )
     }
 
     #[must_use]
     pub const fn ascend() -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::Ascend,
+            PlayerMutation::Designation(PlayerDesignationOp::Ascend),
         )
     }
 
@@ -865,7 +905,7 @@ impl MutatePlayerSpec {
     pub const fn increase_speed() -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::IncreaseSpeed,
+            PlayerMutation::Designation(PlayerDesignationOp::IncreaseSpeed),
         )
     }
 
@@ -873,15 +913,7 @@ impl MutatePlayerSpec {
     pub const fn set_day_night(clock: DayNight) -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::SetDayNight(clock),
-        )
-    }
-
-    #[must_use]
-    pub const fn disallow_damage_prevention() -> Self {
-        Self::new(
-            PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::DisallowDamagePreventionThisTurn,
+            PlayerMutation::Designation(PlayerDesignationOp::SetDayNight(clock)),
         )
     }
 
@@ -899,10 +931,9 @@ impl MutatePlayerSpec {
         self.is_pass_c_or_selection_op()
             || matches!(
                 self.op,
-                PlayerMutation::ExtortDrain
-                    | PlayerMutation::RollDie { .. }
-                    | PlayerMutation::FlipCoins { .. }
-                    | PlayerMutation::MayRevealLibraryTop
+                PlayerMutation::KeywordAction(PlayerKeywordAction::ExtortDrain)
+                    | PlayerMutation::RandomEvent(_)
+                    | PlayerMutation::LibraryTop(LibraryTopAction::MayRevealTop)
                     | PlayerMutation::OfferSourceCounters { .. }
                     | PlayerMutation::ChooseRevealedHandCard { .. }
                     | PlayerMutation::RevealTopTwoPiles { .. }
@@ -918,22 +949,24 @@ impl MutatePlayerSpec {
     pub fn is_pass_c_or_selection_op(&self) -> bool {
         matches!(
             self.op,
-            PlayerMutation::TakeInitiative
-                | PlayerMutation::VentureIntoDungeon { .. }
-                | PlayerMutation::RingTemptsYou
+            PlayerMutation::Designation(
+                PlayerDesignationOp::TakeInitiative | PlayerDesignationOp::RingTemptsYou
+            ) | PlayerMutation::VentureIntoDungeon { .. }
                 | PlayerMutation::ChooseOneLastMoved
                 | PlayerMutation::Behold { .. }
-                | PlayerMutation::ManifestDread
-                | PlayerMutation::Incubate { .. }
-                | PlayerMutation::Demonstrate
-                | PlayerMutation::Ripple(_)
+                | PlayerMutation::LibraryTop(LibraryTopAction::ManifestDread)
                 | PlayerMutation::Vote { .. }
-                | PlayerMutation::Clash
-                | PlayerMutation::Bolster(_)
-                | PlayerMutation::Populate
-                | PlayerMutation::Amass { .. }
-                | PlayerMutation::Blight { .. }
-                | PlayerMutation::CollectEvidence { .. }
+                | PlayerMutation::KeywordAction(
+                    PlayerKeywordAction::Incubate { .. }
+                        | PlayerKeywordAction::Demonstrate
+                        | PlayerKeywordAction::Ripple(_)
+                        | PlayerKeywordAction::Clash
+                        | PlayerKeywordAction::Bolster(_)
+                        | PlayerKeywordAction::Populate
+                        | PlayerKeywordAction::Amass { .. }
+                        | PlayerKeywordAction::Blight { .. }
+                        | PlayerKeywordAction::CollectEvidence { .. }
+                )
         )
     }
 
@@ -941,7 +974,7 @@ impl MutatePlayerSpec {
     pub const fn additional_loyalty_activation() -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::AdditionalLoyaltyActivation,
+            PlayerMutation::TurnFlow(TurnFlowOp::AdditionalLoyaltyActivation),
         )
     }
 
@@ -949,7 +982,7 @@ impl MutatePlayerSpec {
     pub const fn additional_combat(untap: CombatUntapGroup) -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::AdditionalCombat { untap },
+            PlayerMutation::TurnFlow(TurnFlowOp::AdditionalCombat { untap }),
         )
     }
 
@@ -965,7 +998,7 @@ impl MutatePlayerSpec {
     pub const fn take_initiative(player: crate::program::ResolvingPlayer) -> Self {
         Self::new(
             PlayerSelector::Resolving(player),
-            PlayerMutation::TakeInitiative,
+            PlayerMutation::Designation(PlayerDesignationOp::TakeInitiative),
         )
     }
 
@@ -984,7 +1017,7 @@ impl MutatePlayerSpec {
     pub const fn ring_tempts_you() -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::RingTemptsYou,
+            PlayerMutation::Designation(PlayerDesignationOp::RingTemptsYou),
         )
     }
 
@@ -1019,7 +1052,7 @@ impl MutatePlayerSpec {
     pub fn manifest_top(player: crate::program::ResolvingPlayer, amount: ValueExpr) -> Self {
         Self::new(
             PlayerSelector::Resolving(player),
-            PlayerMutation::ManifestTop { amount },
+            PlayerMutation::LibraryTop(LibraryTopAction::ManifestTop(amount)),
         )
     }
 
@@ -1027,7 +1060,7 @@ impl MutatePlayerSpec {
     pub const fn manifest_dread() -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::ManifestDread,
+            PlayerMutation::LibraryTop(LibraryTopAction::ManifestDread),
         )
     }
 
@@ -1035,7 +1068,7 @@ impl MutatePlayerSpec {
     pub fn incubate(count: ValueExpr) -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::Incubate { count },
+            PlayerMutation::KeywordAction(PlayerKeywordAction::Incubate { count }),
         )
     }
 
@@ -1043,7 +1076,7 @@ impl MutatePlayerSpec {
     pub const fn demonstrate() -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::Demonstrate,
+            PlayerMutation::KeywordAction(PlayerKeywordAction::Demonstrate),
         )
     }
 
@@ -1051,7 +1084,7 @@ impl MutatePlayerSpec {
     pub const fn ripple(n: u8) -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::Ripple(n),
+            PlayerMutation::KeywordAction(PlayerKeywordAction::Ripple(n)),
         )
     }
 
@@ -1067,20 +1100,23 @@ impl MutatePlayerSpec {
     pub const fn proliferate() -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::Proliferate,
+            PlayerMutation::KeywordAction(PlayerKeywordAction::Proliferate),
         )
     }
 
     #[must_use]
     pub const fn clash(chooser: crate::program::ResolvingPlayer) -> Self {
-        Self::new(PlayerSelector::Resolving(chooser), PlayerMutation::Clash)
+        Self::new(
+            PlayerSelector::Resolving(chooser),
+            PlayerMutation::KeywordAction(PlayerKeywordAction::Clash),
+        )
     }
 
     #[must_use]
     pub const fn bolster(amount: u16) -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::Bolster(amount),
+            PlayerMutation::KeywordAction(PlayerKeywordAction::Bolster(amount)),
         )
     }
 
@@ -1088,7 +1124,7 @@ impl MutatePlayerSpec {
     pub const fn populate() -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::Populate,
+            PlayerMutation::KeywordAction(PlayerKeywordAction::Populate),
         )
     }
 
@@ -1100,11 +1136,11 @@ impl MutatePlayerSpec {
     ) -> Self {
         Self::new(
             PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
-            PlayerMutation::Amass {
+            PlayerMutation::KeywordAction(PlayerKeywordAction::Amass {
                 army,
                 subtype,
                 amount,
-            },
+            }),
         )
     }
 
@@ -1112,7 +1148,7 @@ impl MutatePlayerSpec {
     pub fn blight(player: crate::program::ResolvingPlayer, amount: ValueExpr) -> Self {
         Self::new(
             PlayerSelector::Resolving(player),
-            PlayerMutation::Blight { amount },
+            PlayerMutation::KeywordAction(PlayerKeywordAction::Blight { amount }),
         )
     }
 
@@ -1120,7 +1156,7 @@ impl MutatePlayerSpec {
     pub fn collect_evidence(player: crate::program::ResolvingPlayer, minimum: ValueExpr) -> Self {
         Self::new(
             PlayerSelector::Resolving(player),
-            PlayerMutation::CollectEvidence { minimum },
+            PlayerMutation::KeywordAction(PlayerKeywordAction::CollectEvidence { minimum }),
         )
     }
 
@@ -1136,7 +1172,7 @@ impl MutatePlayerSpec {
     pub fn scry(player: crate::program::ResolvingPlayer, amount: ValueExpr) -> Self {
         Self::new(
             PlayerSelector::Resolving(player),
-            PlayerMutation::Scry(amount),
+            PlayerMutation::LibraryTop(LibraryTopAction::Scry(amount)),
         )
     }
 
@@ -1144,7 +1180,7 @@ impl MutatePlayerSpec {
     pub fn surveil(player: crate::program::ResolvingPlayer, amount: ValueExpr) -> Self {
         Self::new(
             PlayerSelector::Resolving(player),
-            PlayerMutation::Surveil(amount),
+            PlayerMutation::LibraryTop(LibraryTopAction::Surveil(amount)),
         )
     }
 
@@ -1152,7 +1188,7 @@ impl MutatePlayerSpec {
     pub fn mill(player: crate::program::ResolvingPlayer, amount: ValueExpr) -> Self {
         Self::new(
             PlayerSelector::Resolving(player),
-            PlayerMutation::Mill(amount),
+            PlayerMutation::LibraryTop(LibraryTopAction::Mill(amount)),
         )
     }
 
@@ -1160,7 +1196,7 @@ impl MutatePlayerSpec {
     pub fn extort_drain() -> Self {
         Self::new(
             PlayerSelector::Resolving(ResolvingPlayer::Controller),
-            PlayerMutation::ExtortDrain,
+            PlayerMutation::KeywordAction(PlayerKeywordAction::ExtortDrain),
         )
     }
 
@@ -1174,12 +1210,12 @@ impl MutatePlayerSpec {
     ) -> Self {
         Self::new(
             PlayerSelector::Resolving(player),
-            PlayerMutation::RollDie {
+            PlayerMutation::RandomEvent(RandomEventOp::RollDie {
                 sides,
                 count,
                 mode,
                 bands,
-            },
+            }),
         )
     }
 
@@ -1193,12 +1229,12 @@ impl MutatePlayerSpec {
     ) -> Self {
         Self::new(
             PlayerSelector::Resolving(player),
-            PlayerMutation::FlipCoins {
+            PlayerMutation::RandomEvent(RandomEventOp::FlipCoins {
                 mode,
                 win_body,
                 lose_body,
                 lose_destination,
-            },
+            }),
         )
     }
 
@@ -1206,7 +1242,7 @@ impl MutatePlayerSpec {
     pub fn may_reveal_library_top() -> Self {
         Self::new(
             PlayerSelector::Resolving(ResolvingPlayer::Controller),
-            PlayerMutation::MayRevealLibraryTop,
+            PlayerMutation::LibraryTop(LibraryTopAction::MayRevealTop),
         )
     }
 

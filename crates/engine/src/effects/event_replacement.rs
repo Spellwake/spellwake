@@ -87,16 +87,22 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
                 && valid_src
                 && matches!(
                     &spec.op,
-                    crate::toolbox::ObjectMutation::AddCounters { .. }
-                        | crate::toolbox::ObjectMutation::SetTapped(_)
-                        | crate::toolbox::ObjectMutation::RemoveCounters { kind: Some(_), .. }
-                        | crate::toolbox::ObjectMutation::ClearCounters { kind: Some(_) }
+                    crate::toolbox::ObjectMutation::Counters(
+                        crate::toolbox::CounterOp::Add { .. }
+                            | crate::toolbox::CounterOp::Remove { kind: Some(_), .. }
+                            | crate::toolbox::CounterOp::Clear { kind: Some(_) }
+                    ) | crate::toolbox::ObjectMutation::TapState(crate::toolbox::TapStateOp::Set(
+                        _
+                    ))
                 )
         }
         Instruction::ApplyContinuous(spec) => matches!(
             &spec.payload,
             crate::toolbox::ContinuousPayload::TemporaryRule(rule)
                 if matches!(
+                    rule.as_ref(),
+                    crate::program::TemporaryRuleKind::DamageCantBePrevented
+                ) || matches!(
                     rule.as_ref(),
                     crate::program::TemporaryRuleKind::TemporaryStatic {
                         ability,
@@ -1316,7 +1322,9 @@ impl EffectWindow {
                         _ => Vec::new(),
                     };
                     match &spec.op {
-                        crate::toolbox::PlayerMutation::Mill(amount) => {
+                        crate::toolbox::PlayerMutation::LibraryTop(
+                            crate::toolbox::LibraryTopAction::Mill(amount),
+                        ) => {
                             let player = spec
                                 .resolving_player()
                                 .unwrap_or(crate::program::ResolvingPlayer::Controller);
@@ -1326,7 +1334,11 @@ impl EffectWindow {
                                 .max(0.into());
                             self.inline_mill_player(seat, &val, cause.clone(), append)?;
                         }
-                        crate::toolbox::PlayerMutation::AddCounter { kind, amount } => {
+                        crate::toolbox::PlayerMutation::Counter {
+                            kind,
+                            amount,
+                            pay: false,
+                        } => {
                             let val = self
                                 .resolve_inline_value_expr(rep, amount, event_amount)?
                                 .max(0.into());
@@ -1342,7 +1354,9 @@ impl EffectWindow {
                                 }
                             }
                         }
-                        crate::toolbox::PlayerMutation::WinGame => {
+                        crate::toolbox::PlayerMutation::GameOutcome(
+                            crate::toolbox::PlayerGameOutcome::Win,
+                        ) => {
                             if let Some(&winner) = seats.first() {
                                 let evaluated = self.evaluated_characteristics()?;
                                 if self.window.participants().contains(&winner)
@@ -1353,7 +1367,9 @@ impl EffectWindow {
                                 }
                             }
                         }
-                        crate::toolbox::PlayerMutation::LoseGame => {
+                        crate::toolbox::PlayerMutation::GameOutcome(
+                            crate::toolbox::PlayerGameOutcome::Lose,
+                        ) => {
                             let evaluated = self.evaluated_characteristics()?;
                             let mut losing = BTreeSet::new();
                             for seat in seats {
@@ -1385,12 +1401,16 @@ impl EffectWindow {
                                 })?;
                             }
                         }
-                        crate::toolbox::PlayerMutation::TakeExtraTurn => {
+                        crate::toolbox::PlayerMutation::TurnFlow(
+                            crate::toolbox::TurnFlowOp::TakeExtraTurn,
+                        ) => {
                             for seat in seats {
                                 self.extra_turns.push(seat);
                             }
                         }
-                        crate::toolbox::PlayerMutation::BecomeMonarch => {
+                        crate::toolbox::PlayerMutation::Designation(
+                            crate::toolbox::PlayerDesignationOp::BecomeMonarch,
+                        ) => {
                             if let Some(&seat) = seats.first() {
                                 self.become_monarch(
                                     synthetic_entry,
@@ -1399,9 +1419,6 @@ impl EffectWindow {
                                     append,
                                 )?;
                             }
-                        }
-                        crate::toolbox::PlayerMutation::DisallowDamagePreventionThisTurn => {
-                            self.damage_state.prevention_disallowed_this_turn = true;
                         }
                         _ => {}
                     }
@@ -1476,7 +1493,9 @@ impl EffectWindow {
                         _ => Vec::new(),
                     };
                     match &spec.op {
-                        crate::toolbox::ObjectMutation::AddCounters { kind, amount } => {
+                        crate::toolbox::ObjectMutation::Counters(
+                            crate::toolbox::CounterOp::Add { kind, amount },
+                        ) => {
                             let val = self
                                 .resolve_inline_value_expr(rep, amount, event_amount)?
                                 .max(0.into());
@@ -1490,7 +1509,9 @@ impl EffectWindow {
                                 )?;
                             }
                         }
-                        crate::toolbox::ObjectMutation::SetTapped(tapped) => {
+                        crate::toolbox::ObjectMutation::TapState(
+                            crate::toolbox::TapStateOp::Set(tapped),
+                        ) => {
                             let changing: Vec<ObjectId> = targets
                                 .into_iter()
                                 .filter(|id| {
@@ -1561,10 +1582,12 @@ impl EffectWindow {
                                 })?;
                             }
                         }
-                        crate::toolbox::ObjectMutation::RemoveCounters {
-                            kind: Some(kind),
-                            amount,
-                        } => {
+                        crate::toolbox::ObjectMutation::Counters(
+                            crate::toolbox::CounterOp::Remove {
+                                kind: Some(kind),
+                                amount,
+                            },
+                        ) => {
                             let val = self
                                 .resolve_inline_value_expr(rep, amount, event_amount)?
                                 .max(0.into());
@@ -1578,7 +1601,9 @@ impl EffectWindow {
                                 )?;
                             }
                         }
-                        crate::toolbox::ObjectMutation::ClearCounters { kind: Some(kind) } => {
+                        crate::toolbox::ObjectMutation::Counters(
+                            crate::toolbox::CounterOp::Clear { kind: Some(kind) },
+                        ) => {
                             self.inline_remove_permanent_counters(
                                 &targets,
                                 *kind,
@@ -1591,23 +1616,29 @@ impl EffectWindow {
                     }
                 }
                 Instruction::ApplyContinuous(spec) => {
-                    if let crate::toolbox::ContinuousPayload::TemporaryRule(rule) = &spec.payload
-                        && let crate::program::TemporaryRuleKind::TemporaryStatic {
-                            ability,
-                            condition: None,
-                            one_shot: false,
-                        } = rule.as_ref()
-                        && matches!(
-                            ability.as_ref(),
-                            StaticContinuousAbility::DrawRule {
-                                rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
-                                ..
+                    if let crate::toolbox::ContinuousPayload::TemporaryRule(rule) = &spec.payload {
+                        match rule.as_ref() {
+                            crate::program::TemporaryRuleKind::DamageCantBePrevented => {
+                                self.damage_state.prevention_disallowed_this_turn = true;
                             }
-                        )
-                    {
-                        self.characteristics
-                            .no_max_hand_size_players
-                            .insert(rep.controller);
+                            crate::program::TemporaryRuleKind::TemporaryStatic {
+                                ability,
+                                condition: None,
+                                one_shot: false,
+                            } if matches!(
+                                ability.as_ref(),
+                                StaticContinuousAbility::DrawRule {
+                                    rule: crate::characteristics::StaticDrawRule::NoMaximumHandSize,
+                                    ..
+                                }
+                            ) =>
+                            {
+                                self.characteristics
+                                    .no_max_hand_size_players
+                                    .insert(rep.controller);
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 Instruction::CreateTokens { creations } => {

@@ -90,8 +90,10 @@ impl EffectWindow {
                 if matches!(
                     spec.op,
                     crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
-                        | crate::toolbox::PlayerMutation::RollDie { .. }
-                        | crate::toolbox::PlayerMutation::FlipCoins { .. }
+                        | crate::toolbox::PlayerMutation::RandomEvent(
+                            crate::toolbox::RandomEventOp::RollDie { .. }
+                                | crate::toolbox::RandomEventOp::FlipCoins { .. }
+                        )
                 ) =>
             {
                 true
@@ -334,8 +336,10 @@ impl EffectWindow {
             Some(Instruction::MutatePlayer(spec)) => matches!(
                 spec.op,
                 crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
-                    | crate::toolbox::PlayerMutation::RollDie { .. }
-                    | crate::toolbox::PlayerMutation::FlipCoins { .. }
+                    | crate::toolbox::PlayerMutation::RandomEvent(
+                        crate::toolbox::RandomEventOp::RollDie { .. }
+                            | crate::toolbox::RandomEventOp::FlipCoins { .. }
+                    )
             ),
             _ => false,
         }
@@ -415,7 +419,9 @@ impl EffectWindow {
             .and_then(StackPayload::instructions)
             .and_then(|ops| ops.get(work.cursor.instruction))
             .cloned()
-            && let crate::toolbox::PlayerMutation::RollDie { sides, count, .. } = spec.op
+            && let crate::toolbox::PlayerMutation::RandomEvent(
+                crate::toolbox::RandomEventOp::RollDie { sides, count, .. },
+            ) = spec.op
         {
             let player = work.chooser;
             let cursor = work.cursor;
@@ -478,7 +484,9 @@ impl EffectWindow {
             .and_then(StackPayload::instructions)
             .and_then(|ops| ops.get(work.cursor.instruction))
             .cloned()
-            && let crate::toolbox::PlayerMutation::FlipCoins { mode, .. } = spec.op
+            && let crate::toolbox::PlayerMutation::RandomEvent(
+                crate::toolbox::RandomEventOp::FlipCoins { mode, .. },
+            ) = spec.op
         {
             let player = work.chooser;
             let cursor = work.cursor;

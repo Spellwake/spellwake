@@ -518,7 +518,7 @@ pub(super) fn lower_combat_damage_instruction(
                                         Instruction::MutateObject(spec)
                                             if matches!(
                                                 spec.op,
-                                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                                spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                                             )
                                     )
                             })
@@ -3178,7 +3178,7 @@ pub(super) fn lower_combat_damage_instruction(
                             Instruction::MutateObject(spec)
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                    spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                                 )
                         )
                 })
@@ -3562,7 +3562,9 @@ pub(super) fn lower_combat_damage_instruction(
                             ),
                             ObjectFilter::creature().attacking(),
                         ),
-                        spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Set(false),
+                        ),
                     ),
                 );
                 builder
@@ -4087,9 +4089,9 @@ pub(super) fn lower_combat_damage_instruction(
                         _ => return Err("oracle:unsupported-combat-mod"),
                     },
                     Instruction::MutateObject(spec) => match spec.op {
-                        spellwake_engine::toolbox::ObjectMutation::AddCounters { kind, amount }
-                            if prev_kw_counter == Some(kind) =>
-                        {
+                        spellwake_engine::toolbox::ObjectMutation::Counters(
+                            spellwake_engine::toolbox::CounterOp::Add { kind, amount },
+                        ) if prev_kw_counter == Some(kind) => {
                             SameGrantShape::AddCounters(spec.source, amount)
                         }
                         _ => return Err("oracle:unsupported-combat-mod"),
@@ -6094,7 +6096,7 @@ pub(super) fn lower_combat_damage_instruction(
                                         Instruction::MutateObject(spec)
                                             if matches!(
                                                 spec.op,
-                                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                                spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                                             )
                                     )
                             })

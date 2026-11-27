@@ -669,7 +669,9 @@ impl EffectWindow {
             return Ok(StepOutcome::Continue);
         }
         if let Instruction::MutateObject(ref spec) = instruction
-            && let crate::toolbox::ObjectMutation::ScheduleArtifactReturn(object) = spec.op
+            && let crate::toolbox::ObjectMutation::KeywordZoneAction(
+                crate::toolbox::KeywordZoneOp::ScheduleArtifactReturn(object),
+            ) = spec.op
         {
             let StackKind::Emblem { emblem } = entry.kind() else {
                 return Err(EffectError::InconsistentProgram);
@@ -846,7 +848,12 @@ impl EffectWindow {
         if matches!(
             &instruction,
             Instruction::MutateObject(spec)
-                if matches!(spec.op, crate::toolbox::ObjectMutation::ReturnEarthbentCard)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::KeywordZoneAction(
+                        crate::toolbox::KeywordZoneOp::ReturnEarthbentCard
+                    )
+                )
         ) {
             let binding = self
                 .execution_bindings(entry.id())
@@ -1125,7 +1132,12 @@ impl EffectWindow {
         if matches!(
             &instruction,
             Instruction::MutateObject(spec)
-                if matches!(spec.op, crate::toolbox::ObjectMutation::CreateTokenCopy(_))
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::TokenAttach(
+                        crate::toolbox::TokenAttachOp::CreateCopy(_)
+                    )
+                )
         ) {
             let Instruction::MutateObject(spec) = instruction else {
                 unreachable!();
@@ -1134,7 +1146,10 @@ impl EffectWindow {
                 .source
                 .to_move_subject()
                 .ok_or(EffectError::InconsistentProgram)?;
-            let crate::toolbox::ObjectMutation::CreateTokenCopy(copy) = spec.op else {
+            let crate::toolbox::ObjectMutation::TokenAttach(
+                crate::toolbox::TokenAttachOp::CreateCopy(copy),
+            ) = spec.op
+            else {
                 unreachable!();
             };
             let crate::toolbox::TokenCopySpec {
@@ -1385,7 +1400,9 @@ impl EffectWindow {
             Instruction::MutateObject(spec)
                 if matches!(
                     spec.op,
-                    crate::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                    crate::toolbox::ObjectMutation::TokenAttach(
+                        crate::toolbox::TokenAttachOp::CreateAuraAttached { .. }
+                    )
                 )
         ) {
             let Instruction::MutateObject(spec) = instruction else {
@@ -1395,10 +1412,12 @@ impl EffectWindow {
                 .source
                 .to_move_subject()
                 .ok_or(EffectError::InconsistentProgram)?;
-            let crate::toolbox::ObjectMutation::CreateAuraTokenAttached {
-                definition,
-                up_to_one,
-            } = spec.op
+            let crate::toolbox::ObjectMutation::TokenAttach(
+                crate::toolbox::TokenAttachOp::CreateAuraAttached {
+                    definition,
+                    up_to_one,
+                },
+            ) = spec.op
             else {
                 unreachable!();
             };
@@ -1498,7 +1517,12 @@ impl EffectWindow {
         if matches!(
             &instruction,
             Instruction::MutatePlayer(spec)
-                if matches!(spec.op, crate::toolbox::PlayerMutation::ExtortDrain)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::ExtortDrain
+                    )
+                )
         ) {
             self.drain_opponents(entry.id(), index, entry.controller(), &1.into(), ctx.append)?;
             self.advance_instruction()?;
@@ -1912,7 +1936,9 @@ impl EffectWindow {
                 if matches!(
                     spec.op,
                     crate::toolbox::ObjectMutation::Unearth
-                        | crate::toolbox::ObjectMutation::ExileUnearthed(_)
+                        | crate::toolbox::ObjectMutation::KeywordZoneAction(
+                            crate::toolbox::KeywordZoneOp::ExileUnearthed(_)
+                        )
                 )
         ) {
             if let Some((object, _, _)) = self.keyword_entry_candidate(&instruction, entry)? {
@@ -1927,7 +1953,9 @@ impl EffectWindow {
             Instruction::MutateObject(spec)
                 if matches!(
                     spec.op,
-                    crate::toolbox::ObjectMutation::RememberPermanentTarget
+                    crate::toolbox::ObjectMutation::StateMarker(
+                        crate::toolbox::ObjectStateMarkerOp::RememberPermanentTarget
+                    )
                 )
         ) {
             let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target else {
@@ -1980,13 +2008,17 @@ impl EffectWindow {
             Instruction::MutateObject(spec)
                 if matches!(
                     spec.op,
-                    crate::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
+                    crate::toolbox::ObjectMutation::TokenAttach(
+                        crate::toolbox::TokenAttachOp::CreateAndAttach { .. }
+                    )
                 )
         ) {
             let Instruction::MutateObject(spec) = instruction else {
                 unreachable!();
             };
-            let crate::toolbox::ObjectMutation::CreateTokenAndAttach { definition } = spec.op
+            let crate::toolbox::ObjectMutation::TokenAttach(
+                crate::toolbox::TokenAttachOp::CreateAndAttach { definition },
+            ) = spec.op
             else {
                 unreachable!();
             };

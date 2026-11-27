@@ -437,7 +437,9 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(true),
+                            ),
                         ),
                     )));
                 Ok(())
@@ -476,7 +478,9 @@ pub(super) fn lower_search_library_group(
                     .instructions
                     .push(super::super::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::AttachedHost,
-                        spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Set(true),
+                        ),
                     ));
                 Ok(())
             }
@@ -581,7 +585,9 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(true),
+                            ),
                         ),
                     )));
                 Ok(())
@@ -617,7 +623,9 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(true),
+                            ),
                         ),
                     )));
                 Ok(())
@@ -788,7 +796,9 @@ pub(super) fn lower_search_library_group(
                             category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                             hidden: false,
                         },
-                        spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Set(false),
+                        ),
                     ),
                 )));
             Ok(())
@@ -858,7 +868,9 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(false),
+                            ),
                         ),
                     )));
                 Ok(())
@@ -894,7 +906,9 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(false),
+                            ),
                         ),
                     )));
                 Ok(())
@@ -1050,7 +1064,9 @@ pub(super) fn lower_search_library_group(
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 hidden: false,
                             },
-                            spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                            spellwake_engine::toolbox::ObjectMutation::TapState(
+                                spellwake_engine::toolbox::TapStateOp::Set(false),
+                            ),
                         ),
                     )));
                 Ok(())
@@ -1130,7 +1146,9 @@ pub(super) fn lower_search_library_group(
                     .instructions
                     .push(super::super::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::Source,
-                        spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Toggle,
+                        ),
                     ));
                 Ok(())
             }
@@ -1139,7 +1157,9 @@ pub(super) fn lower_search_library_group(
                     .instructions
                     .push(super::super::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::AttachedHost,
-                        spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Toggle,
+                        ),
                     ));
                 Ok(())
             }
@@ -1205,7 +1225,9 @@ pub(super) fn lower_search_library_group(
                             spellwake_engine::toolbox::QueryZone::Battlefield,
                             obj,
                         ),
-                        spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Toggle,
+                        ),
                     ));
                 Ok(())
             }
@@ -1220,7 +1242,9 @@ pub(super) fn lower_search_library_group(
                     .instructions
                     .push(super::super::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
-                        spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Toggle,
+                        ),
                     ));
                 Ok(())
             }
@@ -1229,7 +1253,9 @@ pub(super) fn lower_search_library_group(
                     .instructions
                     .push(super::super::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
-                        spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                        spellwake_engine::toolbox::ObjectMutation::TapState(
+                            spellwake_engine::toolbox::TapStateOp::Toggle,
+                        ),
                     ));
                 Ok(())
             }
@@ -3265,12 +3291,14 @@ pub(super) fn lower_search_library_group(
                                 obj,
                             ),
                             selection,
-                            spellwake_engine::toolbox::ObjectMutation::Attach {
-                                host: Box::new(super::super::toolbox_emit::move_subject_to_query(
-                                    host_ref,
-                                )),
-                                ability: None,
-                            },
+                            spellwake_engine::toolbox::ObjectMutation::Attach(
+                                spellwake_engine::toolbox::AttachOp::ToObject {
+                                    host: Box::new(
+                                        super::super::toolbox_emit::move_subject_to_query(host_ref),
+                                    ),
+                                    ability: None,
+                                },
+                            ),
                         ),
                     )));
                     *builder = trial;
@@ -4826,7 +4854,12 @@ fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool
             .rev()
             .any(|inner| is_grant_play_last_moved_producer(inner, expected_exile_only)),
         Instruction::MutatePlayer(spec)
-            if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_)) =>
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::Mill(_)
+                )
+            ) =>
         {
             !expected_exile_only
         }
@@ -4926,9 +4959,11 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::Scry(_)
-                        | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
-                        | spellwake_engine::toolbox::PlayerMutation::AddMana(_)
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Scry(_)
+                    ) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Surveil(_)
+                    ) | spellwake_engine::toolbox::PlayerMutation::AddMana(_)
                         | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_)
                 ) =>
             {
@@ -5017,9 +5052,11 @@ fn last_moved_producer_is_single_or_bulk_play(ops: &[Instruction]) -> bool {
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::Scry(_)
-                        | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
-                        | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_)
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Scry(_)
+                    ) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Surveil(_)
+                    ) | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_)
                 ) =>
             {
                 continue;

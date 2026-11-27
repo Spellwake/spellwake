@@ -568,9 +568,11 @@ fn admission_rejects_negative_undefined_amount_and_unavailable_recipient_capabil
         let mut undefined = operation(kind, ResolvingPlayer::Controller, 1.into());
         match &mut undefined {
             Instruction::MutatePlayer(spec) => match &mut spec.op {
-                crate::toolbox::PlayerMutation::Scry(amount)
-                | crate::toolbox::PlayerMutation::Surveil(amount)
-                | crate::toolbox::PlayerMutation::Mill(amount) => {
+                crate::toolbox::PlayerMutation::LibraryTop(
+                    crate::toolbox::LibraryTopAction::Scry(amount)
+                    | crate::toolbox::LibraryTopAction::Surveil(amount)
+                    | crate::toolbox::LibraryTopAction::Mill(amount),
+                ) => {
                     *amount = crate::program::ValueExpr::count_battlefield(
                         crate::program::ObjectFilter::any()
                             .controlled()

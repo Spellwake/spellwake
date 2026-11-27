@@ -2839,10 +2839,12 @@ pub(crate) fn counters() -> Instruction {
         spellwake_engine::program::Instruction::MutateObject(Box::new(
             spellwake_engine::toolbox::MutateObjectSpec::all(
                 spellwake_engine::toolbox::ObjectQuery::Targets,
-                spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                    kind: _k,
-                    amount: spellwake_engine::program::ValueExpr::Literal(_a),
-                },
+                spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Add {
+                        kind: _k,
+                        amount: spellwake_engine::program::ValueExpr::Literal(_a),
+                    },
+                ),
             ),
         ))
     }

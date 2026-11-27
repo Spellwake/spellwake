@@ -81,13 +81,13 @@ pub enum ValueObjectRef {
     RevealedCostCard,
     TriggeringSpell,
     FinalSaga,
-    /// Top card revealed by a reveal-only library look (`ZoneOp` with `ZoneDest::RevealOnly`) or `MayRevealLibraryTop`.
+    /// Top card revealed by a reveal-only library look (`ZoneOp` with `ZoneDest::RevealOnly`) or `LibraryTopAction::MayRevealTop`.
     RevealedTop,
     /// Object that caused the current triggered ability to fire (e.g., entering/attacking/targeted/dying permanent).
     TriggerSubject,
     /// Permanent to which the ability source Aura or Equipment is attached.
     AttachedHost,
-    /// Army token most recently created or grown by `PlayerMutation::Amass` in this resolution.
+    /// Army token most recently created or grown by `PlayerKeywordAction::Amass` in this resolution.
     LastAmassedArmy,
 }
 

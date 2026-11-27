@@ -11077,7 +11077,9 @@ pub(super) fn lower_zone_moves_instruction(
                         Instruction::MutatePlayer(spec)
                             if matches!(
                                 spec.op,
-                                spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                                spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                                    spellwake_engine::toolbox::LibraryTopAction::MayRevealTop
+                                )
                             ) =>
                         {
                             Some(Some(ResolvingPlayer::Controller))
@@ -11194,10 +11196,15 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::Mill(_)
-                        | spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
-                        | spellwake_engine::toolbox::PlayerMutation::ManifestDread
-                        | spellwake_engine::toolbox::PlayerMutation::Incubate { .. }
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Mill(_)
+                    ) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::ManifestTop(_)
+                    ) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::ManifestDread
+                    ) | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                        spellwake_engine::toolbox::PlayerKeywordAction::Incubate { .. }
+                    )
                 ) =>
             {
                 return false;
@@ -11336,7 +11343,12 @@ pub(super) fn has_live_last_moved_producer(
     for op in ops.iter().rev() {
         match op {
             Instruction::MutatePlayer(spec)
-                if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_)) =>
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Mill(_)
+                    )
+                ) =>
             {
                 return matches!(
                     expected,
@@ -11417,8 +11429,11 @@ pub(super) fn has_live_last_moved_producer(
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
-                        | spellwake_engine::toolbox::PlayerMutation::ManifestDread
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::ManifestTop(_)
+                    ) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::ManifestDread
+                    )
                 ) =>
             {
                 return matches!(expected, LastMovedProducerKind::Any);
@@ -11426,7 +11441,9 @@ pub(super) fn has_live_last_moved_producer(
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::Incubate { .. }
+                    spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                        spellwake_engine::toolbox::PlayerKeywordAction::Incubate { .. }
+                    )
                 ) =>
             {
                 return false;
@@ -11705,7 +11722,7 @@ pub(super) fn has_checked_revealed_top(ops: &[Instruction]) -> bool {
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::MayRevealTop)
                 )
         ) || matches!(
             op,
@@ -11739,7 +11756,7 @@ pub(super) fn has_checked_revealed_top_strict(ops: &[Instruction]) -> bool {
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::MayRevealTop)
                 )
         ) || matches!(
             op,
@@ -12205,9 +12222,13 @@ fn extract_prior_resolving_player_for_shuffle(
         Instruction::MutatePlayer(spec)
             if matches!(
                 spec.op,
-                spellwake_engine::toolbox::PlayerMutation::Mill(_)
-                    | spellwake_engine::toolbox::PlayerMutation::Scry(_)
-                    | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
+                spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::Mill(_)
+                ) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::Scry(_)
+                ) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::Surveil(_)
+                )
             ) =>
         {
             from_sel(&spec.players)
@@ -12330,12 +12351,12 @@ fn is_moved_object_instruction(op: &Instruction) -> bool {
             if matches!(
                 spec.op,
                 spellwake_engine::toolbox::PlayerMutation::ChooseOneLastMoved
-                    | spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::Mill(_)
-                    | spellwake_engine::toolbox::PlayerMutation::ManifestDread
-                    | spellwake_engine::toolbox::PlayerMutation::Incubate { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::ManifestTop(_))
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::Mill(_))
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::ManifestDread)
+                    | spellwake_engine::toolbox::PlayerMutation::KeywordAction(spellwake_engine::toolbox::PlayerKeywordAction::Incubate { .. })
                     | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles { .. }
-                    | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::Surveil(_))
             )
     )
 }
@@ -12473,10 +12494,10 @@ pub(super) fn last_instruction_moved_object(ops: &[Instruction]) -> bool {
             Some(Instruction::MutateObject(spec))
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::ObjectMutation::AddCounters { .. }
-                        | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { .. }
-                        | spellwake_engine::toolbox::ObjectMutation::SetTapped(_)
-                        | spellwake_engine::toolbox::ObjectMutation::SkipNextUntap
+                    spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { .. })
+                        | spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Remove { .. })
+                        | spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(_))
+                        | spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::SkipNextUntap)
                 ) && (matches!(
                     &spec.source,
                     spellwake_engine::toolbox::ObjectQuery::LastMoved
@@ -12511,10 +12532,15 @@ pub(super) fn has_prior_moved_object(ops: &[Instruction]) -> bool {
             Instruction::MutateObject(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::ObjectMutation::AddCounters { .. }
-                        | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { .. }
-                        | spellwake_engine::toolbox::ObjectMutation::SetTapped(_)
-                        | spellwake_engine::toolbox::ObjectMutation::SkipNextUntap
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Add { .. }
+                    ) | spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Remove { .. }
+                    ) | spellwake_engine::toolbox::ObjectMutation::TapState(
+                        spellwake_engine::toolbox::TapStateOp::Set(_)
+                    ) | spellwake_engine::toolbox::ObjectMutation::TapState(
+                        spellwake_engine::toolbox::TapStateOp::SkipNextUntap
+                    )
                 ) =>
             {
                 continue;

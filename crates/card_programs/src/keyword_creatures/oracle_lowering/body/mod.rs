@@ -168,7 +168,7 @@ fn rewrite_body_after_revealed_top(body: &mut ExecutableBody) {
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::MayRevealTop)
                 )
         ) || matches!(
             op,
@@ -204,7 +204,7 @@ fn rewrite_body_after_amass(body: &mut ExecutableBody) {
         if matches!(
             op,
             Instruction::MutatePlayer(spec)
-                if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Amass { .. })
+                if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::KeywordAction(spellwake_engine::toolbox::PlayerKeywordAction::Amass { .. }))
         ) {
             saw_amass = true;
         }

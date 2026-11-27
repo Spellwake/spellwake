@@ -636,20 +636,33 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     &rewrite_offer_chosen_to_loop_ve,
                 );
                 match &mut spec.op {
-                    spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-                    | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
-                    | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
-                    | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
-                    | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
-                    | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
-                    | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
-                    | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
-                    | spellwake_engine::toolbox::PlayerMutation::CollectEvidence {
-                        minimum: amount,
-                    }
-                    | spellwake_engine::toolbox::PlayerMutation::RollDie {
-                        count: amount, ..
-                    }
+                    spellwake_engine::toolbox::PlayerMutation::Counter { amount, .. }
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Scry(amount),
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Surveil(amount),
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::Mill(amount),
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::ManifestTop(amount),
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                        spellwake_engine::toolbox::PlayerKeywordAction::Incubate { count: amount },
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                        spellwake_engine::toolbox::PlayerKeywordAction::Blight { amount },
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                        spellwake_engine::toolbox::PlayerKeywordAction::CollectEvidence {
+                            minimum: amount,
+                        },
+                    )
+                    | spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                        spellwake_engine::toolbox::RandomEventOp::RollDie { count: amount, .. },
+                    )
                     | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles {
                         count: amount,
                         ..
@@ -673,11 +686,13 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             rewrite_offer_chosen_to_loop_ops(&mut dec.instructions);
                         }
                     }
-                    spellwake_engine::toolbox::PlayerMutation::FlipCoins {
-                        win_body,
-                        lose_body,
-                        ..
-                    } => {
+                    spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                        spellwake_engine::toolbox::RandomEventOp::FlipCoins {
+                            win_body,
+                            lose_body,
+                            ..
+                        },
+                    ) => {
                         if let Some(wb) = win_body {
                             rewrite_offer_chosen_to_loop_ops(&mut wb.instructions);
                         }
@@ -832,7 +847,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     spellwake_engine::toolbox::ZoneSelection::All => {}
                 }
                 match &mut spec.op {
-                    spellwake_engine::toolbox::ObjectMutation::Goad { by } => {
+                    spellwake_engine::toolbox::ObjectMutation::Goad { by, .. } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                             by,
                             &rewrite_offer_chosen_to_loop_rp,
@@ -840,7 +855,9 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             &rewrite_offer_chosen_to_loop_ve,
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::Attach { host, .. } => {
+                    spellwake_engine::toolbox::ObjectMutation::Attach(
+                        spellwake_engine::toolbox::AttachOp::ToObject { host, .. },
+                    ) => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
                             host,
                             &rewrite_offer_chosen_to_loop_rp,
@@ -848,7 +865,9 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             &rewrite_offer_chosen_to_loop_ve,
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::AttachToPlayer { player } => {
+                    spellwake_engine::toolbox::ObjectMutation::Attach(
+                        spellwake_engine::toolbox::AttachOp::ToPlayer { player },
+                    ) => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                             player,
                             &rewrite_offer_chosen_to_loop_rp,
@@ -856,24 +875,32 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             &rewrite_offer_chosen_to_loop_ve,
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
-                    | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
-                        amount, ..
-                    }
-                    | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Add { amount, .. },
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Remove { amount, .. },
+                    )
+                    | spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                        spellwake_engine::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+                    )
                     | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount }
-                    | spellwake_engine::toolbox::ObjectMutation::Connive { count: amount } => {
+                    | spellwake_engine::toolbox::ObjectMutation::Connive {
+                        count: Some(amount),
+                    } => {
                         rewrite_offer_chosen_to_loop_ve(amount);
                     }
-                    spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
+                    spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                        spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy),
+                    ) => {
                         rewrite_offer_chosen_to_loop_ve(&mut copy.count);
                         if let TokenRecipients::Player(rp) = &mut copy.recipients {
                             rewrite_offer_chosen_to_loop_rp(rp);
                         }
                     }
-                    spellwake_engine::toolbox::ObjectMutation::MoveCounters {
-                        to, amount, ..
-                    } => {
+                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                        spellwake_engine::toolbox::CounterOp::Move { to, amount, .. },
+                    ) => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
                             to,
                             &rewrite_offer_chosen_to_loop_rp,
@@ -884,9 +911,9 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             rewrite_offer_chosen_to_loop_ve(amt);
                         }
                     }
-                    spellwake_engine::toolbox::ObjectMutation::GainControl {
-                        controller, ..
-                    } => {
+                    spellwake_engine::toolbox::ObjectMutation::Control(
+                        spellwake_engine::toolbox::ControlOp::Gain { controller, .. },
+                    ) => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                             controller,
                             &rewrite_offer_chosen_to_loop_rp,
@@ -1990,8 +2017,8 @@ pub(in super::super) fn lower_animate_or_set_pt(
                 Instruction::MutateObject(spec)
                     if matches!(
                         spec.op,
-                        spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
-                            | spellwake_engine::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
+                        spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(_))
+                            | spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateAndAttach { .. })
                     )
             )
     });

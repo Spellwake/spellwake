@@ -271,7 +271,7 @@ pub(super) fn spell(
         ),
         "Each instant and sorcery card in your graveyard gains flashback until end of turn. The flashback cost is equal to its mana cost." => (
             NoTarget,
-            vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller))), ObjectFilter::instant_or_sorcery()), spellwake_engine::toolbox::ObjectMutation::GrantFlashback)))],
+            vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller))), ObjectFilter::instant_or_sorcery()), spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::GrantFlashback))))],
         ),
         "Destroy target creature. If that creature was a Human, you gain life equal to its toughness." => (
             SingleCreature,
@@ -353,7 +353,7 @@ pub(super) fn spell(
                             spellwake_engine::toolbox::QueryZone::Battlefield,
                             ObjectFilter::creature().with_subtype(subtype("Human")?),
                         ),
-                        spellwake_engine::toolbox::ObjectMutation::Transform,
+                        spellwake_engine::toolbox::ObjectMutation::Orientation(spellwake_engine::toolbox::OrientationOp::Transform),
                     ),
                 )),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
@@ -1535,7 +1535,7 @@ pub(super) fn compile(
             vec![(
                 etb,
                 BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::instant_or_sorcery()),
-                vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::GrantFlashback)))],
+                vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::GrantFlashback))))],
             )],
         ),
         "Flash\nFlying\nWhen this creature enters, remove target attacking or blocking creature from combat." => (
@@ -1685,7 +1685,7 @@ pub(super) fn compile(
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::AttachedHost,
-                        spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                        spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(true)),
                     ),
                 ],
             ));
@@ -2740,7 +2740,7 @@ pub(super) fn compile(
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
                         spellwake_engine::toolbox::ObjectQuery::AttachedHost,
-                        spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                        spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(true)),
                     ),
                 ],
             );

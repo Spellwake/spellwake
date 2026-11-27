@@ -1418,10 +1418,12 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
                 vec![Instruction::MutateObject(Box::new(
                     spellwake_engine::toolbox::MutateObjectSpec::all(
                         spellwake_engine::toolbox::ObjectQuery::Targets,
-                        spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                            kind: spellwake_engine::effects::CounterKind::PlusOne,
-                            amount: spellwake_engine::program::ValueExpr::literal(2),
-                        },
+                        spellwake_engine::toolbox::ObjectMutation::Counters(
+                            spellwake_engine::toolbox::CounterOp::Add {
+                                kind: spellwake_engine::effects::CounterKind::PlusOne,
+                                amount: spellwake_engine::program::ValueExpr::literal(2),
+                            },
+                        ),
                     ),
                 ))],
             ),

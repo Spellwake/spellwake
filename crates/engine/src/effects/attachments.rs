@@ -34,10 +34,10 @@ impl EffectWindow {
     ) -> Result<(), EffectError> {
         if let [Instruction::MutateObject(spec)] = body.instructions.as_slice() {
             match &spec.op {
-                crate::toolbox::ObjectMutation::Attach {
+                crate::toolbox::ObjectMutation::Attach(crate::toolbox::AttachOp::ToObject {
                     ability: Some(kind),
                     ..
-                } => {
+                }) => {
                     validate_main_phase(&self.window, turn, actor)?;
                     if *kind == crate::attachment::AttachAbility::Reconfigure
                         && target == Some(TargetRef::Object(source))
@@ -45,7 +45,7 @@ impl EffectWindow {
                         return Err(EffectError::IllegalTarget);
                     }
                 }
-                crate::toolbox::ObjectMutation::Unattach
+                crate::toolbox::ObjectMutation::Attach(crate::toolbox::AttachOp::Unattach)
                     if matches!(spec.source, crate::toolbox::ObjectQuery::Source) =>
                 {
                     validate_main_phase(&self.window, turn, actor)?;
@@ -73,10 +73,12 @@ impl EffectWindow {
                     [Instruction::MutateObject(spec)]
                         if matches!(
                             spec.op,
-                            crate::toolbox::ObjectMutation::Attach {
-                                ability: Some(crate::attachment::AttachAbility::Reconfigure),
-                                ..
-                            }
+                            crate::toolbox::ObjectMutation::Attach(
+                                crate::toolbox::AttachOp::ToObject {
+                                    ability: Some(crate::attachment::AttachAbility::Reconfigure),
+                                    ..
+                                }
+                            )
                         )
                 )
             })
@@ -184,7 +186,9 @@ impl EffectWindow {
             Instruction::MutateObject(spec)
                 if matches!(
                     spec.op,
-                    crate::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
+                    crate::toolbox::ObjectMutation::TokenAttach(
+                        crate::toolbox::TokenAttachOp::CreateAndAttach { .. }
+                    )
                 )
         ) {
             return Err(EffectError::InconsistentProgram);

@@ -510,7 +510,7 @@ pub(super) fn compile(
                     category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                     hidden: false,
                 },
-                op: spellwake_engine::toolbox::ObjectMutation::TurnFaceUp,
+                op: spellwake_engine::toolbox::ObjectMutation::Orientation(spellwake_engine::toolbox::OrientationOp::TurnFaceUp),
                 bind_mutated: None,
                 bind_succeeded: None,
             }))])));

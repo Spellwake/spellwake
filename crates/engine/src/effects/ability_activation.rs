@@ -1239,10 +1239,12 @@ impl EffectWindow {
                             Instruction::MutateObject(spec)
                                 if matches!(
                                     spec.op,
-                                    crate::toolbox::ObjectMutation::Attach {
-                                        ability: Some(crate::attachment::AttachAbility::Equip),
-                                        ..
-                                    }
+                                    crate::toolbox::ObjectMutation::Attach(
+                                        crate::toolbox::AttachOp::ToObject {
+                                            ability: Some(crate::attachment::AttachAbility::Equip),
+                                            ..
+                                        },
+                                    )
                                 )
                         )
                     }),
@@ -1324,10 +1326,14 @@ impl EffectWindow {
                                 Instruction::MutateObject(spec)
                                     if matches!(
                                         spec.op,
-                                        crate::toolbox::ObjectMutation::Attach {
-                                            ability: Some(crate::attachment::AttachAbility::Equip),
-                                            ..
-                                        }
+                                        crate::toolbox::ObjectMutation::Attach(
+                                            crate::toolbox::AttachOp::ToObject {
+                                                ability: Some(
+                                                    crate::attachment::AttachAbility::Equip,
+                                                ),
+                                                ..
+                                            },
+                                        )
                                     )
                             )
                         });
@@ -1532,7 +1538,12 @@ impl EffectWindow {
             matches!(
                 ins,
                 Instruction::MutateObject(spec)
-                    if matches!(spec.op, crate::toolbox::ObjectMutation::AdvanceClassLevel(_))
+                    if matches!(
+                        spec.op,
+                        crate::toolbox::ObjectMutation::StateMarker(
+                            crate::toolbox::ObjectStateMarkerOp::AdvanceClassLevel(_)
+                        )
+                    )
             )
         }) {
             Some(crate::mana::AbilitySpendKind::GainClassLevel)
@@ -1542,10 +1553,12 @@ impl EffectWindow {
                 Instruction::MutateObject(spec)
                     if matches!(
                         spec.op,
-                        crate::toolbox::ObjectMutation::Attach {
-                            ability: Some(crate::attachment::AttachAbility::Equip),
-                            ..
-                        }
+                        crate::toolbox::ObjectMutation::Attach(
+                            crate::toolbox::AttachOp::ToObject {
+                                ability: Some(crate::attachment::AttachAbility::Equip),
+                                ..
+                            }
+                        )
                     )
             )
         }) {

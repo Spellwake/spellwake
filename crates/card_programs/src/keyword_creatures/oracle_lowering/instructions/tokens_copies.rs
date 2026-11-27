@@ -784,10 +784,11 @@ pub(super) fn lower_tokens_copies_instruction(
                         ) =>
                     {
                         match &spec.op {
-                            spellwake_engine::toolbox::ObjectMutation::AddCounters {
-                                kind: src_kind,
-                                ..
-                            } => kind.is_none() || kind.as_ref() == Some(src_kind),
+                            spellwake_engine::toolbox::ObjectMutation::Counters(
+                                spellwake_engine::toolbox::CounterOp::Add {
+                                    kind: src_kind, ..
+                                },
+                            ) => kind.is_none() || kind.as_ref() == Some(src_kind),
                             _ => false,
                         }
                     }
@@ -1874,12 +1875,13 @@ pub(super) fn lower_tokens_copies_instruction(
                     Instruction::MutateObject(spec)
                         if matches!(
                             &spec.op,
-                            spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy)
+                            spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy))
                                 if copy.enters_attacking
                         ) =>
                     {
-                        if let spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) =
-                            &mut spec.op
+                        if let spellwake_engine::toolbox::ObjectMutation::TokenAttach(
+                            spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy),
+                        ) = &mut spec.op
                         {
                             copy.defender_scope = defender_scope;
                         }
@@ -2253,11 +2255,13 @@ fn set_last_copy_may_choose_new_targets(ops: &mut [Instruction]) -> bool {
                 }
             }
             Instruction::MutatePlayer(spec) => match &mut spec.op {
-                spellwake_engine::toolbox::PlayerMutation::FlipCoins {
-                    win_body,
-                    lose_body,
-                    ..
-                } => {
+                spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                    spellwake_engine::toolbox::RandomEventOp::FlipCoins {
+                        win_body,
+                        lose_body,
+                        ..
+                    },
+                ) => {
                     if let Some(body) = lose_body
                         && set_last_copy_may_choose_new_targets(&mut body.instructions)
                     {
@@ -2286,7 +2290,9 @@ fn set_last_copy_may_choose_new_targets(ops: &mut [Instruction]) -> bool {
                         return true;
                     }
                 }
-                spellwake_engine::toolbox::PlayerMutation::RollDie { bands, .. } => {
+                spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                    spellwake_engine::toolbox::RandomEventOp::RollDie { bands, .. },
+                ) => {
                     for band in bands.iter_mut().rev() {
                         if set_last_copy_may_choose_new_targets(&mut band.body.instructions) {
                             return true;

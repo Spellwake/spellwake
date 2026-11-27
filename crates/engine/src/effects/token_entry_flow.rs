@@ -686,8 +686,9 @@ impl EffectWindow {
                 Instruction::MutateObject(spec)
                     if matches!(
                         &spec.op,
-                        crate::toolbox::ObjectMutation::CreateTokenCopy(copy)
-                            if copy.enters_attacking
+                        crate::toolbox::ObjectMutation::TokenAttach(
+                            crate::toolbox::TokenAttachOp::CreateCopy(copy)
+                        ) if copy.enters_attacking
                     )
             );
         let defender_scope = match current_inst {
@@ -695,9 +696,9 @@ impl EffectWindow {
                 token_attacking_scope.unwrap_or(crate::token::AttackingDefenderScope::AnyLegal)
             }
             Instruction::MutateObject(spec) => match &spec.op {
-                crate::toolbox::ObjectMutation::CreateTokenCopy(copy) if copy.enters_attacking => {
-                    copy.defender_scope
-                }
+                crate::toolbox::ObjectMutation::TokenAttach(
+                    crate::toolbox::TokenAttachOp::CreateCopy(copy),
+                ) if copy.enters_attacking => copy.defender_scope,
                 _ => crate::token::AttackingDefenderScope::AnyLegal,
             },
             _ => crate::token::AttackingDefenderScope::AnyLegal,
@@ -1877,7 +1878,9 @@ impl EffectWindow {
             .cloned()
             && matches!(
                 spec.op,
-                crate::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                crate::toolbox::ObjectMutation::TokenAttach(
+                    crate::toolbox::TokenAttachOp::CreateAuraAttached { .. }
+                )
             )
         {
             let host = spec.source.to_move_subject();
@@ -1949,7 +1952,9 @@ impl EffectWindow {
         if let Some(Instruction::MutateObject(spec)) = self
             .stack_body(entry)
             .and_then(|body| body.instructions.get(instruction))
-            && let crate::toolbox::ObjectMutation::CreateTokenCopy(copy) = &spec.op
+            && let crate::toolbox::ObjectMutation::TokenAttach(
+                crate::toolbox::TokenAttachOp::CreateCopy(copy),
+            ) = &spec.op
             && (copy.sacrifice_at_end_step || copy.exile_at_end_step)
             && !objects.is_empty()
         {

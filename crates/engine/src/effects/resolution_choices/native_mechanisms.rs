@@ -837,10 +837,10 @@ fn optional_counters_place_once_or_leave_physical_counters_unchanged() {
             crate::program::Instruction::MutateObject(Box::new(
                 crate::toolbox::MutateObjectSpec::all(
                     crate::toolbox::ObjectQuery::Targets,
-                    crate::toolbox::ObjectMutation::AddCounters {
+                    crate::toolbox::ObjectMutation::Counters(crate::toolbox::CounterOp::Add {
                         kind: _k,
                         amount: crate::program::ValueExpr::Literal(_a),
-                    },
+                    }),
                 ),
             ))
         });
@@ -911,10 +911,12 @@ fn earlier_bounce_removes_take_from_the_real_optional_counter_domain() {
                         crate::program::Instruction::MutateObject(Box::new(
                             crate::toolbox::MutateObjectSpec::all(
                                 crate::toolbox::ObjectQuery::Targets,
-                                crate::toolbox::ObjectMutation::AddCounters {
-                                    kind: _k,
-                                    amount: crate::program::ValueExpr::Literal(_a),
-                                },
+                                crate::toolbox::ObjectMutation::Counters(
+                                    crate::toolbox::CounterOp::Add {
+                                        kind: _k,
+                                        amount: crate::program::ValueExpr::Literal(_a),
+                                    },
+                                ),
                             ),
                         ))
                     },

@@ -2276,7 +2276,7 @@ pub(super) fn lower_bound_x_for_resolution(
             matches!(
                 op,
                 Instruction::MutatePlayer(spec)
-                    if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Amass { .. })
+                    if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::KeywordAction(spellwake_engine::toolbox::PlayerKeywordAction::Amass { .. }))
             )
         })
     {
@@ -2294,7 +2294,9 @@ pub(super) fn lower_bound_x_for_resolution(
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::Amass { .. }
+                    spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                        spellwake_engine::toolbox::PlayerKeywordAction::Amass { .. }
+                    )
                 ) =>
             {
                 Some(ValueObjectRef::LastAmassedArmy)
@@ -2314,7 +2316,9 @@ pub(super) fn lower_bound_x_for_resolution(
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                        spellwake_engine::toolbox::LibraryTopAction::MayRevealTop
+                    )
                 ) =>
             {
                 Some(ValueObjectRef::RevealedTop)
@@ -7018,10 +7022,12 @@ pub(in super::super) fn lower_instruction_seq(
                 let lose_dest = builder.instructions.len();
                 if let Some(Instruction::MutatePlayer(spec)) =
                     builder.instructions.get_mut(flip_idx)
-                    && let spellwake_engine::toolbox::PlayerMutation::FlipCoins {
-                        lose_destination,
-                        ..
-                    } = &mut spec.op
+                    && let spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                        spellwake_engine::toolbox::RandomEventOp::FlipCoins {
+                            lose_destination,
+                            ..
+                        },
+                    ) = &mut spec.op
                 {
                     *lose_destination = Some(lose_dest);
                 }
@@ -7045,10 +7051,12 @@ pub(in super::super) fn lower_instruction_seq(
                 let lose_dest = builder.instructions.len();
                 if let Some(Instruction::MutatePlayer(spec)) =
                     builder.instructions.get_mut(flip_idx)
-                    && let spellwake_engine::toolbox::PlayerMutation::FlipCoins {
-                        lose_destination,
-                        ..
-                    } = &mut spec.op
+                    && let spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                        spellwake_engine::toolbox::RandomEventOp::FlipCoins {
+                            lose_destination,
+                            ..
+                        },
+                    ) = &mut spec.op
                 {
                     *lose_destination = Some(lose_dest);
                 }
@@ -8952,14 +8960,14 @@ pub(in super::super) fn lower_instruction_seq(
                     Instruction::MutatePlayer(spec)
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::PlayerMutation::PayCounter { .. }
-                                | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { .. }
+                            spellwake_engine::toolbox::PlayerMutation::Counter { pay: true, .. }
+                                | spellwake_engine::toolbox::PlayerMutation::KeywordAction(spellwake_engine::toolbox::PlayerKeywordAction::CollectEvidence { .. })
                                 | spellwake_engine::toolbox::PlayerMutation::Behold { .. }
-                                | spellwake_engine::toolbox::PlayerMutation::Clash
+                                | spellwake_engine::toolbox::PlayerMutation::KeywordAction(spellwake_engine::toolbox::PlayerKeywordAction::Clash)
                                 | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles { .. }
-                                | spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                                | spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::MayRevealTop)
                                 | spellwake_engine::toolbox::PlayerMutation::ChooseOneLastMoved
-                                | spellwake_engine::toolbox::PlayerMutation::Mill(_)
+                                | spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::Mill(_))
                         )
                 ) || matches!(
                     op,
@@ -8973,10 +8981,10 @@ pub(in super::super) fn lower_instruction_seq(
                     Instruction::MutateObject(spec)
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::ObjectMutation::RemoveCounters { .. }
-                                | spellwake_engine::toolbox::ObjectMutation::SetTapped(_)
-                                | spellwake_engine::toolbox::ObjectMutation::TurnFaceUp
-                                | spellwake_engine::toolbox::ObjectMutation::TurnFaceDown
+                            spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Remove { .. })
+                                | spellwake_engine::toolbox::ObjectMutation::TapState(spellwake_engine::toolbox::TapStateOp::Set(_))
+                                | spellwake_engine::toolbox::ObjectMutation::Orientation(spellwake_engine::toolbox::OrientationOp::TurnFaceUp)
+                                | spellwake_engine::toolbox::ObjectMutation::Orientation(spellwake_engine::toolbox::OrientationOp::TurnFaceDown)
                         )
                 )
             });
@@ -9328,7 +9336,7 @@ pub(in super::super) fn lower_instruction_seq(
                     Instruction::MutatePlayer(spec)
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                            spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::MayRevealTop)
                         )
                 ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
                     matches!(
@@ -9834,8 +9842,8 @@ pub(in super::super) fn lower_instruction_seq(
                                 break;
                             }
                             Instruction::MutatePlayer(spec) => match &spec.op {
-                                spellwake_engine::toolbox::PlayerMutation::Mill(_)
-                                | spellwake_engine::toolbox::PlayerMutation::Surveil(_) => {
+                                spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::Mill(_))
+                                | spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::Surveil(_)) => {
                                     found = Some(false);
                                     break;
                                 }
@@ -13084,7 +13092,7 @@ pub(in super::super) fn lower_instruction_seq(
                 && matches!(
                     probe.instructions.last(),
                     Some(Instruction::MutatePlayer(spec))
-                        if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_))
+                        if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::Mill(_)))
                 )
             {
                 let sel_player_res = match mill_pick.selector {
@@ -13999,7 +14007,7 @@ pub(in super::super) fn lower_instruction_seq(
                             Instruction::MutateObject(spec)
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                    spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                                 )
                         )
                 })
@@ -14344,7 +14352,7 @@ pub(in super::super) fn lower_instruction_seq(
                             Instruction::MutateObject(spec)
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                    spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                                 )
                         )
                 })
@@ -14518,7 +14526,7 @@ pub(in super::super) fn lower_instruction_seq(
                             Instruction::MutateObject(spec)
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                    spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                                 )
                         )
                 })

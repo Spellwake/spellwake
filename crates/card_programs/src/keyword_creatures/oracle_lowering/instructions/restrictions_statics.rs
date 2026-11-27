@@ -1009,7 +1009,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                             Instruction::MutateObject(spec)
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::ObjectMutation::GrantFlashback
+                                    spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::GrantFlashback)
                                 )
                         ) || matches!(
                             op,
@@ -3967,7 +3967,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                     Instruction::MutatePlayer(spec)
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::PlayerMutation::TakeExtraTurn
+                            spellwake_engine::toolbox::PlayerMutation::TurnFlow(spellwake_engine::toolbox::TurnFlowOp::TakeExtraTurn)
                         )
                 )
             }) {
@@ -4099,10 +4099,10 @@ pub(super) fn lower_restrictions_statics_instruction(
                 Some(Instruction::MutateObject(spec))
                     if matches!(
                         spec.op,
-                        spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(_)
+                        spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(_))
                     ) =>
                 {
-                    if let spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) =
+                    if let spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy)) =
                         &mut spec.op
                     {
                         copy.enters_tapped = true;
@@ -4349,7 +4349,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                     Instruction::MutateObject(spec)
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::ObjectMutation::GrantFlashback
+                            spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::GrantFlashback)
                         )
                 ) || matches!(
                     op,
@@ -4403,7 +4403,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     spellwake_engine::toolbox::ObjectQuery::Targets
                                 ) && matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::ObjectMutation::DoubleCounters { .. }
+                                    spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Double { .. })
                                 )
                         )
                 });
@@ -4639,11 +4639,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                     Instruction::MutateObject(spec)
                         if matches!(
                             &spec.op,
-                            spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy)
+                            spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy))
                                 if copy.recipients == TokenRecipients::Controller
                         ) =>
                     {
-                        if let spellwake_engine::toolbox::ObjectMutation::CreateTokenCopy(copy) =
+                        if let spellwake_engine::toolbox::ObjectMutation::TokenAttach(spellwake_engine::toolbox::TokenAttachOp::CreateCopy(copy)) =
                             &mut spec.op
                         {
                             copy.enters_tapped = true;
@@ -4820,9 +4820,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                     builder.instructions.push(
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
-                            spellwake_engine::toolbox::ObjectMutation::ClearCounters {
+                            spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Clear {
                                 kind: Some(ck),
-                            },
+                            }),
                         ),
                     );
                     return Ok(());
@@ -8218,7 +8218,7 @@ pub(super) fn has_unconditional_mill_one(ops: &[Instruction]) -> bool {
                 if !in_conditional
                     && matches!(
                         &spec.op,
-                        spellwake_engine::toolbox::PlayerMutation::Mill(amount)
+                        spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::Mill(amount))
                             if *amount == ValueExpr::literal(1)
                     ) =>
             {

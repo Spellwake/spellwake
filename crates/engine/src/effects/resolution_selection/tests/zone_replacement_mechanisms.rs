@@ -1074,10 +1074,12 @@ fn captured_activated_body_replaces_sacrifice_after_its_real_source_cost() {
                         crate::program::Instruction::MutateObject(Box::new(
                             crate::toolbox::MutateObjectSpec::all(
                                 crate::toolbox::ObjectQuery::Targets,
-                                crate::toolbox::ObjectMutation::AddCounters {
-                                    kind: _k,
-                                    amount: crate::program::ValueExpr::Literal(_a),
-                                },
+                                crate::toolbox::ObjectMutation::Counters(
+                                    crate::toolbox::CounterOp::Add {
+                                        kind: _k,
+                                        amount: crate::program::ValueExpr::Literal(_a),
+                                    },
+                                ),
                             ),
                         ))
                     },

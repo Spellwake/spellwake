@@ -1647,12 +1647,12 @@ fn creature(
                     vec![Instruction::MutateObject(Box::new(
                         spellwake_engine::toolbox::MutateObjectSpec::all(
                             spellwake_engine::toolbox::ObjectQuery::Source,
-                            spellwake_engine::toolbox::ObjectMutation::GainControl {
+                            spellwake_engine::toolbox::ObjectMutation::Control(spellwake_engine::toolbox::ControlOp::Gain {
                                 controller: spellwake_engine::toolbox::PlayerSelector::Resolving(
                                     ResolvingPlayer::TargetPlayer,
                                 ),
                                 duration: spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
-                            },
+                            }),
                         ),
                     ))],
                 )],

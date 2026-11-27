@@ -865,19 +865,19 @@ fn complete_pass_run() -> Run {
             crate::program::Instruction::MutateObject(Box::new(
                 crate::toolbox::MutateObjectSpec::all(
                     crate::toolbox::ObjectQuery::Targets,
-                    crate::toolbox::ObjectMutation::AddCounters {
+                    crate::toolbox::ObjectMutation::Counters(crate::toolbox::CounterOp::Add {
                         kind: crate::effects::CounterKind::PlusOne,
                         amount: crate::program::ValueExpr::Literal(1.into()),
-                    },
+                    }),
                 ),
             )),
             crate::program::Instruction::MutateObject(Box::new(
                 crate::toolbox::MutateObjectSpec::all(
                     crate::toolbox::ObjectQuery::Targets,
-                    crate::toolbox::ObjectMutation::AddCounters {
+                    crate::toolbox::ObjectMutation::Counters(crate::toolbox::CounterOp::Add {
                         kind: crate::effects::CounterKind::MinusOne,
                         amount: crate::program::ValueExpr::Literal(1.into()),
-                    },
+                    }),
                 ),
             )),
             crate::program::Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
@@ -1645,10 +1645,12 @@ fn cleanup_sba_after_real_expiry_uses_pass_one_and_the_actual_turn_work_parent()
                         crate::program::Instruction::MutateObject(Box::new(
                             crate::toolbox::MutateObjectSpec::all(
                                 crate::toolbox::ObjectQuery::Targets,
-                                crate::toolbox::ObjectMutation::AddCounters {
-                                    kind: _k,
-                                    amount: crate::program::ValueExpr::Literal(_a),
-                                },
+                                crate::toolbox::ObjectMutation::Counters(
+                                    crate::toolbox::CounterOp::Add {
+                                        kind: _k,
+                                        amount: crate::program::ValueExpr::Literal(_a),
+                                    },
+                                ),
                             ),
                         ))
                     },

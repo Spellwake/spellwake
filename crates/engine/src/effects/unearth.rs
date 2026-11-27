@@ -17,7 +17,9 @@ impl EffectWindow {
         let reason = match operation {
             Instruction::MutateObject(spec) => match &spec.op {
                 crate::toolbox::ObjectMutation::Unearth => ZoneReason::UnearthReturn,
-                crate::toolbox::ObjectMutation::ExileUnearthed(_) => ZoneReason::UnearthExile,
+                crate::toolbox::ObjectMutation::KeywordZoneAction(
+                    crate::toolbox::KeywordZoneOp::ExileUnearthed(_),
+                ) => ZoneReason::UnearthExile,
                 _ => return Err(EffectError::InconsistentProgram),
             },
             _ => return Err(EffectError::InconsistentProgram),
@@ -48,7 +50,9 @@ impl EffectWindow {
                         },
                     )
                 }
-                crate::toolbox::ObjectMutation::ExileUnearthed(object) => {
+                crate::toolbox::ObjectMutation::KeywordZoneAction(
+                    crate::toolbox::KeywordZoneOp::ExileUnearthed(object),
+                ) => {
                     if self
                         .window
                         .cards()

@@ -187,7 +187,7 @@ pub(super) fn resolve_prev_anaphora_ref(
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::MayRevealTop)
                 )
         ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
             matches!(
@@ -208,13 +208,20 @@ pub(super) fn resolve_prev_anaphora_ref(
         Instruction::MutatePlayer(spec)
             if matches!(
                 spec.op,
-                spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::MayRevealTop
+                )
             ) =>
         {
             Some(MatchObjectRef::RevealedTop)
         }
         Instruction::MutatePlayer(spec)
-            if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_)) =>
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::Mill(_)
+                )
+            ) =>
         {
             Some(MatchObjectRef::MovedLibraryCard)
         }
@@ -2677,8 +2684,12 @@ pub(in super::super) fn lower_resolution_condition(
                 .rev()
                 .find_map(|op| match op {
                     Instruction::MutatePlayer(spec) => match &spec.op {
-                        spellwake_engine::toolbox::PlayerMutation::Clash => Some(true),
-                        spellwake_engine::toolbox::PlayerMutation::FlipCoins { .. } => Some(false),
+                        spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                            spellwake_engine::toolbox::PlayerKeywordAction::Clash,
+                        ) => Some(true),
+                        spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                            spellwake_engine::toolbox::RandomEventOp::FlipCoins { .. },
+                        ) => Some(false),
                         _ => None,
                     },
                     _ => None,
@@ -3780,7 +3791,7 @@ pub(in super::super) fn lower_resolution_condition(
                     Instruction::MutatePlayer(spec)
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::PlayerMutation::FlipCoins { .. }
+                            spellwake_engine::toolbox::PlayerMutation::RandomEvent(spellwake_engine::toolbox::RandomEventOp::FlipCoins { .. })
                         )
                 )
             });
@@ -4752,7 +4763,7 @@ pub(super) fn lower_subject_to_object_query(
                     ) || matches!(
                         op,
                         Instruction::MutatePlayer(spec)
-                            if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_))
+                            if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::Mill(_)))
                     )
                 });
                 if has_zone_op {

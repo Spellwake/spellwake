@@ -1529,11 +1529,13 @@ fn rewrite_instructions_unique_related_player(
                             );
                         }
                     }
-                    spellwake_engine::toolbox::PlayerMutation::FlipCoins {
-                        win_body,
-                        lose_body,
-                        ..
-                    } => {
+                    spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                        spellwake_engine::toolbox::RandomEventOp::FlipCoins {
+                            win_body,
+                            lose_body,
+                            ..
+                        },
+                    ) => {
                         if let Some(wb) = win_body {
                             rewrite_instructions_unique_related_player(
                                 &mut wb.instructions,
@@ -1547,7 +1549,9 @@ fn rewrite_instructions_unique_related_player(
                             );
                         }
                     }
-                    spellwake_engine::toolbox::PlayerMutation::RollDie { bands, .. } => {
+                    spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                        spellwake_engine::toolbox::RandomEventOp::RollDie { bands, .. },
+                    ) => {
                         for band in bands {
                             rewrite_instructions_unique_related_player(
                                 &mut band.body.instructions,
@@ -1594,7 +1598,7 @@ fn rewrite_instructions_unique_related_player(
                     spellwake_engine::toolbox::ZoneSelection::All => {}
                 }
                 match &mut spec.op {
-                    spellwake_engine::toolbox::ObjectMutation::Goad { by } => {
+                    spellwake_engine::toolbox::ObjectMutation::Goad { by, .. } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                             by,
                             &|p| rewrite_resolving_player_if_unique(p, replacement),
@@ -1602,7 +1606,9 @@ fn rewrite_instructions_unique_related_player(
                             &|_| {},
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::Attach { host, .. } => {
+                    spellwake_engine::toolbox::ObjectMutation::Attach(
+                        spellwake_engine::toolbox::AttachOp::ToObject { host, .. },
+                    ) => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
                             host,
                             &|p| rewrite_resolving_player_if_unique(p, replacement),
@@ -1610,7 +1616,9 @@ fn rewrite_instructions_unique_related_player(
                             &|_| {},
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::AttachToPlayer { player } => {
+                    spellwake_engine::toolbox::ObjectMutation::Attach(
+                        spellwake_engine::toolbox::AttachOp::ToPlayer { player },
+                    ) => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                             player,
                             &|p| rewrite_resolving_player_if_unique(p, replacement),
@@ -1618,9 +1626,9 @@ fn rewrite_instructions_unique_related_player(
                             &|_| {},
                         );
                     }
-                    spellwake_engine::toolbox::ObjectMutation::GainControl {
-                        controller, ..
-                    } => {
+                    spellwake_engine::toolbox::ObjectMutation::Control(
+                        spellwake_engine::toolbox::ControlOp::Gain { controller, .. },
+                    ) => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                             controller,
                             &|p| rewrite_resolving_player_if_unique(p, replacement),

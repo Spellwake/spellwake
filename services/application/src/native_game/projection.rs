@@ -1767,7 +1767,9 @@ impl Projection<'_, '_> {
                                         spellwake_engine::program::Instruction::MutatePlayer(spec),
                                     ] if matches!(
                                         spec.op,
-                                        spellwake_engine::toolbox::PlayerMutation::ExtortDrain
+                                        spellwake_engine::toolbox::PlayerMutation::KeywordAction(
+                                            spellwake_engine::toolbox::PlayerKeywordAction::ExtortDrain
+                                        )
                                     ) =>
                                     {
                                         Some(PlayerKeyword::Extort)

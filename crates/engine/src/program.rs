@@ -2598,10 +2598,12 @@ impl Instruction {
                 }
             }
             Self::MutatePlayer(spec) => match &mut spec.op {
-                crate::toolbox::PlayerMutation::FlipCoins {
-                    lose_destination: Some(dest),
-                    ..
-                } => adjust(dest),
+                crate::toolbox::PlayerMutation::RandomEvent(
+                    crate::toolbox::RandomEventOp::FlipCoins {
+                        lose_destination: Some(dest),
+                        ..
+                    },
+                ) => adjust(dest),
                 crate::toolbox::PlayerMutation::OfferSourceCounters {
                     placed_destination,
                     declined_destination,
@@ -2760,18 +2762,24 @@ impl Instruction {
             }
             Self::MutateObject(spec) => !matches!(
                 spec.op,
-                crate::toolbox::ObjectMutation::ReturnEarthbentCard
-                    | crate::toolbox::ObjectMutation::ResolveGrowth(_)
+                crate::toolbox::ObjectMutation::KeywordZoneAction(
+                    crate::toolbox::KeywordZoneOp::ReturnEarthbentCard
+                        | crate::toolbox::KeywordZoneOp::SacrificeEvoked
+                        | crate::toolbox::KeywordZoneOp::ExileDefeatedSiege
+                ) | crate::toolbox::ObjectMutation::ResolveGrowth(_)
                     | crate::toolbox::ObjectMutation::ResolveCounterKeyword(_)
-                    | crate::toolbox::ObjectMutation::SacrificeEvoked
-                    | crate::toolbox::ObjectMutation::RememberPermanentTarget
-                    | crate::toolbox::ObjectMutation::ExileDefeatedSiege
+                    | crate::toolbox::ObjectMutation::StateMarker(
+                        crate::toolbox::ObjectStateMarkerOp::RememberPermanentTarget
+                    )
             ),
             Self::MutatePlayer(spec) => !matches!(
                 spec.op,
-                crate::toolbox::PlayerMutation::MayRevealLibraryTop
-                    | crate::toolbox::PlayerMutation::ChooseRevealedHandCard { .. }
-                    | crate::toolbox::PlayerMutation::ExtortDrain
+                crate::toolbox::PlayerMutation::LibraryTop(
+                    crate::toolbox::LibraryTopAction::MayRevealTop
+                ) | crate::toolbox::PlayerMutation::ChooseRevealedHandCard { .. }
+                    | crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::ExtortDrain
+                    )
                     | crate::toolbox::PlayerMutation::OfferSourceCounters { .. }
                     | crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
                     | crate::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
@@ -3754,7 +3762,9 @@ impl ExecutableBody {
     pub fn target_division_total(&self) -> Option<u16> {
         self.instructions.iter().find_map(|op| match op {
             Instruction::MutateObject(spec) => match spec.op {
-                crate::toolbox::ObjectMutation::DistributeCounters { total, .. } => Some(total),
+                crate::toolbox::ObjectMutation::Counters(
+                    crate::toolbox::CounterOp::Distribute { total, .. },
+                ) => Some(total),
                 _ => None,
             },
             _ => None,
@@ -3825,7 +3835,9 @@ impl ExecutableBody {
                 if matches!(spec.source, crate::toolbox::ObjectQuery::Targets)
                     && matches!(
                         spec.op,
-                        crate::toolbox::ObjectMutation::DoubleCounters { .. }
+                        crate::toolbox::ObjectMutation::Counters(
+                            crate::toolbox::CounterOp::Double { .. }
+                        )
                     ) =>
             {
                 Some((0, usize::MAX))
@@ -3865,10 +3877,12 @@ impl ExecutableBody {
                     if matches!(spec.source, crate::toolbox::ObjectQuery::Targets)
                         && matches!(
                             spec.op,
-                            crate::toolbox::ObjectMutation::CreateAuraTokenAttached {
-                                up_to_one: true,
-                                ..
-                            }
+                            crate::toolbox::ObjectMutation::TokenAttach(
+                                crate::toolbox::TokenAttachOp::CreateAuraAttached {
+                                    up_to_one: true,
+                                    ..
+                                }
+                            )
                         ) =>
                 {
                     Some((0, 1))
@@ -4967,11 +4981,12 @@ impl ExecutableBody {
                         facts.definitely_exiled_target,
                     )?;
                     let op_fam = match &spec.op {
-                        crate::toolbox::PlayerMutation::AddCounter { amount, .. }
-                        | crate::toolbox::PlayerMutation::PayCounter { amount, .. } => {
+                        crate::toolbox::PlayerMutation::Counter { amount, .. } => {
                             amount.required_operand_family(self.target)?
                         }
-                        crate::toolbox::PlayerMutation::AdditionalCombat { untap } => {
+                        crate::toolbox::PlayerMutation::TurnFlow(
+                            crate::toolbox::TurnFlowOp::AdditionalCombat { untap },
+                        ) => {
                             let admitted = match untap {
                                 CombatUntapGroup::None | CombatUntapGroup::ControlledCreatures => {
                                     self.target == BodyTarget::None
@@ -5025,41 +5040,62 @@ impl ExecutableBody {
                             }
                             None
                         }
-                        crate::toolbox::PlayerMutation::Ripple(n) => {
+                        crate::toolbox::PlayerMutation::KeywordAction(
+                            crate::toolbox::PlayerKeywordAction::Ripple(n),
+                        ) => {
                             if *n == 0 {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                             None
                         }
-                        crate::toolbox::PlayerMutation::Incubate { count } => {
+                        crate::toolbox::PlayerMutation::KeywordAction(
+                            crate::toolbox::PlayerKeywordAction::Incubate { count },
+                        ) => {
                             count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                             None
                         }
-                        crate::toolbox::PlayerMutation::ManifestTop { amount }
-                        | crate::toolbox::PlayerMutation::Scry(amount)
-                        | crate::toolbox::PlayerMutation::Surveil(amount)
-                        | crate::toolbox::PlayerMutation::Mill(amount)
-                        | crate::toolbox::PlayerMutation::Blight { amount }
-                        | crate::toolbox::PlayerMutation::CollectEvidence { minimum: amount } => {
-                            if matches!(spec.op, crate::toolbox::PlayerMutation::Mill(_)) {
+                        crate::toolbox::PlayerMutation::LibraryTop(
+                            crate::toolbox::LibraryTopAction::ManifestTop(amount)
+                            | crate::toolbox::LibraryTopAction::Scry(amount)
+                            | crate::toolbox::LibraryTopAction::Surveil(amount)
+                            | crate::toolbox::LibraryTopAction::Mill(amount),
+                        )
+                        | crate::toolbox::PlayerMutation::KeywordAction(
+                            crate::toolbox::PlayerKeywordAction::Blight { amount }
+                            | crate::toolbox::PlayerKeywordAction::CollectEvidence {
+                                minimum: amount,
+                            },
+                        ) => {
+                            if matches!(
+                                spec.op,
+                                crate::toolbox::PlayerMutation::LibraryTop(
+                                    crate::toolbox::LibraryTopAction::Mill(_)
+                                )
+                            ) {
                                 facts.definitely_milled_top = true;
                             }
                             if matches!(
                                 spec.op,
-                                crate::toolbox::PlayerMutation::CollectEvidence { .. }
+                                crate::toolbox::PlayerMutation::KeywordAction(
+                                    crate::toolbox::PlayerKeywordAction::CollectEvidence { .. }
+                                )
                             ) {
                                 facts.definitely_selected_graveyard_exile = true;
                             }
                             amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                             amount.required_operand_family(self.target)?
                         }
-                        crate::toolbox::PlayerMutation::Bolster(amount) => {
+                        crate::toolbox::PlayerMutation::KeywordAction(
+                            crate::toolbox::PlayerKeywordAction::Bolster(amount),
+                        ) => {
                             if *amount == 0 {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                             None
                         }
-                        crate::toolbox::PlayerMutation::Amass { amount, .. } => {
+                        crate::toolbox::PlayerMutation::KeywordAction(
+                            crate::toolbox::PlayerKeywordAction::Amass { amount, .. },
+                        ) => {
                             if *amount == 0 {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
@@ -5247,14 +5283,18 @@ impl ExecutableBody {
                             }
                             Some(OperandFamily::Permanent)
                         }
-                        crate::toolbox::PlayerMutation::MayRevealLibraryTop => {
+                        crate::toolbox::PlayerMutation::LibraryTop(
+                            crate::toolbox::LibraryTopAction::MayRevealTop,
+                        ) => {
                             if self.target != BodyTarget::None {
                                 return Err(DefinitionError::OperandFamily);
                             }
                             facts.definitely_checked_top = true;
                             None
                         }
-                        crate::toolbox::PlayerMutation::RollDie { count, bands, .. } => {
+                        crate::toolbox::PlayerMutation::RandomEvent(
+                            crate::toolbox::RandomEventOp::RollDie { count, bands, .. },
+                        ) => {
                             count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                             let mut rf = count.required_operand_family(self.target)?;
                             for band in bands {
@@ -5302,12 +5342,14 @@ impl ExecutableBody {
                             }
                             rf
                         }
-                        crate::toolbox::PlayerMutation::FlipCoins {
-                            mode,
-                            win_body,
-                            lose_body,
-                            lose_destination,
-                        } => {
+                        crate::toolbox::PlayerMutation::RandomEvent(
+                            crate::toolbox::RandomEventOp::FlipCoins {
+                                mode,
+                                win_body,
+                                lose_body,
+                                lose_destination,
+                            },
+                        ) => {
                             if let Some(dest) = lose_destination {
                                 Self::validate_destination(index, *dest, length)?;
                             }
@@ -5482,7 +5524,9 @@ impl ExecutableBody {
                             }
                             None
                         }
-                        crate::toolbox::PlayerMutation::ExtortDrain => {
+                        crate::toolbox::PlayerMutation::KeywordAction(
+                            crate::toolbox::PlayerKeywordAction::ExtortDrain,
+                        ) => {
                             let definition = TriggeredAbility::extort(TriggeredAbilityId(0));
                             if !matches!(context, BodyContext::TriggerBound { condition, grouping: TriggerGrouping::EachOccurrence } if *condition == definition.condition)
                                 || *self != definition.body
@@ -5498,15 +5542,22 @@ impl ExecutableBody {
                 Instruction::MutateObject(spec) => {
                     spec.validate_vocabulary(vocabulary)?;
                     let mut family = match &spec.op {
-                        crate::toolbox::ObjectMutation::RememberPermanentTarget
-                        | crate::toolbox::ObjectMutation::CreateTokenCopy(_)
-                        | crate::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                        crate::toolbox::ObjectMutation::StateMarker(
+                            crate::toolbox::ObjectStateMarkerOp::RememberPermanentTarget,
+                        )
+                        | crate::toolbox::ObjectMutation::TokenAttach(
+                            crate::toolbox::TokenAttachOp::CreateCopy(_)
+                            | crate::toolbox::TokenAttachOp::CreateAuraAttached { .. },
+                        )
                         | crate::toolbox::ObjectMutation::Connive { .. }
-                        | crate::toolbox::ObjectMutation::ConniveFinalize
-                        | crate::toolbox::ObjectMutation::ExchangeControl { .. }
-                        | crate::toolbox::ObjectMutation::Attach {
-                            ability: Some(_), ..
-                        } => None,
+                        | crate::toolbox::ObjectMutation::Control(
+                            crate::toolbox::ControlOp::Exchange { .. },
+                        )
+                        | crate::toolbox::ObjectMutation::Attach(
+                            crate::toolbox::AttachOp::ToObject {
+                                ability: Some(_), ..
+                            },
+                        ) => None,
                         _ => validate_toolbox_object_query(
                             &spec.source,
                             context,
@@ -5545,8 +5596,7 @@ impl ExecutableBody {
                     };
                     family = toolbox_merge_family(family, sel_fam)?;
                     let op_fam = match &spec.op {
-                        crate::toolbox::ObjectMutation::Goad { by }
-                        | crate::toolbox::ObjectMutation::GoadPermanent { by } => {
+                        crate::toolbox::ObjectMutation::Goad { by, .. } => {
                             validate_toolbox_player_selector(
                                 by,
                                 context,
@@ -5554,10 +5604,12 @@ impl ExecutableBody {
                                 facts.definitely_exiled_target,
                             )?
                         }
-                        crate::toolbox::ObjectMutation::Attach {
-                            ability: Some(ability),
-                            ..
-                        } => {
+                        crate::toolbox::ObjectMutation::Attach(
+                            crate::toolbox::AttachOp::ToObject {
+                                ability: Some(ability),
+                                ..
+                            },
+                        ) => {
                             let valid = match context {
                                 BodyContext::Unbound
                                 | BodyContext::Activated { .. }
@@ -5584,16 +5636,20 @@ impl ExecutableBody {
                             }
                             Some(OperandFamily::Permanent)
                         }
-                        crate::toolbox::ObjectMutation::Attach {
-                            host,
-                            ability: None,
-                        } => validate_toolbox_object_query(
+                        crate::toolbox::ObjectMutation::Attach(
+                            crate::toolbox::AttachOp::ToObject {
+                                host,
+                                ability: None,
+                            },
+                        ) => validate_toolbox_object_query(
                             host,
                             context,
                             self.target,
                             facts.definitely_exiled_target,
                         )?,
-                        crate::toolbox::ObjectMutation::ExchangeControl { other } => {
+                        crate::toolbox::ObjectMutation::Control(
+                            crate::toolbox::ControlOp::Exchange { other },
+                        ) => {
                             let mut ex_fam = None;
                             for query in [&spec.source, other.as_ref()] {
                                 let qf = match query.to_move_subject() {
@@ -5636,19 +5692,21 @@ impl ExecutableBody {
                             }
                             ex_fam
                         }
-                        crate::toolbox::ObjectMutation::AttachToPlayer { player } => {
-                            validate_toolbox_player_selector(
-                                player,
-                                context,
-                                self.target,
-                                facts.definitely_exiled_target,
-                            )?
-                        }
-                        crate::toolbox::ObjectMutation::AddCounters { amount, .. }
-                        | crate::toolbox::ObjectMutation::RemoveCounters { amount, .. } => {
-                            amount.required_operand_family(self.target)?
-                        }
-                        crate::toolbox::ObjectMutation::BecomeMonstrous { amount } => {
+                        crate::toolbox::ObjectMutation::Attach(
+                            crate::toolbox::AttachOp::ToPlayer { player },
+                        ) => validate_toolbox_player_selector(
+                            player,
+                            context,
+                            self.target,
+                            facts.definitely_exiled_target,
+                        )?,
+                        crate::toolbox::ObjectMutation::Counters(
+                            crate::toolbox::CounterOp::Add { amount, .. }
+                            | crate::toolbox::CounterOp::Remove { amount, .. },
+                        ) => amount.required_operand_family(self.target)?,
+                        crate::toolbox::ObjectMutation::StateMarker(
+                            crate::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+                        ) => {
                             if !context.has_source() {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
@@ -5659,13 +5717,17 @@ impl ExecutableBody {
                             amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                             amount.required_operand_family(self.target)?
                         }
-                        crate::toolbox::ObjectMutation::Enlist => {
+                        crate::toolbox::ObjectMutation::Combat(
+                            crate::toolbox::ObjectCombatOp::Enlist,
+                        ) => {
                             if !context.has_source() {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
                             None
                         }
-                        crate::toolbox::ObjectMutation::DistributeCounters { kind, total } => {
+                        crate::toolbox::ObjectMutation::Counters(
+                            crate::toolbox::CounterOp::Distribute { kind, total },
+                        ) => {
                             if *total == 0 || kind.is_player_counter() {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
@@ -5679,7 +5741,9 @@ impl ExecutableBody {
                                 _ => return Err(DefinitionError::OperandFamily),
                             }
                         }
-                        crate::toolbox::ObjectMutation::ReselectAttackDefender => {
+                        crate::toolbox::ObjectMutation::Combat(
+                            crate::toolbox::ObjectCombatOp::ReselectAttackDefender,
+                        ) => {
                             if self.target
                                 != BodyTarget::FilteredPermanent(
                                     ObjectFilter::creature().attacking(),
@@ -5689,7 +5753,9 @@ impl ExecutableBody {
                             }
                             Some(OperandFamily::Permanent)
                         }
-                        crate::toolbox::ObjectMutation::SoulbondPair { entrant_only } => {
+                        crate::toolbox::ObjectMutation::Combat(
+                            crate::toolbox::ObjectCombatOp::SoulbondPair { entrant_only },
+                        ) => {
                             if self.target != BodyTarget::None
                                 || !matches!(context, BodyContext::TriggerBound {
                                     condition: TriggerSpec {
@@ -5705,7 +5771,9 @@ impl ExecutableBody {
                             }
                             None
                         }
-                        crate::toolbox::ObjectMutation::MoveCounters { to, amount, .. } => {
+                        crate::toolbox::ObjectMutation::Counters(
+                            crate::toolbox::CounterOp::Move { to, amount, .. },
+                        ) => {
                             let f1 = validate_toolbox_object_query(
                                 to,
                                 context,
@@ -5718,15 +5786,17 @@ impl ExecutableBody {
                             };
                             toolbox_merge_family(f1, f2)?
                         }
-                        crate::toolbox::ObjectMutation::GainControl { controller, .. } => {
-                            validate_toolbox_player_selector(
-                                controller,
-                                context,
-                                self.target,
-                                facts.definitely_exiled_target,
-                            )?
-                        }
-                        crate::toolbox::ObjectMutation::CreateTokenAndAttach { definition } => {
+                        crate::toolbox::ObjectMutation::Control(
+                            crate::toolbox::ControlOp::Gain { controller, .. },
+                        ) => validate_toolbox_player_selector(
+                            controller,
+                            context,
+                            self.target,
+                            facts.definitely_exiled_target,
+                        )?,
+                        crate::toolbox::ObjectMutation::TokenAttach(
+                            crate::toolbox::TokenAttachOp::CreateAndAttach { definition },
+                        ) => {
                             if !matches!(
                                 context,
                                 BodyContext::TriggerBound {
@@ -5742,7 +5812,9 @@ impl ExecutableBody {
                                 .map_err(|_| DefinitionError::TokenDefinition)?;
                             None
                         }
-                        crate::toolbox::ObjectMutation::RememberPermanentTarget => {
+                        crate::toolbox::ObjectMutation::StateMarker(
+                            crate::toolbox::ObjectStateMarkerOp::RememberPermanentTarget,
+                        ) => {
                             if index != 0 {
                                 return Err(DefinitionError::InvalidInstruction);
                             }
@@ -5764,7 +5836,14 @@ impl ExecutableBody {
                             )
                         }
                         crate::toolbox::ObjectMutation::Connive { count } => {
-                            count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                            if let Some(count) = count {
+                                count.validate_amount(
+                                    &defined_slots,
+                                    context,
+                                    &facts,
+                                    vocabulary,
+                                )?;
+                            }
                             match spec.source.to_move_subject() {
                                 Some(
                                     MoveSubjectRef::AbilitySource | MoveSubjectRef::AttachedHost,
@@ -5799,42 +5878,9 @@ impl ExecutableBody {
                                 ) => None,
                             }
                         }
-                        crate::toolbox::ObjectMutation::ConniveFinalize => {
-                            match spec.source.to_move_subject() {
-                                Some(
-                                    MoveSubjectRef::AbilitySource | MoveSubjectRef::AttachedHost,
-                                ) => {
-                                    if !context.has_source() {
-                                        return Err(DefinitionError::InvalidInstruction);
-                                    }
-                                    None
-                                }
-                                Some(MoveSubjectRef::TriggeringObject) => {
-                                    if !matches!(context, BodyContext::TriggerBound { .. }) {
-                                        return Err(DefinitionError::InvalidInstruction);
-                                    }
-                                    None
-                                }
-                                Some(MoveSubjectRef::TargetObject) => match self.target {
-                                    BodyTarget::SingleCreature
-                                    | BodyTarget::SinglePermanent
-                                    | BodyTarget::FilteredPermanent(_) => {
-                                        Some(OperandFamily::Permanent)
-                                    }
-                                    _ => return Err(DefinitionError::OperandFamily),
-                                },
-                                Some(MoveSubjectRef::RevealedCard) | None => {
-                                    return Err(DefinitionError::InvalidInstruction);
-                                }
-                                Some(
-                                    MoveSubjectRef::CreatedTokens
-                                    | MoveSubjectRef::LastMoved
-                                    | MoveSubjectRef::RememberedFirst
-                                    | MoveSubjectRef::RememberedSecond,
-                                ) => None,
-                            }
-                        }
-                        crate::toolbox::ObjectMutation::CreateTokenCopy(copy) => {
+                        crate::toolbox::ObjectMutation::TokenAttach(
+                            crate::toolbox::TokenAttachOp::CreateCopy(copy),
+                        ) => {
                             copy.count.validate_amount(
                                 &defined_slots,
                                 context,
@@ -5918,10 +5964,11 @@ impl ExecutableBody {
                             }
                             merge_family(fam, copy.count.required_operand_family(self.target)?)?
                         }
-                        crate::toolbox::ObjectMutation::CreateAuraTokenAttached {
-                            definition,
-                            ..
-                        } => {
+                        crate::toolbox::ObjectMutation::TokenAttach(
+                            crate::toolbox::TokenAttachOp::CreateAuraAttached {
+                                definition, ..
+                            },
+                        ) => {
                             definition
                                 .validate(vocabulary)
                                 .map_err(|_| DefinitionError::InvalidInstruction)?;
@@ -5963,7 +6010,9 @@ impl ExecutableBody {
                                 ) => None,
                             }
                         }
-                        crate::toolbox::ObjectMutation::ExileDefeatedSiege => {
+                        crate::toolbox::ObjectMutation::KeywordZoneAction(
+                            crate::toolbox::KeywordZoneOp::ExileDefeatedSiege,
+                        ) => {
                             if self.target != BodyTarget::None
                                 || !matches!(
                                     context,
@@ -6055,7 +6104,9 @@ impl ExecutableBody {
                             }
                             None
                         }
-                        crate::toolbox::ObjectMutation::SacrificeStateTriggerSource => {
+                        crate::toolbox::ObjectMutation::KeywordZoneAction(
+                            crate::toolbox::KeywordZoneOp::SacrificeStateTriggerSource,
+                        ) => {
                             if self.target != BodyTarget::None
                                 || !matches!(
                                     context,
@@ -6069,7 +6120,9 @@ impl ExecutableBody {
                             }
                             None
                         }
-                        crate::toolbox::ObjectMutation::SacrificeEvoked => {
+                        crate::toolbox::ObjectMutation::KeywordZoneAction(
+                            crate::toolbox::KeywordZoneOp::SacrificeEvoked,
+                        ) => {
                             if self.target != BodyTarget::None
                                 || !matches!(
                                     context,
@@ -6105,11 +6158,15 @@ impl ExecutableBody {
                             }
                             None
                         }
-                        crate::toolbox::ObjectMutation::ExileUnearthed(_)
-                        | crate::toolbox::ObjectMutation::ScheduleArtifactReturn(_) => {
+                        crate::toolbox::ObjectMutation::KeywordZoneAction(
+                            crate::toolbox::KeywordZoneOp::ExileUnearthed(_)
+                            | crate::toolbox::KeywordZoneOp::ScheduleArtifactReturn(_),
+                        ) => {
                             return Err(DefinitionError::InvalidInstruction);
                         }
-                        crate::toolbox::ObjectMutation::ReturnEarthbentCard => {
+                        crate::toolbox::ObjectMutation::KeywordZoneAction(
+                            crate::toolbox::KeywordZoneOp::ReturnEarthbentCard,
+                        ) => {
                             if self.target != BodyTarget::None
                                 || !matches!(context, BodyContext::TriggerBound { .. })
                             {
@@ -8017,17 +8074,21 @@ impl ExecutableBody {
                     Instruction::MutatePlayer(spec)
                         if matches!(
                             spec.op,
-                            crate::toolbox::PlayerMutation::FlipCoins {
-                                lose_destination: Some(_),
-                                ..
-                            }
+                            crate::toolbox::PlayerMutation::RandomEvent(
+                                crate::toolbox::RandomEventOp::FlipCoins {
+                                    lose_destination: Some(_),
+                                    ..
+                                }
+                            )
                         ) =>
                     {
                         facts.merge_into(&mut incoming[next]);
-                        if let crate::toolbox::PlayerMutation::FlipCoins {
-                            lose_destination: Some(destination),
-                            ..
-                        } = &spec.op
+                        if let crate::toolbox::PlayerMutation::RandomEvent(
+                            crate::toolbox::RandomEventOp::FlipCoins {
+                                lose_destination: Some(destination),
+                                ..
+                            },
+                        ) = &spec.op
                         {
                             facts.merge_into(&mut incoming[*destination]);
                         }
@@ -9604,7 +9665,9 @@ impl Program {
                     if matches!(
                         spec.op,
                         crate::toolbox::PlayerMutation::AddMana(EffectManaYield::Fixed(_))
-                            | crate::toolbox::PlayerMutation::Mill(_)
+                            | crate::toolbox::PlayerMutation::LibraryTop(
+                                crate::toolbox::LibraryTopAction::Mill(_)
+                            )
                     )
             ) || matches!(
                 spell.body.instructions.as_slice(),
@@ -10008,7 +10071,9 @@ impl Program {
                     vec![Instruction::MutateObject(Box::new(
                         crate::toolbox::MutateObjectSpec::all(
                             crate::toolbox::ObjectQuery::Source,
-                            crate::toolbox::ObjectMutation::Unattach,
+                            crate::toolbox::ObjectMutation::Attach(
+                                crate::toolbox::AttachOp::Unattach,
+                            ),
                         ),
                     ))],
                 ),
@@ -10789,7 +10854,9 @@ impl Program {
                             [Instruction::MutateObject(spec)]
                                 if matches!(
                                     spec.op,
-                                    crate::toolbox::ObjectMutation::SacrificeEvoked
+                                    crate::toolbox::ObjectMutation::KeywordZoneAction(
+                                        crate::toolbox::KeywordZoneOp::SacrificeEvoked
+                                    )
                                 )
                         )
                     }) =>
@@ -11023,7 +11090,9 @@ impl Program {
                         Instruction::MutatePlayer(spec)
                             if matches!(
                                 spec.op,
-                                crate::toolbox::PlayerMutation::MayRevealLibraryTop
+                                crate::toolbox::PlayerMutation::LibraryTop(
+                                    crate::toolbox::LibraryTopAction::MayRevealTop
+                                )
                             ) =>
                         {
                             true
@@ -11031,7 +11100,9 @@ impl Program {
                         Instruction::MutateObject(spec)
                             if matches!(
                                 spec.op,
-                                crate::toolbox::ObjectMutation::ExileDefeatedSiege
+                                crate::toolbox::ObjectMutation::KeywordZoneAction(
+                                    crate::toolbox::KeywordZoneOp::ExileDefeatedSiege
+                                )
                             ) =>
                         {
                             true
@@ -11219,14 +11290,20 @@ impl Program {
                         Instruction::MutateObject(spec)
                             if matches!(
                                 spec.op,
-                                crate::toolbox::ObjectMutation::Attach {
-                                    ability: Some(_), ..
-                                } | crate::toolbox::ObjectMutation::ResolvePowerAbility(_)
-                                    | crate::toolbox::ObjectMutation::BecomeMonstrous { .. }
-                                    | crate::toolbox::ObjectMutation::Enlist
-                                    | crate::toolbox::ObjectMutation::AdvanceClassLevel(_)
-                                    | crate::toolbox::ObjectMutation::SolveCase
-                                    | crate::toolbox::ObjectMutation::SetPrepared
+                                crate::toolbox::ObjectMutation::Attach(
+                                    crate::toolbox::AttachOp::ToObject {
+                                        ability: Some(_), ..
+                                    }
+                                ) | crate::toolbox::ObjectMutation::ResolvePowerAbility(_)
+                                    | crate::toolbox::ObjectMutation::StateMarker(
+                                        crate::toolbox::ObjectStateMarkerOp::BecomeMonstrous { .. }
+                                            | crate::toolbox::ObjectStateMarkerOp::AdvanceClassLevel(_)
+                                            | crate::toolbox::ObjectStateMarkerOp::SolveCase
+                                            | crate::toolbox::ObjectStateMarkerOp::SetPrepared
+                                    )
+                                    | crate::toolbox::ObjectMutation::Combat(
+                                        crate::toolbox::ObjectCombatOp::Enlist
+                                    )
                             )
                     )
                 }) {
@@ -11510,10 +11587,10 @@ impl Program {
                 return Err(DefinitionError::InvalidInstruction);
             }
             if let [Instruction::MutateObject(spec)] = ability.body.instructions.as_slice()
-                && let crate::toolbox::ObjectMutation::Attach {
+                && let crate::toolbox::ObjectMutation::Attach(crate::toolbox::AttachOp::ToObject {
                     ability: Some(attach),
                     ..
-                } = &spec.op
+                }) = &spec.op
                 && (self.permanent().and_then(|value| value.attachment) != Some(attach.kind())
                     || (ability.source_cost != SourceCost::None
                         && !(*attach == crate::attachment::AttachAbility::Equip
@@ -11787,10 +11864,12 @@ impl Program {
                             if matches!(spec.source, crate::toolbox::ObjectQuery::Targets)
                                 && matches!(
                                     spec.op,
-                                    crate::toolbox::ObjectMutation::AddCounters {
-                                        kind: crate::effects::CounterKind::PlusOne,
-                                        ..
-                                    }
+                                    crate::toolbox::ObjectMutation::Counters(
+                                        crate::toolbox::CounterOp::Add {
+                                            kind: crate::effects::CounterKind::PlusOne,
+                                            ..
+                                        }
+                                    )
                                 )
                     )
                 {
@@ -12150,10 +12229,12 @@ mod stage_a_validation_and_jump_tests {
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    crate::toolbox::PlayerMutation::FlipCoins {
-                        lose_destination: Some(8),
-                        ..
-                    }
+                    crate::toolbox::PlayerMutation::RandomEvent(
+                        crate::toolbox::RandomEventOp::FlipCoins {
+                            lose_destination: Some(8),
+                            ..
+                        }
+                    )
                 )
         ));
         assert!(matches!(
@@ -12216,10 +12297,12 @@ mod stage_a_validation_and_jump_tests {
                 vec![Instruction::MutateObject(Box::new(
                     crate::toolbox::MutateObjectSpec::all(
                         crate::toolbox::ObjectQuery::Source,
-                        crate::toolbox::ObjectMutation::RemoveCounters {
-                            kind: None,
-                            amount: ValueExpr::literal(1),
-                        },
+                        crate::toolbox::ObjectMutation::Counters(
+                            crate::toolbox::CounterOp::Remove {
+                                kind: None,
+                                amount: ValueExpr::literal(1),
+                            },
+                        ),
                     ),
                 ))],
             ),

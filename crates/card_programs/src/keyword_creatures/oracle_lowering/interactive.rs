@@ -1449,7 +1449,7 @@ struct ChooseObjectsSpec {
 fn extract_rest_followup(op: &InstructionAst) -> Option<Instruction> {
     use spellwake_engine::toolbox::{
         GraveyardSemantics, MutateObjectSpec, ObjectMutation, ObjectQuery, PromptChoiceSpec,
-        ZoneDest, ZoneOpSpec,
+        TapStateOp, ZoneDest, ZoneOpSpec,
     };
     let is_rest_subject = |subj: &SubjectRefAst| -> bool {
         match subj {
@@ -1525,7 +1525,7 @@ fn extract_rest_followup(op: &InstructionAst) -> Option<Instruction> {
         InstructionAst::TapPermanent { subject, .. } if is_rest_subject(subject) => {
             Some(Instruction::MutateObject(Box::new(MutateObjectSpec::all(
                 unchosen(),
-                ObjectMutation::SetTapped(true),
+                ObjectMutation::TapState(TapStateOp::Set(true)),
             ))))
         }
         _ => None,
@@ -2121,14 +2121,20 @@ fn has_live_interactive_last_moved(
     for op in ops.iter().rev() {
         match op {
             Instruction::MutatePlayer(spec) => match &spec.op {
-                spellwake_engine::toolbox::PlayerMutation::Mill(_) => {
+                spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::Mill(_),
+                ) => {
                     return matches!(
                         expected,
                         InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Mill
                     );
                 }
-                spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
-                | spellwake_engine::toolbox::PlayerMutation::ManifestDread => {
+                spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::ManifestTop(_),
+                )
+                | spellwake_engine::toolbox::PlayerMutation::LibraryTop(
+                    spellwake_engine::toolbox::LibraryTopAction::ManifestDread,
+                ) => {
                     return matches!(expected, InteractiveLastMovedKind::Any);
                 }
                 spellwake_engine::toolbox::PlayerMutation::AddMana(_)

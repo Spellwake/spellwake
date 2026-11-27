@@ -409,10 +409,10 @@ fn simultaneous_departures_create_independent_surviving_triggers() {
             vec![Instruction::MutateObject(Box::new(
                 crate::toolbox::MutateObjectSpec::all(
                     crate::toolbox::ObjectQuery::Source,
-                    crate::toolbox::ObjectMutation::AddCounters {
+                    crate::toolbox::ObjectMutation::Counters(crate::toolbox::CounterOp::Add {
                         kind: crate::effects::CounterKind::PlusOne,
                         amount: crate::program::ValueExpr::literal(13),
-                    },
+                    }),
                 ),
             ))],
         ),
@@ -661,7 +661,7 @@ fn skipped_departed_turn_expires_its_effects_and_returns_phased_permanents() {
     let phase = instant(crate::program::Instruction::MutateObject(Box::new(
         crate::toolbox::MutateObjectSpec::all(
             crate::toolbox::ObjectQuery::Targets,
-            crate::toolbox::ObjectMutation::PhaseOut,
+            crate::toolbox::ObjectMutation::Orientation(crate::toolbox::OrientationOp::PhaseOut),
         ),
     )));
     let boost = instant({

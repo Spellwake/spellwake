@@ -201,7 +201,9 @@ impl EffectWindow {
     ) -> Result<StepOutcome, EffectError> {
         match instruction {
             Instruction::MutateObject(spec) => match &spec.op {
-                crate::toolbox::ObjectMutation::BecomeMonstrous { amount } => {
+                crate::toolbox::ObjectMutation::StateMarker(
+                    crate::toolbox::ObjectStateMarkerOp::BecomeMonstrous { amount },
+                ) => {
                     let source_id = match entry.kind() {
                         StackKind::ActivatedAbility { source }
                         | StackKind::TriggeredAbility { source } => Some(source.id()),
@@ -249,7 +251,9 @@ impl EffectWindow {
                     self.advance_instruction()?;
                     Ok(StepOutcome::Continue)
                 }
-                crate::toolbox::ObjectMutation::UnlockDoor { door, allow_lock } => {
+                crate::toolbox::ObjectMutation::StateMarker(
+                    crate::toolbox::ObjectStateMarkerOp::UnlockDoor { door, allow_lock },
+                ) => {
                     let resolved = self
                         .eval_object_query_at(
                             entry.controller(),
@@ -268,7 +272,7 @@ impl EffectWindow {
                         *allow_lock,
                     )
                 }
-                crate::toolbox::ObjectMutation::Enlist => {
+                crate::toolbox::ObjectMutation::Combat(crate::toolbox::ObjectCombatOp::Enlist) => {
                     let source_id = match entry.kind() {
                         StackKind::ActivatedAbility { source }
                         | StackKind::TriggeredAbility { source } => Some(source.id()),
@@ -376,7 +380,7 @@ impl EffectWindow {
                     self.advance_instruction()?;
                     Ok(StepOutcome::Continue)
                 }
-                crate::toolbox::ObjectMutation::Connive { count } => {
+                crate::toolbox::ObjectMutation::Connive { count: Some(count) } => {
                     let amount = self.resolve_value_expr(entry.controller(), count)?;
                     let subject = spec
                         .source
@@ -443,7 +447,7 @@ impl EffectWindow {
                     self.splice_replacing_current(entry.id(), index, &ops)?;
                     Ok(StepOutcome::Continue)
                 }
-                crate::toolbox::ObjectMutation::ConniveFinalize => {
+                crate::toolbox::ObjectMutation::Connive { count: None } => {
                     let subject = spec
                         .source
                         .to_move_subject()
@@ -568,7 +572,9 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::Incubate { count } => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Incubate { count },
+                    ) => {
                         let amount = self.resolve_value_expr(entry.controller(), count)?;
                         let creation = crate::dungeon::incubator_token_creation(
                             self.creature_vocabulary(),
@@ -578,7 +584,9 @@ impl EffectWindow {
                         self.begin_token_entries(&[creation], None, false)?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::Clash => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Clash,
+                    ) => {
                         let chooser = player;
                         let cursor_snap = self
                             .resolution_cursor()
@@ -775,7 +783,9 @@ impl EffectWindow {
                             }
                         }
                     }
-                    crate::toolbox::PlayerMutation::RingTemptsYou => {
+                    crate::toolbox::PlayerMutation::Designation(
+                        crate::toolbox::PlayerDesignationOp::RingTemptsYou,
+                    ) => {
                         let controller = entry.controller();
                         let evaluated = self.evaluated_characteristics()?;
                         let creatures: Vec<ObjectId> = evaluated
@@ -964,7 +974,9 @@ impl EffectWindow {
                         }
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::TakeInitiative => {
+                    crate::toolbox::PlayerMutation::Designation(
+                        crate::toolbox::PlayerDesignationOp::TakeInitiative,
+                    ) => {
                         let cursor_snap = self
                             .resolution_cursor()
                             .ok_or(EffectError::WrongResolutionFrame)?
@@ -1091,7 +1103,9 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::ManifestDread => {
+                    crate::toolbox::PlayerMutation::LibraryTop(
+                        crate::toolbox::LibraryTopAction::ManifestDread,
+                    ) => {
                         let controller = entry.controller();
                         let top_two: Vec<ObjectId> = self
                             .window
@@ -1177,7 +1191,9 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::Ripple(n) => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Ripple(n),
+                    ) => {
                         let n = *n;
                         let controller = entry.controller();
                         let top_n: Vec<ObjectId> = self
@@ -1268,7 +1284,9 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::Demonstrate => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Demonstrate,
+                    ) => {
                         let target_id = self
                             .window
                             .entries()
@@ -1309,12 +1327,14 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::RollDie {
-                        sides: _,
-                        count,
-                        mode,
-                        bands,
-                    } => {
+                    crate::toolbox::PlayerMutation::RandomEvent(
+                        crate::toolbox::RandomEventOp::RollDie {
+                            sides: _,
+                            count,
+                            mode,
+                            bands,
+                        },
+                    ) => {
                         let cursor_snap = self
                             .resolution_cursor()
                             .ok_or(EffectError::WrongResolutionFrame)?
@@ -1381,12 +1401,14 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         Ok(StepOutcome::Continue)
                     }
-                    crate::toolbox::PlayerMutation::FlipCoins {
-                        mode: _,
-                        win_body,
-                        lose_body,
-                        lose_destination,
-                    } => {
+                    crate::toolbox::PlayerMutation::RandomEvent(
+                        crate::toolbox::RandomEventOp::FlipCoins {
+                            mode: _,
+                            win_body,
+                            lose_body,
+                            lose_destination,
+                        },
+                    ) => {
                         let cursor_snap = self
                             .resolution_cursor()
                             .ok_or(EffectError::WrongResolutionFrame)?

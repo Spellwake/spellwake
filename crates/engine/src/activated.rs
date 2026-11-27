@@ -943,10 +943,10 @@ impl ActivatedAbility {
                 vec![crate::program::Instruction::MutateObject(Box::new(
                     crate::toolbox::MutateObjectSpec::all(
                         crate::toolbox::ObjectQuery::Targets,
-                        crate::toolbox::ObjectMutation::AddCounters {
+                        crate::toolbox::ObjectMutation::Counters(crate::toolbox::CounterOp::Add {
                             kind: crate::effects::CounterKind::PlusOne,
                             amount: crate::program::ValueExpr::literal(amount),
-                        },
+                        }),
                     ),
                 ))],
             ),

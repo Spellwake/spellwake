@@ -462,6 +462,7 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                                 by: crate::toolbox::PlayerSelector::Resolving(
                                     crate::program::ResolvingPlayer::Controller,
                                 ),
+                                permanent: false,
                             },
                         ),
                     ))],
@@ -551,7 +552,9 @@ pub fn incubator_token_creation(
                 vec![Instruction::MutateObject(Box::new(
                     crate::toolbox::MutateObjectSpec::all(
                         crate::toolbox::ObjectQuery::Source,
-                        crate::toolbox::ObjectMutation::Transform,
+                        crate::toolbox::ObjectMutation::Orientation(
+                            crate::toolbox::OrientationOp::Transform,
+                        ),
                     ),
                 ))],
             ),

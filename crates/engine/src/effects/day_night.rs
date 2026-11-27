@@ -146,7 +146,10 @@ impl EffectWindow {
         let Instruction::MutateObject(spec) = self.current_instruction()? else {
             return Err(EffectError::WrongResolutionFrame);
         };
-        if !matches!(spec.op, crate::toolbox::ObjectMutation::Transform) {
+        if !matches!(
+            spec.op,
+            crate::toolbox::ObjectMutation::Orientation(crate::toolbox::OrientationOp::Transform)
+        ) {
             return Err(EffectError::WrongResolutionFrame);
         }
         let crate::toolbox::ObjectQuery::ZoneScan { filter, .. } = &spec.source else {

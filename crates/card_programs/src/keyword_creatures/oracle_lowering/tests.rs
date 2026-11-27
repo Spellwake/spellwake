@@ -198,10 +198,10 @@ fn stage_a_and_b_fidelity_regressions() {
         Instruction::MutatePlayer(spec)
             if matches!(
                 spec.op,
-                spellwake_engine::toolbox::PlayerMutation::FlipCoins {
+                spellwake_engine::toolbox::PlayerMutation::RandomEvent(spellwake_engine::toolbox::RandomEventOp::FlipCoins {
                     lose_destination: Some(3),
                     ..
-                }
+                })
             )
     ));
     assert!(matches!(jump_ops[3], Instruction::Jump { destination: 4 }));
@@ -229,10 +229,12 @@ fn stage_a_and_b_fidelity_regressions() {
                 );
             }
             Instruction::MutatePlayer(spec) => {
-                if let spellwake_engine::toolbox::PlayerMutation::FlipCoins {
-                    lose_destination: Some(destination),
-                    ..
-                } = &spec.op
+                if let spellwake_engine::toolbox::PlayerMutation::RandomEvent(
+                    spellwake_engine::toolbox::RandomEventOp::FlipCoins {
+                        lose_destination: Some(destination),
+                        ..
+                    },
+                ) = &spec.op
                 {
                     assert!(
                         *destination > idx && *destination <= ops.len(),
@@ -311,7 +313,7 @@ fn stage_a_and_b_fidelity_regressions() {
                     Instruction::MutateObject(spec)
                         if matches!(
                             spec.op,
-                            spellwake_engine::toolbox::ObjectMutation::AddCounters { .. }
+                            spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Add { .. })
                         ) && (matches!(
                             &spec.source,
                             spellwake_engine::toolbox::ObjectQuery::EffectSubject(subject)

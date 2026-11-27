@@ -984,7 +984,10 @@ impl EffectWindow {
             ) || matches!(
                 next_instr,
                 Instruction::MutatePlayer(spec)
-                    if matches!(spec.op, crate::toolbox::PlayerMutation::PayCounter { .. })
+                    if matches!(
+                        spec.op,
+                        crate::toolbox::PlayerMutation::Counter { pay: true, .. }
+                    )
             );
             let unpaid_cost = is_payment && !self.window.participants().contains(&controller);
             if !unpaid_cost {
@@ -1179,7 +1182,11 @@ impl EffectWindow {
                 }
             }
             Instruction::MutatePlayer(spec) => match &spec.op {
-                crate::toolbox::PlayerMutation::PayCounter { kind, amount } => {
+                crate::toolbox::PlayerMutation::Counter {
+                    kind,
+                    amount,
+                    pay: true,
+                } => {
                     let entry = self
                         .window
                         .resolving()
@@ -1200,7 +1207,9 @@ impl EffectWindow {
                             .iter()
                             .all(|s| self.player_counters_of_kind(*s, *kind) >= cost))
                 }
-                crate::toolbox::PlayerMutation::CollectEvidence { minimum } => {
+                crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::CollectEvidence { minimum },
+                ) => {
                     let controller = self
                         .window
                         .resolving()
@@ -1227,7 +1236,9 @@ impl EffectWindow {
                         });
                     Ok(total_mv >= needed)
                 }
-                crate::toolbox::PlayerMutation::Blight { .. } => {
+                crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::Blight { .. },
+                ) => {
                     let player = spec
                         .resolving_player()
                         .ok_or(EffectError::InconsistentProgram)?;
@@ -1240,7 +1251,9 @@ impl EffectWindow {
                             && self.window.cards().phased_out_under(v.object).is_none()
                     }))
                 }
-                crate::toolbox::PlayerMutation::Mill(amount) => {
+                crate::toolbox::PlayerMutation::LibraryTop(
+                    crate::toolbox::LibraryTopAction::Mill(amount),
+                ) => {
                     let controller = self
                         .window
                         .resolving()
@@ -1255,14 +1268,20 @@ impl EffectWindow {
                         && (!requested.is_positive()
                             || !self.window.cards().library(player).is_empty()))
                 }
-                crate::toolbox::PlayerMutation::Populate
+                crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::Populate,
+                )
                 | crate::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
                 | crate::toolbox::PlayerMutation::SacrificeRandomUntilLand
                 | crate::toolbox::PlayerMutation::OfferSourceCounters { .. } => {
                     Err(EffectError::InconsistentProgram)
                 }
-                crate::toolbox::PlayerMutation::MayRevealLibraryTop
-                | crate::toolbox::PlayerMutation::ExtortDrain
+                crate::toolbox::PlayerMutation::LibraryTop(
+                    crate::toolbox::LibraryTopAction::MayRevealTop,
+                )
+                | crate::toolbox::PlayerMutation::KeywordAction(
+                    crate::toolbox::PlayerKeywordAction::ExtortDrain,
+                )
                 | crate::toolbox::PlayerMutation::ChooseRevealedHandCard { .. } => {
                     let entry = self
                         .window
@@ -1568,21 +1587,34 @@ impl EffectWindow {
                 _ => Ok(true),
             },
             Instruction::MutateObject(spec) => {
-                if matches!(spec.op, crate::toolbox::ObjectMutation::ReturnEarthbentCard) {
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::KeywordZoneAction(
+                        crate::toolbox::KeywordZoneOp::ReturnEarthbentCard
+                    )
+                ) {
                     Err(EffectError::InconsistentProgram)
                 } else if matches!(
                     spec.op,
                     crate::toolbox::ObjectMutation::Earthbend { .. }
-                        | crate::toolbox::ObjectMutation::SoulbondPair { .. }
-                        | crate::toolbox::ObjectMutation::RememberPermanentTarget
-                        | crate::toolbox::ObjectMutation::ExileDefeatedSiege
+                        | crate::toolbox::ObjectMutation::Combat(
+                            crate::toolbox::ObjectCombatOp::SoulbondPair { .. }
+                        )
+                        | crate::toolbox::ObjectMutation::StateMarker(
+                            crate::toolbox::ObjectStateMarkerOp::RememberPermanentTarget
+                        )
+                        | crate::toolbox::ObjectMutation::KeywordZoneAction(
+                            crate::toolbox::KeywordZoneOp::ExileDefeatedSiege
+                                | crate::toolbox::KeywordZoneOp::SacrificeEvoked
+                        )
                         | crate::toolbox::ObjectMutation::ResolveGrowth(_)
                         | crate::toolbox::ObjectMutation::ResolveCounterKeyword(_)
-                        | crate::toolbox::ObjectMutation::SacrificeEvoked
-                        | crate::toolbox::ObjectMutation::Attach {
-                            ability: Some(_),
-                            ..
-                        }
+                        | crate::toolbox::ObjectMutation::Attach(
+                            crate::toolbox::AttachOp::ToObject {
+                                ability: Some(_),
+                                ..
+                            }
+                        )
                 ) {
                     let entry = self
                         .window
@@ -1592,29 +1624,31 @@ impl EffectWindow {
                     self.operation_available(instruction, bound.choice().target)
                 } else if matches!(
                     spec.op,
-                    crate::toolbox::ObjectMutation::AdvanceClassLevel(_)
-                        | crate::toolbox::ObjectMutation::SolveCase
-                        | crate::toolbox::ObjectMutation::SetPrepared
-                        | crate::toolbox::ObjectMutation::DistributeCounters { .. }
-                        | crate::toolbox::ObjectMutation::Enlist
-                        | crate::toolbox::ObjectMutation::ReselectAttackDefender
-                        | crate::toolbox::ObjectMutation::Explore
-                        | crate::toolbox::ObjectMutation::BecomeMonstrous { .. }
-                        | crate::toolbox::ObjectMutation::UnlockDoor { .. }
+                    crate::toolbox::ObjectMutation::StateMarker(
+                        crate::toolbox::ObjectStateMarkerOp::AdvanceClassLevel(_)
+                            | crate::toolbox::ObjectStateMarkerOp::SolveCase
+                            | crate::toolbox::ObjectStateMarkerOp::SetPrepared
+                            | crate::toolbox::ObjectStateMarkerOp::BecomeMonstrous { .. }
+                            | crate::toolbox::ObjectStateMarkerOp::UnlockDoor { .. }
+                    ) | crate::toolbox::ObjectMutation::Counters(
+                        crate::toolbox::CounterOp::Distribute { .. }
+                    ) | crate::toolbox::ObjectMutation::Combat(
+                        crate::toolbox::ObjectCombatOp::Enlist
+                            | crate::toolbox::ObjectCombatOp::ReselectAttackDefender
+                    ) | crate::toolbox::ObjectMutation::Explore
                         | crate::toolbox::ObjectMutation::Connive { .. }
-                        | crate::toolbox::ObjectMutation::ConniveFinalize
-                        | crate::toolbox::ObjectMutation::CreateAuraTokenAttached { .. }
+                        | crate::toolbox::ObjectMutation::TokenAttach(_)
                         | crate::toolbox::ObjectMutation::ResolveKeywordTrigger(_)
                         | crate::toolbox::ObjectMutation::Ninjutsu
                         | crate::toolbox::ObjectMutation::Unearth
                         | crate::toolbox::ObjectMutation::Myriad
-                        | crate::toolbox::ObjectMutation::ScheduleArtifactReturn(_)
-                        | crate::toolbox::ObjectMutation::ExileUnearthed(_)
-                        | crate::toolbox::ObjectMutation::SacrificeStateTriggerSource
+                        | crate::toolbox::ObjectMutation::KeywordZoneAction(
+                            crate::toolbox::KeywordZoneOp::ScheduleArtifactReturn(_)
+                                | crate::toolbox::KeywordZoneOp::ExileUnearthed(_)
+                                | crate::toolbox::KeywordZoneOp::SacrificeStateTriggerSource
+                        )
                         | crate::toolbox::ObjectMutation::ResolveTransfer(_)
                         | crate::toolbox::ObjectMutation::ResolvePowerAbility(_)
-                        | crate::toolbox::ObjectMutation::CreateTokenAndAttach { .. }
-                        | crate::toolbox::ObjectMutation::CreateTokenCopy(_)
                 ) {
                     Ok(true)
                 } else if matches!(spec.source, crate::toolbox::ObjectQuery::Targets) {
@@ -1624,7 +1658,12 @@ impl EffectWindow {
                         .ok_or(EffectError::WrongResolutionFrame)?;
                     Ok(match self.instruction_target(entry)?.choice().target {
                         TargetRef::Object(card) => {
-                            if matches!(spec.op, crate::toolbox::ObjectMutation::RemoveFromCombat) {
+                            if matches!(
+                                spec.op,
+                                crate::toolbox::ObjectMutation::Combat(
+                                    crate::toolbox::ObjectCombatOp::RemoveFromCombat
+                                )
+                            ) {
                                 self.combat.as_ref().is_some_and(|combat| {
                                     combat.attacker(card).is_some()
                                         || combat.blocker(card).is_some()
@@ -1905,7 +1944,12 @@ impl EffectWindow {
                         matches!(
                             op,
                             Instruction::MutatePlayer(spec)
-                                if matches!(spec.op, crate::toolbox::PlayerMutation::ExtortDrain)
+                                if matches!(
+                                    spec.op,
+                                    crate::toolbox::PlayerMutation::KeywordAction(
+                                        crate::toolbox::PlayerKeywordAction::ExtortDrain
+                                    )
+                                )
                         )
                     })
                     .then_some([ManaType::White, ManaType::Black]);

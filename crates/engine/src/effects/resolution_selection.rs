@@ -767,7 +767,12 @@ impl EffectWindow {
         if matches!(
             instruction,
             Instruction::MutateObject(spec)
-                if matches!(spec.op, crate::toolbox::ObjectMutation::SacrificeEvoked)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::KeywordZoneAction(
+                        crate::toolbox::KeywordZoneOp::SacrificeEvoked
+                    )
+                )
         ) && let StackKind::TriggeredAbility { source } = entry.kind()
             && let Some(player) = self
                 .window
@@ -981,7 +986,12 @@ impl EffectWindow {
                 )
             }
             Instruction::MutateObject(spec)
-                if matches!(spec.op, crate::toolbox::ObjectMutation::ExileDefeatedSiege) =>
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::KeywordZoneAction(
+                        crate::toolbox::KeywordZoneOp::ExileDefeatedSiege
+                    )
+                ) =>
             {
                 let entry = self
                     .window
@@ -1071,15 +1081,19 @@ impl EffectWindow {
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
-                    crate::toolbox::PlayerMutation::Populate
-                        | crate::toolbox::PlayerMutation::Amass { .. }
-                        | crate::toolbox::PlayerMutation::Bolster(_)
-                        | crate::toolbox::PlayerMutation::Blight { .. }
-                        | crate::toolbox::PlayerMutation::CollectEvidence { .. }
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Populate
+                            | crate::toolbox::PlayerKeywordAction::Amass { .. }
+                            | crate::toolbox::PlayerKeywordAction::Bolster(_)
+                            | crate::toolbox::PlayerKeywordAction::Blight { .. }
+                            | crate::toolbox::PlayerKeywordAction::CollectEvidence { .. }
+                    )
                 ) =>
             {
                 match &spec.op {
-                    crate::toolbox::PlayerMutation::Populate => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Populate,
+                    ) => {
                         all = ValueExpr::Literal(1.into());
                         (
                             AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
@@ -1087,11 +1101,13 @@ impl EffectWindow {
                             ResolutionSelectionOperation::Populate,
                         )
                     }
-                    crate::toolbox::PlayerMutation::Amass {
-                        army,
-                        subtype,
-                        amount,
-                    } => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Amass {
+                            army,
+                            subtype,
+                            amount,
+                        },
+                    ) => {
                         let entry = self
                             .window
                             .resolving()
@@ -1109,7 +1125,9 @@ impl EffectWindow {
                             },
                         )
                     }
-                    crate::toolbox::PlayerMutation::Bolster(amount) => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Bolster(amount),
+                    ) => {
                         let current = self.evaluated_characteristics()?;
                         let controller = self.resolving_player(ResolvingPlayer::Controller)?;
                         let controlled = current.objects.values().filter(|p| {
@@ -1141,7 +1159,9 @@ impl EffectWindow {
                             },
                         )
                     }
-                    crate::toolbox::PlayerMutation::Blight { amount } => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::Blight { amount },
+                    ) => {
                         let entry = self
                             .window
                             .resolving()
@@ -1159,7 +1179,9 @@ impl EffectWindow {
                             ResolutionSelectionOperation::Blight { amount: count },
                         )
                     }
-                    crate::toolbox::PlayerMutation::CollectEvidence { minimum } => {
+                    crate::toolbox::PlayerMutation::KeywordAction(
+                        crate::toolbox::PlayerKeywordAction::CollectEvidence { minimum },
+                    ) => {
                         let entry = self
                             .window
                             .resolving()
@@ -2380,7 +2402,12 @@ impl EffectWindow {
         let exile_siege = matches!(
             actual,
             Instruction::MutateObject(spec)
-                if matches!(spec.op, crate::toolbox::ObjectMutation::ExileDefeatedSiege)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::KeywordZoneAction(
+                        crate::toolbox::KeywordZoneOp::ExileDefeatedSiege
+                    )
+                )
         );
         let exile_source = false;
         let delay_exile_return = false;
@@ -2510,12 +2537,13 @@ impl EffectWindow {
                 && secondary.is_none()
                 && matches!(
                     spec.op,
-                    crate::toolbox::ObjectMutation::SacrificeEvoked
-                        | crate::toolbox::ObjectMutation::SacrificeStateTriggerSource
-                        | crate::toolbox::ObjectMutation::ResolveCounterKeyword(
-                            crate::program::CounterKeyword::Fading(_)
-                                | crate::program::CounterKeyword::VanishingLastCounter
-                        )
+                    crate::toolbox::ObjectMutation::KeywordZoneAction(
+                        crate::toolbox::KeywordZoneOp::SacrificeEvoked
+                            | crate::toolbox::KeywordZoneOp::SacrificeStateTriggerSource
+                    ) | crate::toolbox::ObjectMutation::ResolveCounterKeyword(
+                        crate::program::CounterKeyword::Fading(_)
+                            | crate::program::CounterKeyword::VanishingLastCounter
+                    )
                 )
                 && matches!(
                     entry.kind(),
@@ -2554,13 +2582,17 @@ impl EffectWindow {
                     monarch_controller: None,
                 },
                 Instruction::MutateObject(spec),
-            ) if matches!(spec.op, crate::toolbox::ObjectMutation::ExileDefeatedSiege)
-                && matches!(
-                    entry.kind(),
-                    StackKind::TriggeredAbility { source }
-                        | StackKind::ActivatedAbility { source }
-                        if *object == source.id()
-                ) =>
+            ) if matches!(
+                spec.op,
+                crate::toolbox::ObjectMutation::KeywordZoneAction(
+                    crate::toolbox::KeywordZoneOp::ExileDefeatedSiege
+                )
+            ) && matches!(
+                entry.kind(),
+                StackKind::TriggeredAbility { source }
+                    | StackKind::ActivatedAbility { source }
+                    if *object == source.id()
+            ) =>
             {
                 AffectedPlayers::EachPlayer
             }
@@ -2585,7 +2617,12 @@ impl EffectWindow {
                 if matches!(
                     actual,
                     Instruction::MutateObject(spec)
-                        if matches!(spec.op, crate::toolbox::ObjectMutation::SacrificeEvoked)
+                        if matches!(
+                            spec.op,
+                            crate::toolbox::ObjectMutation::KeywordZoneAction(
+                                crate::toolbox::KeywordZoneOp::SacrificeEvoked
+                            )
+                        )
                 ) =>
             {
                 [self.source_sacrifice_player(entry, actual)].into()

@@ -21,10 +21,10 @@ pub(super) fn definition_or_token_matches(
             .flat_map(|b| &b.instructions)
             .any(|op| match op {
                 Instruction::MutateObject(spec) => match &spec.op {
-                    crate::toolbox::ObjectMutation::CreateTokenAndAttach { definition }
-                    | crate::toolbox::ObjectMutation::CreateAuraTokenAttached {
-                        definition, ..
-                    } => definition_or_token_matches(definition.program(), matches),
+                    crate::toolbox::ObjectMutation::TokenAttach(
+                        crate::toolbox::TokenAttachOp::CreateAndAttach { definition }
+                        | crate::toolbox::TokenAttachOp::CreateAuraAttached { definition, .. },
+                    ) => definition_or_token_matches(definition.program(), matches),
                     _ => false,
                 },
                 Instruction::CreateTokens { creations } => creations
@@ -628,8 +628,7 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
             )
         }
         Instruction::MutatePlayer(spec) => match &spec.op {
-            crate::toolbox::PlayerMutation::AddCounter { amount, .. }
-            | crate::toolbox::PlayerMutation::PayCounter { amount, .. }
+            crate::toolbox::PlayerMutation::Counter { amount, .. }
             | crate::toolbox::PlayerMutation::BindResolutionX(amount) => {
                 value_expr_uses_damage_dealt_by(amount)
             }
@@ -647,12 +646,14 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
             _ => false,
         },
         Instruction::MutateObject(spec) => match &spec.op {
-            crate::toolbox::ObjectMutation::AddCounters { amount, .. }
-            | crate::toolbox::ObjectMutation::RemoveCounters { amount, .. }
-            | crate::toolbox::ObjectMutation::MoveCounters {
-                amount: Some(amount),
-                ..
-            } => value_expr_uses_damage_dealt_by(amount),
+            crate::toolbox::ObjectMutation::Counters(
+                crate::toolbox::CounterOp::Add { amount, .. }
+                | crate::toolbox::CounterOp::Remove { amount, .. }
+                | crate::toolbox::CounterOp::Move {
+                    amount: Some(amount),
+                    ..
+                },
+            ) => value_expr_uses_damage_dealt_by(amount),
             _ => false,
         },
         Instruction::ApplyContinuous(spec) => match &spec.payload {

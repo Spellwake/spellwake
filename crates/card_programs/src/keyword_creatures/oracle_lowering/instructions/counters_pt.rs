@@ -134,18 +134,17 @@ pub(super) fn infer_prior_counter_kind(ops: &[Instruction]) -> Option<CounterKin
     for op in ops.iter().rev() {
         match op {
             Instruction::MutateObject(spec) => match &spec.op {
-                spellwake_engine::toolbox::ObjectMutation::AddCounters { kind, .. }
-                    if kind.is_permanent() =>
-                {
+                spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Add { kind, .. },
+                ) if kind.is_permanent() => {
                     return Some(*kind);
                 }
-                spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
-                    kind: Some(ck),
-                    ..
-                }
-                | spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind: Some(ck) }
-                    if ck.is_permanent() =>
-                {
+                spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Remove { kind: Some(ck), .. },
+                )
+                | spellwake_engine::toolbox::ObjectMutation::Counters(
+                    spellwake_engine::toolbox::CounterOp::Clear { kind: Some(ck) },
+                ) if ck.is_permanent() => {
                     return Some(*ck);
                 }
                 _ => {}
@@ -176,7 +175,7 @@ fn is_pure_remember_target_clause(op: &Instruction) -> bool {
                         Instruction::MutateObject(spec)
                             if matches!(
                                 spec.op,
-                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                             )
                     )
                 })
@@ -204,7 +203,7 @@ fn try_append_fixed_first_target_pt_parts(
                         Instruction::MutateObject(spec)
                             if matches!(
                                 spec.op,
-                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                             )
                     )
                 })
@@ -262,7 +261,7 @@ fn try_append_fixed_first_target_counters(
                             Instruction::MutateObject(spec)
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                    spellwake_engine::toolbox::ObjectMutation::StateMarker(spellwake_engine::toolbox::ObjectStateMarkerOp::RememberPermanentTarget)
                                 )
                         )
                     })
@@ -433,7 +432,7 @@ pub(super) fn lower_counters_pt_instruction(
                             Some(Instruction::MutatePlayer(spec))
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::PlayerMutation::Incubate { .. }
+                                    spellwake_engine::toolbox::PlayerMutation::KeywordAction(spellwake_engine::toolbox::PlayerKeywordAction::Incubate { .. })
                                 )
                         )
                         || (has_prior_token_creation(&trial.instructions)
@@ -451,7 +450,7 @@ pub(super) fn lower_counters_pt_instruction(
                             Some(Instruction::MutatePlayer(spec))
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
+                                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::ManifestTop(_))
                                 )
                         ) =>
                 {
@@ -1170,11 +1169,13 @@ pub(super) fn lower_counters_pt_instruction(
                         builder
                             .instructions
                             .push(Instruction::MutateObject(Box::new(
-                                spellwake_engine::toolbox::MutateObjectSpec::all(
-                                    spellwake_engine::toolbox::ObjectQuery::Targets,
-                                    spellwake_engine::toolbox::ObjectMutation::GrantFlashback,
+                            spellwake_engine::toolbox::MutateObjectSpec::all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                                    spellwake_engine::toolbox::ObjectStateMarkerOp::GrantFlashback,
                                 ),
-                            )));
+                            ),
+                        )));
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -1200,7 +1201,9 @@ pub(super) fn lower_counters_pt_instruction(
                                     filter: Box::new(ObjectFilter::any()),
                                     slice: spellwake_engine::toolbox::QuerySlice::All,
                                 },
-                                spellwake_engine::toolbox::ObjectMutation::GrantFlashback,
+                                spellwake_engine::toolbox::ObjectMutation::StateMarker(
+                                    spellwake_engine::toolbox::ObjectStateMarkerOp::GrantFlashback,
+                                ),
                             ),
                         )));
                         return Ok(());
@@ -2970,16 +2973,16 @@ pub(super) fn lower_counters_pt_instruction(
                     _ => None,
                 };
                 if let Some(eff_subj) = target_subj {
-                    trial
-                        .instructions
-                        .push(Instruction::MutateObject(Box::new(
-                            spellwake_engine::toolbox::MutateObjectSpec::all(
-                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
-                                    eff_subj,
-                                )),
-                                spellwake_engine::toolbox::ObjectMutation::TransferCountersFromTriggeringLki,
+                    trial.instructions.push(Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::all(
+                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                eff_subj,
+                            )),
+                            spellwake_engine::toolbox::ObjectMutation::Counters(
+                                spellwake_engine::toolbox::CounterOp::TransferFromTriggeringLki,
                             ),
-                        )));
+                        ),
+                    )));
                     *builder = trial;
                     return Ok(());
                 }
@@ -4088,8 +4091,8 @@ pub(super) fn lower_counters_pt_instruction(
                             Some(Instruction::MutatePlayer(spec))
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
-                                        | spellwake_engine::toolbox::PlayerMutation::ManifestDread
+                                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::ManifestTop(_))
+                                        | spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::ManifestDread)
                                 )
                         )
                         || matches!(
@@ -4100,9 +4103,7 @@ pub(super) fn lower_counters_pt_instruction(
                                     Instruction::MutatePlayer(spec)
                                         if matches!(
                                             spec.op,
-                                            spellwake_engine::toolbox::PlayerMutation::ManifestTop {
-                                                ..
-                                            } | spellwake_engine::toolbox::PlayerMutation::ManifestDread
+                                            spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::ManifestTop(_)) | spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::ManifestDread)
                                         )
                                 ))
                         ) =>
@@ -4476,9 +4477,9 @@ pub(super) fn lower_counters_pt_instruction(
                             builder.instructions.push(
                                 crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
                                     spellwake_engine::toolbox::ObjectQuery::Targets,
-                                    spellwake_engine::toolbox::ObjectMutation::ClearCounters {
-                                        kind,
-                                    },
+                                    spellwake_engine::toolbox::ObjectMutation::Counters(
+                                        spellwake_engine::toolbox::CounterOp::Clear { kind },
+                                    ),
                                 ),
                             );
                         }
@@ -4529,13 +4530,13 @@ pub(super) fn lower_counters_pt_instruction(
                                 ObjectClause::any().attached_to_self(),
                             )), kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::Matching(ObjectFilter::Clause(
                                 ObjectClause::any().attached_to_self(),
-                            )), spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind }) });
+                            )), spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Clear { kind })) });
                     Ok(())
                 }
                 SubjectRefAst::TriggerSubject if in_trigger => {
                     builder
                         .instructions
-                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::TriggerSubject, kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::TriggerSubject, spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind }) });
+                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::TriggerSubject, kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::TriggerSubject, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Clear { kind })) });
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_)
@@ -4543,13 +4544,13 @@ pub(super) fn lower_counters_pt_instruction(
                 {
                     builder
                         .instructions
-                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::CreatedTokens, kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::CreatedTokens, spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind }) });
+                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::CreatedTokens, kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::CreatedTokens, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Clear { kind })) });
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
                     builder
                         .instructions
-                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::TargetObject, kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::TargetObject, spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind }) });
+                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::TargetObject, kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::TargetObject, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Clear { kind })) });
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_)
@@ -4558,7 +4559,7 @@ pub(super) fn lower_counters_pt_instruction(
                 {
                     builder
                         .instructions
-                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::LastMoved, kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::LastMoved, spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind }) });
+                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::LastMoved, kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::LastMoved, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Clear { kind })) });
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(raw)
@@ -4568,7 +4569,7 @@ pub(super) fn lower_counters_pt_instruction(
                 {
                     builder
                         .instructions
-                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::TriggerSubject, kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::TriggerSubject, spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind }) });
+                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::TriggerSubject, kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::TriggerSubject, spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Clear { kind })) });
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_)
@@ -4577,7 +4578,7 @@ pub(super) fn lower_counters_pt_instruction(
                 {
                     builder
                         .instructions
-                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::Matching(group_obj), kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::Matching(group_obj), spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind }) });
+                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::Matching(group_obj), kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::Matching(group_obj), spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Clear { kind })) });
                     Ok(())
                 }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -4591,7 +4592,7 @@ pub(super) fn lower_counters_pt_instruction(
                     builder.last_group_filter = Some(obj);
                     builder
                         .instructions
-                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::Matching(obj), kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::Matching(obj), spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind }) });
+                        .push(match amt_opt { Some(amt) => crate::keyword_creatures::oracle_lowering::toolbox_emit::remove_counters_from_subject(EffectSubject::Matching(obj), kind, amt), None => crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_subject(EffectSubject::Matching(obj), spellwake_engine::toolbox::ObjectMutation::Counters(spellwake_engine::toolbox::CounterOp::Clear { kind })) });
                     Ok(())
                 }
                 SubjectRefAst::Compound(items) if !items.is_empty() => {
@@ -5217,7 +5218,7 @@ pub(super) fn lower_counters_pt_instruction(
                             Some(Instruction::MutatePlayer(spec))
                                 if matches!(
                                     spec.op,
-                                    spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
+                                    spellwake_engine::toolbox::PlayerMutation::LibraryTop(spellwake_engine::toolbox::LibraryTopAction::ManifestTop(_))
                                 )
                         ) =>
                 {
