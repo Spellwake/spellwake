@@ -222,6 +222,15 @@ impl<'a> TokenStream<'a> {
         }
     }
 
+    pub fn eat_semicolon(&mut self) -> bool {
+        if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Semicolon)) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn eat_em_dash(&mut self) -> bool {
         if matches!(self.peek().map(|t| &t.kind), Some(TokenKind::EmDash)) {
             self.pos += 1;

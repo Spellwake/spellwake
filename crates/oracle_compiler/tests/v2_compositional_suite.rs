@@ -1090,3 +1090,159 @@ fn v2_real_magic_card_corpus_sample_and_iconic_staples() {
         }
     ));
 }
+
+/// 5. Deep Wave 2 compositional IR assertions covering shocklands, Thoughtseize/Duress,
+///    Drown in the Loch, Theros Devotion, Gaea's Cradle scaled mana, Pharika's Cure
+///    multi-clause damage+life, Path to Exile, Tormod's Crypt, X/X tokens, Tap-or-Untap,
+///    and extra turns / phasing.
+#[test]
+fn v2_wave2_compositional_grammar_deep_ir_assertions() {
+    let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("content")
+        .join("tests")
+        .join("fixtures")
+        .join("creature-vocabulary.input.json");
+    let vocab = Vocabulary::load_from_file(&vocab_path).expect("load CR creature vocabulary");
+
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "Breeding Pool",
+            "Land — Forest Island",
+            "As Breeding Pool enters, you may pay 2 life. If you don't, it enters tapped.",
+        ),
+        (
+            "Thoughtseize",
+            "Sorcery",
+            "Target player reveals their hand. You choose a nonland card from it. That player discards that card. You lose 2 life.",
+        ),
+        (
+            "Drown in the Loch",
+            "Instant",
+            "Choose one —\n• Counter target spell with mana value less than or equal to the number of cards in its controller's graveyard.\n• Destroy target creature with mana value less than or equal to the number of cards in its controller's graveyard.",
+        ),
+        (
+            "Thassa, God of the Sea",
+            "Legendary Enchantment Creature — God",
+            "Indestructible\nAs long as your devotion to blue is less than five, Thassa isn't a creature.\nAt the beginning of your upkeep, scry 1.",
+        ),
+        (
+            "Pharika's Cure",
+            "Instant",
+            "Pharika's Cure deals 2 damage to target creature and you gain 2 life.",
+        ),
+        (
+            "Path to Exile",
+            "Instant",
+            "Exile target creature. Its controller may search their library for a basic land card, put that card onto the battlefield tapped, then shuffle.",
+        ),
+        (
+            "Gaea's Cradle",
+            "Legendary Land",
+            "{T}: Add {G} for each creature you control.",
+        ),
+        (
+            "Tormod's Crypt",
+            "Artifact",
+            "{T}, Sacrifice Tormod's Crypt: Exile target player's graveyard.",
+        ),
+        (
+            "Time Warp",
+            "Sorcery",
+            "Target player takes an extra turn after this one.",
+        ),
+        (
+            "Slip Out the Back",
+            "Instant",
+            "Put a +1/+1 counter on target creature. It phases out.",
+        ),
+        (
+            "Twiddle",
+            "Instant",
+            "You may tap or untap target artifact, creature, or land.",
+        ),
+        (
+            "Veil of Summer",
+            "Instant",
+            "Draw a card if an opponent has cast a blue or black spell this turn. Spells you control can't be countered this turn. You and permanents you control gain hexproof from blue and from black until end of turn.",
+        ),
+        (
+            "Elvish Ooze Maker",
+            "Sorcery",
+            "Create an X/X green Ooze creature token, where X is your life total.",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in cases {
+        let card = CardInput {
+            oracle_id: name,
+            name,
+            layout: "normal",
+            faces: vec![FaceInput {
+                name,
+                type_line,
+                oracle_text,
+            }],
+        };
+        let compiled = compile_card_v2(&card, &vocab);
+        assert!(
+            compiled.strictly_compiled,
+            "Wave 2 card `{name}` failed strict v2 compilation: {:#?}",
+            compiled.faces[0].errors
+        );
+    }
+
+    // Verify Pharika's Cure emits BOTH DealDamage AND AdjustLife (never swallows `you` as damage target!)
+    let cure = compile_card_v2(
+        &CardInput {
+            oracle_id: "cure",
+            name: "Pharika's Cure",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Pharika's Cure",
+                type_line: "Instant",
+                oracle_text: "Pharika's Cure deals 2 damage to target creature and you gain 2 life.",
+            }],
+        },
+        &vocab,
+    );
+    assert_eq!(cure.faces[0].spell_effects.len(), 2);
+    assert!(matches!(
+        &cure.faces[0].spell_effects[0],
+        Effect::DealDamage { .. }
+    ));
+    assert!(matches!(
+        &cure.faces[0].spell_effects[1],
+        Effect::AdjustLife {
+            player: PlayerRef::You,
+            op: LifeOp::Gain,
+            ..
+        }
+    ));
+
+    // Verify Gaea's Cradle emits scaled ManaSpec::Scaled
+    let cradle = compile_card_v2(
+        &CardInput {
+            oracle_id: "cradle",
+            name: "Gaea's Cradle",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Gaea's Cradle",
+                type_line: "Legendary Land",
+                oracle_text: "{T}: Add {G} for each creature you control.",
+            }],
+        },
+        &vocab,
+    );
+    assert!(matches!(
+        cradle.faces[0].abilities.as_slice(),
+        [Ability::Activated { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::MutatePlayer {
+                    mutation: PlayerMutation::AddMana(spellwake_oracle_compiler::v2::ir::ManaSpec::Scaled { .. }),
+                    ..
+                }]
+            )
+    ));
+}

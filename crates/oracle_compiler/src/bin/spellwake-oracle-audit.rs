@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
@@ -131,6 +131,7 @@ fn run_v2_corpus_audit(
     snapshot: &Path,
     vocab_path: &Path,
     output: Option<&Path>,
+    dump_failures: Option<&Path>,
     all_cards: bool,
 ) -> Result<ExitCode, String> {
     let vocab = Vocabulary::load_from_file(vocab_path).map_err(|e| {
@@ -140,6 +141,14 @@ fn run_v2_corpus_audit(
         )
     })?;
     let mut summary = V2CorpusSummary::default();
+    let mut failure_writer = match dump_failures {
+        Some(p) => {
+            let f =
+                File::create(p).map_err(|e| format!("failed to create {}: {e}", p.display()))?;
+            Some(BufWriter::new(f))
+        }
+        None => None,
+    };
 
     let mut handle_raw = |raw: RawCard| {
         if !all_cards && !raw.legalities.is_empty() && !is_ordinary_base_format(&raw.legalities) {
@@ -177,6 +186,23 @@ fn run_v2_corpus_audit(
             faces: face_inputs,
         };
         let compiled = compile_card_v2(&input, &vocab);
+        if !compiled.strictly_compiled
+            && let Some(ref mut w) = failure_writer
+        {
+            let errs: Vec<_> = compiled
+                .faces
+                .iter()
+                .flat_map(|f| f.errors.iter())
+                .collect();
+            let rec = serde_json::json!({
+                "name": compiled.name,
+                "layout": compiled.layout,
+                "error_count": errs.len(),
+                "errors": errs,
+            });
+            let _ = serde_json::to_writer(&mut *w, &rec);
+            let _ = w.write_all(b"\n");
+        }
         summary.record(&compiled);
     };
 
@@ -585,6 +611,7 @@ fn main() -> ExitCode {
             let mut snapshot: Option<PathBuf> = None;
             let mut vocab: Option<PathBuf> = None;
             let mut output: Option<PathBuf> = None;
+            let mut dump_failures: Option<PathBuf> = None;
             let mut all_cards = false;
             let mut i = 1;
             while i < args.len() {
@@ -601,6 +628,10 @@ fn main() -> ExitCode {
                         output = Some(PathBuf::from(&args[i + 1]));
                         i += 2;
                     }
+                    "--dump-failures" if i + 1 < args.len() => {
+                        dump_failures = Some(PathBuf::from(&args[i + 1]));
+                        i += 2;
+                    }
                     "--all-cards" => {
                         all_cards = true;
                         i += 1;
@@ -615,7 +646,13 @@ fn main() -> ExitCode {
                 eprintln!("audit-v2-corpus requires --snapshot <path> and --vocab <path>");
                 return ExitCode::FAILURE;
             };
-            match run_v2_corpus_audit(&snap, &voc, output.as_deref(), all_cards) {
+            match run_v2_corpus_audit(
+                &snap,
+                &voc,
+                output.as_deref(),
+                dump_failures.as_deref(),
+                all_cards,
+            ) {
                 Ok(code) => code,
                 Err(err) => {
                     eprintln!("Error: {err}");
