@@ -13,6 +13,7 @@ pub mod keywords;
 pub mod preprocess;
 pub mod standardize;
 pub mod typed_ir;
+pub mod v2;
 pub mod vocab;
 
 use std::error::Error;
