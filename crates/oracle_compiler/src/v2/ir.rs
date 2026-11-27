@@ -178,6 +178,110 @@ pub enum KeywordKind {
     Partner,
     Companion,
     Fuse,
+    Plainswalk,
+    Islandwalk,
+    Swampwalk,
+    Mountainwalk,
+    Forestwalk,
+    Landwalk,
+    CumulativeUpkeep,
+    Affinity,
+    Madness,
+    Echo,
+    Megamorph,
+    Vanishing,
+    Fading,
+    Soulbond,
+    Evolve,
+    Outlast,
+    Exploit,
+    Renown,
+    Awaken,
+    Surge,
+    Emerge,
+    Escalate,
+    Fabricate,
+    Improvise,
+    Aftermath,
+    Embalm,
+    Eternalize,
+    Ascend,
+    Assist,
+    JumpStart,
+    Mentor,
+    Riot,
+    Spectacle,
+    Afterlife,
+    Mutate,
+    Encore,
+    Boast,
+    Disturb,
+    Decayed,
+    Daybound,
+    Nightbound,
+    Cleave,
+    Training,
+    Reconfigure,
+    Compleated,
+    Casualty,
+    Myriad,
+    ReadAhead,
+    Enlist,
+    Squad,
+    Prototype,
+    ForMirrodin,
+    Backup,
+    Bargain,
+    Craft,
+    Offspring,
+    Impending,
+    StartYourEngines,
+    Harmonize,
+    Mobilize,
+    Phasing,
+    Rampage,
+    Bushido,
+    Modular,
+    Sunburst,
+    Dredge,
+    Bloodthirst,
+    Graft,
+    Ripple,
+    Recover,
+    Frenzy,
+    Absorb,
+    AuraSwap,
+    Fortify,
+    Gravestorm,
+    Poisonous,
+    Transfigure,
+    Champion,
+    Hideaway,
+    Prowl,
+    Reinforce,
+    Conspire,
+    Devour,
+    LevelUp,
+    UmbraArmor,
+    BattleCry,
+    LivingWeapon,
+    Scavenge,
+    Unleash,
+    Cipher,
+    Tribute,
+    Dethrone,
+    HiddenAgenda,
+    Melee,
+    Undaunted,
+    Ingest,
+    Meld,
+    Ravenous,
+    Demonstrate,
+    Freerunning,
+    Splice,
+    NinjutsuCommander,
+    Typecycling,
+    BasicLandcycling,
 }
 
 /// Optional typed parameter on a keyword (e.g. `Equip {2}`, `Ward {1}`, `Protection from red`).
@@ -185,8 +289,11 @@ pub enum KeywordKind {
 pub enum KeywordParam {
     Cost(Vec<Cost>),
     Number(u16),
+    NumberAndCost(u16, Vec<Cost>),
+    FilterAndCost(Box<ObjectFilter>, Vec<Cost>),
     Filter(Box<ObjectFilter>),
     Color(ColorMask),
+    Everything,
 }
 
 /// Typed keyword ability specification.
@@ -543,6 +650,7 @@ pub enum SubjectRef {
         another: bool,
     },
     Player(PlayerRef),
+    HandOf(PlayerRef),
     Each(Box<ObjectFilter>),
     All(Box<ObjectFilter>),
     Group(Box<ObjectFilter>),
@@ -632,6 +740,21 @@ pub enum PtDelta {
     MinusX,
 }
 
+/// Typed object state predicate for conditions (`~ is tapped`, `~ is untapped`, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ObjectStateKind {
+    Tapped,
+    Untapped,
+    Attacking,
+    Blocking,
+    Blocked,
+    Unblocked,
+    Equipped,
+    Enchanted,
+    Modified,
+    FaceDown,
+}
+
 /// Strictly-typed boolean condition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConditionExpr {
@@ -649,6 +772,31 @@ pub enum ConditionExpr {
         subject: Box<SubjectRef>,
         keyword: KeywordKind,
     },
+    SubjectState {
+        subject: Box<SubjectRef>,
+        state: ObjectStateKind,
+    },
+    ZoneHasCount {
+        filter: Box<ObjectFilter>,
+        zone: ZoneRef,
+        min_count: u16,
+    },
+    PlayerTurnEvent {
+        player: PlayerRef,
+        event: TurnEventKind,
+        filter: Option<Box<ObjectFilter>>,
+        min_count: u16,
+    },
+    LifeCompare {
+        player: PlayerRef,
+        op: CompareOp,
+        value: Box<ValueExpr>,
+    },
+    PermanentDiedThisTurn,
+    SubjectMatches {
+        subject: Box<SubjectRef>,
+        filter: Box<ObjectFilter>,
+    },
     ManaCostContains {
         subject: Box<SubjectRef>,
         symbol: ManaSymbol,
@@ -656,6 +804,9 @@ pub enum ConditionExpr {
     IsFirstCombatPhase,
     ControlsSelf,
     IsYourTurn,
+    WasKicked,
+    WasCastFromHand,
+    YouCastIt,
     Not(Box<ConditionExpr>),
     And(Box<ConditionExpr>, Box<ConditionExpr>),
     Or(Box<ConditionExpr>, Box<ConditionExpr>),
@@ -679,6 +830,7 @@ pub enum Duration {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ManaSpec {
     Exact(ManaCost),
+    Choice(Vec<ManaCost>),
     AnyColor {
         amount: ValueExpr,
         single_color: bool,
@@ -730,6 +882,12 @@ pub enum PredefinedToken {
     Map,
     Powerstone,
     Shard,
+    Lander,
+    Junk,
+    Gold,
+    Incubator,
+    Role,
+    Walker,
 }
 
 /// Typed cost atom.
@@ -739,6 +897,7 @@ pub enum Cost {
     TapSelf,
     UntapSelf,
     PayLife(ValueExpr),
+    PayEnergy(ValueExpr),
     SacrificeSelf,
     Sacrifice {
         count: ValueExpr,
@@ -747,23 +906,51 @@ pub enum Cost {
     Discard {
         count: ValueExpr,
         filter: Option<ObjectFilter>,
+        random: bool,
     },
+    DiscardHand,
     ExileSelf,
+    Exile {
+        count: ValueExpr,
+        filter: ObjectFilter,
+        from: Vec<ZoneRef>,
+    },
+    TapUntapped {
+        count: ValueExpr,
+        filter: ObjectFilter,
+    },
+    ReturnToHand {
+        subject: SubjectRef,
+    },
+    PutCounters {
+        kind: CounterKind,
+        count: ValueExpr,
+        subject: SubjectRef,
+    },
     RemoveCounters {
         kind: CounterKind,
         count: ValueExpr,
+        subject: Option<SubjectRef>,
+    },
+    Mill(ValueExpr),
+    RevealFromHand {
+        count: ValueExpr,
+        filter: ObjectFilter,
     },
 }
 
 /// Typed activation/cast timing restriction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActivationRestriction {
     AsSorcery,
     AsInstant,
     DuringYourTurn,
+    DuringYourUpkeep,
     DuringCombat,
+    BeforeAttackers,
     OnceEachTurn,
     Once,
+    OnlyIf(Box<ConditionExpr>),
 }
 
 /// Typed life adjustment kind.
@@ -864,6 +1051,18 @@ pub enum ObjectMutation {
     CantAttackOrBlock,
     CantBeBlocked,
     CantBeRegenerated,
+    CantBeCountered,
+    Regenerate,
+    DoesntUntapNextUntap,
+    MustAttackEachCombat,
+    CanBlockAdditional(u8),
+    Fight(Box<SubjectRef>),
+    Adapt(u16),
+    Explore,
+    Exert,
+    Suspect,
+    Detain,
+    RetainTypes(CardTypeMask),
 }
 
 /// Typed player mutation kind.
@@ -883,6 +1082,25 @@ pub enum PlayerMutation {
     Surveil(ValueExpr),
     Investigate(ValueExpr),
     Proliferate,
+    Amass {
+        subtype: String,
+        amount: ValueExpr,
+    },
+    Connive(ValueExpr),
+    Incubate(ValueExpr),
+    Populate,
+    Manifest {
+        dread: bool,
+    },
+    VentureIntoDungeon,
+    Discover(ValueExpr),
+    RingTemptsYou,
+    Bolster(ValueExpr),
+    Support(ValueExpr),
+    Fateseal(ValueExpr),
+    Forage,
+    CollectEvidence(ValueExpr),
+    ChooseNewTargets(Box<SubjectRef>),
     BecomeMonarch,
     ExtraTurn,
     SkipNextTurn,
@@ -907,6 +1125,9 @@ pub enum PlayerMutation {
 pub enum ChoiceCount {
     Exact(u8),
     UpTo(u8),
+    OneOrBoth,
+    OneOrMore,
+    VariableX,
     AnyNumber,
 }
 
@@ -973,9 +1194,12 @@ pub enum StepOwner {
     Next,
     YourNext,
     Your,
+    Each,
+    The,
     EachPlayer,
     EachOpponent,
     ThatPlayer,
+    DefendingPlayer,
 }
 
 /// Delayed trigger specification.
@@ -1011,6 +1235,13 @@ pub enum Effect {
         target: SubjectRef,
         amount: ValueExpr,
         divided_by: Option<PlayerRef>,
+    },
+    PreventDamage {
+        amount: Option<ValueExpr>,
+        combat_only: bool,
+        source: Option<SubjectRef>,
+        target: Option<SubjectRef>,
+        duration: Duration,
     },
     AdjustLife {
         player: PlayerRef,
@@ -1100,6 +1331,8 @@ pub enum RuleRestrictionKind {
     CantBeBlocked,
     CantBeCountered,
     CantBeTargetedBy(Box<ObjectFilter>),
+    CantBeBlockedBy(Box<ObjectFilter>),
+    CantBeBlockedByMoreThan(u8),
     DamageCantBePrevented,
     AreGoaded,
 }
@@ -1111,6 +1344,9 @@ pub enum PlayerRestrictionKind {
     CantActivateAbilities,
     CastOnlyAsSorcery,
     PlaysWithHandRevealed,
+    CantGainLife,
+    CantSearchLibraries,
+    CantDrawMoreThanOne,
 }
 
 /// Typed static ability.
@@ -1188,6 +1424,55 @@ pub enum StaticAbility {
     CastAsThoughFlash {
         player: PlayerRef,
         filter: ObjectFilter,
+    },
+    AdditionalCost(Vec<Cost>),
+    DynamicBasePT {
+        power: Option<ValueExpr>,
+        toughness: Option<ValueExpr>,
+    },
+    DoesntUntap {
+        subject: SubjectRef,
+        condition: Option<ConditionExpr>,
+    },
+    MustAttack {
+        subject: SubjectRef,
+        condition: Option<ConditionExpr>,
+    },
+    CanBlockAdditional {
+        subject: SubjectRef,
+        count: u8,
+        condition: Option<ConditionExpr>,
+    },
+    CastFromZone {
+        player: PlayerRef,
+        subject: SubjectRef,
+        zone: ZoneRef,
+        condition: Option<ConditionExpr>,
+    },
+    EntersTappedStatic {
+        subject: SubjectRef,
+        condition: Option<ConditionExpr>,
+    },
+    EntersWithCountersStatic {
+        subject: SubjectRef,
+        kind: CounterKind,
+        count: ValueExpr,
+        additional: bool,
+        condition: Option<ConditionExpr>,
+    },
+    ControlEnchanted {
+        controller: PlayerRef,
+    },
+    ActivationCostModifier {
+        delta: ManaCost,
+        less: bool,
+        scale: Option<ValueExpr>,
+        condition: Option<ConditionExpr>,
+    },
+    PreventDamageStatic {
+        combat_only: bool,
+        source: Option<SubjectRef>,
+        target: Option<SubjectRef>,
     },
     NextSpellModifier {
         filter: ObjectFilter,
@@ -1277,6 +1562,48 @@ pub enum TriggerEvent {
     BecomesTarget {
         subject: SubjectRef,
         source: ObjectFilter,
+    },
+    Blocks {
+        subject: SubjectRef,
+        blocked: Option<Box<SubjectRef>>,
+    },
+    BecomesBlocked {
+        subject: SubjectRef,
+        by: Option<Box<SubjectRef>>,
+    },
+    AttacksAndNotBlocked {
+        subject: SubjectRef,
+    },
+    BecomesTapped {
+        subject: SubjectRef,
+    },
+    BecomesUntapped {
+        subject: SubjectRef,
+    },
+    TurnedFaceUp {
+        subject: SubjectRef,
+    },
+    PutIntoGraveyard {
+        subject: SubjectRef,
+        from: Option<ZoneKind>,
+    },
+    DealtDamage {
+        subject: SubjectRef,
+        combat_only: bool,
+    },
+    Cycled {
+        player: PlayerRef,
+        self_card: bool,
+    },
+    NthCardDrawn {
+        player: PlayerRef,
+        nth: u8,
+    },
+    Transforms {
+        subject: SubjectRef,
+    },
+    Exploits {
+        subject: SubjectRef,
     },
 }
 

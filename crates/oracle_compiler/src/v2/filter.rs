@@ -6,13 +6,12 @@ use crate::ast::{
     SupertypeMask,
 };
 use crate::v2::ir::{
-    AnaphoraRef, CountSpec, CounterKind, EntryModifiers, FilterFlags, FilterPredicate, KeywordKind,
-    KeywordParam, KeywordSpec, LibraryOrder, LibraryPosition, ObjectFilter, PlayerRef,
-    PriorActionKind, SharedProperty, StatBound, SubjectRef, TargetCount, ValueExpr, ZoneDest,
-    ZoneKind, ZoneOwner, ZoneRef,
+    AnaphoraRef, CountSpec, CounterKind, EntryModifiers, FilterFlags, FilterPredicate,
+    LibraryOrder, LibraryPosition, ObjectFilter, PlayerRef, PriorActionKind, SharedProperty,
+    StatBound, SubjectRef, TargetCount, ValueExpr, ZoneDest, ZoneKind, ZoneOwner, ZoneRef,
 };
 use crate::v2::lexer::TokenKind;
-use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
+use crate::v2::parser::{PResult, TokenStream, try_parse};
 use crate::v2::value::parse_value_expr;
 use crate::vocab::{lookup_card_type, lookup_color, lookup_supertype};
 
@@ -63,6 +62,12 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     if ts.eat_phrase(&["enchanted", "player"]) || ts.eat_phrase(&["enchanted", "opponent"]) {
         return Ok(PlayerRef::EnchantedPlayer);
     }
+    if ts.eat_phrase(&["that", "creature's", "controller"])
+        || ts.eat_phrase(&["that", "permanent's", "controller"])
+        || ts.eat_phrase(&["that", "card's", "owner"])
+    {
+        return Ok(PlayerRef::ItsController);
+    }
     if ts.eat_phrase(&["that", "spell's", "controller"]) {
         return Ok(PlayerRef::ThatSpellController);
     }
@@ -81,183 +86,7 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     Err(ts.err("expected player reference"))
 }
 
-/// Parse a typed [`KeywordKind`].
-pub fn parse_keyword_kind(ts: &mut TokenStream<'_>) -> PResult<KeywordKind> {
-    if ts.eat_phrase(&["first", "strike"]) {
-        return Ok(KeywordKind::FirstStrike);
-    }
-    if ts.eat_phrase(&["double", "strike"]) {
-        return Ok(KeywordKind::DoubleStrike);
-    }
-    if ts.eat_phrase(&["split", "second"]) {
-        return Ok(KeywordKind::SplitSecond);
-    }
-    let cp = ts.checkpoint();
-    let Some(w) = ts.next_word() else {
-        return Err(ts.err("expected keyword"));
-    };
-    let kind = match w.to_ascii_lowercase().as_str() {
-        "flying" => KeywordKind::Flying,
-        "deathtouch" => KeywordKind::Deathtouch,
-        "haste" => KeywordKind::Haste,
-        "hexproof" => KeywordKind::Hexproof,
-        "indestructible" => KeywordKind::Indestructible,
-        "lifelink" => KeywordKind::Lifelink,
-        "menace" => KeywordKind::Menace,
-        "reach" => KeywordKind::Reach,
-        "trample" => KeywordKind::Trample,
-        "vigilance" => KeywordKind::Vigilance,
-        "defender" => KeywordKind::Defender,
-        "flash" => KeywordKind::Flash,
-        "shroud" => KeywordKind::Shroud,
-        "ward" => KeywordKind::Ward,
-        "equip" => KeywordKind::Equip,
-        "kicker" => KeywordKind::Kicker,
-        "multikicker" => KeywordKind::Multikicker,
-        "flashback" => KeywordKind::Flashback,
-        "cycling" => KeywordKind::Cycling,
-        "suspend" => KeywordKind::Suspend,
-        "spree" => KeywordKind::Spree,
-        "protection" => KeywordKind::Protection,
-        "enchant" => KeywordKind::Enchant,
-        "toxic" => KeywordKind::Toxic,
-        "afflict" => KeywordKind::Afflict,
-        "annihilator" => KeywordKind::Annihilator,
-        "cascade" => KeywordKind::Cascade,
-        "convoke" => KeywordKind::Convoke,
-        "delve" => KeywordKind::Delve,
-        "prowess" => KeywordKind::Prowess,
-        "wither" => KeywordKind::Wither,
-        "infect" => KeywordKind::Infect,
-        "undying" => KeywordKind::Undying,
-        "persist" => KeywordKind::Persist,
-        "exalted" => KeywordKind::Exalted,
-        "extort" => KeywordKind::Extort,
-        "fear" => KeywordKind::Fear,
-        "intimidate" => KeywordKind::Intimidate,
-        "skulk" => KeywordKind::Skulk,
-        "shadow" => KeywordKind::Shadow,
-        "horsemanship" => KeywordKind::Horsemanship,
-        "flanking" => KeywordKind::Flanking,
-        "banding" => KeywordKind::Banding,
-        "changeling" => KeywordKind::Changeling,
-        "devoid" => KeywordKind::Devoid,
-        "storm" => KeywordKind::Storm,
-        "rebound" => KeywordKind::Rebound,
-        "retrace" => KeywordKind::Retrace,
-        "buyback" => KeywordKind::Buyback,
-        "entwine" => KeywordKind::Entwine,
-        "overload" => KeywordKind::Overload,
-        "miracle" => KeywordKind::Miracle,
-        "foretell" => KeywordKind::Foretell,
-        "plot" => KeywordKind::Plot,
-        "warp" => KeywordKind::Warp,
-        "escape" => KeywordKind::Escape,
-        "unearth" => KeywordKind::Unearth,
-        "blitz" => KeywordKind::Blitz,
-        "dash" => KeywordKind::Dash,
-        "evoke" => KeywordKind::Evoke,
-        "bestow" => KeywordKind::Bestow,
-        "ninjutsu" => KeywordKind::Ninjutsu,
-        "morph" => KeywordKind::Morph,
-        "disguise" => KeywordKind::Disguise,
-        "crew" => KeywordKind::Crew,
-        "saddle" => KeywordKind::Saddle,
-        "station" => KeywordKind::Station,
-        "partner" => KeywordKind::Partner,
-        "companion" => KeywordKind::Companion,
-        "fuse" => KeywordKind::Fuse,
-        _ => {
-            ts.restore(cp);
-            return Err(ts.err("expected known MTG keyword"));
-        }
-    };
-    Ok(kind)
-}
-
-/// Parse a keyword specification including optional parameter (e.g. `equip {2}`, `ward {1}`, `protection from red`).
-pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
-    let kind = parse_keyword_kind(ts)?;
-    let param = match kind {
-        KeywordKind::Equip
-        | KeywordKind::Ward
-        | KeywordKind::Kicker
-        | KeywordKind::Multikicker
-        | KeywordKind::Flashback
-        | KeywordKind::Cycling
-        | KeywordKind::Foretell
-        | KeywordKind::Plot
-        | KeywordKind::Escape
-        | KeywordKind::Unearth
-        | KeywordKind::Blitz
-        | KeywordKind::Dash
-        | KeywordKind::Evoke
-        | KeywordKind::Bestow
-        | KeywordKind::Ninjutsu
-        | KeywordKind::Morph
-        | KeywordKind::Disguise
-        | KeywordKind::Buyback
-        | KeywordKind::Entwine
-        | KeywordKind::Overload
-        | KeywordKind::Miracle => {
-            let _ = ts.eat_em_dash();
-            opt(ts, crate::v2::cost::parse_cost_list).map(KeywordParam::Cost)
-        }
-        KeywordKind::Crew
-        | KeywordKind::Saddle
-        | KeywordKind::Toxic
-        | KeywordKind::Afflict
-        | KeywordKind::Annihilator
-        | KeywordKind::Station => ts
-            .next_number(false)
-            .and_then(|n| u16::try_from(n).ok())
-            .map(KeywordParam::Number),
-        KeywordKind::Protection => {
-            if ts.eat_word("from") {
-                if let Some(w) = ts.peek_word()
-                    && let Some(c) = lookup_color(&w.to_ascii_lowercase())
-                {
-                    ts.next_word();
-                    Some(KeywordParam::Color(c))
-                } else {
-                    opt(ts, parse_object_filter).map(|f| KeywordParam::Filter(Box::new(f)))
-                }
-            } else {
-                None
-            }
-        }
-        KeywordKind::Enchant => {
-            opt(ts, parse_object_filter).map(|f| KeywordParam::Filter(Box::new(f)))
-        }
-        _ => None,
-    };
-    Ok(KeywordSpec { kind, param })
-}
-
-/// Parse a comma/`and`/`or`-separated list of keywords (`flying, deathtouch, or hexproof`).
-pub fn parse_keyword_list(ts: &mut TokenStream<'_>) -> PResult<(Vec<KeywordSpec>, bool)> {
-    let first = parse_keyword_spec(ts)?;
-    let mut kws = vec![first];
-    let mut is_or = false;
-    loop {
-        let cp = ts.checkpoint();
-        let had_comma = ts.eat_comma();
-        let had_or = ts.eat_word("or");
-        let had_and = !had_or && ts.eat_word("and");
-        if (had_comma || had_or || had_and)
-            && let Ok(next_kw) = try_parse(ts, parse_keyword_spec)
-        {
-            if had_or {
-                is_or = true;
-            }
-            kws.push(next_kw);
-            continue;
-        }
-        ts.restore(cp);
-        break;
-    }
-    Ok((kws, is_or))
-}
+pub use crate::v2::keywords::{parse_keyword_kind, parse_keyword_list, parse_keyword_spec};
 
 /// Parse a typed [`CounterKind`] (strictly rejects articles `"a"`/`"an"` as counter kinds!).
 pub fn parse_counter_kind(ts: &mut TokenStream<'_>) -> PResult<CounterKind> {
@@ -592,7 +421,7 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
         };
         let low = word.to_ascii_lowercase();
 
-        // Conjunctions inside noun phrase (`blue or red`, `artifact or creature`, `instant and sorcery`)
+        // Conjunctions inside noun phrase (`blue or red`, `artifact or creature`, `spell or ability`, `attacking or blocking`)
         if matches!(low.as_str(), "or" | "and/or") {
             let next_ok = ts.peek_n(1).is_some_and(|t| match t.kind {
                 TokenKind::Word(nw) => {
@@ -600,7 +429,18 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                     lookup_color(&nl).is_some()
                         || lookup_card_type(&nl).is_some()
                         || ts.vocab.lookup_subtype(&nl).is_some()
-                        || matches!(nl.as_str(), "a" | "an" | "activated" | "triggered")
+                        || matches!(
+                            nl.as_str(),
+                            "a" | "an"
+                                | "activated"
+                                | "triggered"
+                                | "ability"
+                                | "abilities"
+                                | "blocking"
+                                | "attacking"
+                                | "permanent"
+                                | "permanents"
+                        )
                 }
                 _ => false,
             });
@@ -705,11 +545,19 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
             }
             "attacking" => {
                 ts.next_word();
-                flt.combat = Some(CombatState::Attacking);
+                flt.combat = Some(if flt.combat == Some(CombatState::Blocking) {
+                    CombatState::AttackingOrBlocking
+                } else {
+                    CombatState::Attacking
+                });
             }
             "blocking" => {
                 ts.next_word();
-                flt.combat = Some(CombatState::Blocking);
+                flt.combat = Some(if flt.combat == Some(CombatState::Attacking) {
+                    CombatState::AttackingOrBlocking
+                } else {
+                    CombatState::Blocking
+                });
             }
             "blocked" => {
                 ts.next_word();
@@ -887,6 +735,21 @@ fn is_filter_modifier_word(w: &str, vocab: &crate::vocab::Vocabulary) -> bool {
 fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter) -> PResult<()> {
     loop {
         // Controller / owner clauses
+        if ts.eat_phrase(&["you", "don't", "control"]) {
+            flt.controller = Some(ControllerRelation::NotYou);
+            continue;
+        }
+        if ts.eat_phrase(&["defending", "player", "controls"]) {
+            flt.controller = Some(ControllerRelation::DefendingPlayer);
+            continue;
+        }
+        if ts.eat_phrase(&["on", "the", "battlefield"]) {
+            flt.zones.push(ZoneRef {
+                zone: ZoneKind::Battlefield,
+                owner: ZoneOwner::Default,
+            });
+            continue;
+        }
         if ts.eat_phrase(&["you", "control"]) {
             flt.controller = Some(ControllerRelation::You);
             continue;
@@ -970,6 +833,15 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
             let host = parse_subject_ref(ts)?;
             flt.predicates
                 .push(FilterPredicate::AttachedTo(Box::new(host)));
+            continue;
+        }
+
+        // `without <kw>` (e.g. `creature without flying`)
+        if ts.eat_word("without")
+            && let Ok((kws, _)) = try_parse(ts, parse_keyword_list)
+        {
+            flt.forbidden_keywords
+                .extend(kws.into_iter().map(|k| k.kind));
             continue;
         }
 
@@ -1077,6 +949,13 @@ fn parse_filter_post_modifiers(ts: &mut TokenStream<'_>, flt: &mut ObjectFilter)
             }
             if ts.eat_phrase(&["attacked", "this", "turn"]) {
                 flt.flags = flt.flags.union(FilterFlags::ATTACKED_THIS_TURN);
+                continue;
+            }
+            if (ts.eat_word("targets") || ts.eat_word("target"))
+                && let Ok(tgt) = try_parse(ts, parse_subject_ref)
+            {
+                flt.predicates
+                    .push(FilterPredicate::TargetsSubject(Box::new(tgt)));
                 continue;
             }
             if ts.eat_phrase(&["shares", "a", "creature", "type", "with"])
@@ -1228,6 +1107,22 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                 });
             }
             if ts.eat_word("player") || ts.eat_word("players") {
+                if ts.eat_phrase(&["or", "planeswalker"]) {
+                    return Ok(SubjectRef::Compound(vec![
+                        SubjectRef::TargetPlayer {
+                            opponent_only: false,
+                            count,
+                        },
+                        SubjectRef::TargetObject {
+                            filter: Box::new(ObjectFilter {
+                                any_types: CardTypeMask::PLANESWALKER,
+                                ..Default::default()
+                            }),
+                            count,
+                            another,
+                        },
+                    ]));
+                }
                 return Ok(SubjectRef::TargetPlayer {
                     opponent_only: false,
                     count,
@@ -1237,6 +1132,20 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
             if another {
                 flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
             }
+            // Support trailing `or player` (`target creature or player`, `target creature, planeswalker, or player`)
+            if ts.eat_phrase(&["or", "player"]) {
+                return Ok(SubjectRef::Compound(vec![
+                    SubjectRef::TargetObject {
+                        filter: Box::new(flt),
+                        count,
+                        another,
+                    },
+                    SubjectRef::TargetPlayer {
+                        opponent_only: false,
+                        count,
+                    },
+                ]));
+            }
             return Ok(SubjectRef::TargetObject {
                 filter: Box::new(flt),
                 count,
@@ -1244,6 +1153,27 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
             });
         }
         ts.restore(cp);
+    }
+
+    // `your commander`, `their hand`, `your hand`, `that player's hand`
+    if ts.eat_phrase(&["your", "commander"]) {
+        return Ok(SubjectRef::Group(Box::new(ObjectFilter {
+            flags: FilterFlags::IS_COMMANDER,
+            owner: Some(ControllerRelation::OwnerYou),
+            ..Default::default()
+        })));
+    }
+    if ts.eat_phrase(&["their", "hand"]) || ts.eat_phrase(&["that", "player's", "hand"]) {
+        return Ok(SubjectRef::HandOf(PlayerRef::ThatPlayer));
+    }
+    if ts.eat_phrase(&["your", "hand"]) {
+        return Ok(SubjectRef::HandOf(PlayerRef::You));
+    }
+    if ts.eat_phrase(&["target", "opponent's", "hand"]) {
+        return Ok(SubjectRef::HandOf(PlayerRef::TargetOpponent));
+    }
+    if ts.eat_phrase(&["target", "player's", "hand"]) {
+        return Ok(SubjectRef::HandOf(PlayerRef::TargetPlayer));
     }
 
     // `any number of <filter>`, `up to <N> <filter>`, or `<N> <filter>` (untargeted counted objects)
