@@ -440,6 +440,8 @@ pub enum FilterPredicateAst {
     CanBlockAdditionalCreatures,
     /// Indicates `ObjectFilterAst.subtypes` uses OR semantics (`Ape or Monkey`) rather than AND (`Human Warrior`).
     SubtypesMatchAny,
+    /// Indicates `ObjectFilterAst.any_types` uses AND semantics (`artifact creature`) rather than OR (`artifact or creature`).
+    TypesMatchAll,
     /// Preserves `"of that player's choice"` / `"of your choice"` chooser metadata.
     ChosenByPlayer(PlayerRefAst),
     /// Matches objects put into their current zone from `from_zone` this turn.

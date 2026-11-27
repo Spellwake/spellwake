@@ -30,7 +30,7 @@ use keywords::try_parse_keyword_line;
 use preprocess::{
     BULLET, is_bare_pt, is_exotic_layout_header, normalize_self, parse_leveler_band,
     parse_sticker_option, split_class_level_line, split_cost_and_effect, split_loyalty_line,
-    split_saga_line, split_sentences, strip_ability_word, strip_reminder,
+    split_saga_line, split_sentences, strip_ability_word, strip_reminder, strip_reminder_multiline,
 };
 pub use vocab::Vocabulary;
 
@@ -467,7 +467,8 @@ pub fn compile_face_with_options(
     }
     let mut section = ActiveSection::Base;
 
-    for raw_p in face.oracle_text.split('\n') {
+    let preprocessed_oracle = strip_reminder_multiline(face.oracle_text);
+    for raw_p in preprocessed_oracle.split('\n') {
         if raw_p.trim().is_empty() {
             continue;
         }

@@ -361,9 +361,7 @@ pub fn parse_player_ref(phrase: &str) -> Option<PlayerRefAst> {
         | "you and each opponent who voted for a choice you voted for" => {
             Some(PlayerRefAst::EachPlayer)
         }
-        "each opponent who chose silence" | "each opponent who chose snitch" => {
-            Some(PlayerRefAst::EachOpponent)
-        }
+        other if other.starts_with("each opponent who chose ") => Some(PlayerRefAst::EachOpponent),
         "target player who lost life this turn" => Some(PlayerRefAst::TargetPlayer),
         "the player who revealed the fewest items"
         | "the player who reveals the card with the greatest mana value" => {

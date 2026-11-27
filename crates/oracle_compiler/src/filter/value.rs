@@ -1109,19 +1109,38 @@ pub fn parse_for_each_value_expr(fe_raw: &str, vocab: &Vocabulary) -> Result<Val
                         || other.starts_with("1 ")
                         || other.starts_with("one ")
                         || other.starts_with("{")))
-                || (other.ends_with(" this turn")
-                    && !other.contains("guess")
-                    && !other.contains("pile")
-                    && (other.starts_with("card you")
-                        || other.starts_with("spell you")
-                        || other.starts_with("spell an opponent")
-                        || other.starts_with("spell cast this turn")
-                        || other.starts_with("life you ")
-                        || other.starts_with("creature ")
-                        || other.starts_with("nontoken ")
-                        || other.starts_with("+1/+1 counter ")))
             {
                 return Ok(ValueExprAst::PriorResult);
+            }
+            if other.ends_with(" this turn")
+                && !other.contains("guess")
+                && !other.contains("pile")
+                && (other.starts_with("card you")
+                    || other.starts_with("spell you")
+                    || other.starts_with("spell an opponent")
+                    || other.starts_with("spell cast this turn")
+                    || other.starts_with("spell a player")
+                    || other.starts_with("noncreature spell ")
+                    || other.starts_with("instant or sorcery spell ")
+                    || other.starts_with("life you ")
+                    || other.starts_with("creature ")
+                    || other.starts_with("nontoken ")
+                    || other.starts_with("+1/+1 counter "))
+            {
+                let player = if other.contains(" you ")
+                    || other.contains(" you've ")
+                    || other.contains(" your ")
+                {
+                    Some(PlayerRefAst::You)
+                } else if other.contains(" an opponent ") || other.contains(" opponents ") {
+                    Some(PlayerRefAst::AnyOpponent)
+                } else {
+                    None
+                };
+                return Ok(ValueExprAst::EventCountThisTurn {
+                    event: other.to_string(),
+                    player,
+                });
             }
         }
     }

@@ -11,10 +11,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ast::{
-    AbilityAst, CardAst, FaceAst, InstructionAst, InteractiveChoiceKind, KeywordAst,
-    ObjectFilterFlags, ReplacementEffectAst, StaticAbilityAst,
+    AbilityAst, CardAst, ConditionAst, FaceAst, FilterPredicateAst, InstructionAst,
+    InteractiveChoiceKind, KeywordAst, ObjectFilterAst, ObjectFilterFlags, ReplacementEffectAst,
+    StaticAbilityAst, SubjectRefAst, TriggerEventAst, TriggerSpecAst, ValueExprAst,
 };
-use crate::preprocess::{is_mana_sequence, strip_reminder};
+use crate::preprocess::{is_mana_sequence, strip_reminder_multiline};
 use crate::{CardInput, CompileOptions};
 
 /// Severity of an automated parser audit finding.
@@ -268,7 +269,7 @@ fn audit_face(
     opaque: &mut Vec<AuditFinding>,
 ) {
     // 1. Empty AST on non-vanilla face (after stripping reminder text).
-    let stripped = strip_reminder(oracle_text);
+    let stripped = strip_reminder_multiline(oracle_text);
     let has_rules_text = stripped.lines().any(|l| !l.trim().is_empty());
     let ast_items = face.keywords.len()
         + face.abilities.len()
@@ -378,8 +379,23 @@ fn audit_section_items(
     }
     for (i, ab) in abilities.iter().enumerate() {
         match ab {
+            AbilityAst::Triggered { trigger, body, .. } => {
+                check_trigger_structure(
+                    trigger,
+                    &format!("{path}.abilities[{i}].trigger"),
+                    critical,
+                    opaque,
+                );
+                for (j, ins) in body.iter().enumerate() {
+                    check_instruction_structure(
+                        ins,
+                        &format!("{path}.abilities[{i}].body[{j}]"),
+                        critical,
+                        opaque,
+                    );
+                }
+            }
             AbilityAst::Activated { body, .. }
-            | AbilityAst::Triggered { body, .. }
             | AbilityAst::Loyalty { body, .. }
             | AbilityAst::SagaChapter { body, .. } => {
                 for (j, ins) in body.iter().enumerate() {
@@ -402,16 +418,201 @@ fn audit_section_items(
     }
 }
 
+fn check_trigger_structure(
+    trigger: &TriggerSpecAst,
+    path: &str,
+    critical: &mut Vec<AuditFinding>,
+    opaque: &mut Vec<AuditFinding>,
+) {
+    let _ = critical;
+    for (ei, ev) in trigger.events.iter().enumerate() {
+        check_trigger_event_structure(ev, &format!("{path}.events[{ei}]"), opaque);
+    }
+}
+
+fn check_trigger_event_structure(ev: &TriggerEventAst, path: &str, opaque: &mut Vec<AuditFinding>) {
+    match ev {
+        TriggerEventAst::KeywordActionPerformed { action, .. } => {
+            if !is_structured_keyword_action(action) {
+                opaque.push(AuditFinding {
+                    code: "opaque:KeywordActionPerformed".to_string(),
+                    severity: AuditSeverity::Opaque,
+                    path: path.to_string(),
+                    detail: action.clone(),
+                });
+            }
+        }
+        TriggerEventAst::QualifiedTrigger { inner, .. } => {
+            check_trigger_event_structure(inner, &format!("{path}.inner"), opaque);
+        }
+        _ => {}
+    }
+}
+
+fn is_structured_keyword_action(action: &str) -> bool {
+    if action.is_empty() || action.contains(' ') {
+        return false;
+    }
+    matches!(
+        action,
+        "scry"
+            | "scry_bottom"
+            | "surveil"
+            | "investigate"
+            | "proliferate"
+            | "populate"
+            | "explore"
+            | "exert"
+            | "connive"
+            | "evolve"
+            | "train"
+            | "enlist"
+            | "manifest"
+            | "manifest_dread"
+            | "morph"
+            | "megamorph"
+            | "disguise"
+            | "cloak"
+            | "forage"
+            | "expend"
+            | "suspect"
+            | "collect_evidence"
+            | "craft"
+            | "discover"
+            | "adapt"
+            | "monstrosity"
+            | "ring_tempts_you"
+            | "exhaust"
+            | "shuffle_library"
+            | "become_monarch"
+            | "lose_control_self"
+            | "finish_voting"
+            | "venture"
+            | "roll_die"
+            | "flip_coin"
+            | "saddle"
+            | "crew"
+            | "station"
+            | "warp"
+            | "earthbend"
+            | "airbend"
+            | "waterbend"
+            | "firebend"
+            | "endure"
+            | "blight"
+            | "plot"
+            | "foretell"
+            | "cycle"
+            | "madness"
+            | "cascade"
+            | "convoke"
+            | "delve"
+            | "escape"
+            | "exploit"
+            | "exalted"
+            | "extort"
+            | "fabricate"
+            | "goad"
+            | "mentor"
+            | "ninjutsu"
+            | "renown"
+            | "support"
+            | "bolster"
+            | "amass"
+            | "incubate"
+            | "transform"
+            | "convert"
+            | "meld"
+            | "boast"
+            | "disturb"
+            | "cleave"
+            | "blitz"
+            | "casualty"
+            | "backup"
+            | "bargain"
+            | "celebration"
+            | "descend"
+            | "offspring"
+            | "valiant"
+            | "gift"
+            | "impending"
+            | "max_speed"
+            | "start_your_engines"
+            | "harmonize"
+            | "mobilize"
+            | "renew"
+            | "flurry"
+            | "behold"
+            | "crime"
+            | "outlaw"
+            | "spree"
+    )
+}
+
 fn check_replacement_structure(
     rp: &ReplacementEffectAst,
     path: &str,
     critical: &mut Vec<AuditFinding>,
     opaque: &mut Vec<AuditFinding>,
 ) {
-    if let ReplacementEffectAst::AsEntersAction(body) = rp {
-        for (i, ins) in body.iter().enumerate() {
-            check_instruction_structure(ins, &format!("{path}.body[{i}]"), critical, opaque);
+    match rp {
+        ReplacementEffectAst::AsEntersAction(body)
+        | ReplacementEffectAst::AsTransformsAction(body)
+        | ReplacementEffectAst::AsTurnedFaceUpAction(body)
+        | ReplacementEffectAst::AsBecomesAttachedAction { body, .. } => {
+            for (i, ins) in body.iter().enumerate() {
+                check_instruction_structure(ins, &format!("{path}.body[{i}]"), critical, opaque);
+            }
         }
+        ReplacementEffectAst::EventInstead {
+            subject_or_event,
+            would,
+            instead,
+            instead_body,
+        } => {
+            if !subject_or_event.trim().is_empty() || !would.trim().is_empty() {
+                opaque.push(AuditFinding {
+                    code: "opaque:EventInstead_raw_event".to_string(),
+                    severity: AuditSeverity::Opaque,
+                    path: path.to_string(),
+                    detail: format!("subject_or_event `{subject_or_event}` would `{would}`"),
+                });
+            }
+            match instead_body {
+                Some(body) => {
+                    for (i, ins) in body.iter().enumerate() {
+                        check_instruction_structure(
+                            ins,
+                            &format!("{path}.instead_body[{i}]"),
+                            critical,
+                            opaque,
+                        );
+                    }
+                }
+                None => {
+                    opaque.push(AuditFinding {
+                        code: "opaque:EventInstead_unparsed".to_string(),
+                        severity: AuditSeverity::Opaque,
+                        path: path.to_string(),
+                        detail: format!("would `{would}` -> instead `{instead}`"),
+                    });
+                }
+            }
+        }
+        ReplacementEffectAst::Compound(items) => {
+            for (i, sub) in items.iter().enumerate() {
+                check_replacement_structure(
+                    sub,
+                    &format!("{path}.compound[{i}]"),
+                    critical,
+                    opaque,
+                );
+            }
+        }
+        ReplacementEffectAst::ScaledBy { inner, .. } => {
+            check_replacement_structure(inner, &format!("{path}.inner"), critical, opaque);
+        }
+        _ => {}
     }
 }
 
@@ -607,6 +808,165 @@ fn check_instruction_structure(
                 }
             }
         }
+        InstructionAst::ReturnZone {
+            from_zone,
+            with_counter,
+            ..
+        } => {
+            if let Some(fz) = from_zone
+                && is_greedy_from_zone(fz)
+            {
+                critical.push(AuditFinding {
+                    code: "greedy_from_zone".to_string(),
+                    severity: AuditSeverity::Critical,
+                    path: format!("{path}.from_zone"),
+                    detail: format!("from_zone swallowed clause/destination text: {fz:?}"),
+                });
+            }
+            if let Some(wc) = with_counter
+                && is_malformed_counter_kind(wc)
+            {
+                critical.push(AuditFinding {
+                    code: "malformed_counter_kind".to_string(),
+                    severity: AuditSeverity::Critical,
+                    path: format!("{path}.with_counter"),
+                    detail: format!("malformed with_counter value: {wc:?}"),
+                });
+            }
+        }
+        InstructionAst::OneShotReplacement {
+            subject,
+            event,
+            replace_with,
+            instead_body,
+        } => match instead_body {
+            Some(body) => {
+                for (i, sub) in body.iter().enumerate() {
+                    check_instruction_structure(
+                        sub,
+                        &format!("{path}.instead_body[{i}]"),
+                        critical,
+                        opaque,
+                    );
+                }
+            }
+            None => {
+                opaque.push(AuditFinding {
+                    code: "opaque:OneShotReplacement_unparsed".to_string(),
+                    severity: AuditSeverity::Opaque,
+                    path: path.to_string(),
+                    detail: format!(
+                        "subject `{subject}` event `{event}` -> replace_with `{replace_with}`"
+                    ),
+                });
+            }
+        },
+        InstructionAst::CombatRuleMod { rule, .. } => {
+            opaque.push(AuditFinding {
+                code: "opaque:CombatRuleMod".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: rule.clone(),
+            });
+        }
+        InstructionAst::TemporaryPlayerRestriction { rule, .. } => {
+            opaque.push(AuditFinding {
+                code: "opaque:TemporaryPlayerRestriction".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: rule.clone(),
+            });
+        }
+        InstructionAst::AdditionalCombat(text) => {
+            opaque.push(AuditFinding {
+                code: "opaque:AdditionalCombat".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: text.clone(),
+            });
+        }
+        InstructionAst::ChooseOption(text) => {
+            opaque.push(AuditFinding {
+                code: "opaque:ChooseOption".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: text.clone(),
+            });
+        }
+        InstructionAst::BiddingAction(text) => {
+            opaque.push(AuditFinding {
+                code: "opaque:BiddingAction".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: text.clone(),
+            });
+        }
+        InstructionAst::VotingAction(text) => {
+            opaque.push(AuditFinding {
+                code: "opaque:VotingAction".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: text.clone(),
+            });
+        }
+        InstructionAst::RepeatSameWay(text) => {
+            opaque.push(AuditFinding {
+                code: "opaque:RepeatSameWay".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: text.clone(),
+            });
+        }
+        InstructionAst::ModalModifier(text) => {
+            opaque.push(AuditFinding {
+                code: "opaque:ModalModifier".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: text.clone(),
+            });
+        }
+        InstructionAst::TokenCharacteristicsChoice(text) => {
+            opaque.push(AuditFinding {
+                code: "opaque:TokenCharacteristicsChoice".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: text.clone(),
+            });
+        }
+        InstructionAst::InteractiveChoice(InteractiveChoiceKind::ChooseFromGroup {
+            description,
+            ..
+        }) => {
+            opaque.push(AuditFinding {
+                code: "opaque:ChooseFromGroup".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: description.clone(),
+            });
+        }
+        InstructionAst::InteractiveChoice(InteractiveChoiceKind::BiddingAction { description }) => {
+            opaque.push(AuditFinding {
+                code: "opaque:BiddingAction".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: description.clone(),
+            });
+        }
+        InstructionAst::InteractiveChoice(InteractiveChoiceKind::SecretVote { prompt }) => {
+            opaque.push(AuditFinding {
+                code: "opaque:SecretVote".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: prompt.clone(),
+            });
+        }
+        InstructionAst::DelayedEventTrigger { trigger, body }
+        | InstructionAst::TemporaryTrigger { trigger, body, .. } => {
+            check_trigger_structure(trigger, &format!("{path}.trigger"), critical, opaque);
+            for (i, sub) in body.iter().enumerate() {
+                check_instruction_structure(sub, &format!("{path}.body[{i}]"), critical, opaque);
+            }
+        }
         InstructionAst::Optional(body)
         | InstructionAst::OptionalPlayer { body, .. }
         | InstructionAst::IfPreviousSucceeded(body)
@@ -621,8 +981,6 @@ fn check_instruction_structure(
         | InstructionAst::ForEachObject { body, .. }
         | InstructionAst::ForEachCount { body, .. }
         | InstructionAst::DelayedTrigger { body, .. }
-        | InstructionAst::DelayedEventTrigger { body, .. }
-        | InstructionAst::TemporaryTrigger { body, .. }
         | InstructionAst::ReflexiveTrigger(body)
         | InstructionAst::BindX { body, .. }
         | InstructionAst::BindXY { body, .. }
@@ -673,7 +1031,51 @@ fn check_static_structure(
     critical: &mut Vec<AuditFinding>,
     opaque: &mut Vec<AuditFinding>,
 ) {
+    check_static_for_prior_result(st, path, critical);
     match st {
+        StaticAbilityAst::ContinuousModifyPT {
+            grant_ability_text,
+            paired_rule,
+            ..
+        } => {
+            if let Some(txt) = grant_ability_text
+                && !txt.trim().is_empty()
+            {
+                opaque.push(AuditFinding {
+                    code: "opaque:ContinuousModifyPT_grant_ability_text".to_string(),
+                    severity: AuditSeverity::Opaque,
+                    path: format!("{path}.grant_ability_text"),
+                    detail: txt.clone(),
+                });
+            }
+            if let Some(pr) = paired_rule {
+                check_static_structure(pr, &format!("{path}.paired_rule"), critical, opaque);
+            }
+        }
+        StaticAbilityAst::GrantKeywords {
+            paired_rule: Some(pr),
+            ..
+        } => {
+            check_static_structure(pr, &format!("{path}.paired_rule"), critical, opaque);
+        }
+        StaticAbilityAst::LookOrRevealRule {
+            rule, follow_up, ..
+        } => {
+            opaque.push(AuditFinding {
+                code: "opaque:LookOrRevealRule".to_string(),
+                severity: AuditSeverity::Opaque,
+                path: path.to_string(),
+                detail: rule.clone(),
+            });
+            for (i, ins) in follow_up.iter().enumerate() {
+                check_instruction_structure(
+                    ins,
+                    &format!("{path}.follow_up[{i}]"),
+                    critical,
+                    opaque,
+                );
+            }
+        }
         StaticAbilityAst::DieRollBand { payload, .. }
         | StaticAbilityAst::StationBand { payload, .. }
         | StaticAbilityAst::StickerOption { payload, .. } => {
@@ -754,7 +1156,26 @@ fn check_static_structure(
             }
             None => {}
         },
-        StaticAbilityAst::PairedTrigger { body, .. } | StaticAbilityAst::FollowUp(body) => {
+        StaticAbilityAst::PairedTrigger { trigger, body } => {
+            check_trigger_structure(trigger, &format!("{path}.trigger"), critical, opaque);
+            for (i, ins) in body.iter().enumerate() {
+                check_instruction_structure(ins, &format!("{path}.body[{i}]"), critical, opaque);
+            }
+        }
+        StaticAbilityAst::FollowUp(body)
+        | StaticAbilityAst::OpeningHandRevealAction { body }
+        | StaticAbilityAst::ExertOnAttackAction { body }
+        | StaticAbilityAst::PreventAndReplaceDamage {
+            follow_up: body, ..
+        } => {
+            for (i, ins) in body.iter().enumerate() {
+                check_instruction_structure(ins, &format!("{path}.body[{i}]"), critical, opaque);
+            }
+        }
+        StaticAbilityAst::FirstTimeEachTurnAction { event, body, .. } => {
+            if let Some(ev) = event {
+                check_trigger_event_structure(ev, &format!("{path}.event"), opaque);
+            }
             for (i, ins) in body.iter().enumerate() {
                 check_instruction_structure(ins, &format!("{path}.body[{i}]"), critical, opaque);
             }
@@ -764,11 +1185,456 @@ fn check_static_structure(
                 check_static_structure(sub, &format!("{path}.compound[{i}]"), critical, opaque);
             }
         }
-        StaticAbilityAst::OncePerTurn(inner) | StaticAbilityAst::OnceDuringYourTurn(inner) => {
+        StaticAbilityAst::OncePerTurn(inner)
+        | StaticAbilityAst::OnceDuringYourTurn(inner)
+        | StaticAbilityAst::Otherwise(inner)
+        | StaticAbilityAst::ScaledBy { inner, .. }
+        | StaticAbilityAst::WithIgnoreCost { inner, .. }
+        | StaticAbilityAst::NextSpellModifier { effect: inner, .. } => {
             check_static_structure(inner, path, critical, opaque);
         }
         _ => {}
     }
+}
+
+fn check_static_for_prior_result(
+    st: &StaticAbilityAst,
+    path: &str,
+    critical: &mut Vec<AuditFinding>,
+) {
+    match st {
+        StaticAbilityAst::CostModifier {
+            subject,
+            per,
+            scale_expr,
+            condition,
+            ..
+        }
+        | StaticAbilityAst::CostModifierWithFloor {
+            subject,
+            per,
+            scale_expr,
+            condition,
+            ..
+        } => {
+            check_subject_prior_result(subject, &format!("{path}.subject"), critical);
+            if let Some(f) = per {
+                check_filter_prior_result(f, &format!("{path}.per"), critical);
+            }
+            if let Some(v) = scale_expr {
+                check_value_prior_result(v, &format!("{path}.scale_expr"), critical);
+            }
+            if let Some(c) = condition {
+                check_condition_prior_result(c, &format!("{path}.condition"), critical);
+            }
+        }
+        StaticAbilityAst::ContinuousModifyPT {
+            subject,
+            scale,
+            condition,
+            ..
+        } => {
+            check_subject_prior_result(subject, &format!("{path}.subject"), critical);
+            if let Some(v) = scale {
+                check_value_prior_result(v, &format!("{path}.scale"), critical);
+            }
+            if let Some(c) = condition {
+                check_condition_prior_result(c, &format!("{path}.condition"), critical);
+            }
+        }
+        StaticAbilityAst::CdaPowerToughness { power, toughness } => {
+            if let Some(v) = power {
+                check_value_prior_result(v, &format!("{path}.power"), critical);
+            }
+            if let Some(v) = toughness {
+                check_value_prior_result(v, &format!("{path}.toughness"), critical);
+            }
+        }
+        StaticAbilityAst::DynamicBasePT {
+            subject,
+            power,
+            toughness,
+            condition,
+        } => {
+            check_subject_prior_result(subject, &format!("{path}.subject"), critical);
+            check_value_prior_result(power, &format!("{path}.power"), critical);
+            check_value_prior_result(toughness, &format!("{path}.toughness"), critical);
+            if let Some(c) = condition {
+                check_condition_prior_result(c, &format!("{path}.condition"), critical);
+            }
+        }
+        StaticAbilityAst::DynamicModifyPT {
+            subject,
+            power_delta,
+            toughness_delta,
+            condition,
+        } => {
+            check_subject_prior_result(subject, &format!("{path}.subject"), critical);
+            check_value_prior_result(power_delta, &format!("{path}.power_delta"), critical);
+            check_value_prior_result(
+                toughness_delta,
+                &format!("{path}.toughness_delta"),
+                critical,
+            );
+            if let Some(c) = condition {
+                check_condition_prior_result(c, &format!("{path}.condition"), critical);
+            }
+        }
+        StaticAbilityAst::ScaledBy { per, .. } => {
+            check_value_prior_result(per, &format!("{path}.per"), critical);
+        }
+        StaticAbilityAst::PreventThresholdDamage {
+            max_damage,
+            condition,
+            ..
+        } => {
+            check_value_prior_result(max_damage, &format!("{path}.max_damage"), critical);
+            if let Some(c) = condition {
+                check_condition_prior_result(c, &format!("{path}.condition"), critical);
+            }
+        }
+        StaticAbilityAst::ModifyMaximumHandSize {
+            size, condition, ..
+        } => {
+            check_value_prior_result(size, &format!("{path}.size"), critical);
+            if let Some(c) = condition {
+                check_condition_prior_result(c, &format!("{path}.condition"), critical);
+            }
+        }
+        StaticAbilityAst::CrewOrSaddlePowerBonus { bonus, .. } => {
+            check_value_prior_result(bonus, &format!("{path}.bonus"), critical);
+        }
+        StaticAbilityAst::NextSpellModifier { filter, .. } => {
+            check_filter_prior_result(filter, &format!("{path}.filter"), critical);
+        }
+        _ => {}
+    }
+}
+
+fn check_value_prior_result(v: &ValueExprAst, path: &str, critical: &mut Vec<AuditFinding>) {
+    match v {
+        ValueExprAst::PriorResult => {
+            critical.push(AuditFinding {
+                code: "prior_result_in_static".to_string(),
+                severity: AuditSeverity::Critical,
+                path: path.to_string(),
+                detail: "ValueExprAst::PriorResult is invalid inside a static ability".to_string(),
+            });
+        }
+        ValueExprAst::Count(f)
+        | ValueExprAst::AggregateStat { filter: f, .. }
+        | ValueExprAst::ColorsAmong(f)
+        | ValueExprAst::CardTypesAmong(f)
+        | ValueExprAst::SubtypesAmong(f) => {
+            check_filter_prior_result(f, path, critical);
+        }
+        ValueExprAst::Add(a, b)
+        | ValueExprAst::Sub(a, b)
+        | ValueExprAst::Mul(a, b)
+        | ValueExprAst::Pow { base: a, exp: b } => {
+            check_value_prior_result(a, path, critical);
+            check_value_prior_result(b, path, critical);
+        }
+        ValueExprAst::DivConst { expr, .. }
+        | ValueExprAst::AggregateOverPlayers { metric: expr, .. } => {
+            check_value_prior_result(expr, path, critical);
+        }
+        ValueExprAst::ObjectStat { subject, .. } | ValueExprAst::CounterCount { subject, .. } => {
+            check_subject_prior_result(subject, path, critical);
+        }
+        _ => {}
+    }
+}
+
+fn check_filter_prior_result(f: &ObjectFilterAst, path: &str, critical: &mut Vec<AuditFinding>) {
+    for sb in &f.stat_bounds {
+        check_value_prior_result(&sb.value, path, critical);
+    }
+    for pred in &f.predicates {
+        match pred {
+            FilterPredicateAst::StatRelationTo { expr, .. }
+            | FilterPredicateAst::ColorCountCompare { expr, .. } => {
+                check_value_prior_result(expr, path, critical);
+            }
+            FilterPredicateAst::AnyOf(items) => {
+                for item in items {
+                    check_filter_prior_result(item, path, critical);
+                }
+            }
+            FilterPredicateAst::SuperlativeAmong { scope, .. }
+            | FilterPredicateAst::AttachedBy(scope)
+            | FilterPredicateAst::FromSource(scope)
+            | FilterPredicateAst::NotTargetedBy(scope)
+            | FilterPredicateAst::BlockedOrBlockedBy { other: scope, .. } => {
+                check_filter_prior_result(scope, path, critical);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn check_subject_prior_result(s: &SubjectRefAst, path: &str, critical: &mut Vec<AuditFinding>) {
+    match s {
+        SubjectRefAst::TargetObject { filter, .. }
+        | SubjectRefAst::Each(filter)
+        | SubjectRefAst::All(filter)
+        | SubjectRefAst::Group(filter) => {
+            check_filter_prior_result(filter, path, critical);
+        }
+        SubjectRefAst::Compound(items) | SubjectRefAst::TargetOneOf { options: items, .. } => {
+            for item in items {
+                check_subject_prior_result(item, path, critical);
+            }
+        }
+        SubjectRefAst::InZone { subject, .. }
+        | SubjectRefAst::ControllerOf(subject)
+        | SubjectRefAst::OwnerOf(subject) => {
+            check_subject_prior_result(subject, path, critical);
+        }
+        SubjectRefAst::PlayerMatching { condition, .. } => {
+            check_condition_prior_result(condition, path, critical);
+        }
+        _ => {}
+    }
+}
+
+fn check_condition_prior_result(c: &ConditionAst, path: &str, critical: &mut Vec<AuditFinding>) {
+    match c {
+        ConditionAst::Not(inner) => check_condition_prior_result(inner, path, critical),
+        ConditionAst::And(a, b) | ConditionAst::Or(a, b) => {
+            check_condition_prior_result(a, path, critical);
+            check_condition_prior_result(b, path, critical);
+        }
+        ConditionAst::Compare { lhs, rhs, .. } => {
+            check_value_prior_result(lhs, path, critical);
+            check_value_prior_result(rhs, path, critical);
+        }
+        ConditionAst::PlayerControlsMost { filter, .. }
+        | ConditionAst::CastSpellThisTurn { filter, .. }
+        | ConditionAst::TotalStatCompare { filter, .. } => {
+            check_filter_prior_result(filter, path, critical);
+        }
+        _ => {}
+    }
+}
+
+fn is_malformed_counter_kind(raw: &str) -> bool {
+    let trimmed = raw.trim().to_ascii_lowercase();
+    trimmed.is_empty()
+        || trimmed == "a"
+        || trimmed == "an"
+        || trimmed.starts_with("a ")
+        || trimmed.starts_with("an ")
+}
+
+fn is_greedy_from_zone(raw: &str) -> bool {
+    let low = raw.to_ascii_lowercase();
+    [
+        ", put ",
+        " onto the ",
+        " into your ",
+        " into their ",
+        " into its ",
+        " into a ",
+        " onto ",
+        " into ",
+        " under ",
+        " then ",
+        " to the ",
+        " to your ",
+        " to its ",
+        " tapped",
+    ]
+    .iter()
+    .any(|bad| low.contains(bad))
+}
+
+fn is_allowlisted_anaphora(raw: &str) -> bool {
+    let low = raw.trim().to_ascii_lowercase();
+    if !low.contains(' ') {
+        return true;
+    }
+    matches!(
+        low.as_str(),
+        "that creature"
+            | "that permanent"
+            | "that card"
+            | "that spell"
+            | "that token"
+            | "that land"
+            | "that artifact"
+            | "that enchantment"
+            | "that planeswalker"
+            | "that battle"
+            | "that player"
+            | "that opponent"
+            | "that object"
+            | "that ability"
+            | "that source"
+            | "that aura"
+            | "that equipment"
+            | "that vehicle"
+            | "that creature card"
+            | "that land card"
+            | "that permanent card"
+            | "that artifact card"
+            | "that enchantment card"
+            | "that instant or sorcery card"
+            | "those creatures"
+            | "those permanents"
+            | "those cards"
+            | "those tokens"
+            | "those lands"
+            | "those spells"
+            | "those artifacts"
+            | "those enchantments"
+            | "the rest"
+            | "the exiled card"
+            | "the exiled cards"
+            | "the revealed card"
+            | "the revealed cards"
+            | "the chosen creature"
+            | "the chosen permanent"
+            | "the chosen card"
+            | "the chosen cards"
+            | "the sacrificed creature"
+            | "the sacrificed permanent"
+            | "the destroyed creature"
+            | "the discarded card"
+            | "the returned card"
+            | "the targeted creature"
+            | "the blocked creature"
+            | "the attacking creature"
+            | "the blocking creature"
+            | "the enchanted creature"
+            | "the equipped creature"
+            | "the copied spell"
+            | "one of them"
+            | "one of those cards"
+            | "each of them"
+            | "both of them"
+            | "all of them"
+            | "each of those creatures"
+            | "each of those permanents"
+            | "each of those cards"
+            | "target creature"
+            | "target permanent"
+            | "target player"
+            | "target opponent"
+            | "any target"
+    )
+}
+
+fn is_structured_ability_restriction(raw: &str) -> bool {
+    if crate::typed_ir::parse_rule_restriction(raw).is_some()
+        || crate::typed_ir::parse_ability_restriction(raw).is_some()
+    {
+        return true;
+    }
+    if matches!(
+        raw,
+        "Condition"
+            | "Sorcery"
+            | "Instant"
+            | "OnceEachTurn"
+            | "Once"
+            | "DuringYourTurn"
+            | "DuringCombat"
+            | "DuringUpkeep"
+            | "DuringDeclareAttackersStep"
+            | "DuringDeclareBlockersStep"
+            | "SorceryOnceEachTurn"
+            | "DuringYourTurnOnceEachTurn"
+            | "OwnTurnBeforeAttackers"
+            | "TriggersOnceEachTurn"
+            | "TriggersOnce"
+            | "BecomesPlotted"
+            | "RepeatProcess"
+            | "LicidBecomeAura"
+            | "DamageCantBePrevented"
+            | "DamageCantBePreventedThisTurn"
+            | "ExcessDamageToController"
+            | "EachAttackingOpponentRepeats"
+            | "EachCopyDifferentTarget"
+            | "JoinForcesPayMana"
+            | "EachModeDifferentPlayer"
+            | "FlashbackEqualManaCost"
+            | "NoMaxHandSizeRestOfGame"
+            | "XCantBeZero"
+    ) {
+        return true;
+    }
+    if let Some(mid) = raw
+        .strip_prefix("AtMost")
+        .and_then(|r| r.strip_suffix("TimesEachTurn"))
+        && mid.parse::<u32>().is_ok()
+    {
+        return true;
+    }
+    if let Some(rest) = raw.strip_prefix("AnyPlayer:") {
+        return rest.is_empty()
+            || rest.split('+').all(|part| {
+                crate::typed_ir::parse_rule_restriction(part).is_some()
+                    || crate::typed_ir::parse_ability_restriction(part).is_some()
+            });
+    }
+    false
+}
+
+fn is_structured_play_permission(raw: &str) -> bool {
+    matches!(
+        raw,
+        "from your graveyard"
+            | "from exile"
+            | "from the top of your library"
+            | "as though it had flash"
+            | "without paying its mana cost"
+            | "unlimited_lands_per_turn"
+            | "can't be countered"
+            | "can be cast as though it had flash"
+            | "can be cast without paying its mana cost"
+    )
+}
+
+fn is_structured_state_qualification(raw: &str) -> bool {
+    if raw.starts_with("pt:") {
+        return true;
+    }
+    matches!(
+        raw,
+        "kicked"
+            | "warped"
+            | "bountied"
+            | "blighted"
+            | "stickered"
+            | "solved"
+            | "saddled"
+            | "suspected"
+            | "goaded"
+            | "monstrous"
+            | "renowned"
+            | "exerted"
+            | "prepared"
+            | "adventure"
+            | "modal"
+            | "silver-bordered"
+            | "acorn"
+            | "black-bordered"
+            | "phased_out"
+            | "suspended"
+            | "nonblocking"
+            | "foretold"
+            | "double-faced"
+            | "transformed"
+            | "sacrificed"
+            | "exiled"
+            | "discarded"
+            | "revealed"
+            | "milled"
+            | "chosen"
+            | "returned"
+            | "same_planeswalker_type_as_self"
+    )
 }
 
 fn looks_like_rust_debug_leak(s: &str, path: &str) -> bool {
@@ -825,6 +1691,28 @@ fn walk_json_invariants(
 ) {
     match v {
         Value::Object(map) => {
+            // Check malformed counter_kind or with_counter anywhere in the serialized AST.
+            if let Some(ck) = map.get("counter_kind").and_then(Value::as_str)
+                && is_malformed_counter_kind(ck)
+            {
+                critical.push(AuditFinding {
+                    code: "malformed_counter_kind".to_string(),
+                    severity: AuditSeverity::Critical,
+                    path: format!("{path}.counter_kind"),
+                    detail: format!("malformed counter_kind value: {ck:?}"),
+                });
+            }
+            if let Some(wc) = map.get("with_counter").and_then(Value::as_str)
+                && is_malformed_counter_kind(wc)
+            {
+                critical.push(AuditFinding {
+                    code: "malformed_counter_kind".to_string(),
+                    severity: AuditSeverity::Critical,
+                    path: format!("{path}.with_counter"),
+                    detail: format!("malformed with_counter value: {wc:?}"),
+                });
+            }
+
             // Check ObjectFilterAst MODIFIED flag against face oracle text
             if let Some(flags_num) = map.get("flags").and_then(Value::as_u64)
                 && map.contains_key("any_types")
@@ -894,6 +1782,18 @@ fn walk_json_invariants(
                             }
                         }
                     }
+                    "Anaphora" => {
+                        if let Some(an) = inner.as_str()
+                            && !is_allowlisted_anaphora(an)
+                        {
+                            opaque.push(AuditFinding {
+                                code: "opaque:Anaphora_prose".to_string(),
+                                severity: AuditSeverity::Opaque,
+                                path: path.to_string(),
+                                detail: an.to_string(),
+                            });
+                        }
+                    }
                     "EventOccurredThisTurn" => {
                         if let Some(ev) = inner.get("event").and_then(Value::as_str) {
                             opaque.push(AuditFinding {
@@ -905,9 +1805,7 @@ fn walk_json_invariants(
                         }
                     }
                     "PlayerActionThisTurn" => {
-                        if let Some(act) = inner.get("action").and_then(Value::as_str)
-                            && act.contains(' ')
-                        {
+                        if let Some(act) = inner.get("action").and_then(Value::as_str) {
                             opaque.push(AuditFinding {
                                 code: "opaque:PlayerActionThisTurn".to_string(),
                                 severity: AuditSeverity::Opaque,
@@ -918,7 +1816,7 @@ fn walk_json_invariants(
                     }
                     "HasStatus" => {
                         if let Some(st) = inner.get("status").and_then(Value::as_str)
-                            && st.contains(':')
+                            && (st.contains(':') || st.contains(' ') || st.contains('_'))
                         {
                             opaque.push(AuditFinding {
                                 code: "opaque:HasStatus_complex".to_string(),
@@ -930,7 +1828,7 @@ fn walk_json_invariants(
                     }
                     "StateQualification" => {
                         if let Some(sq) = inner.as_str()
-                            && sq.contains(' ')
+                            && !is_structured_state_qualification(sq)
                         {
                             opaque.push(AuditFinding {
                                 code: "opaque:StateQualification_prose".to_string(),
@@ -942,7 +1840,7 @@ fn walk_json_invariants(
                     }
                     "AbilityRestriction" => {
                         if let Some(r) = inner.get("restriction").and_then(Value::as_str)
-                            && r.contains(' ')
+                            && !is_structured_ability_restriction(r)
                         {
                             opaque.push(AuditFinding {
                                 code: "opaque:AbilityRestriction_prose".to_string(),
@@ -954,7 +1852,8 @@ fn walk_json_invariants(
                     }
                     "RuleOrCombatRestriction" => {
                         if let Some(r) = inner.get("rule").and_then(Value::as_str)
-                            && r.contains(' ')
+                            && crate::typed_ir::parse_rule_restriction(r).is_none()
+                            && crate::typed_ir::parse_ability_restriction(r).is_none()
                         {
                             opaque.push(AuditFinding {
                                 code: "opaque:RuleOrCombatRestriction_prose".to_string(),
@@ -964,27 +1863,9 @@ fn walk_json_invariants(
                             });
                         }
                     }
-                    "EventInstead" => {
-                        if inner.get("instead_body").is_none_or(Value::is_null) {
-                            let would = inner
-                                .get("would")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            let instead = inner
-                                .get("instead")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            opaque.push(AuditFinding {
-                                code: "opaque:EventInstead_unparsed".to_string(),
-                                severity: AuditSeverity::Opaque,
-                                path: path.to_string(),
-                                detail: format!("would `{would}` -> instead `{instead}`"),
-                            });
-                        }
-                    }
                     "PlayOrCastPermission" => {
                         if let Some(perm) = inner.get("permission").and_then(Value::as_str)
-                            && (perm.contains(". ") || perm.len() > 48)
+                            && !is_structured_play_permission(perm)
                         {
                             opaque.push(AuditFinding {
                                 code: "opaque:PlayOrCastPermission_prose".to_string(),

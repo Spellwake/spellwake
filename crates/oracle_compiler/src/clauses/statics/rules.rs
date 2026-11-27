@@ -359,23 +359,130 @@ pub(super) fn parse_extended_statics(
         let less = tlow.starts_with("less to cast");
         let scale_expr = if let Some((_, fe)) = tlow.split_once(" for each ") {
             match parse_for_each_value_expr(fe, vocab) {
-                Ok(v) => Some(Box::new(v)),
-                Err(_) => return None,
+                Ok(v) if !matches!(v, ValueExprAst::PriorResult) => Some(Box::new(v)),
+                _ => return None,
             }
         } else {
             None
         };
         let subj_s = s[..idx].trim();
-        let subj = parse_subject_or_target(subj_s, vocab)
-            .unwrap_or_else(|_| SubjectRefAst::Anaphora(subj_s.to_string()));
+        let subj_low = subj_s.to_ascii_lowercase();
+        let (subj_core, turn_cond) = if let Some(b) = subj_low
+            .strip_suffix(" during your turn")
+            .or_else(|| subj_low.strip_suffix(" during each of your turns"))
+        {
+            (b.trim(), Some(ConditionAst::IsYourTurn))
+        } else if let Some(b) = subj_low
+            .strip_suffix(" during opponents' turns")
+            .or_else(|| subj_low.strip_suffix(" during an opponent's turn"))
+        {
+            (
+                b.trim(),
+                Some(ConditionAst::Not(Box::new(ConditionAst::IsYourTurn))),
+            )
+        } else {
+            (subj_low.as_str(), None)
+        };
+        let mut nth_spell = None;
+        let subj_after_nth = if let Some(r) = subj_core.strip_prefix("the first ") {
+            nth_spell = Some(1u8);
+            r.trim()
+        } else if let Some(r) = subj_core.strip_prefix("the second ") {
+            nth_spell = Some(2u8);
+            r.trim()
+        } else {
+            subj_core
+        };
+        let subj_after_turn = subj_after_nth.trim_end_matches(" each turn").trim();
+        let mut caster: Option<ControllerRelation> = None;
+        let subj_after_caster = if let Some(r) = subj_after_turn
+            .strip_suffix(" your opponents cast")
+            .or_else(|| subj_after_turn.strip_suffix(" opponents cast"))
+        {
+            caster = Some(ControllerRelation::Opponents);
+            r.trim()
+        } else if let Some(r) = subj_after_turn.strip_suffix(" an opponent casts") {
+            caster = Some(ControllerRelation::Opponent);
+            r.trim()
+        } else if let Some(r) = subj_after_turn.strip_suffix(" you cast") {
+            caster = Some(ControllerRelation::You);
+            r.trim()
+        } else if let Some(r) = subj_after_turn.strip_suffix(" players cast") {
+            r.trim()
+        } else if let Some((before, after)) = subj_after_turn.split_once(" your opponents cast ") {
+            caster = Some(ControllerRelation::Opponents);
+            // Re-assemble filter + trailing zone qualifier (e.g. "from graveyards")
+            let combined = format!("{before} {after}");
+            if let Ok(mut flt) = parse_object_filter(&combined, vocab) {
+                if flt.controller.is_none() {
+                    flt.controller = caster;
+                }
+                if let Some(n) = nth_spell {
+                    flt.predicates
+                        .push(FilterPredicateAst::NthSpellCastThisTurn(n));
+                }
+                return Some(st_s(StaticAbilityAst::CostModifier {
+                    subject: Box::new(grp(flt)),
+                    delta: delta_tok.to_string(),
+                    less,
+                    next_only: nth_spell == Some(1),
+                    per: None,
+                    scale_expr,
+                    condition: turn_cond.map(Box::new),
+                }));
+            }
+            return None;
+        } else if let Some((before, after)) = subj_after_turn.split_once(" you cast ") {
+            caster = Some(ControllerRelation::You);
+            let combined = format!("{before} {after}");
+            if let Ok(mut flt) = parse_object_filter(&combined, vocab) {
+                if flt.controller.is_none() {
+                    flt.controller = caster;
+                }
+                if let Some(n) = nth_spell {
+                    flt.predicates
+                        .push(FilterPredicateAst::NthSpellCastThisTurn(n));
+                }
+                return Some(st_s(StaticAbilityAst::CostModifier {
+                    subject: Box::new(grp(flt)),
+                    delta: delta_tok.to_string(),
+                    less,
+                    next_only: nth_spell == Some(1),
+                    per: None,
+                    scale_expr,
+                    condition: turn_cond.map(Box::new),
+                }));
+            }
+            return None;
+        } else {
+            subj_after_turn
+        };
+        let subj = if subj_after_caster == "~" {
+            SubjectRefAst::SelfObject
+        } else if let Ok(mut flt) = parse_object_filter(subj_after_caster, vocab) {
+            if flt.controller.is_none() {
+                flt.controller = caster;
+            }
+            if let Some(n) = nth_spell {
+                flt.predicates
+                    .push(FilterPredicateAst::NthSpellCastThisTurn(n));
+            }
+            grp(flt)
+        } else if let Ok(parsed) = parse_subject_or_target(subj_s, vocab)
+            && !matches!(parsed, SubjectRefAst::Anaphora(_))
+        {
+            parsed
+        } else {
+            return None;
+        };
         return Some(st_s(StaticAbilityAst::CostModifier {
             subject: Box::new(subj),
             delta: delta_tok.to_string(),
             less,
-            next_only: subj_s.to_ascii_lowercase().starts_with("the first "),
+            next_only: nth_spell == Some(1),
             per: None,
             scale_expr,
-            condition: None,
+            condition: turn_cond.map(Box::new),
         }));
     }
 

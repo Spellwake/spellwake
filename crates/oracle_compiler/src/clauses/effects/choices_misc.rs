@@ -5169,9 +5169,22 @@ fn parse_remaining_lossless_clauses(
             (_dur.clone(), subj_raw.trim())
         };
         if let Ok(subject) = parse_subject_or_target(subj_clean, vocab) {
+            let kind = match kind_raw.trim() {
+                "creature type" => "creature_type",
+                "card type" => "card_type",
+                "permanent type" => "permanent_type",
+                "basic land type" => "basic_land_type",
+                "land type" => "land_type",
+                "artifact type" => "artifact_type",
+                "enchantment type" => "enchantment_type",
+                "planeswalker type" => "planeswalker_type",
+                "color" => "color",
+                "color or colors" => "color",
+                other => other,
+            };
             let mut out = vec![InstructionAst::BecomeChosenCharacteristic {
                 subject: Box::new(subject),
-                kind: kind_raw.trim().replace(' ', "_"),
+                kind: kind.to_string(),
                 duration: eff_dur,
             }];
             let keep = keep_tail.trim();

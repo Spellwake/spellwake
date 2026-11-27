@@ -121,6 +121,24 @@ const SELF_NOUNS: &[&str] = &[
     "emblem",
 ];
 
+/// Strip parenthetical reminder text across multiple lines while preserving newlines outside
+/// parentheses, so multi-line Saga or keyword reminder blocks do not leak orphan fragments.
+#[must_use]
+pub fn strip_reminder_multiline(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut depth: u32 = 0;
+    for ch in text.chars() {
+        if ch == '(' {
+            depth = depth.saturating_add(1);
+        } else if ch == ')' && depth > 0 {
+            depth -= 1;
+        } else if depth == 0 {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// Strip parenthetical reminder text and collapse repeated ASCII whitespace.
 #[must_use]
 pub fn strip_reminder(text: &str) -> String {
@@ -190,8 +208,8 @@ pub fn normalize_self(text: &str, face_name: &str, type_line: &str) -> String {
             s = replace_word(&s, short, "~");
         }
     } else if type_line.contains("Legendary") {
-        // Pick the earliest matching title delimiter so names like "Shang-Chi and the Ten Rings"
-        // extract "Shang-Chi" rather than "Shang-Chi and".
+        // Pick the earliest matching title delimiter so names like "Hero-Name and the Relic"
+        // extract "Hero-Name" rather than "Hero-Name and".
         let earliest_short = [" of ", " the ", " the,", " and ", " and the "]
             .into_iter()
             .filter_map(|delim| face_name.find(delim).map(|pos| (pos, &face_name[..pos])))
@@ -563,7 +581,14 @@ pub fn split_sentences(body: &str) -> Vec<&str> {
                 start = idx + 1;
             }
         } else if ch == '.' && !in_quotes {
-            let part = body[start..idx].trim();
+            let before_dot = &body[start..idx];
+            let last_tok = before_dot
+                .rsplit_once(char::is_whitespace)
+                .map_or(before_dot, |(_, t)| t);
+            if matches!(last_tok, "Dr" | "Mr" | "Mrs" | "Ms" | "St" | "Jr" | "Sr") {
+                continue;
+            }
+            let part = before_dot.trim();
             if !part.is_empty() && part != "\"" {
                 out.push(part);
             }

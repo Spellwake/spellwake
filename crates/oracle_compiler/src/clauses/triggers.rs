@@ -16,6 +16,32 @@ use crate::filter::{
 use crate::preprocess::is_physical_tabletop_clause;
 use crate::vocab::{Vocabulary, parse_number_word};
 
+/// Infer the triggering player actor from a trigger clause so opponent or any-player triggers
+/// are never silently misattributed to `PlayerRefAst::You`.
+fn infer_trigger_actor(blow: &str) -> PlayerRefAst {
+    if blow.starts_with("an opponent ")
+        || blow.starts_with("another player ")
+        || blow.starts_with("one or more opponents ")
+        || blow.starts_with("one or more of your opponents ")
+        || blow.starts_with("one or more creatures an opponent ")
+        || blow.starts_with("one or more creatures your opponents ")
+        || blow.starts_with("a spell or ability an opponent ")
+        || blow.starts_with("a creature entering under an opponent's ")
+        || blow.starts_with("one or more lands enter under an opponent's ")
+    {
+        PlayerRefAst::AnyOpponent
+    } else if blow.starts_with("enchanted player ") || blow.starts_with("enchanted opponent ") {
+        PlayerRefAst::EnchantedPlayer
+    } else if blow.starts_with("a player ")
+        || blow.starts_with("one or more players ")
+        || blow.starts_with("each player ")
+    {
+        PlayerRefAst::AnyPlayer
+    } else {
+        PlayerRefAst::You
+    }
+}
+
 /// Parse a triggered-ability header (including compound events, Planechase, Archenemy,
 /// Tabletop Honor-System claims, and intervening-`if`).
 pub fn parse_trigger_header(header: &str, vocab: &Vocabulary) -> Result<TriggerSpecAst, String> {
@@ -285,7 +311,12 @@ pub(crate) fn parse_trigger_events(
             | "whenever an opponent who controls an artifact named ~ draws a card during their turn"
             | "whenever an opponent who controls an artifact named ~ gains life during their turn"
     ) {
-        return Ok(vec![trig_kw(PlayerRefAst::You, low)]);
+        let actor = if low.starts_with("whenever an opponent ") {
+            PlayerRefAst::AnyOpponent
+        } else {
+            PlayerRefAst::You
+        };
+        return Ok(vec![trig_kw(actor, low)]);
     }
     if low == "whenever a player casts their second spell during their turn" {
         return Ok(vec![trig_cast_ext(
@@ -2567,7 +2598,6 @@ pub(crate) fn parse_trigger_events(
             | "a player casts a spell that shares a color or mana value with the exiled card"
             | "an opponent casts a spell with mana value, power, or toughness equal to the chosen number"
             | "you cast a spell with power, toughness, or mana value 4"
-            | "the tenth +1/+1 counter is put on shang-chi"
             | "a permanent other than a basic land enters"
             | "a player casts a spell they don't own"
             | "you cast an instant or sorcery spell with a single target"
@@ -2581,13 +2611,14 @@ pub(crate) fn parse_trigger_events(
             | "an opponent casts a spell from anywhere other than their hand"
             | "you play a card with the same name as one of the exiled cards"
             | "a white instant or sorcery spell causes you to gain life"
-    ) || blow.starts_with("a permanent you control transforms into ")
+    ) || (blow.starts_with("the ") && blow.contains(" counter is put on "))
+        || blow.starts_with("a permanent you control transforms into ")
         || blow.starts_with("a creature you control explores ")
         || (blow.starts_with("you play a ") && blow.contains(" or cast a "))
         || (blow.starts_with("an opponent is dealt ")
             && blow.ends_with(" or more damage by a single source"))
     {
-        return Ok(vec![trig_kw(PlayerRefAst::You, blow.to_string())]);
+        return Ok(vec![trig_kw(infer_trigger_actor(blow), blow.to_string())]);
     }
     if blow.ends_with(" is championed with ~")
         || blow.starts_with("~ deals ")
@@ -2598,7 +2629,7 @@ pub(crate) fn parse_trigger_events(
         || blow.ends_with(" loses the game")
         || (blow.starts_with("~ and at least ") && blow.ends_with(" attack"))
     {
-        return Ok(vec![trig_kw(PlayerRefAst::You, blow.to_string())]);
+        return Ok(vec![trig_kw(infer_trigger_actor(blow), blow.to_string())]);
     }
     // CR 603.8 State trigger: "When <condition>" (Floodgate, Opal Avenger, Phyrexian Devourer, Rune-Tail, Goblins of the Flarg)
     if low.starts_with("when ")
