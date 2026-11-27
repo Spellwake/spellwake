@@ -182,8 +182,14 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                 if another {
                     flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
                 }
-                // Support trailing `or player` (`target creature or player`, `target creature, planeswalker, or player`)
-                if ts.eat_phrase(&["or", "player"]) {
+                // Support trailing `or player` / `and/or player(s)` (`target creature or player`, `target creature, planeswalker, or player`, `target creatures, planeswalkers, and/or players`)
+                let p_cp = ts.checkpoint();
+                let _ = ts.eat_comma();
+                if ts.eat_phrase(&["or", "player"])
+                    || ts.eat_phrase(&["or", "players"])
+                    || ts.eat_phrase(&["and/or", "player"])
+                    || ts.eat_phrase(&["and/or", "players"])
+                {
                     return Ok(SubjectRef::Compound(vec![
                         SubjectRef::TargetObject {
                             filter: Box::new(flt),
@@ -196,6 +202,7 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                         },
                     ]));
                 }
+                ts.restore(p_cp);
                 let first_target = SubjectRef::TargetObject {
                     filter: Box::new(flt),
                     count,
@@ -476,7 +483,11 @@ pub fn parse_anaphora(ts: &mut TokenStream<'_>) -> Option<AnaphoraRef> {
     {
         return Some(AnaphoraRef::TheRest);
     }
-    if ts.eat_phrase(&["the", "copies"]) || ts.eat_phrase(&["those", "copies"]) {
+    if ts.eat_phrase(&["the", "copies"])
+        || ts.eat_phrase(&["those", "copies"])
+        || ts.eat_phrase(&["those", "tokens"])
+        || ts.eat_phrase(&["the", "tokens"])
+    {
         return Some(AnaphoraRef::TheCopies);
     }
     if ts.eat_phrase(&["the", "copy"]) || ts.eat_phrase(&["that", "copy"]) {
@@ -546,6 +557,10 @@ pub fn parse_anaphora(ts: &mut TokenStream<'_>) -> Option<AnaphoraRef> {
     }
     if ts.eat_phrase(&["that", "creature", "or", "planeswalker"])
         || ts.eat_phrase(&["that", "permanent"])
+        || ts.eat_phrase(&["that", "artifact"])
+        || ts.eat_phrase(&["that", "enchantment"])
+        || ts.eat_phrase(&["that", "planeswalker"])
+        || ts.eat_phrase(&["that", "battle"])
     {
         return Some(AnaphoraRef::ThatPermanent);
     }

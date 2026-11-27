@@ -301,6 +301,13 @@ fn parse_static_core(
             kind: VisibilityKind::PlayWithTopRevealed,
         });
     }
+    if ts.eat_phrase(&["play", "with", "your", "hand", "revealed"]) {
+        return Ok(StaticAbility::PlayerRestriction {
+            player: PlayerRef::You,
+            restriction: PlayerRestrictionKind::PlaysWithHandRevealed,
+            condition: None,
+        });
+    }
     if ts.eat_phrase(&[
         "a", "deck", "can", "have", "any", "number", "of", "cards", "named",
     ]) && ts.eat_tilde()
@@ -310,35 +317,50 @@ fn parse_static_core(
     if ts.eat_word("draft") && ts.eat_tilde() && ts.eat_phrase(&["face", "up"]) {
         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::DraftFaceUp));
     }
-    if ts.eat_phrase(&["your", "maximum", "hand", "size", "is", "equal", "to"]) {
-        let value = parse_value_expr(ts)?;
-        return Ok(StaticAbility::HandSize {
-            player: PlayerRef::You,
-            rule: HandSizeRule::Set(value),
-        });
-    }
-    if ts.eat_phrase(&["your", "maximum", "hand", "size", "is", "increased", "by"])
-        && let Some(n) = ts.next_number(false)
     {
-        return Ok(StaticAbility::HandSize {
-            player: PlayerRef::You,
-            rule: HandSizeRule::Delta(i16::try_from(n).unwrap_or(1)),
-        });
-    }
-    if ts.eat_phrase(&["your", "maximum", "hand", "size", "is", "reduced", "by"])
-        && let Some(n) = ts.next_number(false)
-    {
-        return Ok(StaticAbility::HandSize {
-            player: PlayerRef::You,
-            rule: HandSizeRule::Delta(-i16::try_from(n).unwrap_or(1)),
-        });
-    }
-    if ts.eat_phrase(&["your", "maximum", "hand", "size", "is"]) {
-        let value = parse_value_expr(ts)?;
-        return Ok(StaticAbility::HandSize {
-            player: PlayerRef::You,
-            rule: HandSizeRule::Set(value),
-        });
+        let hcp = ts.checkpoint();
+        let hand_player = if ts.eat_phrase(&["your", "maximum", "hand", "size"]) {
+            Some(PlayerRef::You)
+        } else if ts.eat_phrase(&["each", "opponent's", "maximum", "hand", "size"]) {
+            Some(PlayerRef::EachOpponent)
+        } else if ts.eat_phrase(&["each", "player's", "maximum", "hand", "size"]) {
+            Some(PlayerRef::EachPlayer)
+        } else {
+            None
+        };
+        if let Some(player) = hand_player {
+            if ts.eat_phrase(&["is", "equal", "to"]) {
+                let value = parse_value_expr(ts)?;
+                return Ok(StaticAbility::HandSize {
+                    player,
+                    rule: HandSizeRule::Set(value),
+                });
+            }
+            if ts.eat_phrase(&["is", "increased", "by"])
+                && let Some(n) = ts.next_number(false)
+            {
+                return Ok(StaticAbility::HandSize {
+                    player,
+                    rule: HandSizeRule::Delta(i16::try_from(n).unwrap_or(1)),
+                });
+            }
+            if ts.eat_phrase(&["is", "reduced", "by"])
+                && let Some(n) = ts.next_number(false)
+            {
+                return Ok(StaticAbility::HandSize {
+                    player,
+                    rule: HandSizeRule::Delta(-i16::try_from(n).unwrap_or(1)),
+                });
+            }
+            if ts.eat_word("is") {
+                let value = parse_value_expr(ts)?;
+                return Ok(StaticAbility::HandSize {
+                    player,
+                    rule: HandSizeRule::Set(value),
+                });
+            }
+        }
+        ts.restore(hcp);
     }
     if ts.eat_phrase(&["players", "have", "no", "maximum", "hand", "size"])
         || ts.eat_phrase(&["each", "player", "has", "no", "maximum", "hand", "size"])
@@ -727,6 +749,12 @@ fn parse_static_core(
             let mut source = None;
             let mut target = None;
             loop {
+                if ts.eat_phrase(&["to", "and", "dealt", "by"]) {
+                    let subj = parse_subject_ref(ts)?;
+                    target = Some(subj.clone());
+                    source = Some(subj);
+                    continue;
+                }
                 if ts.eat_word("to") {
                     target = Some(parse_subject_ref(ts)?);
                     continue;
@@ -1360,6 +1388,11 @@ fn parse_static_core(
                                 condition: None,
                             });
                         }
+                        let cond = if ts.eat_phrase(&["as", "long", "as"]) || ts.eat_word("if") {
+                            Some(parse_condition(ts)?)
+                        } else {
+                            None
+                        };
                         return Ok(StaticAbility::ZoneCastPermission {
                             player,
                             filter: Some(ObjectFilter {
@@ -1369,7 +1402,7 @@ fn parse_static_core(
                             subject: None,
                             zone: None,
                             mode: CastPermissionMode::AsThoughFlash { extra_cost: None },
-                            condition: None,
+                            condition: cond,
                         });
                     }
                 }
@@ -1537,6 +1570,21 @@ fn parse_static_core(
             StaticFlagKind::NamedSourcesCantActivate,
         ));
     }
+    {
+        let acp = ts.checkpoint();
+        if ts.eat_phrase(&["activated", "abilities", "of"])
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+            && ts.eat_phrase(&["can't", "be", "activated"])
+        {
+            let _ = ts.eat_phrase(&["unless", "they're", "mana", "abilities"]);
+            return Ok(StaticAbility::RuleRestriction {
+                subject: Some(SubjectRef::All(Box::new(flt))),
+                rule: RuleRestrictionKind::ActivatedAbilitiesCantBeActivated,
+                condition,
+            });
+        }
+        ts.restore(acp);
+    }
 
     // 1. `The next/first <flt> you cast this/each turn can't be countered / has <kws> / costs {N} less to cast`
     {
@@ -1589,6 +1637,15 @@ fn parse_static_core(
             }
         }
         ts.restore(cp);
+    }
+
+    // 1z. `Spells and abilities can't be countered` (`Spider-Punk`)
+    if ts.eat_phrase(&["spells", "and", "abilities", "can't", "be", "countered"]) {
+        return Ok(StaticAbility::RuleRestriction {
+            subject: None,
+            rule: RuleRestrictionKind::CantBeCountered,
+            condition,
+        });
     }
 
     // 2. Static spell cost modifier:
@@ -1736,7 +1793,20 @@ fn parse_cost_modifier(
             ..Default::default()
         }
     } else {
-        parse_object_filter(ts)?
+        let first = parse_object_filter(ts)?;
+        // Support `<flt1> and <flt2> [you cast] cost ...` (`Elemental spells and Warrior spells`, `Goblin spells and Shaman spells`)
+        let acp = ts.checkpoint();
+        if ts.eat_word("and")
+            && let Ok(second) = try_parse(ts, parse_object_filter)
+        {
+            ObjectFilter {
+                predicates: vec![FilterPredicate::AnyOf(vec![first, second])],
+                ..Default::default()
+            }
+        } else {
+            ts.restore(acp);
+            first
+        }
     };
 
     // Preserve caster relation explicitly!

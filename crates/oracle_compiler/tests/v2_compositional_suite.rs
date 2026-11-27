@@ -2125,3 +2125,336 @@ fn v2_wave5_compositional_grammar_deep_ir_assertions() {
         }]
     ));
 }
+
+/// 9. Deep Wave 6 compositional IR assertions (zero new core IR enum variants):
+///    conjoined sacrifice costs, multi-filter cost modifiers, aura-transform statics,
+///    two-sentence damage-prevention replacements, `For each 1 damage`, restrictive player clauses,
+///    negated relative filters, `that's <types>`, and zero regression on `Teferi, Mage of Zhalfir`.
+#[test]
+fn v2_wave6_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::ast::SupertypeMask;
+    use spellwake_oracle_compiler::v2::ir::{
+        ConditionExpr, DamageReplacement, PlayerRestrictionKind, ZoneMetricKind,
+    };
+    let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("content")
+        .join("tests")
+        .join("fixtures")
+        .join("creature-vocabulary.input.json");
+    let vocab = Vocabulary::load_from_file(&vocab_path).expect("load CR creature vocabulary");
+
+    let wave6_cards: &[(&str, &str, &str)] = &[
+        (
+            "Teferi, Mage of Zhalfir",
+            "Legendary Creature - Human Wizard",
+            "Flash\nCreature cards you own that aren't on the battlefield have flash.\nEach opponent can cast spells only any time they could cast a sorcery.",
+        ),
+        (
+            "Darksteel Mutation",
+            "Enchantment - Aura",
+            "Enchant creature\nEnchanted creature is an Insect artifact creature with base power and toughness 0/1 and has indestructible, and it loses all other abilities, card types, and creature types.",
+        ),
+        (
+            "Imprisoned in the Moon",
+            "Enchantment - Aura",
+            "Enchant creature, land, or planeswalker\nEnchanted permanent is a colorless land with \"{T}: Add {C}\" and loses all other card types and abilities.",
+        ),
+        (
+            "Stormwild Capridor",
+            "Creature - Bird Goat",
+            "Flying\nIf noncombat damage would be dealt to Stormwild Capridor, prevent that damage. Put a +1/+1 counter on Stormwild Capridor for each 1 damage prevented this way.",
+        ),
+        (
+            "Inkshield",
+            "Instant",
+            "Prevent all combat damage that would be dealt to you this turn. For each 1 damage prevented this way, create a 2/1 white and black Inkling creature token with flying.",
+        ),
+        (
+            "Wolverine, Best There Is",
+            "Legendary Creature - Mutant Berserker Hero",
+            "Double all damage Wolverine would deal.\nAt the beginning of each end step, if Wolverine dealt damage to another creature this turn, put a +1/+1 counter on him.\n{1}{G}: Regenerate Wolverine.",
+        ),
+        (
+            "Plaguecrafter",
+            "Creature - Human Shaman",
+            "When Plaguecrafter enters, each player sacrifices a creature or planeswalker. Each player who can't discards a card.",
+        ),
+        (
+            "Tinybones, Trinket Thief",
+            "Legendary Creature - Skeleton Rogue",
+            "At the beginning of each end step, if an opponent discarded a card this turn, you draw a card and you lose 1 life.\n{4}{B}{B}: Each opponent with no cards in hand loses 10 life.",
+        ),
+        (
+            "Jarad, Golgari Lich Lord",
+            "Legendary Creature - Zombie Elf",
+            "Jarad gets +1/+1 for each creature card in your graveyard.\n{1}{B}{G}, Sacrifice another creature: Each opponent loses life equal to the sacrificed creature's power.\nSacrifice a Swamp and a Forest: Return Jarad from your graveyard to your hand.",
+        ),
+        (
+            "Stonybrook Banneret",
+            "Creature - Merfolk Wizard",
+            "Islandwalk\nMerfolk spells and Wizard spells you cast cost {1} less to cast.",
+        ),
+        (
+            "Awaken the Ancient",
+            "Enchantment - Aura",
+            "Enchant Mountain\nEnchanted Mountain is a 7/7 red Giant creature with haste. It's still a land.",
+        ),
+        (
+            "Bounty Agent",
+            "Creature - Human Soldier",
+            "Vigilance\n{T}, Sacrifice Bounty Agent: Destroy target legendary permanent that's an artifact, creature, or enchantment.",
+        ),
+        (
+            "Enduring Renewal",
+            "Enchantment",
+            "Play with your hand revealed.\nIf you would draw a card, reveal the top card of your library instead. If it's a creature card, put it into your graveyard. Otherwise, draw a card.\nWhenever a creature is put into your graveyard from the battlefield, return it to your hand.",
+        ),
+        (
+            "Kozilek, the Great Distortion",
+            "Legendary Creature - Eldrazi",
+            "When you cast this spell, if you have fewer than seven cards in hand, draw cards equal to the difference.\nMenace\nDiscard a card with mana value X: Counter target spell with mana value X.",
+        ),
+        (
+            "Vastwood Animist",
+            "Creature - Elf Shaman Ally",
+            "{T}: Target land you control becomes an X/X Elemental creature until end of turn, where X is the number of Allies you control. It's still a land.",
+        ),
+        (
+            "Urza's Ruinous Blast",
+            "Legendary Sorcery",
+            "Exile all nonland permanents that aren't legendary.",
+        ),
+        (
+            "Epic Experiment",
+            "Sorcery",
+            "Exile the top X cards of your library. For each instant and sorcery card with mana value X or less among them, you may cast that spell without paying its mana cost. Then put all cards exiled this way that weren't cast into your graveyard.",
+        ),
+        (
+            "Cursed Totem",
+            "Artifact",
+            "Activated abilities of creatures can't be activated.",
+        ),
+        (
+            "Collector Ouphe",
+            "Creature - Ouphe",
+            "Activated abilities of artifacts can't be activated.",
+        ),
+        (
+            "Blanket of Night",
+            "Enchantment",
+            "Each land is a Swamp in addition to its other land types.",
+        ),
+        (
+            "Rocco, Street Chef",
+            "Legendary Creature - Elf Druid",
+            "At the beginning of your end step, each player exiles the top card of their library. Until your next end step, each player may play the card they exiled this way.\nWhenever a player plays a land from exile or casts a spell from exile, you put a +1/+1 counter on target creature and create a Food token.",
+        ),
+        (
+            "Spider-Punk",
+            "Legendary Creature - Spider Human Hero",
+            "Riot\nOther Spiders you control have riot.\nSpells and abilities can't be countered.\nDamage can't be prevented.",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in wave6_cards {
+        let compiled = compile_v2_strict(name, type_line, oracle_text, &vocab);
+        assert!(
+            compiled.strictly_compiled,
+            "Wave 6 card `{name}` failed strict v2 compilation: {:#?}",
+            compiled.faces[0].errors
+        );
+    }
+
+    // Deep typed IR assertions on orthogonal Wave 6 primitives:
+    // 1. Jarad conjoined sacrifice cost splits cleanly into two independent Cost::Sacrifice atoms
+    let jarad = compile_v2_strict(
+        "Jarad, Golgari Lich Lord",
+        "Legendary Creature - Zombie Elf",
+        "Sacrifice a Swamp and a Forest: Return Jarad from your graveyard to your hand.",
+        &vocab,
+    );
+    assert!(matches!(
+        jarad.faces[0].abilities.as_slice(),
+        [Ability::Activated { cost, .. }]
+            if matches!(
+                cost.as_slice(),
+                [Cost::Sacrifice { .. }, Cost::Sacrifice { .. }]
+            )
+    ));
+
+    // 2. Brighthearth Banneret multi-filter cost modifier composes FilterPredicate::AnyOf
+    let banneret = compile_v2_strict(
+        "Brighthearth Banneret",
+        "Creature - Elemental Warrior",
+        "Elemental spells and Warrior spells you cast cost {1} less to cast.",
+        &vocab,
+    );
+    assert!(matches!(
+        banneret.faces[0].statics.as_slice(),
+        [StaticAbility::CostModifier { subject, less: true, .. }]
+            if matches!(subject.predicates.as_slice(), [FilterPredicate::AnyOf(parts)] if parts.len() == 2)
+    ));
+
+    // 3. Stormwild Capridor two-sentence damage-prevention replacement preserves rider
+    let capridor = compile_v2_strict(
+        "Stormwild Capridor",
+        "Creature - Bird Goat",
+        "If noncombat damage would be dealt to Stormwild Capridor, prevent that damage. Put a +1/+1 counter on Stormwild Capridor for each 1 damage prevented this way.",
+        &vocab,
+    );
+    assert!(matches!(
+        capridor.faces[0].replacements.as_slice(),
+        [Replacement::DamageRule(DamageReplacement::PreventWithRider { rider, .. })]
+            if !rider.is_empty()
+    ));
+
+    // 4. Inkshield `For each 1 damage prevented this way` compiles to ForEachDomain::EachUnitOfValue
+    let inkshield = compile_v2_strict(
+        "Inkshield",
+        "Instant",
+        "Prevent all combat damage that would be dealt to you this turn. For each 1 damage prevented this way, create a 2/1 white and black Inkling creature token with flying.",
+        &vocab,
+    );
+    assert!(matches!(
+        inkshield.faces[0].spell_effects.as_slice(),
+        [
+            Effect::PreventDamage {
+                combat_only: true,
+                ..
+            },
+            Effect::ForEach {
+                over: ForEachDomain::EachUnitOfValue(ValueExpr::PriorActionCount(
+                    PriorActionKind::DamagePreventedThisWay
+                )),
+                ..
+            }
+        ]
+    ));
+
+    // 5. Darksteel Mutation compiles to Compound static (SetBasePT + GrantKeywords + RemoveAllAbilities + SetSubtypes)
+    let mutation = compile_v2_strict(
+        "Darksteel Mutation",
+        "Enchantment - Aura",
+        "Enchanted creature is an Insect artifact creature with base power and toughness 0/1 and has indestructible, and it loses all other abilities, card types, and creature types.",
+        &vocab,
+    );
+    assert!(matches!(
+        mutation.faces[0].statics.as_slice(),
+        [StaticAbility::Compound(parts)] if parts.len() >= 4
+    ));
+
+    // 6. Plaguecrafter `Each player who can't discards a card` -> ForEachDomain::EachPlayerWhoCant
+    let plague = compile_v2_strict(
+        "Plaguecrafter",
+        "Creature - Human Shaman",
+        "When Plaguecrafter enters, each player sacrifices a creature or planeswalker. Each player who can't discards a card.",
+        &vocab,
+    );
+    assert!(matches!(
+        plague.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                body.get(1),
+                Some(Effect::ForEach {
+                    over: ForEachDomain::EachPlayerWhoCant(PlayerRef::EachPlayer),
+                    ..
+                })
+            )
+    ));
+
+    // 7. Tinybones `Each opponent with no cards in hand loses 10 life` -> ZoneMetric::IsEmpty
+    let tinybones = compile_v2_strict(
+        "Tinybones, Trinket Thief",
+        "Legendary Creature - Skeleton Rogue",
+        "{4}{B}{B}: Each opponent with no cards in hand loses 10 life.",
+        &vocab,
+    );
+    assert!(matches!(
+        tinybones.faces[0].abilities.as_slice(),
+        [Ability::Activated { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::ForEach {
+                    over: ForEachDomain::EachOpponentWithCondition(ConditionExpr::ZoneMetric {
+                        kind: ZoneMetricKind::IsEmpty,
+                        ..
+                    }),
+                    ..
+                }]
+            )
+    ));
+
+    // 8. Urza's Ruinous Blast `that aren't legendary` sets forbidden_supertypes = LEGENDARY
+    let blast = compile_v2_strict(
+        "Urza's Ruinous Blast",
+        "Legendary Sorcery",
+        "Exile all nonland permanents that aren't legendary.",
+        &vocab,
+    );
+    assert!(matches!(
+        blast.faces[0].spell_effects.as_slice(),
+        [Effect::ZoneOp {
+            subject: SubjectRef::All(flt),
+            ..
+        }] if flt.forbidden_supertypes == SupertypeMask::LEGENDARY
+    ));
+
+    // 9. Enduring Renewal `Play with your hand revealed` -> PlayerRestrictionKind::PlaysWithHandRevealed
+    let renewal = compile_v2_strict(
+        "Enduring Renewal",
+        "Enchantment",
+        "Play with your hand revealed.",
+        &vocab,
+    );
+    assert!(matches!(
+        renewal.faces[0].statics.as_slice(),
+        [StaticAbility::PlayerRestriction {
+            player: PlayerRef::You,
+            restriction: PlayerRestrictionKind::PlaysWithHandRevealed,
+            ..
+        }]
+    ));
+
+    // 10. Wolverine `Double all damage ~ would deal` -> Replacement::ModifyDamage { factor: 2 }
+    let wolverine = compile_v2_strict(
+        "Wolverine, Best There Is",
+        "Legendary Creature - Mutant Berserker Hero",
+        "Double all damage Wolverine would deal.",
+        &vocab,
+    );
+    assert!(matches!(
+        wolverine.faces[0].replacements.as_slice(),
+        [Replacement::ModifyDamage { factor: 2, .. }]
+    ));
+
+    // 11. Cursed Totem `Activated abilities of creatures can't be activated` -> RuleRestrictionKind::ActivatedAbilitiesCantBeActivated
+    let totem = compile_v2_strict(
+        "Cursed Totem",
+        "Artifact",
+        "Activated abilities of creatures can't be activated.",
+        &vocab,
+    );
+    assert!(matches!(
+        totem.faces[0].statics.as_slice(),
+        [StaticAbility::RuleRestriction {
+            rule: RuleRestrictionKind::ActivatedAbilitiesCantBeActivated,
+            ..
+        }]
+    ));
+
+    // 12. Teferi, Mage of Zhalfir zero-regression guard (`that aren't on the battlefield`)
+    let teferi = compile_v2_strict(
+        "Teferi, Mage of Zhalfir",
+        "Legendary Creature - Human Wizard",
+        "Creature cards you own that aren't on the battlefield have flash.",
+        &vocab,
+    );
+    assert!(matches!(
+        teferi.faces[0].statics.as_slice(),
+        [StaticAbility::GrantKeywords {
+            subject: SubjectRef::Group(flt),
+            ..
+        }] if flt.flags.contains(FilterFlags::NOT_ON_BATTLEFIELD)
+    ));
+}

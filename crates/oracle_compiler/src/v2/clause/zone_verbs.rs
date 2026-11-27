@@ -676,6 +676,21 @@ fn parse_zone_verb_frame_inner(
                 (),
             ));
         }
+        let return_count = {
+            let rcp = ts.checkpoint();
+            if ts.eat_phrase(&["up", "to"])
+                && let Ok(val) = try_parse(ts, parse_value_expr)
+            {
+                Some(CountSpec {
+                    count: val,
+                    up_to: true,
+                    any_number: false,
+                })
+            } else {
+                ts.restore(rcp);
+                None
+            }
+        };
         let first_subj = parse_subject_ref(ts)?;
         let subject = {
             let ccp = ts.checkpoint();
@@ -767,7 +782,7 @@ fn parse_zone_verb_frame_inner(
                 to: Some(dest),
                 modifiers,
                 except,
-                count: None,
+                count: return_count,
             }],
             (),
         ));

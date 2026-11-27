@@ -77,6 +77,43 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
         ts.restore(cp);
     }
 
+    // 0a. `Double all damage <subj> would deal.` (`Wolverine, Best There Is`, `Collective Inferno`)
+    {
+        let dcp = ts.checkpoint();
+        if ts.eat_phrase(&["double", "all", "damage"]) {
+            let _ = ts.eat_word("that");
+            if let Ok(src_flt) = try_parse(ts, parse_object_filter)
+                && ts.eat_phrase(&["would", "deal"])
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::ModifyDamage {
+                        source: Some(src_flt),
+                        target: None,
+                        add: 0,
+                        factor: 2,
+                    });
+                }
+            }
+            ts.restore(dcp);
+            if ts.eat_phrase(&["double", "all", "damage"])
+                && ts.eat_tilde()
+                && ts.eat_phrase(&["would", "deal"])
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::ModifyDamage {
+                        source: None,
+                        target: None,
+                        add: 0,
+                        factor: 2,
+                    });
+                }
+            }
+        }
+        ts.restore(dcp);
+    }
+
     // 0b. `You may have ~ enter [tapped] as a copy of <flt> [, except ...]`
     {
         let cp = ts.checkpoint();
@@ -958,7 +995,10 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             ts.restore(pcp);
                         }
                         if ts.eat_phrase(&["prevent", "that", "damage"]) {
-                            let rider = if ts.eat_word("and") || ts.eat_comma() {
+                            let rider = if ts.eat_word("and")
+                                || ts.eat_comma()
+                                || (ts.eat_period() && !ts.is_eof())
+                            {
                                 let _ = ts.eat_word("and");
                                 parse_effect_sentence(ts)?
                             } else {
@@ -1106,7 +1146,8 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 };
                 if ts.eat_comma() {
                     if ts.eat_phrase(&["prevent", "that", "damage"]) {
-                        if ts.eat_word("and") || ts.eat_comma() {
+                        if ts.eat_word("and") || ts.eat_comma() || (ts.eat_period() && !ts.is_eof())
+                        {
                             let _ = ts.eat_word("and");
                             let rider = parse_effect_sentence(ts)?;
                             let _ = ts.eat_period();
