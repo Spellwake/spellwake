@@ -1844,7 +1844,51 @@ pub(super) fn lower_counters_pt_instruction(
                 }
                 SubjectRefAst::TargetOneOf {
                     options,
-                    count: TargetCountAst::UpTo(1),
+                    count: TargetCountAst::UpTo(max),
+                } if *max > 0 => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, builder, in_trigger, vocabulary,
+                    )?;
+                    builder.bind_target(bt)?;
+                    builder
+                        .instructions
+                        .push(Instruction::AffectPermanentTargets {
+                            minimum: 0,
+                            maximum: *max,
+                            action: PermanentTargetAction::Modify {
+                                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
+                                    ab_change,
+                                )]),
+                                duration: dur,
+                            },
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::TargetOneOf {
+                    options,
+                    count: TargetCountAst::Exact(n),
+                } if *n >= 2 => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, builder, in_trigger, vocabulary,
+                    )?;
+                    builder.bind_target(bt)?;
+                    builder
+                        .instructions
+                        .push(Instruction::AffectPermanentTargets {
+                            minimum: *n,
+                            maximum: *n,
+                            action: PermanentTargetAction::Modify {
+                                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
+                                    ab_change,
+                                )]),
+                                duration: dur,
+                            },
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::TargetOneOf {
+                    options,
+                    count: TargetCountAst::AnyNumber,
                 } => {
                     let bt = lower_target_one_of_permanent_body_target(
                         options, builder, in_trigger, vocabulary,
@@ -1854,7 +1898,34 @@ pub(super) fn lower_counters_pt_instruction(
                         .instructions
                         .push(Instruction::AffectPermanentTargets {
                             minimum: 0,
-                            maximum: 1,
+                            maximum: u16::MAX,
+                            action: PermanentTargetAction::Modify {
+                                parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
+                                    ab_change,
+                                )]),
+                                duration: dur,
+                            },
+                        });
+                    Ok(())
+                }
+                SubjectRefAst::TargetOneOf {
+                    options,
+                    count: tc @ (TargetCountAst::ChosenX | TargetCountAst::UpToX),
+                } if !in_trigger => {
+                    let bt = lower_target_one_of_permanent_body_target(
+                        options, builder, in_trigger, vocabulary,
+                    )?;
+                    builder.bind_target(bt)?;
+                    if *tc == TargetCountAst::UpToX {
+                        builder.up_to_x_target_count = true;
+                    } else {
+                        builder.x_target_count = true;
+                    }
+                    builder
+                        .instructions
+                        .push(Instruction::AffectPermanentTargets {
+                            minimum: 0,
+                            maximum: u16::MAX,
                             action: PermanentTargetAction::Modify {
                                 parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(
                                     ab_change,
@@ -2621,6 +2692,99 @@ pub(super) fn lower_counters_pt_instruction(
                 }
                 return Err("oracle:put-counter-kind");
             }
+            if in_trigger
+                && self_pronoun_valid
+                && matches!(count.as_ref(), ValueExprAst::Const(1))
+                && let Some(kind_rest) = kind_trimmed
+                    .strip_prefix("all of its ")
+                    .or_else(|| kind_trimmed.strip_prefix("all its "))
+                    .or_else(|| kind_trimmed.strip_prefix("its "))
+                    .or_else(|| kind_trimmed.strip_prefix("all of ~'s "))
+                    .or_else(|| kind_trimmed.strip_prefix("~'s "))
+                    .or_else(|| kind_trimmed.strip_prefix("this creature's "))
+                    .or_else(|| kind_trimmed.strip_prefix("this permanent's "))
+                    .or_else(|| kind_trimmed.strip_prefix("this artifact's "))
+                && let Some(ck_clean) = Some(
+                    kind_rest
+                        .trim()
+                        .strip_suffix(" counters")
+                        .or_else(|| kind_rest.trim().strip_suffix(" counter"))
+                        .unwrap_or(kind_rest.trim())
+                        .trim(),
+                )
+                && let Some(ck) = parse_counter_kind(ck_clean)
+                && ck.is_permanent()
+            {
+                let eff_subject = match subject.as_ref() {
+                    SubjectRefAst::InZone {
+                        subject: inner,
+                        zone: ZoneFilter::Battlefield,
+                    } => inner.as_ref(),
+                    other => other,
+                };
+                let src_cnt = ValueExpr::CounterCount {
+                    subject: spellwake_engine::program::CounterSubjectRef::AbilitySource,
+                    kind: Some(ck),
+                };
+                let mut trial = builder.clone();
+                let target_query = match eff_subject {
+                    SubjectRefAst::TargetObject {
+                        filter,
+                        count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
+                    } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
+                        let mut f_clean = filter.as_ref().clone();
+                        f_clean.zone = None;
+                        let bt = lower_battlefield_body_target_in_context(
+                            &f_clean, &trial, in_trigger, vocabulary,
+                        )?;
+                        trial.bind_target(bt)?;
+                        if *tc == TargetCountAst::UpTo(1) {
+                            trial.up_to_one_target = true;
+                        }
+                        Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+                    }
+                    SubjectRefAst::TargetOneOf {
+                        options,
+                        count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
+                    } => {
+                        let bt = lower_target_one_of_permanent_body_target(
+                            options, &trial, in_trigger, vocabulary,
+                        )?;
+                        trial.bind_target(bt)?;
+                        if *tc == TargetCountAst::UpTo(1) {
+                            trial.up_to_one_target = true;
+                        }
+                        Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+                    }
+                    SubjectRefAst::Anaphora(_) if is_permanent_body_target(trial.target) => {
+                        Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+                    }
+                    SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
+                        if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
+                    {
+                        let mut f_clean = f.as_ref().clone();
+                        f_clean.zone = None;
+                        let obj = lower_object_filter_in_context(
+                            &f_clean, &trial, in_trigger, vocabulary,
+                        )?;
+                        bind_filter_player_target(&mut trial, &obj)?;
+                        trial.last_group_filter = Some(obj);
+                        Some(spellwake_engine::toolbox::ObjectQuery::EffectSubject(
+                            Box::new(EffectSubject::Matching(obj)),
+                        ))
+                    }
+                    _ => None,
+                };
+                if let Some(query) = target_query {
+                    trial.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                            query, ck, src_cnt,
+                        ),
+                    );
+                    *builder = trial;
+                    return Ok(());
+                }
+            }
             if matches!(count.as_ref(), ValueExprAst::Const(1))
                 && matches!(
                     kind_low_full.as_str(),
@@ -2674,7 +2838,7 @@ pub(super) fn lower_counters_pt_instruction(
                     }
                     SubjectRefAst::TargetObject {
                         filter,
-                        count: TargetCountAst::Exact(1),
+                        count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                     } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
                         let mut f_clean = filter.as_ref().clone();
                         f_clean.zone = None;
@@ -2682,16 +2846,22 @@ pub(super) fn lower_counters_pt_instruction(
                             &f_clean, &trial, in_trigger, vocabulary,
                         )?;
                         trial.bind_target(bt)?;
+                        if *tc == TargetCountAst::UpTo(1) {
+                            trial.up_to_one_target = true;
+                        }
                         Some(EffectSubject::TargetObject)
                     }
                     SubjectRefAst::TargetOneOf {
                         options,
-                        count: TargetCountAst::Exact(1),
+                        count: tc @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                     } => {
                         let bt = lower_target_one_of_permanent_body_target(
                             options, &trial, in_trigger, vocabulary,
                         )?;
                         trial.bind_target(bt)?;
+                        if *tc == TargetCountAst::UpTo(1) {
+                            trial.up_to_one_target = true;
+                        }
                         Some(EffectSubject::TargetObject)
                     }
                     SubjectRefAst::AttachedHost(_) if has_source => Some(EffectSubject::Matching(
@@ -3131,7 +3301,20 @@ pub(super) fn lower_counters_pt_instruction(
                 in_trigger,
                 vocabulary,
             )?;
-            if ck.is_player_counter() {
+            fn is_put_counter_player_subject(subj: &SubjectRefAst) -> bool {
+                match subj {
+                    SubjectRefAst::Player(_) | SubjectRefAst::TargetPlayer { .. } => true,
+                    SubjectRefAst::Anaphora(raw) => is_player_anaphora_label(raw),
+                    SubjectRefAst::Compound(items) => {
+                        !items.is_empty() && items.iter().all(is_put_counter_player_subject)
+                    }
+                    _ => false,
+                }
+            }
+            if ck.is_player_counter()
+                || (matches!(ck, CounterKind::Custom(_))
+                    && is_put_counter_player_subject(subject.as_ref()))
+            {
                 if let SubjectRefAst::Compound(items) = subject.as_ref()
                     && !items.is_empty()
                 {
@@ -3664,6 +3847,16 @@ pub(super) fn lower_counters_pt_instruction(
                         .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(EffectSubject::LastMoved, ck, amt));
                     Ok(())
                 }
+                SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
+                    if is_permanent_body_target(builder.target) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                            ck, amt,
+                        ),
+                    );
+                    Ok(())
+                }
                 SubjectRefAst::Compound(items) if !items.is_empty() => {
                     for it in items {
                         lower_instruction(
@@ -3966,7 +4159,24 @@ pub(super) fn lower_counters_pt_instruction(
             };
             let u = u16::try_from(n.to_usize().ok_or("oracle:adapt-ovf")?)
                 .map_err(|_| "oracle:adapt-ovf")?;
-            builder.instructions.push(Instruction::Adapt(u));
+            let skip_dst = builder.instructions.len() + 2;
+            builder.instructions.push(Instruction::BranchCondition {
+                condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Compare {
+                    left: Box::new(ValueExpr::counters(
+                        spellwake_engine::program::CounterSubjectRef::AbilitySource,
+                        Some(CounterKind::PlusOne),
+                    )),
+                    op: Comparison::Equal,
+                    right: Box::new(ValueExpr::literal(0)),
+                }),
+                destination: skip_dst,
+            });
+            builder
+                .instructions
+                .push(toolbox_emit::put_counters_on_source(
+                    CounterKind::PlusOne,
+                    ValueExpr::literal(i64::from(u)),
+                ));
             Ok(())
         }
         InstructionAst::Explore { subject } => {
@@ -4056,8 +4266,32 @@ pub(super) fn lower_counters_pt_instruction(
             counter_kind,
             count,
         } => {
-            let ck = parse_counter_kind(counter_kind).ok_or("oracle:player-counter-kind")?;
-            if !ck.is_player_counter() {
+            let kind_low_owned = counter_kind.trim().to_ascii_lowercase();
+            let mut kind_clean = kind_low_owned.as_str();
+            while let Some(rest) = kind_clean
+                .strip_prefix("an additional ")
+                .or_else(|| kind_clean.strip_prefix("additional "))
+                .or_else(|| kind_clean.strip_prefix("another "))
+                .or_else(|| kind_clean.strip_prefix("a "))
+                .or_else(|| kind_clean.strip_prefix("an "))
+                .or_else(|| kind_clean.strip_prefix("one "))
+            {
+                kind_clean = rest.trim_start();
+            }
+            kind_clean = kind_clean
+                .trim_end_matches('.')
+                .trim()
+                .strip_suffix(" counters")
+                .or_else(|| {
+                    kind_clean
+                        .trim_end_matches('.')
+                        .trim()
+                        .strip_suffix(" counter")
+                })
+                .unwrap_or(kind_clean.trim_end_matches('.').trim())
+                .trim();
+            let ck = parse_counter_kind(kind_clean).ok_or("oracle:player-counter-kind")?;
+            if !(ck.is_player_counter() || matches!(ck, CounterKind::Custom(_))) {
                 return Err("oracle:player-counter-kind");
             }
             let amt = lower_value_expr_in_context(

@@ -672,10 +672,10 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
             false
         }
         MatchObjectRef::LastMovedToExile
-            if builder.instructions.last().is_some_and(|op| {
+            if builder.instructions.iter().rev().take(2).any(|op| {
                 matches!(
                     op,
-                    Instruction::ExileTopForPlay { .. } | Instruction::ExileTopForFreePlay
+                    Instruction::ExileTopForPlay { .. }
                 ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
                     matches!(
                         &spec.source,

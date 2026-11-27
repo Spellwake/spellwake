@@ -2737,23 +2737,81 @@ pub(super) fn lower_resolution_pay_cost_ops(
             any_number: false,
         } => {
             let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
-            let obj = lower_filter_any(filter)?;
-            Ok(vec![Instruction::TapOrUntapControlled {
-                players: AffectedPlayers::One(player),
-                tap: true,
-                amount: amt,
-                filter: Box::new(obj),
-            }])
+            let mut obj = lower_filter_any(filter)?;
+            match &mut obj {
+                ObjectFilter::Clause(c) => {
+                    if c.tapped.is_none() {
+                        c.tapped = Some(false);
+                    }
+                }
+                ObjectFilter::Either(a, b) => {
+                    if a.tapped.is_none() {
+                        a.tapped = Some(false);
+                    }
+                    if b.tapped.is_none() {
+                        b.tapped = Some(false);
+                    }
+                }
+            }
+            let p_sel = spellwake_engine::toolbox::PlayerSelector::Resolving(player);
+            Ok(vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::with_selection(
+                    spellwake_engine::toolbox::ObjectQuery::zone(
+                        spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                            p_sel.clone(),
+                        )),
+                        obj,
+                    ),
+                    spellwake_engine::toolbox::ZoneSelection::Prompt {
+                        chooser: p_sel,
+                        min: Box::new(amt.clone()),
+                        max: Box::new(amt),
+                        constraint: None,
+                        category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                        hidden: false,
+                    },
+                    spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                ),
+            ))])
         }
         CostAtomAst::UntapPermanent { count, filter } => {
             let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
-            let obj = lower_filter_any(filter)?;
-            Ok(vec![Instruction::TapOrUntapControlled {
-                players: AffectedPlayers::One(player),
-                tap: false,
-                amount: amt,
-                filter: Box::new(obj),
-            }])
+            let mut obj = lower_filter_any(filter)?;
+            match &mut obj {
+                ObjectFilter::Clause(c) => {
+                    if c.tapped.is_none() {
+                        c.tapped = Some(true);
+                    }
+                }
+                ObjectFilter::Either(a, b) => {
+                    if a.tapped.is_none() {
+                        a.tapped = Some(true);
+                    }
+                    if b.tapped.is_none() {
+                        b.tapped = Some(true);
+                    }
+                }
+            }
+            let p_sel = spellwake_engine::toolbox::PlayerSelector::Resolving(player);
+            Ok(vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::with_selection(
+                    spellwake_engine::toolbox::ObjectQuery::zone(
+                        spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(Box::new(
+                            p_sel.clone(),
+                        )),
+                        obj,
+                    ),
+                    spellwake_engine::toolbox::ZoneSelection::Prompt {
+                        chooser: p_sel,
+                        min: Box::new(amt.clone()),
+                        max: Box::new(amt),
+                        constraint: None,
+                        category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                        hidden: false,
+                    },
+                    spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                ),
+            ))])
         }
         CostAtomAst::Mill(expr) => {
             let amt = lower_value_expr(resolve_x(expr, bound_x), vocabulary)?;
@@ -4830,6 +4888,21 @@ pub(super) fn predefined_token_def(
         }
         "junk" => {
             let act_id = ids.activated();
+            let mut exile_spec = spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                    zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                    )),
+                    filter: Box::new(ObjectFilter::any()),
+                    slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(
+                        ValueExpr::literal(1),
+                    )),
+                },
+                spellwake_engine::toolbox::ZoneDest::exile(),
+            );
+            exile_spec.bind_moved = Some(spellwake_engine::toolbox::BindingId(911));
             let mut p = Program::artifact(
                 None,
                 vec![ActivatedAbility {
@@ -4838,9 +4911,23 @@ pub(super) fn predefined_token_def(
                     source_cost: SourceCost::TapSacrifice,
                     body: ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::ExileTopForPlay {
-                            until_next_from_source: false,
-                        }],
+                        vec![
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                exile_spec,
+                            ),
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::grant_play_permission(
+                                spellwake_engine::toolbox::ObjectQuery::Bound(
+                                    spellwake_engine::toolbox::BindingId(911),
+                                ),
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                ResolvedDuration::UntilEndOfTurn,
+                                false,
+                                false,
+                                false,
+                            ),
+                        ],
                     ),
                 }],
             );

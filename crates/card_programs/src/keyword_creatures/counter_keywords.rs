@@ -21,7 +21,26 @@ pub(super) fn adapt(
         id: ActivatedAbilityId(0),
         mana_cost: fixed_cost(cost)?,
         source_cost: SourceCost::None,
-        body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Adapt(amount)]),
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                Instruction::BranchCondition {
+                    condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Compare {
+                        left: Box::new(spellwake_engine::program::ValueExpr::counters(
+                            spellwake_engine::program::CounterSubjectRef::AbilitySource,
+                            Some(spellwake_engine::effects::CounterKind::PlusOne),
+                        )),
+                        op: spellwake_engine::program::Comparison::Equal,
+                        right: Box::new(spellwake_engine::program::ValueExpr::literal(0)),
+                    }),
+                    destination: 2,
+                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                    spellwake_engine::effects::CounterKind::PlusOne,
+                    spellwake_engine::program::ValueExpr::literal(i64::from(amount)),
+                ),
+            ],
+        ),
     });
     match lines.next() {
         None => {}

@@ -275,6 +275,8 @@ pub struct PreventionSourceFilter {
     pub required_keyword: Option<crate::characteristics::KeywordAbility>,
     /// Forbid the source from having this keyword ability.
     pub forbidden_keyword: Option<crate::characteristics::KeywordAbility>,
+    /// When non-empty, the source must not have any of these creature subtypes.
+    pub forbidden_subtypes: [Option<spellwake_contracts::creature_types::CreatureTypeId>; 2],
     /// Restrict by source controller relative to the prevention effect's controller.
     pub controller: crate::program::ControllerFilter,
 }

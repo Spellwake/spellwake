@@ -908,8 +908,6 @@ impl EffectWindow {
                                 | Instruction::ImpulseCastOrDamage(_)
                                 | Instruction::ExileNonlandsToHandAndDamage { .. }
                                 | Instruction::ControlledSubtypeDamagesAttacker(_)
-                                | Instruction::DamageCapturedBlocker(_)
-                                | Instruction::DamageDamagedPlayersCreatures
                                 | Instruction::DivideDamageAmongTargets { .. }
                                 | Instruction::DivideDamageExprAmongTargets { .. }
                                 | Instruction::DivideThreeDamageAmongTargets
@@ -924,7 +922,6 @@ impl EffectWindow {
                                 | Instruction::ReflectAttachedCreatureDamage
                                 | Instruction::AddCounterAndDischargeOnResolution(_)
                                 | Instruction::DamageTargetControllersCreatures { .. }
-                                | Instruction::DrawAndDamageOpponents { .. }
                         )
                     )
                 {

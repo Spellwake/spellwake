@@ -6526,7 +6526,11 @@ fn resolve_that_player_for_value_expr(
                 Instruction::ChooseValue {
                     domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
                     ..
-                }
+                } | Instruction::SelectExtremeLifePlayer { .. }
+            ) || matches!(
+                op,
+                Instruction::PromptChoice(spec)
+                    if matches!(spec.domain, spellwake_engine::toolbox::PromptDomain::Players { .. })
             )
         }) =>
         {

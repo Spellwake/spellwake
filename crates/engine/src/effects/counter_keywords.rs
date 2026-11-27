@@ -110,7 +110,6 @@ impl EffectWindow {
             }
             | Instruction::SacrificeEvoked
             | Instruction::SacrificeStateTriggerSource
-            | Instruction::SacrificeUpkeepSource(_)
             | Instruction::ResolveCounterKeyword(CounterKeyword::VanishingLastCounter) => Ok(true),
             Instruction::ResolveCounterKeyword(CounterKeyword::Fading(_)) => {
                 let Some(StackKind::TriggeredAbility { source }) =

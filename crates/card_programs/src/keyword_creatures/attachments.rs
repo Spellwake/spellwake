@@ -107,7 +107,20 @@ pub(super) fn compile_rules(
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::ExileCombatDamagedCreature],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Intersect(
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Battlefield,
+                                    spellwake_engine::program::ObjectFilter::any(),
+                                )),
+                            ),
+                            spellwake_engine::toolbox::ZoneDest::exile(),
+                        ),
+                    ),
+                ],
             ),
         });
         program.continuous = Some(continuous);

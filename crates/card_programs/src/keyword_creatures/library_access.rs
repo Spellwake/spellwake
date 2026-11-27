@@ -339,7 +339,29 @@ pub(super) fn impulse(
     let mut program;
     if text.strip_prefix("Whenever an opponent attacks you and/or one or more planeswalkers you control, exile the top card of that player's library. ")==Some("You may play that card for as long as it remains exiled, and you may spend mana as though it were mana of any color to cast it.") && face.type_line.as_deref()==Some("Enchantment") {
         program=Program::enchantment(Some(fixed_cost(face.mana_cost.as_deref()?)?));
-        program.triggered.push(trigger(spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::any(), spellwake_engine::program::AttackTriggerMode::OpponentsAtController { minimum: 1 }),vec![Instruction::ExileRelatedTopForPlay]));
+        program.triggered.push(trigger(
+            spellwake_engine::program::TriggerSpec::attacks(
+                spellwake_engine::program::ObjectFilter::any(),
+                spellwake_engine::program::AttackTriggerMode::OpponentsAtController { minimum: 1 },
+            ),
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_library_top(
+                    spellwake_engine::program::ResolvingPlayer::UniqueRelatedPlayer,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                    false,
+                ),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::grant_play_permission(
+                    spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration,
+                    false,
+                    false,
+                    true,
+                ),
+            ],
+        ));
     } else if let Some(effect) = text
         .strip_prefix("At the beginning of your end step, if you control a creature with power ")
         .and_then(|rest| rest.split_once(" or greater, "))
@@ -394,9 +416,23 @@ pub(super) fn impulse(
             },
             parts: StaticParts(vec![StaticPart::GrantTrigger(Box::new(trigger(
                 spellwake_engine::program::TriggerSpec::self_deals_combat_damage_to_player(),
-                vec![Instruction::ExileTopForPlay {
-                    until_next_from_source: false,
-                }],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_library_top(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                        false,
+                    ),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::grant_play_permission(
+                        spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        false,
+                        false,
+                        false,
+                    ),
+                ],
             )))]),
         });
     } else {

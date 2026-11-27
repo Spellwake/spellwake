@@ -2147,3 +2147,168 @@ fn mutate_player_counters_monarch_extra_turn_and_emblem() {
     // P0 took the extra turn!
     assert_eq!(turn2.execution().window().active_player(), P0);
 }
+
+#[test]
+fn phase5_custom_player_counters_and_exile_with_counters() {
+    let vocab = vocabulary();
+    let ticket = CounterKind::Custom(
+        spellwake_engine::effects::CustomCounterKey::from_label("ticket").expect("valid key"),
+    );
+    let void_counter = CounterKind::Custom(
+        spellwake_engine::effects::CustomCounterKey::from_label("void").expect("valid key"),
+    );
+    let mut exile_spec = ZoneOpSpec::move_all(
+        ObjectQuery::Targets,
+        ZoneDest::Exile {
+            face_down: false,
+            link_to_source: false,
+            link_group: None,
+            delayed_return: None,
+            viewer: None,
+        },
+    );
+    exile_spec.bind_moved = Some(BindingId(1));
+    let spell = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![
+                    Instruction::MutatePlayer(Box::new(MutatePlayerSpec::add_counter(
+                        PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                        ticket,
+                        ValueExpr::literal(3),
+                    ))),
+                    Instruction::ZoneOp(Box::new(exile_spec)),
+                    Instruction::MutateObject(Box::new(MutateObjectSpec::all(
+                        ObjectQuery::Bound(BindingId(1)),
+                        ObjectMutation::AddCounters {
+                            kind: void_counter,
+                            amount: ValueExpr::literal(2),
+                        },
+                    ))),
+                ],
+            ),
+        ),
+        &vocab,
+    );
+    let victim = bear(2, 2, BTreeSet::new(), &vocab);
+    let game = init_world(vocab, vec![in_hand(1, P0, spell), bf(2, P1, victim)]);
+    let cast = submit(
+        &game,
+        P0,
+        GameCommand::Cast {
+            spell: object(&game, 1),
+            target: TargetRef::Object(object(&game, 2)),
+        },
+    );
+    let after = pass_pair(cast.state()).into_state();
+    assert_eq!(
+        after.execution().player_counters_of_kind(P0, ticket),
+        RulesInteger::from(3)
+    );
+    let exiled_id = object(&after, 2);
+    let exiled_card = after.execution().window().cards().get(exiled_id).unwrap();
+    assert_eq!(exiled_card.zone(), ObjectZone::Exile);
+    assert_eq!(
+        after.execution().counters_of_kind(exiled_id, void_counter),
+        RulesInteger::from(2)
+    );
+}
+
+#[test]
+fn phase5_prevent_damage_forbidden_subtypes_and_sticker_tag() {
+    let vocab = vocabulary();
+    let goblin = vocab.resolve_label("Goblin").expect("Goblin in vocabulary");
+    let mut gob = bear(2, 2, BTreeSet::new(), &vocab);
+    gob.creature_subtypes.insert(goblin);
+    let non_gob = bear(2, 2, BTreeSet::new(), &vocab);
+
+    let preventer = sorcery(
+        vec![
+            Instruction::ApplyContinuous(Box::new(ApplyContinuousSpec::prevent_damage(
+                TurnPreventionSpec {
+                    combat_only: false,
+                    source: PreventionSourceSpec::Filter(
+                        spellwake_engine::damage::PreventionSourceFilter {
+                            creatures_only: true,
+                            forbidden_subtypes: [Some(goblin), None],
+                            ..spellwake_engine::damage::PreventionSourceFilter::default()
+                        },
+                    ),
+                    recipient: PreventionRecipientSpec::Any,
+                    both_directions: false,
+                },
+            ))),
+            Instruction::SetObjectTag {
+                query: Box::new(ObjectQuery::ZoneScan {
+                    zone: QueryZone::Battlefield,
+                    filter: Box::new(ObjectFilter::creature().controlled()),
+                    slice: QuerySlice::All,
+                }),
+                key: TagKey::Label("sticker".into()),
+                value: Some(TagValue::Text("name-sticker".into())),
+            },
+        ],
+        &vocab,
+    );
+    let ping_from_gob = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![Instruction::DealDamage(Box::new(DealDamageSpec {
+                    source: DamageSourceQuery::Objects(ObjectQuery::Targets),
+                    recipients: DamageTargetQuery::Players(PlayerSelector::Group(
+                        AffectedPlayers::EachOpponent,
+                    )),
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(ValueExpr::literal(
+                        2,
+                    )),
+                    exile_if_dies: false,
+                }))],
+            ),
+        ),
+        &vocab,
+    );
+    let ping_from_non_gob = ping_from_gob.clone();
+    let game = init_world(
+        vocab,
+        vec![
+            in_hand(1, P0, preventer),
+            in_hand(2, P0, ping_from_gob),
+            in_hand(3, P0, ping_from_non_gob),
+            bf(4, P0, gob),
+            bf(5, P0, non_gob),
+        ],
+    );
+    let s1 = cast_untargeted(&game, 1).into_state();
+    // Both controlled creatures got the generic "sticker" tag.
+    let tagged = s1.execution().object_tags().objects_with_tag(
+        &TagKey::Label("sticker".into()),
+        Some(&TagValue::Text("name-sticker".into())),
+    );
+    assert!(tagged.contains(&object(&s1, 4)));
+    assert!(tagged.contains(&object(&s1, 5)));
+    // Damage from non-Goblin (card 5) is prevented; damage from Goblin (card 4) is NOT prevented!
+    let c_non = submit(
+        &s1,
+        P0,
+        GameCommand::Cast {
+            spell: object(&s1, 3),
+            target: TargetRef::Object(object(&s1, 5)),
+        },
+    );
+    let s2 = pass_pair(c_non.state()).into_state();
+    assert_eq!(s2.execution().life_total(P1), Some(&RulesInteger::from(20)));
+    let c_gob = submit(
+        &s2,
+        P0,
+        GameCommand::Cast {
+            spell: object(&s2, 2),
+            target: TargetRef::Object(object(&s2, 4)),
+        },
+    );
+    let s3 = pass_pair(c_gob.state()).into_state();
+    assert_eq!(s3.execution().life_total(P1), Some(&RulesInteger::from(18)));
+}

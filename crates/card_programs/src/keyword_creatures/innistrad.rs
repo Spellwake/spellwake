@@ -15,7 +15,7 @@ use spellwake_engine::{
     program::{
         BodyTarget, Comparison, EffectSubject, ExecutableBody, Instruction, LibraryPlacement,
         ObjectClause, ObjectFilter, PermanentTargetAction, PlayerRelation, PowerFilter, Program,
-        ProgramKind, RelatedExileGroup, ResolutionCondition, ResolvingPlayer, ValueExpr,
+        ProgramKind, ResolutionCondition, ResolvingPlayer, ValueExpr,
     },
     turn::Step,
 };
@@ -307,18 +307,63 @@ pub(super) fn spell(
                         spellwake_engine::toolbox::ObjectMutation::Transform,
                     ),
                 )),
-                PreventDamageThisTurn(spellwake_engine::damage::TurnPreventionFilter::CombatFromCreaturesWithoutEitherSubtype(
-                    subtype("Werewolf")?, subtype("Wolf")?,
-                )),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
+                    spellwake_engine::damage::TurnPreventionSpec {
+                        combat_only: true,
+                        source: spellwake_engine::damage::PreventionSourceSpec::Filter(
+                            spellwake_engine::damage::PreventionSourceFilter {
+                                creatures_only: true,
+                                forbidden_subtypes: [
+                                    Some(subtype("Werewolf")?),
+                                    Some(subtype("Wolf")?),
+                                ],
+                                ..Default::default()
+                            },
+                        ),
+                        recipient: spellwake_engine::damage::PreventionRecipientSpec::Any,
+                        both_directions: false,
+                    },
+                ),
             ],
         ),
         "Exile target creature and all other creatures with the same name as that creature." => (
             SingleCreature,
-            vec![ExileRelatedPermanents(RelatedExileGroup::CreaturesSharingTargetName)],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                            EffectSubject::TargetAndSameNameMatching(ObjectFilter::creature()),
+                        )),
+                        spellwake_engine::toolbox::ZoneDest::exile(),
+                    ),
+                ),
+            ],
         ),
         "Exile all nonland permanents target player controls. Return the exiled cards to the battlefield under their owner's control at the beginning of the next end step." => (
             SinglePlayer,
-            vec![ExileRelatedPermanents(RelatedExileGroup::TargetPlayerNonlandsUntilNextEndStep)],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(
+                                Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::TargetPlayer,
+                                )),
+                            ),
+                            ObjectFilter::nonland(),
+                        ),
+                        spellwake_engine::toolbox::ZoneDest::Exile {
+                            face_down: false,
+                            viewer: None,
+                            link_to_source: false,
+                            delayed_return: Some(
+                                spellwake_engine::program::DelayedReturnTiming::NextEndStep,
+                            ),
+                            link_group: None,
+                        },
+                    ),
+                ),
+            ],
         ),
         "Counter target spell. If that spell is countered this way, exile it instead of putting it into its owner's graveyard." => {
             (
@@ -375,9 +420,15 @@ pub(super) fn spell(
                             comparison: Comparison::LessOrEqual,
                             right: spellwake_engine::program::ValueExpr::Literal(5.into()),
                         },
-                        destination: 3,
+                        destination: 4,
                     },
-                    TapAttackersAndSkipNextUntap,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::set_group_tapped(
+                        ObjectFilter::creature().attacking(),
+                        true,
+                    ),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap(
+                        EffectSubject::Matching(ObjectFilter::creature().attacking()),
+                    ),
                 ],
             )
         }
@@ -1150,7 +1201,22 @@ pub(super) fn compile(
                 delta: CounterCostDelta::RemoveAll,
                 tap_source: true,
                 sacrifice_source: false,
-            }, NoTarget, vec![LookTopOneRestBottom { count: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::PaidNamedCounters) }]);
+            }, NoTarget, vec![Instruction::LookTopChoose {
+                count: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::PaidNamedCounters),
+                library_owner: spellwake_engine::program::ResolvingPlayer::Controller,
+                filter: None,
+                reveal: false,
+                reveal_only: false,
+                to_battlefield: false,
+                enters_tapped: false,
+                take_all_matching: false,
+                max_picks: 1,
+                rest_to_graveyard: false,
+                rest_to_exile: false,
+                rest_to_top: false,
+                random_rest_order: false,
+                secondary: None,
+            }]);
             let mut program = Program::artifact(Some(price()?), vec![look]);
             add_trigger(&mut program, spellwake_engine::program::TriggerSpec::dies(spellwake_engine::program::ObjectFilter::creature().controlled()), NoTarget,
                 vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(CounterKind::Eyeball, amount(2))]);
@@ -1637,7 +1703,19 @@ pub(super) fn compile(
                 vec![(
                     spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::any().controlled().with_subtype(vocabulary.resolve_label("Vampire")?,), spellwake_engine::program::DamageTriggerRecipient::AnyPlayer, true),
                     NoTarget,
-                    vec![PutCounterOnRelatedPermanent],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                            spellwake_engine::toolbox::ObjectQuery::Intersect(
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Battlefield,
+                                    ObjectFilter::any(),
+                                )),
+                            ),
+                            spellwake_engine::effects::CounterKind::PlusOne,
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                    ],
                 )],
             )
         }
@@ -1721,7 +1799,19 @@ pub(super) fn compile(
                 &mut program,
                 spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::any(), spellwake_engine::program::DamageTriggerRecipient::EnchantedPlayer, true),
                 NoTarget,
-                vec![PutCounterOnRelatedPermanent],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                        spellwake_engine::toolbox::ObjectQuery::Intersect(
+                            Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
+                            Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Battlefield,
+                                ObjectFilter::any(),
+                            )),
+                        ),
+                        spellwake_engine::effects::CounterKind::PlusOne,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                    ),
+                ],
             );
             return Some(program);
         }
@@ -1949,7 +2039,21 @@ pub(super) fn compile(
             vec![(
                 spellwake_engine::program::TriggerSpec::blocks_or_blocked(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::BlockTriggerKind::BlocksOrBlockedByEach { required_subtype: None }),
                 NoTarget,
-                vec![DamageCapturedBlocker(1)],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                        spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                            spellwake_engine::toolbox::ObjectQuery::Intersect(
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Battlefield,
+                                    ObjectFilter::creature(),
+                                )),
+                            ),
+                        ),
+                        spellwake_engine::program::ValueExpr::literal(1),
+                        false,
+                    ),
+                ],
             )],
         ),
         "Haste\nWhenever a creature you control attacks, this creature deals 1 damage to the player or planeswalker it's attacking." => (
@@ -2163,7 +2267,22 @@ pub(super) fn compile(
                 spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::PutIntoGraveyard { subject: spellwake_engine::program::ObjectFilter::creature(), player: PlayerRelation::Opponent, from_library: true, own_turn_only: false }),
                 BodyTarget::None,
                 vec![
-                    ExileCapturedGraveyardCard,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Intersect(
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::Group(
+                                            spellwake_engine::program::AffectedPlayers::EachPlayer,
+                                        ),
+                                    )),
+                                    ObjectFilter::any().nontoken(),
+                                )),
+                            ),
+                            spellwake_engine::toolbox::ZoneDest::exile(),
+                        ),
+                    ),
                     ordinary_text::create_tokens("a 2/2 black Zombie creature token", vocabulary)?,
                 ],
             );
@@ -2204,7 +2323,22 @@ pub(super) fn compile(
                 spellwake_engine::program::TriggerSpec::dies(ObjectFilter::self_object()),
                 NoTarget,
                 vec![
-                    ExileCapturedGraveyardCard,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Intersect(
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
+                                Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::Group(
+                                            spellwake_engine::program::AffectedPlayers::EachPlayer,
+                                        ),
+                                    )),
+                                    ObjectFilter::any().nontoken(),
+                                )),
+                            ),
+                            spellwake_engine::toolbox::ZoneDest::exile(),
+                        ),
+                    ),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::return_random_graveyard_cards(Some(ObjectFilter::creature()), std::num::NonZeroU8::new(2)?, true),
                 ],
             )],

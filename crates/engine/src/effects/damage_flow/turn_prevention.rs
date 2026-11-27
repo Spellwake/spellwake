@@ -228,6 +228,17 @@ impl EffectWindow {
         {
             return false;
         }
+        if filter.forbidden_subtypes.iter().any(Option::is_some)
+            && let Some(oid) = object_id
+            && let Some(view) = evaluated.get(oid)
+            && filter
+                .forbidden_subtypes
+                .iter()
+                .flatten()
+                .any(|st| view.current_creature_subtypes.contains(st))
+        {
+            return false;
+        }
         match filter.controller {
             ControllerFilter::Any => {}
             ControllerFilter::You => {

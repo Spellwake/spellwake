@@ -1474,6 +1474,7 @@ pub struct WaitingInstance {
     pub source: SupportedAppearance,
     pub controller: SeatId,
     pub body: ExecutableBody,
+    pub upkeep_keyword: Option<crate::program::UpkeepKeyword>,
 }
 /// Execution keeps no duplicate controller; the real StackEntry controls the body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1485,6 +1486,7 @@ pub struct TriggerBinding {
     pub granting_effect: Option<crate::characteristics::EffectInstanceKey>,
     pub causes: TriggerCauseSet,
     pub source: SupportedAppearance,
+    pub upkeep_keyword: Option<crate::program::UpkeepKeyword>,
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExecutionBindings {
@@ -1498,6 +1500,7 @@ impl WaitingInstance {
             granting_effect: self.granting_effect,
             causes: self.causes,
             source: self.source,
+            upkeep_keyword: self.upkeep_keyword,
         };
         (self.body, binding)
     }
@@ -2507,6 +2510,7 @@ impl TriggerState {
                         crate::program::BodyTarget::None,
                         vec![crate::program::Instruction::CopyCapturedAbility],
                     ),
+                    upkeep_keyword: None,
                 };
                 self.next_instance = self
                     .next_instance
@@ -3373,6 +3377,12 @@ impl TriggerState {
                         source: source.clone(),
                         controller,
                         body: body.clone(),
+                        upkeep_keyword: match ability.condition.event {
+                            crate::program::TriggerEvent::Keyword(
+                                crate::program::TriggerKeywordEvent::Upkeep(kw),
+                            ) => Some(kw),
+                            _ => None,
+                        },
                     };
                     self.next_instance = self
                         .next_instance
@@ -3424,6 +3434,7 @@ impl TriggerState {
                             source: delay.source.clone(),
                             controller: delay.controller,
                             body: delay.body.clone(),
+                            upkeep_keyword: None,
                         };
                         self.next_instance = self
                             .next_instance
@@ -3474,6 +3485,7 @@ impl TriggerState {
                         source: cast.spell().clone(),
                         controller: cast.controller(),
                         body: ability.body,
+                        upkeep_keyword: None,
                     };
                     self.next_instance = self
                         .next_instance
@@ -3532,6 +3544,7 @@ impl TriggerState {
                         crate::program::BodyTarget::None,
                         vec![crate::program::Instruction::ReturnTokenLinkedExile],
                     ),
+                    upkeep_keyword: None,
                 };
                 self.next_instance = self
                     .next_instance
@@ -3574,6 +3587,7 @@ impl TriggerState {
                         crate::program::BodyTarget::None,
                         vec![crate::program::Instruction::ReturnEarthbentCard],
                     ),
+                    upkeep_keyword: None,
                 };
                 self.next_instance = self
                     .next_instance
@@ -3619,6 +3633,7 @@ impl TriggerState {
                                     attack.attacker,
                                 )],
                             ),
+                            upkeep_keyword: None,
                         };
                         self.next_instance = self
                             .next_instance
@@ -3662,6 +3677,7 @@ impl TriggerState {
                                 amount: crate::program::ValueExpr::Literal(1.into()),
                             }],
                         ),
+                        upkeep_keyword: None,
                     };
                     self.next_instance = self
                         .next_instance
@@ -3705,6 +3721,7 @@ impl TriggerState {
                             ),
                         ],
                     ),
+                    upkeep_keyword: None,
                 };
                 self.next_instance = self
                     .next_instance
@@ -3741,6 +3758,7 @@ impl TriggerState {
                     source: source.as_ref().clone(),
                     controller: *controller,
                     body: instance_body,
+                    upkeep_keyword: None,
                 };
                 self.next_instance = self
                     .next_instance
@@ -3788,6 +3806,7 @@ impl TriggerState {
                             },
                         ))],
                     ),
+                    upkeep_keyword: None,
                 };
                 self.next_instance = self
                     .next_instance
@@ -3823,6 +3842,7 @@ impl TriggerState {
                         crate::program::BodyTarget::None,
                         vec![crate::program::Instruction::MiracleCast(object.object.id())],
                     ),
+                    upkeep_keyword: None,
                 };
                 self.next_instance = self
                     .next_instance
@@ -3866,6 +3886,7 @@ impl TriggerState {
                         crate::program::BodyTarget::None,
                         vec![crate::program::Instruction::MadnessCast],
                     ),
+                    upkeep_keyword: None,
                 };
                 self.next_instance = self
                     .next_instance
@@ -4049,6 +4070,7 @@ impl TriggerState {
                         source,
                         controller,
                         body: delayed_body,
+                        upkeep_keyword: None,
                     };
                     self.next_instance = self
                         .next_instance
@@ -4343,6 +4365,7 @@ impl TriggerState {
                         granting_effect: None,
                         causes,
                         source: synth.clone(),
+                        upkeep_keyword: None,
                     };
                     self.emblem_waiting.insert(
                         instance,

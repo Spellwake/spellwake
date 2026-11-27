@@ -17,6 +17,73 @@ use spellwake_engine::{
 };
 use std::collections::BTreeSet;
 use trajectories::*;
+
+fn prevent_legacy(filter: TurnPreventionFilter) -> Instruction {
+    use spellwake_engine::damage::{
+        PreventionRecipientSpec, PreventionSourceFilter, PreventionSourceSpec, TurnPreventionSpec,
+    };
+    let spec = match filter {
+        TurnPreventionFilter::FromTarget => TurnPreventionSpec {
+            combat_only: false,
+            source: PreventionSourceSpec::TargetPermanent,
+            recipient: PreventionRecipientSpec::Any,
+            both_directions: false,
+        },
+        TurnPreventionFilter::CombatFromTarget => TurnPreventionSpec {
+            combat_only: true,
+            source: PreventionSourceSpec::TargetPermanent,
+            recipient: PreventionRecipientSpec::Any,
+            both_directions: false,
+        },
+        TurnPreventionFilter::CombatToOrFromTarget => TurnPreventionSpec {
+            combat_only: true,
+            source: PreventionSourceSpec::TargetPermanent,
+            recipient: PreventionRecipientSpec::Any,
+            both_directions: true,
+        },
+        TurnPreventionFilter::FromAbilitySource => TurnPreventionSpec {
+            combat_only: false,
+            source: PreventionSourceSpec::AbilitySource,
+            recipient: PreventionRecipientSpec::Any,
+            both_directions: false,
+        },
+        TurnPreventionFilter::CombatFromAbilitySource => TurnPreventionSpec {
+            combat_only: true,
+            source: PreventionSourceSpec::AbilitySource,
+            recipient: PreventionRecipientSpec::Any,
+            both_directions: false,
+        },
+        TurnPreventionFilter::CombatToOrFromAbilitySource => TurnPreventionSpec {
+            combat_only: true,
+            source: PreventionSourceSpec::AbilitySource,
+            recipient: PreventionRecipientSpec::Any,
+            both_directions: true,
+        },
+        TurnPreventionFilter::Creatures => TurnPreventionSpec {
+            combat_only: false,
+            source: PreventionSourceSpec::Filter(PreventionSourceFilter {
+                creatures_only: true,
+                ..PreventionSourceFilter::default()
+            }),
+            recipient: PreventionRecipientSpec::Any,
+            both_directions: false,
+        },
+        TurnPreventionFilter::CombatFromCreatures => TurnPreventionSpec {
+            combat_only: true,
+            source: PreventionSourceSpec::Filter(PreventionSourceFilter {
+                creatures_only: true,
+                ..PreventionSourceFilter::default()
+            }),
+            recipient: PreventionRecipientSpec::Any,
+            both_directions: false,
+        },
+        other => panic!("unexpected filter in wave12 test: {other:?}"),
+    };
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(spec),
+    ))
+}
+
 fn pinger(sacrifice: bool) -> Program {
     let mut p = Program::creature(Some(ManaCost::free()), 3.into(), 6.into(), BTreeSet::new());
     p.activated.push(ActivatedAbility {
@@ -79,11 +146,7 @@ fn source_prevention_is_not_recipient_protection_and_preserves_damage_kind() {
             vec![
                 card(1, pinger(false), true),
                 card(2, pinger(false), true),
-                spell(
-                    10,
-                    BodyTarget::SingleCreature,
-                    vec![Instruction::PreventDamageThisTurn(filter)],
-                ),
+                spell(10, BodyTarget::SingleCreature, vec![prevent_legacy(filter)]),
             ],
             vec![CardId(1), CardId(2)],
         );
@@ -120,9 +183,7 @@ fn departed_source_still_matches_its_captured_prevention_identity() {
             spell(
                 10,
                 BodyTarget::SingleCreature,
-                vec![Instruction::PreventDamageThisTurn(
-                    TurnPreventionFilter::FromTarget,
-                )],
+                vec![prevent_legacy(TurnPreventionFilter::FromTarget)],
             ),
         ],
         vec![CardId(1)],
@@ -142,9 +203,7 @@ fn combat_prevention_stops_only_the_selected_attacker() {
             spell(
                 10,
                 BodyTarget::SingleCreature,
-                vec![Instruction::PreventDamageThisTurn(
-                    TurnPreventionFilter::CombatFromTarget,
-                )],
+                vec![prevent_legacy(TurnPreventionFilter::CombatFromTarget)],
             ),
         ],
         vec![CardId(1), CardId(2), CardId(3)],
@@ -182,10 +241,7 @@ fn source_prevention_rejects_wrong_target_family_and_absent_ability_source() {
     ] {
         let bad = Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(
-                BodyTarget::SinglePlayer,
-                vec![Instruction::PreventDamageThisTurn(filter)],
-            ),
+            ExecutableBody::new(BodyTarget::SinglePlayer, vec![prevent_legacy(filter)]),
         );
         assert!(bad.validate(&vocab).is_err());
     }
@@ -195,10 +251,7 @@ fn source_prevention_rejects_wrong_target_family_and_absent_ability_source() {
     ] {
         let bad = Program::instant(
             ManaCost::free(),
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::PreventDamageThisTurn(filter)],
-            ),
+            ExecutableBody::new(BodyTarget::None, vec![prevent_legacy(filter)]),
         );
         assert!(bad.validate(&vocab).is_err());
     }
@@ -214,7 +267,7 @@ fn ability_source_prevention_survives_sacrifice_and_respects_combat_only() {
         source.activated[0]
             .body
             .instructions
-            .insert(0, Instruction::PreventDamageThisTurn(filter));
+            .insert(0, prevent_legacy(filter));
         let game = world(vocabulary(), vec![card(1, source, true)], vec![CardId(1)]);
         let damaged = ping(&game, 1, TargetRef::Player(P1));
         assert_eq!(
@@ -233,9 +286,7 @@ fn source_prevention_expires_at_cleanup() {
             spell(
                 10,
                 BodyTarget::SingleCreature,
-                vec![Instruction::PreventDamageThisTurn(
-                    TurnPreventionFilter::FromTarget,
-                )],
+                vec![prevent_legacy(TurnPreventionFilter::FromTarget)],
             ),
         ],
         vec![CardId(1)],
@@ -270,11 +321,7 @@ fn creature_source_groups_use_damage_kind_and_exclude_noncreature_sources() {
             vec![
                 card(1, pinger(true), true),
                 card(2, artifact, true),
-                spell(
-                    10,
-                    BodyTarget::None,
-                    vec![Instruction::PreventDamageThisTurn(filter)],
-                ),
+                spell(10, BodyTarget::None, vec![prevent_legacy(filter)]),
             ],
             vec![CardId(1), CardId(2)],
         );

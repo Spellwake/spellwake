@@ -138,6 +138,7 @@ impl TriggerState {
                                     ),
                                 ))],
                             ),
+                            upkeep_keyword: None,
                         };
                         self.waiting.insert(instance, waiting.clone());
                         discoveries.push(RulesRecord::TriggerDiscovered(Box::new(waiting)));

@@ -470,13 +470,19 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
                 .or_else(|| s.strip_suffix(" card."))
         })
     {
+        let draw_amt = spellwake_engine::program::ValueExpr::Literal(
+            super::super::ordinary_text::amount(words)?.into(),
+        );
         return Some(ExecutableBody::new(
             BodyTarget::SingleOpponent,
-            vec![Instruction::DrawControllerAndTarget {
-                amount: spellwake_engine::program::ValueExpr::Literal(
-                    super::super::ordinary_text::amount(words)?.into(),
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                    draw_amt.clone(),
                 ),
-            }],
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
+                    draw_amt,
+                ),
+            ],
         ));
     }
     if let Some(count) = lower.strip_prefix("each player mills ").and_then(|words| {
@@ -499,9 +505,31 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
     if lower
         == "untap all creatures and gain control of them until end of turn. they gain haste until end of turn."
     {
+        use spellwake_engine::characteristics::{
+            AbilityChange, ControlRecipient, KeywordAbility, ResolvedDuration, ResolvedPartSpec,
+            ResolvedPartsSpec,
+        };
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::UntapAndControlCreatures],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::set_group_tapped(
+                    ObjectFilter::creature(),
+                    false,
+                ),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::zone(
+                        spellwake_engine::toolbox::QueryZone::Battlefield,
+                        ObjectFilter::creature(),
+                    ),
+                    ResolvedPartsSpec(vec![
+                        ResolvedPartSpec::Control(ControlRecipient::ResolvingController),
+                        ResolvedPartSpec::Abilities(AbilityChange::grant_keywords([
+                            KeywordAbility::Haste,
+                        ])),
+                    ]),
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            ],
         ));
     }
     if let Some(gain) = lower
@@ -748,7 +776,20 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
     if lower == "each player sacrifices all permanents they control that are one or more colors." {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::SacrificeColoredPermanents],
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                            ObjectFilter::any()
+                                .with_color(spellwake_engine::program::ObjectColorFilter::Colored),
+                        ),
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice,
+                        },
+                    ),
+                ),
+            ],
         ));
     }
     if lower == "destroy all creatures. they can't be regenerated." {
@@ -1017,7 +1058,19 @@ pub(in crate::keyword_creatures) fn exile_followup(
         && next == "gains life equal to its power."
         && body.target == BodyTarget::SingleCreature
     {
-        Instruction::ExiledTargetControllerGainsPower
+        if let Some(Instruction::ZoneOp(spec)) = body.instructions.first_mut() {
+            spec.bind_snapshots = Some(spellwake_engine::toolbox::BindingId(1));
+        }
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
+            spellwake_engine::toolbox::PlayerSelector::Bound(spellwake_engine::toolbox::BindingId(
+                1,
+            )),
+            spellwake_engine::program::ValueExpr::BoundStat {
+                binding: spellwake_engine::toolbox::BindingId(1),
+                stat: spellwake_engine::program::ObjectStatKind::Power,
+                op: spellwake_engine::program::StatAggregate::Sum,
+            },
+        )
     } else {
         let literal = next.strip_prefix("creates ")?.strip_suffix('.')?;
         let Instruction::CreateTokens { mut creations } =
@@ -1904,7 +1957,6 @@ pub(super) fn combat_defense(
     text: &str,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<ExecutableBody> {
-    use spellwake_engine::damage::TurnPreventionFilter;
     let (template, excluded) = text.strip_prefix("Create X ")?.split_once(
         ", where X is the number of creatures attacking you. Prevent all combat damage that would be dealt this turn by non-"
     )?;
@@ -1922,8 +1974,19 @@ pub(super) fn combat_defense(
         BodyTarget::None,
         vec![
             Instruction::CreateTokens { creations },
-            Instruction::PreventDamageThisTurn(
-                TurnPreventionFilter::CombatFromCreaturesWithoutSubtype(subtype),
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(
+                spellwake_engine::damage::TurnPreventionSpec {
+                    combat_only: true,
+                    source: spellwake_engine::damage::PreventionSourceSpec::Filter(
+                        spellwake_engine::damage::PreventionSourceFilter {
+                            creatures_only: true,
+                            forbidden_subtypes: [Some(subtype), None],
+                            ..Default::default()
+                        },
+                    ),
+                    recipient: spellwake_engine::damage::PreventionRecipientSpec::Any,
+                    both_directions: false,
+                },
             ),
         ],
     ))

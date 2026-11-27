@@ -137,7 +137,15 @@ pub(super) fn compile(
                     .strip_prefix("create ")?
                     .strip_suffix(". That token gains haste until end of turn.")?;
                 body.push(ordinary_text::create_tokens(token, vocabulary)?);
-                body.push(Instruction::GrantNewTokensHaste);
+                body.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        EffectSubject::CreatedTokens,
+                        spellwake_engine::program::ValueExpr::literal(0),
+                        spellwake_engine::program::ValueExpr::literal(0),
+                        [KeywordAbility::Haste].into(),
+                        std::collections::BTreeSet::new(),
+                    ),
+                );
             }
         }
         program.triggered.push(TriggeredAbility {

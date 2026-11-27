@@ -295,7 +295,6 @@ native!(ExecutableBody, self, {
     self.instructions.iter().try_for_each(|value| match value {
         Instruction::CopyAbility
         | Instruction::OfferDynamicManaPayment { .. }
-        | Instruction::TapOrUntapControlled { .. }
         | Instruction::CollectEvidence { .. }
         | Instruction::Blight { .. }
         | Instruction::Populate
@@ -321,14 +320,12 @@ native!(ExecutableBody, self, {
         | Instruction::ExploreSubject(_)
         | Instruction::ScheduleDelayedEventTrigger { .. }
         | Instruction::CounterSpellToExile
-        | Instruction::TapAttackersAndSkipNextUntap
         | Instruction::FightSourceWithTarget
         | Instruction::TransformSourceAndAttachToTarget
         | Instruction::AdvanceClassLevel(_)
         | Instruction::SolveSourceCase
         | Instruction::BecomePreparedSource
         | Instruction::ModifyAnyNumberOfPermanents { .. }
-        | Instruction::WeakenTargetByChosenX
         | Instruction::OfferSourceCounters { .. }
         | Instruction::OptionalSequence { .. }
         | Instruction::ImpulseCastOrDamage(_)
@@ -345,14 +342,10 @@ native!(ExecutableBody, self, {
         | Instruction::PutGraveyardCreatureAtMostX
         | Instruction::PutLandFromExiledCohort
         | Instruction::ExileTopForEachSpellType(_)
-        | Instruction::ExileTopFreeNoncreatureSpells(_)
-        | Instruction::ExileRelatedTopForCastThisTurn
-        | Instruction::ExileRelatedTopForPlay
         | Instruction::ExileTopForPlay { .. }
         | Instruction::ScheduleCreatedTokenExile(_)
         | Instruction::ScheduleCreatedTokenSacrifice
         | Instruction::ExileDelayedObjects(_)
-        | Instruction::ExileRelatedPermanents(_)
         | Instruction::ChooseAndReturnOwnGraveyardCardsByType
         | Instruction::TargetDamagesItsControllersOtherCreatures
         | Instruction::OtherCreaturesReturnPowerDamage
@@ -369,7 +362,6 @@ native!(ExecutableBody, self, {
         | Instruction::PutEquipmentFromHandOrGraveyard
         | Instruction::EquipNewToken
         | Instruction::Encore
-        | Instruction::GrantNewTokensHaste
         | Instruction::RequireAttackSourceNextTurn
         | Instruction::SetBlockDeclarations(_)
         | Instruction::ReselectAttackDefender
@@ -409,11 +401,6 @@ native!(ExecutableBody, self, {
         | Instruction::ExileUnearthed(_)
         | Instruction::ResolveTransfer(_)
         | Instruction::ExileDefeatedSiege
-        | Instruction::ExileSourceAndGainLife(_)
-        | Instruction::PutCounterOnRelatedPermanent
-        | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
-        | Instruction::PutCreatureAndOtherPlaneswalkerCounters
-        | Instruction::LinkedPlayerLosesDamageAmount
         | Instruction::SetControlledCreatureSizeToHand
         | Instruction::DamageFromPower(_)
         | Instruction::CreatureDealsPowerDamageToOther { .. }
@@ -423,7 +410,6 @@ native!(ExecutableBody, self, {
         | Instruction::ResolveCounterKeyword(_)
         | Instruction::SacrificeEvoked
         | Instruction::SacrificeStateTriggerSource
-        | Instruction::SacrificeUpkeepSource(_)
         | Instruction::CounterWardSource
         | Instruction::ResolveKeywordTrigger(_)
         | Instruction::GrantProtectionChosenColor(_)
@@ -455,7 +441,6 @@ native!(ExecutableBody, self, {
         | Instruction::CastFoundSpell(_)
         | Instruction::LookTopOneRestGraveyard { .. }
         | Instruction::RevealTopHandRestGraveyard { .. }
-        | Instruction::LookTopOneRestBottom { .. }
         | Instruction::LookTopCreatureSharingAttachedSubtype { .. }
         | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
         | Instruction::RevealHandAndBottomPiles
@@ -488,13 +473,9 @@ native!(ExecutableBody, self, {
         | Instruction::LookOpponentExileForCast { .. }
         | Instruction::ExileFromTargetLibrary
         | Instruction::SearchLibrary { .. }
-        | Instruction::Adapt(_)
-        | Instruction::BoostSourceByCastManaValue
         | Instruction::CreateTokenAndAttach { .. }
-        | Instruction::BoostSaddledAttacker { .. }
         | Instruction::ControlManaSourceThroughNextTurn
         | Instruction::AddMana(_)
-        | Instruction::AbandonSourceScheme
         | Instruction::TabletopHonorAction { .. }
         | Instruction::CreateNonlegendaryLoyaltyCopy
         | Instruction::WeakenOpposingAttackersUntilNextTurn
@@ -511,26 +492,18 @@ native!(ExecutableBody, self, {
         | Instruction::ScheduleDelayedStepTrigger { .. }
         | Instruction::EmitReflexiveTrigger { .. }
         | Instruction::RemoveLoyaltyExileTopForPlay
-        | Instruction::DamageDamagedPlayersCreatures
         | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
-        | Instruction::DrawHighestEntrantController
-        | Instruction::DrawRelatedPlayer
-        | Instruction::DrawCombatDamageSourceController
-        | Instruction::DrawControllerAndTarget { .. }
         | Instruction::DrawPlayersControllingName(_)
         | Instruction::ReturnUpToOneRecentGraveyardCard
         | Instruction::ExileUpToTwoGraveyardTargetsGainLife
         | Instruction::ChooseRevealedHandCard { .. }
         | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
-        | Instruction::ReturnOwnedCommandersToHand
-        | Instruction::ExileTopForFreePlay
         | Instruction::ExileTargetUntilNonlandForFreeCast
         | Instruction::ExileTopRepeatOnPermanentEntry
         | Instruction::ShuffleTargetGraveyardCards { .. }
         | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
         | Instruction::CastLinkedSpellMatchingX
         | Instruction::DestroyDamagedPlayersNonlandsAtX
-        | Instruction::PutChosenXChargeCounters
         | Instruction::DestroyNonlandsAtSourceChargeCount
         | Instruction::AddCounterAndDischargeOnResolution(_)
         | Instruction::ExileCreatureAtMostRevealedPower
@@ -540,7 +513,6 @@ native!(ExecutableBody, self, {
         | Instruction::ExileTargetUntilOpponentMonarch
         | Instruction::RememberPermanentTarget
         | Instruction::ControllerLosesRememberedManaValue
-        | Instruction::ExiledTargetControllerGainsPower
         | Instruction::RepeatOpponentLifeLoss
         | Instruction::GainControlOfSpell
         | Instruction::ChangeOnlyTarget
@@ -548,24 +520,16 @@ native!(ExecutableBody, self, {
         | Instruction::ChooseNewTargets
         | Instruction::AdditionalCombat { .. }
         | Instruction::AdditionalCombatAfterUntappingAttackers
-        | Instruction::PreventDamageThisTurn(_)
-        | Instruction::PreventDamageSpec(_)
-        | Instruction::ExileCapturedGraveyardCard
         | Instruction::GrantGraveyardCastAndWatchAbilities
         | Instruction::GainCastCardAbilities { .. }
-        | Instruction::ExileCombatDamagedCreature
         | Instruction::DestroyCapturedDamageSource
         | Instruction::RemoveCreatureCounters { .. }
         | Instruction::AttachOnEntry { .. }
         | Instruction::ControlledSubtypeDamagesAttacker(_)
         | Instruction::RevealTopAndRemoveAttackerIfForest
-        | Instruction::DamageCapturedBlocker(_)
-        | Instruction::ChangeControlledPlaneswalkers { .. }
-        | Instruction::UntapAndControlCreatures
         | Instruction::Proliferate
         | Instruction::DamagePlayersHalfLife
         | Instruction::DamageTargetControllersCreatures { .. }
-        | Instruction::DrawAndDamageOpponents { .. }
         | Instruction::ResolvePowerAbility(_)
         | Instruction::UnattachEquipmentAndProtectHost
         | Instruction::Attach(_)
@@ -601,7 +565,6 @@ native!(ExecutableBody, self, {
         | Instruction::ChooseCreaturesToKeep
         | Instruction::DestroyOtherCreatures
         | Instruction::SacrificeOtherCreatures
-        | Instruction::SacrificeColoredPermanents
         | Instruction::ExileFromHandOrBattlefield(_)
         | Instruction::ExileRelatedHandCardForPlay
         | Instruction::PayLifeOrSacrificeCreatures

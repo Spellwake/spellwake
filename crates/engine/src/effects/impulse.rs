@@ -204,11 +204,6 @@ impl EffectWindow {
             return Err(EffectError::InconsistentProgram);
         }
         let (owners, face_down_viewer, play_permission) = match self.current_instruction()? {
-            Instruction::ExileRelatedTopForPlay | Instruction::ExileRelatedTopForCastThisTurn => (
-                vec![self.resolving_player(crate::program::ResolvingPlayer::UniqueRelatedPlayer)?],
-                None,
-                Some(entry.controller()),
-            ),
             Instruction::ExileTargetUntilNonlandForFreeCast => (
                 vec![self.resolving_player(crate::program::ResolvingPlayer::TargetPlayer)?],
                 None,
@@ -559,30 +554,6 @@ impl EffectWindow {
                     },
                 );
             }
-            let free_play = self
-                .payloads
-                .get(&entry.id())
-                .and_then(StackPayload::instructions)
-                .and_then(|ops| ops.get(work.cursor.instruction))
-                == Some(&Instruction::ExileTopForFreePlay);
-            let free_noncreature = self
-                .payloads
-                .get(&entry.id())
-                .and_then(StackPayload::instructions)
-                .and_then(|ops| ops.get(work.cursor.instruction))
-                .is_some_and(|op| matches!(op, Instruction::ExileTopFreeNoncreatureSpells(_)));
-            let temporary_cast = self
-                .payloads
-                .get(&entry.id())
-                .and_then(StackPayload::instructions)
-                .and_then(|ops| ops.get(work.cursor.instruction))
-                == Some(&Instruction::ExileRelatedTopForCastThisTurn);
-            let any_color = self
-                .payloads
-                .get(&entry.id())
-                .and_then(StackPayload::instructions)
-                .and_then(|ops| ops.get(work.cursor.instruction))
-                == Some(&Instruction::ExileRelatedTopForPlay);
             let linked_source = if matches!(
                 self.payloads
                     .get(&entry.id())
@@ -678,31 +649,6 @@ impl EffectWindow {
                             });
                             self.free_exiled_cards.insert(permission);
                         }
-                    } else if free_play {
-                        self.card_play_permissions.insert(CardPlayPermission {
-                            zone: CardPlayZone::Exile,
-                            object: permission.0,
-                            player,
-                            duration: CardPlayDuration::ThroughTurn,
-                            any_color: false,
-                            free: true,
-                            cast_only: false,
-                        });
-                        self.free_exiled_cards.insert(permission);
-                    } else if free_noncreature {
-                        self.free_exiled_noncreature_spells.insert(permission);
-                    } else if temporary_cast {
-                        self.temporary_any_color_exile_cast.insert(permission);
-                    } else if any_color {
-                        self.card_play_permissions.insert(CardPlayPermission {
-                            zone: CardPlayZone::Exile,
-                            object: permission.0,
-                            player,
-                            duration: CardPlayDuration::WhileInZone,
-                            any_color: true,
-                            free: false,
-                            cast_only: false,
-                        });
                     } else if let Some(source) = linked_source {
                         self.exile_play_until_next.insert(source, permission);
                     } else {

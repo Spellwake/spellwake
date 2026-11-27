@@ -9202,9 +9202,40 @@ pub(in super::super) fn lower_instruction_seq(
                     && !*face_down
                     && impulse_dur == spellwake_engine::program::ImpulsePlayDuration::ThisTurn
                 {
-                    builder.instructions.push(Instruction::ExileTopForPlay {
-                        until_next_from_source: false,
-                    });
+                    let mut exile_spec = spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                            )),
+                            filter: Box::new(ObjectFilter::any()),
+                            slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(
+                                ValueExpr::literal(1),
+                            )),
+                        },
+                        spellwake_engine::toolbox::ZoneDest::exile(),
+                    );
+                    exile_spec.bind_moved = Some(spellwake_engine::toolbox::BindingId(911));
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            exile_spec,
+                        ),
+                    );
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::grant_play_permission(
+                            spellwake_engine::toolbox::ObjectQuery::Bound(
+                                spellwake_engine::toolbox::BindingId(911),
+                            ),
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            ResolvedDuration::UntilEndOfTurn,
+                            false,
+                            false,
+                            false,
+                        ),
+                    );
                 } else {
                     builder.instructions.push(Instruction::ExileTopPlay {
                         count: cnt,
@@ -10398,7 +10429,7 @@ pub(in super::super) fn lower_instruction_seq(
                 }
             }
         }
-        // Fuse RevealUntil(single or EachOpponent/EachPlayer, filter, count) + single MoveZone(all revealed / those cards -> graveyard/hand/exile)
+        // Fuse RevealUntil(single or EachOpponent/EachPlayer, filter, count) + single MoveZone/Exile/ReturnZone(all revealed / those cards -> graveyard/hand/exile/bottom)
         // e.g. Balustrade Spy, Undercity Informer, Mind Grind, Consuming Aberration
         if i + 1 < ins.len()
             && let InstructionAst::RevealUntil {
@@ -10406,9 +10437,80 @@ pub(in super::super) fn lower_instruction_seq(
                 filter: rev_filter,
                 count: rev_count,
             } = &ins[i]
-            && let InstructionAst::MoveZone { subject, to } = &ins[i + 1]
+            && let Some((rev_subj, rev_dest_opt, bottom_random_opt)) = (match &ins[i + 1] {
+                InstructionAst::MoveZone { subject, to }
+                | InstructionAst::ReturnZone {
+                    subject,
+                    to,
+                    transformed: false,
+                    with_counter: None,
+                    attached_to: None,
+                    ..
+                } => {
+                    let to_low = to.trim().to_ascii_lowercase();
+                    if to_low.contains("graveyard") {
+                        Some((
+                            subject.as_ref(),
+                            Some((
+                                spellwake_engine::program::LookTopKeepDest::Graveyard,
+                                spellwake_engine::program::LookTopRestDest::Graveyard,
+                            )),
+                            None,
+                        ))
+                    } else if to_low.contains("hand") {
+                        Some((
+                            subject.as_ref(),
+                            Some((
+                                spellwake_engine::program::LookTopKeepDest::Hand,
+                                spellwake_engine::program::LookTopRestDest::Hand,
+                            )),
+                            None,
+                        ))
+                    } else if to_low.contains("exile") {
+                        Some((
+                            subject.as_ref(),
+                            Some((
+                                spellwake_engine::program::LookTopKeepDest::Exile {
+                                    playable: false,
+                                    free: false,
+                                    cast_only: false,
+                                    any_color: false,
+                                    duration: ResolvedDuration::NoStatedDuration,
+                                },
+                                spellwake_engine::program::LookTopRestDest::Exile,
+                            )),
+                            None,
+                        ))
+                    } else if to_low.contains("bottom") && to_low.contains("library") {
+                        Some((subject.as_ref(), None, Some(to_low.contains("random"))))
+                    } else {
+                        None
+                    }
+                }
+                InstructionAst::Exile {
+                    actor: None | Some(PlayerRefAst::You | PlayerRefAst::ThatPlayer),
+                    subject,
+                    random: false,
+                    face_down: false,
+                    into_pile: false,
+                } => Some((
+                    subject.as_ref(),
+                    Some((
+                        spellwake_engine::program::LookTopKeepDest::Exile {
+                            playable: false,
+                            free: false,
+                            cast_only: false,
+                            any_color: false,
+                            duration: ResolvedDuration::NoStatedDuration,
+                        },
+                        spellwake_engine::program::LookTopRestDest::Exile,
+                    )),
+                    None,
+                )),
+                _ => None,
+            })
             && {
-                match subject.as_ref() {
+                match rev_subj {
                     SubjectRefAst::Anaphora(a) => matches!(
                         a.trim().to_ascii_lowercase().as_str(),
                         "those cards"
@@ -10435,32 +10537,70 @@ pub(in super::super) fn lower_instruction_seq(
                 vocabulary,
             )
         {
-            let to_low = to.trim().to_ascii_lowercase();
-            let dest_pair = if to_low.contains("graveyard") {
-                Some((
-                    spellwake_engine::program::LookTopKeepDest::Graveyard,
-                    spellwake_engine::program::LookTopRestDest::Graveyard,
-                ))
-            } else if to_low.contains("hand") {
-                Some((
-                    spellwake_engine::program::LookTopKeepDest::Hand,
-                    spellwake_engine::program::LookTopRestDest::Hand,
-                ))
-            } else if to_low.contains("exile") {
-                Some((
-                    spellwake_engine::program::LookTopKeepDest::Exile {
-                        playable: false,
-                        free: false,
-                        cast_only: false,
-                        any_color: false,
-                        duration: ResolvedDuration::NoStatedDuration,
-                    },
-                    spellwake_engine::program::LookTopRestDest::Exile,
-                ))
-            } else {
-                None
-            };
-            if let Some((match_dest, rest_dest)) = dest_pair {
+            if let Some(is_random) = bottom_random_opt {
+                let p_sel_opt = match *rev_player {
+                    PlayerRefAst::EachOpponent => Some((
+                        None,
+                        spellwake_engine::toolbox::PlayerSelector::Group(
+                            AffectedPlayers::EachOpponent,
+                        ),
+                    )),
+                    PlayerRefAst::EachPlayer => Some((
+                        None,
+                        spellwake_engine::toolbox::PlayerSelector::Group(
+                            AffectedPlayers::EachPlayer,
+                        ),
+                    )),
+                    PlayerRefAst::EachOtherPlayer => Some((
+                        None,
+                        spellwake_engine::toolbox::PlayerSelector::Group(
+                            AffectedPlayers::EachOtherPlayer,
+                        ),
+                    )),
+                    other => {
+                        let mut p_probe = builder.clone();
+                        lower_resolving_player_in_context(other, &mut p_probe, in_trigger)
+                            .ok()
+                            .map(|rp| {
+                                (
+                                    (p_probe.target != builder.target).then_some(p_probe.target),
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                                )
+                            })
+                    }
+                };
+                if let Some((req_bt, p_sel)) = p_sel_opt {
+                    if let Some(bt) = req_bt {
+                        builder.bind_target(bt)?;
+                    }
+                    let pos = if is_random {
+                        spellwake_engine::toolbox::LibraryOrderPos::BottomRandom
+                    } else {
+                        spellwake_engine::toolbox::LibraryOrderPos::Bottom
+                    };
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                        p_sel,
+                                    )),
+                                    filter: Box::new(ObjectFilter::any()),
+                                    slice: spellwake_engine::toolbox::QuerySlice::UntilMatch {
+                                        filter: Box::new(obj_filter),
+                                        count: Box::new(cnt_expr),
+                                        include_non_matches: true,
+                                    },
+                                },
+                                spellwake_engine::toolbox::ZoneDest::Library { position: pos },
+                            ),
+                        ),
+                    );
+                    i += 2;
+                    continue;
+                }
+            }
+            if let Some((match_dest, rest_dest)) = rev_dest_opt {
                 let group_opt = match *rev_player {
                     PlayerRefAst::EachOpponent => Some(AffectedPlayers::EachOpponent),
                     PlayerRefAst::EachPlayer => Some(AffectedPlayers::EachPlayer),
@@ -11294,22 +11434,6 @@ pub(in super::super) fn lower_instruction_seq(
                     .instructions
                     .into_iter()
                     .map(|op| match op {
-                        Instruction::LookTopOneRestBottom { count } => Instruction::LookTopChoose {
-                            count,
-                            library_owner: ResolvingPlayer::Controller,
-                            filter: None,
-                            reveal: false,
-                            reveal_only: false,
-                            to_battlefield: false,
-                            enters_tapped: false,
-                            take_all_matching: false,
-                            max_picks: 1,
-                            rest_to_graveyard: false,
-                            rest_to_exile: false,
-                            rest_to_top: false,
-                            random_rest_order: false,
-                            secondary: None,
-                        },
                         Instruction::LookTopOneRestGraveyard { count } => {
                             Instruction::LookTopChoose {
                                 count: ValueExpr::literal(i64::from(count)),
@@ -11340,6 +11464,34 @@ pub(in super::super) fn lower_instruction_seq(
                 ) {
                     builder.instructions.push(Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,
+                    });
+                    builder.instructions.extend(converted);
+                    i += 1;
+                    continue;
+                }
+                if matches!(
+                    converted.as_slice(),
+                    [Instruction::ZoneOp(_), Instruction::ZoneOp(_)]
+                ) {
+                    builder.instructions.push(Instruction::OptionalSequence {
+                        chooser: ResolvingPlayer::Controller,
+                        instructions: 2,
+                    });
+                    builder.instructions.extend(converted);
+                    i += 1;
+                    continue;
+                }
+                if matches!(
+                    converted.as_slice(),
+                    [
+                        Instruction::ZoneOp(_),
+                        Instruction::ZoneOp(_),
+                        Instruction::ZoneOp(spec)
+                    ] if spec.shuffle_library.is_some()
+                ) {
+                    builder.instructions.push(Instruction::OptionalSequence {
+                        chooser: ResolvingPlayer::Controller,
+                        instructions: 3,
                     });
                     builder.instructions.extend(converted);
                     i += 1;
@@ -12375,9 +12527,51 @@ pub(in super::super) fn lower_instruction_seq(
                             && rest_bottom
                             && !rest_low.contains("random order")
                         {
-                            builder
-                                .instructions
-                                .push(Instruction::LookTopOneRestBottom { count: cnt });
+                            const UNCHOSEN_BIND: spellwake_engine::toolbox::BindingId =
+                                spellwake_engine::toolbox::BindingId(910);
+                            let mut pick_spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                            ResolvingPlayer::Controller,
+                                        ),
+                                    )),
+                                    filter: Box::new(ObjectFilter::any()),
+                                    slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(
+                                        cnt,
+                                    )),
+                                },
+                                spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                    chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        ResolvingPlayer::Controller,
+                                    ),
+                                    min: Box::new(ValueExpr::literal(1)),
+                                    max: Box::new(ValueExpr::literal(1)),
+                                    constraint: None,
+                                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                    hidden: true,
+                                },
+                                spellwake_engine::toolbox::ZoneDest::Hand,
+                            );
+                            pick_spec.bind_unchosen = Some(UNCHOSEN_BIND);
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                    pick_spec,
+                                ),
+                            );
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                        spellwake_engine::toolbox::ObjectQuery::Bound(
+                                            UNCHOSEN_BIND,
+                                        ),
+                                        spellwake_engine::toolbox::ZoneDest::Library {
+                                            position:
+                                                spellwake_engine::toolbox::LibraryOrderPos::Bottom,
+                                        },
+                                    ),
+                                ),
+                            );
                             i += 2;
                             continue;
                         }
@@ -12392,9 +12586,51 @@ pub(in super::super) fn lower_instruction_seq(
                             && let Some(u) = n.to_usize().and_then(|v| u8::try_from(v).ok())
                             && u > 0
                         {
-                            builder
-                                .instructions
-                                .push(Instruction::LookTopOneRestGraveyard { count: u });
+                            const UNCHOSEN_BIND: spellwake_engine::toolbox::BindingId =
+                                spellwake_engine::toolbox::BindingId(910);
+                            let mut pick_spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                            ResolvingPlayer::Controller,
+                                        ),
+                                    )),
+                                    filter: Box::new(ObjectFilter::any()),
+                                    slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(
+                                        ValueExpr::literal(i64::from(u)),
+                                    )),
+                                },
+                                spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                    chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        ResolvingPlayer::Controller,
+                                    ),
+                                    min: Box::new(ValueExpr::literal(1)),
+                                    max: Box::new(ValueExpr::literal(1)),
+                                    constraint: None,
+                                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                    hidden: true,
+                                },
+                                spellwake_engine::toolbox::ZoneDest::Hand,
+                            );
+                            pick_spec.bind_unchosen = Some(UNCHOSEN_BIND);
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                    pick_spec,
+                                ),
+                            );
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                        spellwake_engine::toolbox::ObjectQuery::Bound(
+                                            UNCHOSEN_BIND,
+                                        ),
+                                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                            semantics:
+                                                spellwake_engine::toolbox::GraveyardSemantics::Move,
+                                        },
+                                    ),
+                                ),
+                            );
                             i += 2;
                             continue;
                         }

@@ -460,7 +460,11 @@ pub(super) fn lower_zone_moves_instruction(
                                     | "all of them"
                                     | "the rest"
                             );
-                            if !is_singular {
+                            let is_plural_last_moved = matches!(
+                                low.as_str(),
+                                "them" | "those" | "those cards" | "all of them"
+                            );
+                            if !is_singular && !is_plural_last_moved {
                                 return Err("oracle:unsupported-exile");
                             }
                             if has_prior_moved_object(&builder.instructions)
@@ -470,7 +474,8 @@ pub(super) fn lower_zone_moves_instruction(
                                 delayed_return: None,
                             }));
                                 Ok(())
-                            } else if in_trigger
+                            } else if is_singular
+                                && in_trigger
                                 && builder.target == BodyTarget::None
                                 && (!self_pronoun_valid || !is_self_anaphora_label(raw))
                             {
@@ -1820,6 +1825,80 @@ pub(super) fn lower_zone_moves_instruction(
                         .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(players));
                     Ok(())
                 }
+                SubjectRefAst::Anaphora(raw) => {
+                    let low = raw.trim().to_ascii_lowercase();
+                    if matches!(
+                        low.as_str(),
+                        "it" | "that card"
+                            | "those cards"
+                            | "them"
+                            | "the chosen card"
+                            | "the chosen cards"
+                            | "that creature"
+                            | "that permanent"
+                            | "that"
+                    ) {
+                        if last_instruction_moved_object(&builder.instructions)
+                            || has_prior_moved_object(&builder.instructions)
+                        {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                    MoveSubjectRef::LastMoved,
+                                    SubjectDestination::Exile {
+                                        delayed_return: None,
+                                    },
+                                ),
+                            );
+                            Ok(())
+                        } else if builder.target != BodyTarget::None
+                            && !matches!(
+                                builder.target,
+                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                            )
+                        {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                            );
+                            Ok(())
+                        } else if last_instruction_created_tokens(&builder.instructions) {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                    MoveSubjectRef::CreatedTokens,
+                                    SubjectDestination::Exile {
+                                        delayed_return: None,
+                                    },
+                                ),
+                            );
+                            Ok(())
+                        } else if in_trigger
+                            && (!self_pronoun_valid || !is_self_anaphora_label(raw))
+                        {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                    MoveSubjectRef::TriggeringObject,
+                                    SubjectDestination::Exile {
+                                        delayed_return: None,
+                                    },
+                                ),
+                            );
+                            Ok(())
+                        } else if has_checked_revealed_top_strict(&builder.instructions) {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                    MoveSubjectRef::RevealedCard,
+                                    SubjectDestination::Exile {
+                                        delayed_return: None,
+                                    },
+                                ),
+                            );
+                            Ok(())
+                        } else {
+                            Err("oracle:unsupported-exile")
+                        }
+                    } else {
+                        Err("oracle:unsupported-exile")
+                    }
+                }
                 SubjectRefAst::Group(f)
                     if matches!(
                         f.zone,
@@ -2498,7 +2577,7 @@ pub(super) fn lower_zone_moves_instruction(
                         )));
                     Ok(())
                 }
-                "that player" | "that player's" => {
+                "that player" | "that player's" | "their" | "their graveyard" => {
                     let rp = lower_resolving_player_in_context(
                         PlayerRefAst::ThatPlayer,
                         builder,
@@ -2518,6 +2597,88 @@ pub(super) fn lower_zone_moves_instruction(
                     builder
                         .instructions
                         .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(rp)));
+                    Ok(())
+                }
+                "its owner" | "its owner's" => {
+                    let rp = lower_resolving_player_in_context(
+                        PlayerRefAst::ItsOwner,
+                        builder,
+                        in_trigger,
+                    )?;
+                    builder
+                        .instructions
+                        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_player_graveyards(AffectedPlayers::One(rp)));
+                    Ok(())
+                }
+                "the bottom card of your" => {
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone: spellwake_engine::toolbox::QueryZone::Graveyard(
+                                        Box::new(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::Controller,
+                                            ),
+                                        ),
+                                    ),
+                                    filter: Box::new(ObjectFilter::any()),
+                                    slice: spellwake_engine::toolbox::QuerySlice::Bottom(Box::new(
+                                        ValueExpr::literal(1),
+                                    )),
+                                },
+                                spellwake_engine::toolbox::ZoneDest::exile(),
+                            ),
+                        ));
+                    Ok(())
+                }
+                "the bottom card of target player's" | "the bottom card of target player" => {
+                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone: spellwake_engine::toolbox::QueryZone::Graveyard(
+                                        Box::new(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::TargetPlayer,
+                                            ),
+                                        ),
+                                    ),
+                                    filter: Box::new(ObjectFilter::any()),
+                                    slice: spellwake_engine::toolbox::QuerySlice::Bottom(Box::new(
+                                        ValueExpr::literal(1),
+                                    )),
+                                },
+                                spellwake_engine::toolbox::ZoneDest::exile(),
+                            ),
+                        ));
+                    Ok(())
+                }
+                "the bottom card of target opponent's" | "the bottom card of target opponent" => {
+                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone: spellwake_engine::toolbox::QueryZone::Graveyard(
+                                        Box::new(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::TargetPlayer,
+                                            ),
+                                        ),
+                                    ),
+                                    filter: Box::new(ObjectFilter::any()),
+                                    slice: spellwake_engine::toolbox::QuerySlice::Bottom(Box::new(
+                                        ValueExpr::literal(1),
+                                    )),
+                                },
+                                spellwake_engine::toolbox::ZoneDest::exile(),
+                            ),
+                        ));
                     Ok(())
                 }
                 "a creature they control and their"
@@ -6815,6 +6976,288 @@ pub(super) fn lower_zone_moves_instruction(
                     _ => {}
                 }
             }
+            if dest.contains("battlefield")
+                && !dest.contains("blocking")
+                && !dest.contains("as a copy")
+                && !dest.contains("as a ")
+                && !dest.contains("melded")
+                && !dest.contains(" with ")
+                && !dest.contains("attached to")
+                && (dest.contains("face down")
+                    || dest.contains("face-down")
+                    || dest.contains("under that player's control")
+                    || dest.contains("under their control")
+                    || dest.contains("under its controller's control"))
+            {
+                let face_down = dest.contains("face down") || dest.contains("face-down");
+                let tapped = dest.contains("tapped") && !dest.contains("untapped");
+                let transformed = dest.contains("transformed") || dest.contains("converted");
+                let controller_opt = if dest.contains("owner's control")
+                    || dest.contains("owners' control")
+                {
+                    Some(spellwake_engine::toolbox::ZoneController::Owner)
+                } else if dest.contains("under your control") || !dest.contains("under ") {
+                    Some(spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                    )))
+                } else if dest.contains("under that player's control")
+                    || dest.contains("under their control")
+                {
+                    lower_resolving_player_in_context(PlayerRefAst::ThatPlayer, builder, in_trigger)
+                        .ok()
+                        .map(|rp| {
+                            spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                            ))
+                        })
+                } else if dest.contains("under its controller's control") {
+                    lower_resolving_player_in_context(
+                        PlayerRefAst::ItsController,
+                        builder,
+                        in_trigger,
+                    )
+                    .ok()
+                    .map(|rp| {
+                        spellwake_engine::toolbox::ZoneController::Player(Box::new(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                        ))
+                    })
+                } else {
+                    None
+                };
+                if let Some(controller) = controller_opt {
+                    let zone_dest = spellwake_engine::toolbox::ZoneDest::Battlefield {
+                        controller,
+                        tapped,
+                        attacking: false,
+                        transformed,
+                        face_down,
+                        entering_counters: Vec::new(),
+                        attach_to: None,
+                    };
+                    let mut trial = builder.clone();
+                    let query_opt = match subject.as_ref() {
+                        s if is_self_pronoun(s, &trial, self_pronoun_valid) => {
+                            Some(spellwake_engine::toolbox::ObjectQuery::Source)
+                        }
+                        SubjectRefAst::TargetObject {
+                            count: TargetCountAst::Exact(1),
+                            ..
+                        } => {
+                            if let Ok(bt) = lower_target_subject(subject, vocabulary)
+                                && trial.bind_target(bt).is_ok()
+                            {
+                                Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+                            } else {
+                                None
+                            }
+                        }
+                        SubjectRefAst::TriggerSubject if in_trigger => {
+                            Some(spellwake_engine::toolbox::ObjectQuery::TriggerSubject)
+                        }
+                        SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
+                            Some(spellwake_engine::toolbox::ObjectQuery::AttachedHost)
+                        }
+                        SubjectRefAst::Anaphora(raw) => {
+                            if trial.target != BodyTarget::None
+                                && !matches!(
+                                    trial.target,
+                                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                                )
+                            {
+                                Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+                            } else if last_instruction_moved_object(&trial.instructions)
+                                || (is_last_moved_card_anaphora(raw)
+                                    && has_prior_moved_object(&trial.instructions))
+                            {
+                                Some(spellwake_engine::toolbox::ObjectQuery::LastMoved)
+                            } else if in_trigger
+                                && (!self_pronoun_valid || !is_self_anaphora_label(raw))
+                            {
+                                Some(spellwake_engine::toolbox::ObjectQuery::TriggerSubject)
+                            } else if self_pronoun_valid {
+                                Some(spellwake_engine::toolbox::ObjectQuery::Source)
+                            } else if has_checked_revealed_top_strict(&trial.instructions) {
+                                Some(spellwake_engine::toolbox::ObjectQuery::Revealed)
+                            } else {
+                                None
+                            }
+                        }
+                        SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
+                            if let Some(z) = f.zone {
+                                let mut inner = f.as_ref().clone();
+                                inner.zone = None;
+                                if let Ok(obj) = if is_unrestricted_filter(&inner) {
+                                    Ok(ObjectFilter::any())
+                                } else {
+                                    lower_object_filter_in_context(
+                                        &inner, &trial, in_trigger, vocabulary,
+                                    )
+                                } && bind_filter_player_target(&mut trial, &obj).is_ok()
+                                    && let Ok(q) =
+                                        zone_filter_to_object_query(z, obj, &mut trial, in_trigger)
+                                {
+                                    Some(q)
+                                } else {
+                                    None
+                                }
+                            } else if has_prior_moved_object(&trial.instructions)
+                                && let Some(filtered) = strip_move_zone_last_moved_filter(
+                                    f, &trial, in_trigger, vocabulary,
+                                )
+                            {
+                                Some(spellwake_engine::toolbox::ObjectQuery::filtered(
+                                    spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                                    filtered,
+                                ))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(q) = query_opt {
+                        trial.instructions.push(super::super::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(q, zone_dest),
+                        ));
+                        *builder = trial;
+                        return Ok(());
+                    }
+                }
+            }
+            if dest.contains("shuffle") && dest.contains("library") {
+                let mut trial = builder.clone();
+                let query_opt = match subject.as_ref() {
+                    s if is_self_pronoun(s, &trial, self_pronoun_valid) => {
+                        Some(spellwake_engine::toolbox::ObjectQuery::Source)
+                    }
+                    SubjectRefAst::TargetObject {
+                        count: TargetCountAst::Exact(1),
+                        ..
+                    } => {
+                        if let Ok(bt) = lower_target_subject(subject, vocabulary)
+                            && is_valid_put_target_in_library_target(&bt)
+                            && trial.bind_target(bt).is_ok()
+                        {
+                            Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+                        } else {
+                            None
+                        }
+                    }
+                    SubjectRefAst::Anaphora(raw) => {
+                        if let Ok(Some(q)) =
+                            parse_whole_zone_anaphora_query(raw, &mut trial, in_trigger)
+                        {
+                            Some(q)
+                        } else if is_valid_put_target_in_library_target(&trial.target) {
+                            Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+                        } else if last_instruction_moved_object(&trial.instructions)
+                            || has_prior_moved_object(&trial.instructions)
+                        {
+                            Some(spellwake_engine::toolbox::ObjectQuery::LastMoved)
+                        } else if in_trigger
+                            && (!self_pronoun_valid || !is_self_anaphora_label(raw))
+                        {
+                            Some(spellwake_engine::toolbox::ObjectQuery::TriggerSubject)
+                        } else {
+                            None
+                        }
+                    }
+                    SubjectRefAst::All(f) | SubjectRefAst::Each(f) => {
+                        let z = f.zone.unwrap_or(ZoneFilter::Battlefield);
+                        let mut inner = f.as_ref().clone();
+                        inner.zone = None;
+                        if let Ok(obj) = if is_unrestricted_filter(&inner) {
+                            Ok(ObjectFilter::any())
+                        } else {
+                            lower_object_filter_in_context(&inner, &trial, in_trigger, vocabulary)
+                        } && bind_filter_player_target(&mut trial, &obj).is_ok()
+                            && let Ok(q) =
+                                zone_filter_to_object_query(z, obj, &mut trial, in_trigger)
+                        {
+                            Some(q)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(q) = query_opt {
+                    trial.instructions.push(super::super::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            q,
+                            spellwake_engine::toolbox::ZoneDest::Library {
+                                position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
+                            },
+                        ),
+                    ));
+                    *builder = trial;
+                    return Ok(());
+                }
+            }
+            if let SubjectRefAst::Anaphora(raw) = subject.as_ref()
+                && has_prior_moved_object(&builder.instructions)
+                && let Some(pick_n) = parse_last_moved_subset_count(raw)
+            {
+                let dest_opt = if let Some(bf_flags) = parse_battlefield_dest(&dest)
+                    && !bf_flags.attach_to_self
+                {
+                    Some(super::super::toolbox_emit::subject_dest_to_zone_dest(
+                        SubjectDestination::Battlefield {
+                            tapped: bf_flags.tapped,
+                            attacking: bf_flags.attacking,
+                            transformed: bf_flags.transformed,
+                            under_owner_control: bf_flags.under_owner_control,
+                            with_counter: None,
+                            attach_to_self: false,
+                        },
+                    ))
+                } else if let Some(pl) = parse_lib_placement_for_subject(&dest, true, subject) {
+                    Some(spellwake_engine::toolbox::ZoneDest::Library {
+                        position: spellwake_engine::toolbox::LibraryOrderPos::from_placement(pl),
+                    })
+                } else if let Some(pd) = pub_dest {
+                    match pd {
+                        PublicZoneDestination::Hand => {
+                            Some(spellwake_engine::toolbox::ZoneDest::Hand)
+                        }
+                        PublicZoneDestination::Graveyard => {
+                            Some(spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Move,
+                            })
+                        }
+                        PublicZoneDestination::Exile => {
+                            Some(spellwake_engine::toolbox::ZoneDest::exile())
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(zone_dest) = dest_opt {
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::simple(
+                                spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                                spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                    chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        ResolvingPlayer::Controller,
+                                    ),
+                                    min: Box::new(ValueExpr::literal(pick_n)),
+                                    max: Box::new(ValueExpr::literal(pick_n)),
+                                    constraint: None,
+                                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                    hidden: false,
+                                },
+                                zone_dest,
+                            ),
+                        ));
+                    return Ok(());
+                }
+            }
             Err("oracle:unsupported-move-zone")
         }
         InstructionAst::Sacrifice {
@@ -7408,6 +7851,157 @@ pub(super) fn lower_zone_moves_instruction(
         InstructionAst::Discard {
             player,
             count,
+            filter,
+            anaphora: Some(a),
+            random: false,
+        } if has_prior_moved_object(&builder.instructions) => {
+            let low = a.trim().to_ascii_lowercase();
+            let mut trial = builder.clone();
+            let filtered_source = match filter.as_deref() {
+                None => spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                Some(f) => {
+                    let stripped = strip_matching_chooser(f, *player);
+                    if is_unrestricted_filter(&stripped) {
+                        spellwake_engine::toolbox::ObjectQuery::LastMoved
+                    } else {
+                        let obj = lower_object_filter_in_context(
+                            &stripped, &trial, in_trigger, vocabulary,
+                        )?;
+                        spellwake_engine::toolbox::ObjectQuery::filtered(
+                            spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                            obj,
+                        )
+                    }
+                }
+            };
+            if count.is_none()
+                && matches!(
+                    low.as_str(),
+                    "that card"
+                        | "it"
+                        | "those cards"
+                        | "the chosen card"
+                        | "the chosen cards"
+                        | "that"
+                        | "them"
+                )
+            {
+                trial.instructions.push(super::super::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        filtered_source,
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard,
+                        },
+                    ),
+                ));
+                *builder = trial;
+                return Ok(());
+            }
+            let pick_count_opt = if let Some(c) = count {
+                Some(lower_value_expr_in_context(
+                    resolve_x(c, bound_x),
+                    &trial,
+                    in_trigger,
+                    vocabulary,
+                )?)
+            } else {
+                parse_last_moved_subset_count(&low).map(ValueExpr::literal)
+            };
+            if let Some(amt) = pick_count_opt {
+                let chooser_rp =
+                    lower_resolving_player_in_context(*player, &mut trial, in_trigger)?;
+                trial.instructions.push(super::super::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::simple(
+                        filtered_source,
+                        spellwake_engine::toolbox::ZoneSelection::Prompt {
+                            chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                chooser_rp,
+                            ),
+                            min: Box::new(amt.clone()),
+                            max: Box::new(amt),
+                            constraint: None,
+                            category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                            hidden: true,
+                        },
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard,
+                        },
+                    ),
+                ));
+                *builder = trial;
+                return Ok(());
+            }
+            Err("oracle:unsupported-instruction")
+        }
+        InstructionAst::Discard {
+            player,
+            count,
+            filter: Some(f),
+            anaphora: None,
+            random: true,
+        } if !is_unrestricted_filter(&strip_matching_chooser(f, *player)) => {
+            let stripped = strip_matching_chooser(f, *player);
+            let amt = match count {
+                Some(c) => lower_value_expr_in_context(
+                    resolve_x(c, bound_x),
+                    builder,
+                    in_trigger,
+                    vocabulary,
+                )?,
+                None => ValueExpr::literal(1),
+            };
+            let obj_filter = lower_object_filter(&stripped, vocabulary)?;
+            if let Some(players) = try_group_affected_players(*player) {
+                const RAND_DISC_BIND: spellwake_engine::toolbox::BindingId =
+                    spellwake_engine::toolbox::BindingId(916);
+                let seat_sel = spellwake_engine::toolbox::PlayerSelector::Bound(RAND_DISC_BIND);
+                let inner = super::super::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::simple(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Hand(Box::new(seat_sel.clone())),
+                            obj_filter,
+                        ),
+                        spellwake_engine::toolbox::ZoneSelection::Random {
+                            count: Box::new(amt),
+                            chooser: seat_sel,
+                        },
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard,
+                        },
+                    ),
+                );
+                builder.instructions.push(Instruction::ForEachPlayerQuery {
+                    selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(players)),
+                    bind_player: RAND_DISC_BIND,
+                    body: Box::new(ExecutableBody::new(BodyTarget::None, vec![inner])),
+                });
+                return Ok(());
+            }
+            let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+            builder
+                .instructions
+                .push(super::super::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::simple(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                            )),
+                            obj_filter,
+                        ),
+                        spellwake_engine::toolbox::ZoneSelection::Random {
+                            count: Box::new(amt),
+                            chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                        },
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard,
+                        },
+                    ),
+                ));
+            Ok(())
+        }
+        InstructionAst::Discard {
+            player,
+            count,
             filter: Some(f),
             anaphora: None,
             random: false,
@@ -7451,6 +8045,37 @@ pub(super) fn lower_zone_moves_instruction(
                 None => ValueExpr::literal(1),
             };
             if *random {
+                if let Some(players) = try_group_affected_players(*player) {
+                    const RAND_DISC_GRP_BIND: spellwake_engine::toolbox::BindingId =
+                        spellwake_engine::toolbox::BindingId(917);
+                    let seat_sel =
+                        spellwake_engine::toolbox::PlayerSelector::Bound(RAND_DISC_GRP_BIND);
+                    let inner = super::super::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::simple(
+                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                    seat_sel.clone(),
+                                )),
+                                ObjectFilter::any(),
+                            ),
+                            spellwake_engine::toolbox::ZoneSelection::Random {
+                                count: Box::new(amt),
+                                chooser: seat_sel,
+                            },
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard,
+                            },
+                        ),
+                    );
+                    builder.instructions.push(Instruction::ForEachPlayerQuery {
+                        selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(
+                            players,
+                        )),
+                        bind_player: RAND_DISC_GRP_BIND,
+                        body: Box::new(ExecutableBody::new(BodyTarget::None, vec![inner])),
+                    });
+                    return Ok(());
+                }
                 let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
                 if amt == ValueExpr::literal(1) {
                     builder
@@ -7680,32 +8305,17 @@ pub(super) fn lower_zone_moves_instruction(
                             _ => None,
                         },
                         Instruction::ZoneOp(spec) => {
-                            let found_p = match &spec.source {
-                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
-                                    zone:
-                                        spellwake_engine::toolbox::QueryZone::Hand(ps)
-                                        | spellwake_engine::toolbox::QueryZone::Library(ps)
-                                        | spellwake_engine::toolbox::QueryZone::Graveyard(ps)
-                                        | spellwake_engine::toolbox::QueryZone::ExileOwnedBy(ps),
-                                    ..
-                                } => match ps.as_ref() {
-                                    spellwake_engine::toolbox::PlayerSelector::Resolving(p)
-                                    | spellwake_engine::toolbox::PlayerSelector::Group(
-                                        AffectedPlayers::One(p),
+                            let found_p = extract_zone_op_resolving_player(&spec.source).or(
+                                match &spec.shuffle_library {
+                                    Some(
+                                        spellwake_engine::toolbox::PlayerSelector::Resolving(p)
+                                        | spellwake_engine::toolbox::PlayerSelector::Group(
+                                            AffectedPlayers::One(p),
+                                        ),
                                     ) => Some(*p),
                                     _ => None,
                                 },
-                                _ => None,
-                            }
-                            .or(match &spec.shuffle_library {
-                                Some(
-                                    spellwake_engine::toolbox::PlayerSelector::Resolving(p)
-                                    | spellwake_engine::toolbox::PlayerSelector::Group(
-                                        AffectedPlayers::One(p),
-                                    ),
-                                ) => Some(*p),
-                                _ => None,
-                            });
+                            );
                             found_p.filter(|p| {
                                 *p != ResolvingPlayer::Controller
                                     && (*p != ResolvingPlayer::UniqueRelatedPlayer || in_trigger)
@@ -7781,23 +8391,7 @@ pub(super) fn lower_zone_moves_instruction(
                             }
                             _ => None,
                         },
-                        Instruction::ZoneOp(spec) => match &spec.source {
-                            spellwake_engine::toolbox::ObjectQuery::ZoneScan {
-                                zone:
-                                    spellwake_engine::toolbox::QueryZone::Hand(ps)
-                                    | spellwake_engine::toolbox::QueryZone::Library(ps)
-                                    | spellwake_engine::toolbox::QueryZone::Graveyard(ps),
-                                ..
-                            } => match ps.as_ref() {
-                                spellwake_engine::toolbox::PlayerSelector::Group(players)
-                                    if !matches!(players, AffectedPlayers::One(_)) =>
-                                {
-                                    Some(*players)
-                                }
-                                _ => None,
-                            },
-                            _ => None,
-                        },
+                        Instruction::ZoneOp(spec) => extract_zone_op_group_players(&spec.source),
                         _ => None,
                     })
                 {
@@ -7806,6 +8400,26 @@ pub(super) fn lower_zone_moves_instruction(
                         vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(ResolvingPlayer::LoopPlayer,)],
                         builder,
                     );
+                    return Ok(());
+                } else if builder.instructions.iter().rev().any(|op| {
+                    matches!(
+                        op,
+                        Instruction::ZoneOp(spec)
+                            if matches!(
+                                spec.destination,
+                                spellwake_engine::toolbox::ZoneDest::Library { .. }
+                            )
+                    )
+                }) {
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::shuffle(
+                                spellwake_engine::toolbox::PlayerSelector::OwnersOf(Box::new(
+                                    spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                                )),
+                            ),
+                        ));
                     return Ok(());
                 } else {
                     return Err("oracle:unbound-that-player");
@@ -8642,13 +9256,61 @@ pub(super) fn lower_zone_moves_instruction(
             _ => Err("oracle:unsupported-reveal-cards"),
         },
         InstructionAst::ExileOrRevealTopUntil {
-            exile: true,
+            exile,
             library,
             filter,
         } => {
             let lib_low = library.trim().to_ascii_lowercase();
-            let (req_bt, library_owner) = match lib_low.as_str() {
-                "your" | "own" | "" | "you" | "yourlibrary" | "ownlibrary" => {
+            let lib_key = lib_low
+                .strip_suffix(" library")
+                .or_else(|| lib_low.strip_suffix(" libraries"))
+                .unwrap_or(lib_low.as_str())
+                .trim();
+            let mut inner_f = filter.as_ref().clone();
+            inner_f.zone = None;
+            let obj = lower_object_filter(&inner_f, vocabulary)?;
+            let group_players = match lib_key {
+                "each opponent" | "each opponent's" | "opponents'" | "your opponents'" => {
+                    Some(AffectedPlayers::EachOpponent)
+                }
+                "each player" | "each player's" => Some(AffectedPlayers::EachPlayer),
+                "each other player" | "each other player's" => {
+                    Some(AffectedPlayers::EachOtherPlayer)
+                }
+                _ => None,
+            };
+            if let Some(players) = group_players {
+                const UNTIL_BIND: spellwake_engine::toolbox::BindingId =
+                    spellwake_engine::toolbox::BindingId(918);
+                let seat_sel = spellwake_engine::toolbox::PlayerSelector::Bound(UNTIL_BIND);
+                let dest = if *exile {
+                    spellwake_engine::toolbox::ZoneDest::exile()
+                } else {
+                    spellwake_engine::toolbox::ZoneDest::RevealOnly
+                };
+                let inner = super::super::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(seat_sel)),
+                            filter: Box::new(ObjectFilter::any()),
+                            slice: spellwake_engine::toolbox::QuerySlice::UntilMatch {
+                                filter: Box::new(obj),
+                                count: Box::new(ValueExpr::literal(1)),
+                                include_non_matches: true,
+                            },
+                        },
+                        dest,
+                    ),
+                );
+                builder.instructions.push(Instruction::ForEachPlayerQuery {
+                    selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(players)),
+                    bind_player: UNTIL_BIND,
+                    body: Box::new(ExecutableBody::new(BodyTarget::None, vec![inner])),
+                });
+                return Ok(());
+            }
+            let (req_bt, library_owner) = match lib_key {
+                "your" | "own" | "" | "you" | "yourlibrary" | "ownlibrary" | "library" => {
                     (None, ResolvingPlayer::Controller)
                 }
                 "target player" | "target player's" | "targetplayer" => (
@@ -8659,13 +9321,25 @@ pub(super) fn lower_zone_moves_instruction(
                     Some(BodyTarget::SingleOpponent),
                     ResolvingPlayer::TargetPlayer,
                 ),
-                "that player" | "that player's" | "thatplayer" | "their" | "their library" => (
+                "that player" | "that player's" | "thatplayer" | "their" => (
                     None,
                     lower_resolving_player_in_context(
                         PlayerRefAst::ThatPlayer,
                         builder,
                         in_trigger,
                     )?,
+                ),
+                "its controller" | "its controller's" => (
+                    None,
+                    lower_resolving_player_in_context(
+                        PlayerRefAst::ItsController,
+                        builder,
+                        in_trigger,
+                    )?,
+                ),
+                "its owner" | "its owner's" => (
+                    None,
+                    lower_resolving_player_in_context(PlayerRefAst::ItsOwner, builder, in_trigger)?,
                 ),
                 "defending player" | "defending player's" | "defendingplayer" => {
                     (None, ResolvingPlayer::DefendingPlayer)
@@ -8683,24 +9357,44 @@ pub(super) fn lower_zone_moves_instruction(
             if let Some(bt) = req_bt {
                 builder.bind_target(bt)?;
             }
-            let mut inner_f = filter.as_ref().clone();
-            inner_f.zone = None;
-            let obj = lower_object_filter(&inner_f, vocabulary)?;
-            builder.instructions.push(Instruction::RevealUntilMatchExt {
-                library_owner,
-                chooser: ResolvingPlayer::Controller,
-                filter: Box::new(obj),
-                count: ValueExpr::literal(1),
-                match_dest: spellwake_engine::program::LookTopKeepDest::Exile {
-                    playable: false,
-                    free: false,
-                    cast_only: false,
-                    any_color: false,
-                    duration: ResolvedDuration::NoStatedDuration,
-                },
-                rest_dest: spellwake_engine::program::LookTopRestDest::Exile,
-                keep_all_revealed: false,
-            });
+            if *exile {
+                builder.instructions.push(Instruction::RevealUntilMatchExt {
+                    library_owner,
+                    chooser: ResolvingPlayer::Controller,
+                    filter: Box::new(obj),
+                    count: ValueExpr::literal(1),
+                    match_dest: spellwake_engine::program::LookTopKeepDest::Exile {
+                        playable: false,
+                        free: false,
+                        cast_only: false,
+                        any_color: false,
+                        duration: ResolvedDuration::NoStatedDuration,
+                    },
+                    rest_dest: spellwake_engine::program::LookTopRestDest::Exile,
+                    keep_all_revealed: false,
+                });
+            } else {
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                        library_owner,
+                                    ),
+                                )),
+                                filter: Box::new(ObjectFilter::any()),
+                                slice: spellwake_engine::toolbox::QuerySlice::UntilMatch {
+                                    filter: Box::new(obj),
+                                    count: Box::new(ValueExpr::literal(1)),
+                                    include_non_matches: true,
+                                },
+                            },
+                            spellwake_engine::toolbox::ZoneDest::RevealOnly,
+                        ),
+                    ));
+            }
             Ok(())
         }
         InstructionAst::RevealByPlayer { player, subject } => match subject.as_ref() {
@@ -9676,6 +10370,7 @@ fn is_moved_object_instruction(op: &Instruction) -> bool {
         op,
         Instruction::ZoneOp(_)
             | Instruction::ForEachPlayerQuery { .. }
+            | Instruction::DrawCards(_)
             | Instruction::ChooseOneLastMoved { .. }
             | Instruction::ManifestTop { .. }
             | Instruction::ChooseObjects { .. }
@@ -9698,6 +10393,108 @@ fn is_moved_object_instruction(op: &Instruction) -> bool {
             | Instruction::Incubate { .. }
             | Instruction::SearchLibrary { .. }
     )
+}
+
+fn extract_zone_op_resolving_player(
+    query: &spellwake_engine::toolbox::ObjectQuery,
+) -> Option<ResolvingPlayer> {
+    use spellwake_engine::toolbox::{ObjectQuery, PlayerSelector, QueryZone};
+    match query {
+        ObjectQuery::ZoneScan {
+            zone:
+                QueryZone::Hand(ps)
+                | QueryZone::Library(ps)
+                | QueryZone::Graveyard(ps)
+                | QueryZone::ExileOwnedBy(ps)
+                | QueryZone::BattlefieldControlledBy(ps),
+            ..
+        } => match ps.as_ref() {
+            PlayerSelector::Resolving(p) | PlayerSelector::Group(AffectedPlayers::One(p)) => {
+                Some(*p)
+            }
+            _ => None,
+        },
+        ObjectQuery::Union(parts) => parts.iter().find_map(extract_zone_op_resolving_player),
+        ObjectQuery::Filtered { source, .. }
+        | ObjectQuery::Take { source, .. }
+        | ObjectQuery::Difference(source, _)
+        | ObjectQuery::Intersect(source, _) => extract_zone_op_resolving_player(source),
+        _ => None,
+    }
+}
+
+fn extract_zone_op_group_players(
+    query: &spellwake_engine::toolbox::ObjectQuery,
+) -> Option<AffectedPlayers> {
+    use spellwake_engine::toolbox::{ObjectQuery, PlayerSelector, QueryZone};
+    match query {
+        ObjectQuery::ZoneScan {
+            zone:
+                QueryZone::Hand(ps)
+                | QueryZone::Library(ps)
+                | QueryZone::Graveyard(ps)
+                | QueryZone::ExileOwnedBy(ps)
+                | QueryZone::BattlefieldControlledBy(ps),
+            ..
+        } => match ps.as_ref() {
+            PlayerSelector::Group(players) if !matches!(players, AffectedPlayers::One(_)) => {
+                Some(*players)
+            }
+            _ => None,
+        },
+        ObjectQuery::Union(parts) => parts.iter().find_map(extract_zone_op_group_players),
+        ObjectQuery::Filtered { source, .. }
+        | ObjectQuery::Take { source, .. }
+        | ObjectQuery::Difference(source, _)
+        | ObjectQuery::Intersect(source, _) => extract_zone_op_group_players(source),
+        _ => None,
+    }
+}
+
+fn parse_last_moved_subset_count(raw: &str) -> Option<i64> {
+    let low = raw.trim().to_ascii_lowercase();
+    match low.as_str() {
+        "one of them" | "one of those cards" | "a card from among them" | "one of the cards" => {
+            Some(1)
+        }
+        "two of them" | "two of those cards" | "two of the cards" => Some(2),
+        "three of them" | "three of those cards" | "three of the cards" => Some(3),
+        "four of them" | "four of those cards" => Some(4),
+        _ => None,
+    }
+}
+
+fn strip_move_zone_last_moved_filter(
+    f: &ObjectFilterAst,
+    builder: &BodyBuilder,
+    in_trigger: bool,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Option<ObjectFilter> {
+    use spellwake_oracle_compiler::ast::FilterPredicateAst;
+    let has_prior_ref = f.predicates.iter().any(|p| {
+        matches!(
+            p,
+            FilterPredicateAst::PriorActionZoneRef { .. }
+                | FilterPredicateAst::AffectedByPriorAction(_)
+        )
+    });
+    if !has_prior_ref {
+        return None;
+    }
+    let mut cleaned = f.clone();
+    cleaned.predicates.retain(|p| {
+        !matches!(
+            p,
+            FilterPredicateAst::PriorActionZoneRef { .. }
+                | FilterPredicateAst::AffectedByPriorAction(_)
+        )
+    });
+    cleaned.zone = None;
+    if is_unrestricted_filter(&cleaned) {
+        Some(ObjectFilter::any())
+    } else {
+        lower_object_filter_in_context(&cleaned, builder, in_trigger, vocabulary).ok()
+    }
 }
 
 pub(super) fn last_instruction_moved_object(ops: &[Instruction]) -> bool {

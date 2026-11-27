@@ -928,7 +928,7 @@ impl EffectWindow {
                     after,
                 }))
             }
-            CounterKind::Energy | CounterKind::Rad => {
+            CounterKind::Energy | CounterKind::Rad | CounterKind::Custom(_) => {
                 let before = self.player_counters_of_kind(player, kind);
                 let after = before.plus(amount);
                 self.characteristics
