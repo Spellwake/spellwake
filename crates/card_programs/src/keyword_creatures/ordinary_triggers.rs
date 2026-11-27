@@ -1383,9 +1383,7 @@ pub(super) fn body(
             AbilityChange, ControlRecipient, PowerToughness, ResolvedDuration, ResolvedPartSpec,
             ResolvedPartsSpec,
         };
-        use spellwake_engine::program::{
-            PermanentTargetAction, TriggeredAbility, TriggeredAbilityId,
-        };
+        use spellwake_engine::program::{TriggeredAbility, TriggeredAbilityId};
         let until_end = ResolvedDuration::UntilEndOfTurn;
         let grant = TriggeredAbility::annihilator(TriggeredAbilityId(0), 2.into());
         return Some(ExecutableBody::new(
@@ -1398,11 +1396,7 @@ pub(super) fn body(
                     )]),
                     until_end,
                 ),
-                Instruction::AffectPermanentTargets {
-                    minimum: 1,
-                    maximum: 1,
-                    action: PermanentTargetAction::Untap,
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(false),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                     spellwake_engine::toolbox::ObjectQuery::Targets,
                     ResolvedPartsSpec(vec![
@@ -1637,11 +1631,7 @@ pub(super) fn body(
     if text == "tap target creature defending player controls." {
         return Some(ExecutableBody::new(
             BodyTarget::FilteredPermanent(ObjectFilter::creature().of_related_player()),
-            vec![Instruction::AffectPermanentTargets {
-                minimum: 1,
-                maximum: 1,
-                action: spellwake_engine::program::PermanentTargetAction::Tap,
-            }],
+            vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(true)],
         ));
     }
     if let Some(template) = text
@@ -1767,18 +1757,24 @@ pub(super) fn body(
     if let Some((price, effect)) = text.strip_prefix("you may pay ").and_then(|clause| clause.split_once(". If you do, tap up to "))
         && let Some(subjects) = effect.strip_suffix(" target permanents. Those permanents don't untap during their controllers' next untap steps.")
     {
-        use spellwake_engine::program::PermanentTargetAction;
         let maximum = u16::try_from(amount(subjects)?).ok()?;
-        return Some(ExecutableBody::new(BodyTarget::SinglePermanent, vec![
-            Instruction::OfferDynamicManaPayment {
-                payer: ResolvingPlayer::Controller,
-                fixed: fixed_cost(price)?,
-                extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
-                paid_destination: 1,
-                declined_destination: 2,
-            },
-            Instruction::AffectPermanentTargets { minimum: 0, maximum, action: PermanentTargetAction::TapAndSkipNextUntap },
-        ]));
+        return Some(
+            ExecutableBody::new(
+                BodyTarget::SinglePermanent,
+                vec![
+                    Instruction::OfferDynamicManaPayment {
+                        payer: ResolvingPlayer::Controller,
+                        fixed: fixed_cost(price)?,
+                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
+                        paid_destination: 1,
+                        declined_destination: 3,
+                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(true),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap_targets(),
+                ],
+            )
+            .with_permanent_target_bounds(0, maximum),
+        );
     }
     if let Some((price, paid)) = text
         .strip_prefix("you may pay ")

@@ -214,7 +214,11 @@ fn cmm_harsh_mercy_collects_all_choices_before_destroying_unchosen_types() {
         assert_eq!(physical(&choosing, 5).zone(), ObjectZone::Battlefield);
         choosing = reply(
             &choosing,
-            DecisionReply::CreatureType(vocabulary.resolve_label(kind).unwrap()),
+            DecisionReply::PromptChoice(
+                spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+                    vocabulary.resolve_label(kind).unwrap(),
+                ),
+            ),
         )
         .into_state();
     }

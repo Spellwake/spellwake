@@ -304,19 +304,20 @@ pub(super) fn impulse(
         program.triggered.push(trigger(
             spellwake_engine::program::TriggerSpec::step_began(spellwake_engine::turn::Step::End, spellwake_engine::program::PlayerRelation::Controller).only_if(spellwake_engine::program::TriggerCondition::ControlledCreaturePowerAtLeast(minimum)),
             vec![
-                Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(gate))), destination: 2 },
-                Instruction::ExileTopPlay {
-                    count: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    library_owner: spellwake_engine::program::AffectedPlayers::One(
+                Instruction::BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(gate))), destination: 3 },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_top_library_group(
+                    spellwake_engine::program::AffectedPlayers::One(
                         spellwake_engine::program::ResolvingPlayer::Controller,
                     ),
-                    duration: spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource,
-                    cast_only: false,
-                    free: false,
-                    any_color: false,
-                    face_down: false,
-                    grant_play: true,
-                },
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    false,
+                ),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::impulse_play_last_moved(
+                    spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource,
+                    false,
+                    false,
+                    false,
+                ),
             ],
         ));
     } else if let Some((kind, rule)) = text.split_once(" creatures you control have \"") {

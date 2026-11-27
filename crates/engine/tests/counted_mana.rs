@@ -145,10 +145,12 @@ fn a_chosen_word_updates_boost_and_mana_count_without_changing_the_mana_symbol()
                 6,
                 BodyTarget::SingleCreature,
                 vec![
-                    Instruction::ChooseCreatureType {
-                        into: slot,
-                        excluding: subtypes(&v, &["Vampire"]),
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                            slot,
+                            subtypes(&v, &["Vampire"]),
+                        ),
+                    )),
                     effect(
                         vec![
                             ResolvedPartSpec::Control(ControlRecipient::ResolvingController),
@@ -177,7 +179,9 @@ fn a_chosen_word_updates_boost_and_mana_count_without_changing_the_mana_symbol()
     let changed = reply(
         pending.state(),
         P0,
-        DecisionReply::CreatureType(v.resolve_label("Elf").unwrap()),
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+            v.resolve_label("Elf").unwrap(),
+        )),
     );
     assert_eq!(
         current(changed.state(), object(changed.state(), 2))

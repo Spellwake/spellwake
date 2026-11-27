@@ -30,7 +30,6 @@ mod combat_flow;
 mod day_night;
 mod emblems;
 mod end_step_cast;
-mod impulse;
 mod library_rewrite;
 mod ninja;
 mod speed;
@@ -1758,7 +1757,6 @@ enum PendingWork {
     SelectedActivationCost(Box<selected_activation_cost::SelectedActivationCostWork>),
     GraveyardExile(Box<graveyard_exile::GraveyardExileWork>),
     GraveyardShuffle(Box<graveyard_shuffle::GraveyardShuffleWork>),
-    ImpulseReplacement(Box<ImpulseReplacementWork>),
     LibraryTop(Box<LibraryTopWork>),
     LookTop(Box<look_top::LookTopWork>),
     ResolutionSelection(Box<ResolutionSelectionWork>),
@@ -2182,15 +2180,6 @@ struct LandPlayWork {
 struct PermanentEntryWork {
     entry: crate::stack_window::StackEntry,
     object: ObjectId,
-    batch: ZoneReplacementBatch,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ImpulseReplacementWork {
-    cursor: ResolutionCursor,
-    objects: Vec<ObjectId>,
-    play_permission: Option<SeatId>,
-    face_down_viewer: Option<SeatId>,
-    graveyard_orders: BTreeMap<SeatId, Vec<ObjectId>>,
     batch: ZoneReplacementBatch,
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -5607,7 +5596,6 @@ impl EffectWindow {
                 | PendingWork::SelectedActivationCost(_)
                 | PendingWork::GraveyardExile(_)
                 | PendingWork::GraveyardShuffle(_)
-                | PendingWork::ImpulseReplacement(_)
                 | PendingWork::ResolutionSelection(_)
                 | PendingWork::TokenEntry(_)
                 | PendingWork::OptionalEffect(_)
@@ -5625,7 +5613,6 @@ impl EffectWindow {
             Some(PendingWork::GraveyardExile(work)) => Some(&work.cursor),
             Some(PendingWork::GraveyardShuffle(work)) => Some(&work.cursor),
             Some(PendingWork::SearchEntry(work)) => Some(&work.cursor),
-            Some(PendingWork::ImpulseReplacement(work)) => Some(&work.cursor),
             Some(PendingWork::LibraryTop(work)) => Some(&work.cursor),
             Some(PendingWork::LookTop(work)) => Some(&work.cursor),
             Some(PendingWork::ResolutionSelection(work)) => Some(&work.cursor),
@@ -5637,7 +5624,6 @@ impl EffectWindow {
     fn resolution_cursor_mut(&mut self) -> Option<&mut ResolutionCursor> {
         match self.pending_work.as_mut() {
             Some(PendingWork::BattlefieldEntry(work)) => Some(&mut work.cursor),
-            Some(PendingWork::ImpulseReplacement(work)) => Some(&mut work.cursor),
             Some(PendingWork::LibraryTop(work)) => Some(&mut work.cursor),
             Some(PendingWork::LookTop(work)) => Some(&mut work.cursor),
             Some(PendingWork::ResolutionSelection(work)) => Some(&mut work.cursor),
@@ -10527,9 +10513,7 @@ impl EffectWindow {
     ) -> Result<bool, EffectError> {
         let evaluated = self.evaluated_characteristics()?;
         Ok(match instruction {
-            Instruction::AffectPermanentTargets { .. }
-            | Instruction::Sacrifice { .. }
-            | Instruction::Discard { .. } => {
+            Instruction::Sacrifice { .. } | Instruction::Discard { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
             Instruction::MutatePlayer(spec)
@@ -10661,7 +10645,6 @@ impl EffectWindow {
             // The iterative driver owns these paths before target availability.
             Instruction::OptionalSequence { .. }
             | Instruction::Jump { .. }
-            | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::ChooseValue { .. }
@@ -10683,7 +10666,6 @@ impl EffectWindow {
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }
-            | Instruction::ChooseCreatureType { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. }

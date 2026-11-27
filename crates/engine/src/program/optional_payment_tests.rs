@@ -25,10 +25,12 @@ fn gain() -> Instruction {
     )))
 }
 fn choose(slot: u16) -> Instruction {
-    Instruction::ChooseCreatureType {
-        into: CreatureTypeSlot::new(slot),
-        excluding: BTreeSet::new(),
-    }
+    Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec::choose_creature_type(
+            CreatureTypeSlot::new(slot),
+            BTreeSet::new(),
+        ),
+    ))
 }
 fn read(slot: u16) -> Instruction {
     crate::program::Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec::simple(

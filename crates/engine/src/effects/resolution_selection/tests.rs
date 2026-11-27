@@ -766,10 +766,21 @@ fn counted_amount_is_frozen_once_under_resolving_controller_for_every_affected_p
     let state = fixture(
         BodyTarget::None,
         vec![
-            Instruction::ChooseCreatureType {
-                into: CreatureTypeSlot::new(0),
-                excluding: BTreeSet::new(),
-            },
+            Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                chooser: crate::toolbox::PlayerSelector::Resolving(
+                    crate::program::ResolvingPlayer::Controller,
+                ),
+                domain: crate::toolbox::PromptDomain::Subtype {
+                    kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                    excluding: BTreeSet::new(),
+                    legacy_slot: Some(CreatureTypeSlot::new(0)),
+                },
+                category: crate::toolbox::ChoiceCategory::Generic,
+                bind_to: crate::toolbox::BindingId(0),
+                bind_unchosen: None,
+                tag_partition: None,
+                auto_resolve_trivial: false,
+            })),
             Instruction::Sacrifice {
                 players: AffectedPlayers::EachPlayer,
                 amount: crate::program::ValueExpr::count_battlefield(
@@ -790,7 +801,11 @@ fn counted_amount_is_frozen_once_under_resolving_controller_for_every_affected_p
         cards,
     );
     let state = pass_to_boundary(cast(&state, A, 1, None));
-    let mut state = reply(&state, DecisionReply::CreatureType(elf)).into_state();
+    let mut state = reply(
+        &state,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(elf)),
+    )
+    .into_state();
     assert_eq!(select_frame(&state).required(), 2);
     state = reply(
         &state,

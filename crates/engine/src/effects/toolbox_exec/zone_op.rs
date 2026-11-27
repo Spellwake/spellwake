@@ -459,6 +459,21 @@ impl EffectWindow {
                     let (window, movements) = self.window.record_linked_return_moves(&to_move)?;
                     self.window = window;
                     moved_ids = movements.iter().map(|m| m.after.id()).collect();
+                    if matches!(semantics, GraveyardSemantics::Destroy { .. }) {
+                        let destroyed_cards: Vec<ObjectId> = movements
+                            .iter()
+                            .flat_map(crate::object_identity::ObjectMovement::arrivals)
+                            .filter(|id| {
+                                self.window.cards().get(*id).is_some_and(|card| {
+                                    card.card_id().is_some()
+                                        && matches!(card.zone(), ObjectZone::Graveyard(_))
+                                })
+                            })
+                            .collect();
+                        if let Some(cur) = self.resolution_cursor_mut() {
+                            cur.results.destroyed_cards_to_graveyard = destroyed_cards;
+                        }
+                    }
                     let moved_refs = movements.clone();
                     let sem = *semantics;
                     self.emit_from(
@@ -570,6 +585,36 @@ impl EffectWindow {
                     let (window, movements) = self.window.record_linked_return_moves(&to_move)?;
                     self.window = window;
                     moved_ids = movements.iter().map(|m| m.after.id()).collect();
+                    if matches!(
+                        self.payloads
+                            .get(&entry.id())
+                            .and_then(StackPayload::instructions)
+                            .and_then(|ops| ops.get(index + 1)),
+                        Some(Instruction::ZoneOp(next_spec))
+                            if matches!(
+                                next_spec.destination,
+                                ZoneDest::Delayed(
+                                    crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort {
+                                        ..
+                                    }
+                                )
+                            )
+                    ) {
+                        let flickered: Vec<ObjectId> = movements
+                            .iter()
+                            .filter(|m| m.after.zone() == ObjectZone::Exile)
+                            .flat_map(crate::object_identity::ObjectMovement::arrivals)
+                            .filter(|id| {
+                                self.window
+                                    .cards()
+                                    .get(*id)
+                                    .is_some_and(|card| card.card_id().is_some())
+                            })
+                            .collect();
+                        if let Some(cur) = self.resolution_cursor_mut() {
+                            cur.impulse.flickered = flickered;
+                        }
+                    }
                     for &new_id in &moved_ids {
                         if *face_down {
                             self.face_down_exile.insert(new_id, viewer_seat);

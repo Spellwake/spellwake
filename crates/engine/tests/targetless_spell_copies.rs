@@ -585,12 +585,13 @@ fn copy_of_copy_owns_body_and_traits_after_the_physical_original_is_countered() 
 
 #[test]
 fn each_targetless_copy_and_original_makes_fresh_resolution_choices_and_controller_counts() {
-    let mut choose = type_choice_body();
-    let Instruction::ChooseCreatureType { excluding, .. } = &mut choose else {
-        panic!("type-choice fixture")
-    };
     let excluded = vocabulary().resolve_label("Dragon").unwrap();
-    excluding.insert(excluded);
+    let choose = Instruction::PromptChoice(Box::new(
+        spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+            spellwake_engine::program::CreatureTypeSlot::new(0),
+            BTreeSet::from([excluded]),
+        ),
+    ));
     let game = setup(
         spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![choose, chosen_draw()],
@@ -617,15 +618,15 @@ fn each_targetless_copy_and_original_makes_fresh_resolution_choices_and_controll
         let pending = resolve(&state);
         let source = pending.state();
         let decision = source.pending_decision().unwrap();
-        let RuleFrame::CreatureType(frame) = decision.frame() else {
+        let RuleFrame::PromptChoice(frame) = decision.frame() else {
             panic!("actual resolution type choice")
         };
-        assert_eq!(frame.entry(), id);
-        assert_eq!(frame.chooser(), actor);
-        assert_eq!(
-            frame.vocabulary(),
-            source.execution().creature_vocabulary().id()
-        );
+        assert_eq!(frame.entry, id);
+        assert_eq!(frame.chooser, actor);
+        assert!(matches!(
+            frame.domain,
+            spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. }
+        ));
         assert!(
             source
                 .execution()
@@ -645,7 +646,9 @@ fn each_targetless_copy_and_original_makes_fresh_resolution_choices_and_controll
             .unwrap();
         let reply = GameCommand::Reply {
             decision: decision.id(),
-            choice: DecisionReply::CreatureType(selected),
+            choice: DecisionReply::PromptChoice(
+                spellwake_engine::toolbox::PromptChoiceReply::CreatureType(selected),
+            ),
         };
         reject(
             source,
@@ -672,7 +675,9 @@ fn each_targetless_copy_and_original_makes_fresh_resolution_choices_and_controll
                 actor,
                 command: GameCommand::Reply {
                     decision: DecisionId(decision.id().0 + 1),
-                    choice: DecisionReply::CreatureType(selected),
+                    choice: DecisionReply::PromptChoice(
+                        spellwake_engine::toolbox::PromptChoiceReply::CreatureType(selected),
+                    ),
                 },
             },
             GameError::WrongDecision,
@@ -684,10 +689,12 @@ fn each_targetless_copy_and_original_makes_fresh_resolution_choices_and_controll
                 actor,
                 command: GameCommand::Reply {
                     decision: decision.id(),
-                    choice: DecisionReply::CreatureType(excluded),
+                    choice: DecisionReply::PromptChoice(
+                        spellwake_engine::toolbox::PromptChoiceReply::CreatureType(excluded),
+                    ),
                 },
             },
-            GameError::Effect(EffectError::IllegalCreatureType),
+            GameError::Effect(EffectError::SelectionOutsideDomain),
         );
         reject(
             source,
@@ -727,18 +734,18 @@ fn automatic_copy_keeps_its_journal_when_a_later_real_choice_suspends() {
     let saved = lower.clone();
     assert_eq!(
         lower.resolve_top(lower.revision()),
-        Err(EffectError::CreatureTypeChoiceRequired)
+        Err(EffectError::SelectionRequired)
     );
     assert_eq!(
         lower.resolve_top_with_copy_choice(lower.revision(), P1, CopyTargetChoice::Retain),
-        Err(EffectError::CreatureTypeChoiceRequired)
+        Err(EffectError::SelectionRequired)
     );
     assert_eq!(lower, saved);
     let result = resolve(&game);
     assert_eq!(copies(&result).len(), 1);
     let state = result.state();
     let decision = state.pending_decision().unwrap();
-    assert!(matches!(decision.frame(),RuleFrame::CreatureType(f) if f.entry()==copier));
+    assert!(matches!(decision.frame(), RuleFrame::PromptChoice(f) if f.entry == copier));
     assert_eq!(
         state.next_decision_sequence(),
         game.next_decision_sequence() + 1
@@ -748,12 +755,14 @@ fn automatic_copy_keeps_its_journal_when_a_later_real_choice_suspends() {
         P1,
         GameCommand::Reply {
             decision: decision.id(),
-            choice: DecisionReply::CreatureType(
-                state
-                    .execution()
-                    .creature_vocabulary()
-                    .resolve_label("Goblin")
-                    .unwrap(),
+            choice: DecisionReply::PromptChoice(
+                spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+                    state
+                        .execution()
+                        .creature_vocabulary()
+                        .resolve_label("Goblin")
+                        .unwrap(),
+                ),
             ),
         },
     );

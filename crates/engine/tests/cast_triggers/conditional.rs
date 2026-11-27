@@ -140,10 +140,12 @@ fn wrong_and_stale_type_replies_preserve_branch_paused_state() {
             BodyTarget::None,
             vec![
                 life(20, 2),
-                Instruction::ChooseCreatureType {
-                    into: slot,
-                    excluding: BTreeSet::new(),
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                        slot,
+                        BTreeSet::new(),
+                    ),
+                )),
                 gain(1),
             ],
         ),
@@ -157,7 +159,9 @@ fn wrong_and_stale_type_replies_preserve_branch_paused_state() {
             P1,
             GameCommand::Reply {
                 decision,
-                choice: DecisionReply::CreatureType(human),
+                choice: DecisionReply::PromptChoice(
+                    spellwake_engine::toolbox::PromptChoiceReply::CreatureType(human),
+                ),
             },
         ),
         (P0, GameCommand::Pass),
@@ -181,7 +185,13 @@ fn wrong_and_stale_type_replies_preserve_branch_paused_state() {
         );
         assert_eq!(paused.state(), &saved);
     }
-    let done = tr::reply(paused.state(), P0, DecisionReply::CreatureType(human));
+    let done = tr::reply(
+        paused.state(),
+        P0,
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+            human,
+        )),
+    );
     let saved_done = done.state().clone();
     assert!(
         done.state()
@@ -190,7 +200,9 @@ fn wrong_and_stale_type_replies_preserve_branch_paused_state() {
                 actor: P0,
                 command: GameCommand::Reply {
                     decision,
-                    choice: DecisionReply::CreatureType(human)
+                    choice: DecisionReply::PromptChoice(
+                        spellwake_engine::toolbox::PromptChoiceReply::CreatureType(human),
+                    ),
                 }
             })
             .is_err()

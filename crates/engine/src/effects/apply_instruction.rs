@@ -37,14 +37,11 @@ impl EffectWindow {
             instruction: index,
         };
         let receipt = match instruction {
-            Instruction::AffectPermanentTargets { .. }
-            | Instruction::Sacrifice { .. }
-            | Instruction::Discard { .. } => {
+            Instruction::Sacrifice { .. } | Instruction::Discard { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
             Instruction::OptionalSequence { .. }
             | Instruction::Jump { .. }
-            | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::ChooseValue { .. }
@@ -72,8 +69,7 @@ impl EffectWindow {
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::FixedTargetClause(_)
-            | Instruction::SearchLibrary { .. }
-            | Instruction::ChooseCreatureType { .. } => {
+            | Instruction::SearchLibrary { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
             Instruction::StackOp(spec) if !spec.requires_stack_target() => {

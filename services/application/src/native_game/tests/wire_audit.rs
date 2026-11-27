@@ -226,10 +226,6 @@ fn collect_body_counter_kinds(body: &ExecutableBody, out: &mut Vec<CounterKind>)
                     }
                 }
             }
-            Instruction::AffectPermanentTargets {
-                action: spellwake_engine::program::PermanentTargetAction::PutCounters { kind, .. },
-                ..
-            } => out.push(*kind),
             Instruction::FixedTargetClause(inner)
             | Instruction::EmitReflexiveTrigger { body: inner }
             | Instruction::ScheduleDelayedStepTrigger { body: inner, .. }

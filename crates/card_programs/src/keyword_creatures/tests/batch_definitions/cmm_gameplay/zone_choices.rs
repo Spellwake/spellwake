@@ -2031,7 +2031,13 @@ fn cmm_zones_for_the_ancestors_chooses_a_type_and_repeats_the_effect_with_flashb
         )
         .into_state();
         let choose = round(cast).into_state();
-        let select = reply(&choose, DecisionReply::CreatureType(kind)).into_state();
+        let select = reply(
+            &choose,
+            DecisionReply::PromptChoice(
+                spellwake_engine::toolbox::PromptChoiceReply::CreatureType(kind),
+            ),
+        )
+        .into_state();
         let ready = select
             .supply_entropy(select.basis(), vec![0; 9])
             .unwrap()

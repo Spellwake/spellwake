@@ -81,13 +81,7 @@ pub(super) fn lower_zone_moves_instruction(
                     options, builder, in_trigger, vocabulary,
                 )?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: 1,
-                        action: PermanentTargetAction::Destroy,
-                    });
+                builder.push_bounded_target_op(0, 1, super::super::toolbox_emit::destroy_targets());
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -96,13 +90,11 @@ pub(super) fn lower_zone_moves_instruction(
             } if *n >= 2 => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: *n,
-                        maximum: *n,
-                        action: PermanentTargetAction::Destroy,
-                    });
+                builder.push_bounded_target_op(
+                    *n,
+                    *n,
+                    super::super::toolbox_emit::destroy_targets(),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -111,13 +103,11 @@ pub(super) fn lower_zone_moves_instruction(
             } if *max > 0 => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: *max,
-                        action: PermanentTargetAction::Destroy,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    *max,
+                    super::super::toolbox_emit::destroy_targets(),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -131,13 +121,11 @@ pub(super) fn lower_zone_moves_instruction(
                 } else {
                     builder.x_target_count = true;
                 }
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Destroy,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::destroy_targets(),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -146,13 +134,11 @@ pub(super) fn lower_zone_moves_instruction(
             } if filter.zone.is_none() => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Destroy,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::destroy_targets(),
+                );
                 Ok(())
             }
             SubjectRefAst::Anaphora(_) if builder.target != BodyTarget::None => {
@@ -325,9 +311,6 @@ pub(super) fn lower_zone_moves_instruction(
                 .rev()
                 .any(try_upgrade_destroy_no_regen)
             {
-                return Ok(());
-            }
-            if try_upgrade_affect_destroy_no_regen_in_ops(&mut builder.instructions) {
                 return Ok(());
             }
             let dmg_no_regen_query = builder
@@ -662,13 +645,11 @@ pub(super) fn lower_zone_moves_instruction(
                         options, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: 1,
-                            action: PermanentTargetAction::Exile,
-                        });
+                    builder.push_bounded_target_op(
+                        0,
+                        1,
+                        super::super::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetOneOf {
@@ -679,13 +660,11 @@ pub(super) fn lower_zone_moves_instruction(
                         options, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: *n,
-                            maximum: *n,
-                            action: PermanentTargetAction::Exile,
-                        });
+                    builder.push_bounded_target_op(
+                        *n,
+                        *n,
+                        super::super::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetOneOf {
@@ -696,13 +675,11 @@ pub(super) fn lower_zone_moves_instruction(
                         options, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: *max,
-                            action: PermanentTargetAction::Exile,
-                        });
+                    builder.push_bounded_target_op(
+                        0,
+                        *max,
+                        super::super::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetOneOf {
@@ -713,13 +690,11 @@ pub(super) fn lower_zone_moves_instruction(
                         options, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: u16::MAX,
-                            action: PermanentTargetAction::Exile,
-                        });
+                    builder.push_bounded_target_op(
+                        0,
+                        u16::MAX,
+                        super::super::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetOneOf {
@@ -735,13 +710,11 @@ pub(super) fn lower_zone_moves_instruction(
                     } else {
                         builder.x_target_count = true;
                     }
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: u16::MAX,
-                            action: PermanentTargetAction::Exile,
-                        });
+                    builder.push_bounded_target_op(
+                        0,
+                        u16::MAX,
+                        super::super::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -752,13 +725,11 @@ pub(super) fn lower_zone_moves_instruction(
                     clean.zone = None;
                     let bt = lower_battlefield_body_target(&clean, vocabulary)?;
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: *n,
-                            maximum: *n,
-                            action: PermanentTargetAction::Exile,
-                        });
+                    builder.push_bounded_target_op(
+                        *n,
+                        *n,
+                        super::super::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -769,13 +740,11 @@ pub(super) fn lower_zone_moves_instruction(
                     clean.zone = None;
                     let bt = lower_battlefield_body_target(&clean, vocabulary)?;
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: *max,
-                            action: PermanentTargetAction::Exile,
-                        });
+                    builder.push_bounded_target_op(
+                        0,
+                        *max,
+                        super::super::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -786,13 +755,11 @@ pub(super) fn lower_zone_moves_instruction(
                     clean.zone = None;
                     let bt = lower_battlefield_body_target(&clean, vocabulary)?;
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: u16::MAX,
-                            action: PermanentTargetAction::Exile,
-                        });
+                    builder.push_bounded_target_op(
+                        0,
+                        u16::MAX,
+                        super::super::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -808,13 +775,11 @@ pub(super) fn lower_zone_moves_instruction(
                     } else {
                         builder.x_target_count = true;
                     }
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: u16::MAX,
-                            action: PermanentTargetAction::Exile,
-                        });
+                    builder.push_bounded_target_op(
+                        0,
+                        u16::MAX,
+                        super::super::toolbox_emit::exile_target(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -2635,13 +2600,11 @@ pub(super) fn lower_zone_moves_instruction(
                         options, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: 1,
-                            action: PermanentTargetAction::MoveTo(exile_until_dest),
-                        });
+                    builder.push_bounded_target_op(
+                        0,
+                        1,
+                        super::super::toolbox_emit::move_targets_to(exile_until_dest),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetObject { filter, count }
@@ -2667,13 +2630,11 @@ pub(super) fn lower_zone_moves_instruction(
                     if is_x {
                         builder.x_target_count = true;
                     }
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum,
-                            maximum,
-                            action: PermanentTargetAction::MoveTo(exile_until_dest),
-                        });
+                    builder.push_bounded_target_op(
+                        minimum,
+                        maximum,
+                        super::super::toolbox_emit::move_targets_to(exile_until_dest),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -3793,15 +3754,13 @@ pub(super) fn lower_zone_moves_instruction(
                         if is_x {
                             builder.x_target_count = true;
                         }
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: min_t,
-                                maximum: max_t,
-                                action: PermanentTargetAction::MoveTo(SubjectDestination::Library(
-                                    pl,
-                                )),
-                            });
+                        builder.push_bounded_target_op(
+                            min_t,
+                            max_t,
+                            super::super::toolbox_emit::move_targets_to(
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject { filter, count }
@@ -4337,13 +4296,11 @@ pub(super) fn lower_zone_moves_instruction(
                         } else if filter.zone.is_none() && from_zone.is_none() {
                             let bt = lower_battlefield_body_target(filter, vocabulary)?;
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: *n,
-                                    maximum: *n,
-                                    action: PermanentTargetAction::ReturnToHand,
-                                });
+                            builder.push_bounded_target_op(
+                                *n,
+                                *n,
+                                super::super::toolbox_emit::return_target_to_hand(),
+                            );
                             Ok(())
                         } else {
                             Err("oracle:unsupported-return-hand")
@@ -4403,13 +4360,11 @@ pub(super) fn lower_zone_moves_instruction(
                         } else if filter.zone.is_none() && from_zone.is_none() {
                             let bt = lower_battlefield_body_target(filter, vocabulary)?;
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: *max,
-                                    action: PermanentTargetAction::ReturnToHand,
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                *max,
+                                super::super::toolbox_emit::return_target_to_hand(),
+                            );
                             Ok(())
                         } else {
                             Err("oracle:unsupported-return-hand")
@@ -4489,13 +4444,11 @@ pub(super) fn lower_zone_moves_instruction(
                             } else if *count == TargetCountAst::UpToX {
                                 builder.up_to_x_target_count = true;
                             }
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: u16::MAX,
-                                    action: PermanentTargetAction::ReturnToHand,
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                u16::MAX,
+                                super::super::toolbox_emit::return_target_to_hand(),
+                            );
                             Ok(())
                         } else {
                             Err("oracle:unsupported-return-hand")
@@ -5887,13 +5840,11 @@ pub(super) fn lower_zone_moves_instruction(
                         if is_up_to_x {
                             builder.up_to_x_target_count = true;
                         }
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: min_t,
-                                maximum: max_t,
-                                action: PermanentTargetAction::MoveTo(bf_dest),
-                            });
+                        builder.push_bounded_target_op(
+                            min_t,
+                            max_t,
+                            super::super::toolbox_emit::move_targets_to(bf_dest),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject { filter, count }
@@ -5996,13 +5947,11 @@ pub(super) fn lower_zone_moves_instruction(
                         if is_up_to_x {
                             builder.up_to_x_target_count = true;
                         }
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: min_t,
-                                maximum: max_t,
-                                action: PermanentTargetAction::MoveTo(bf_dest),
-                            });
+                        builder.push_bounded_target_op(
+                            min_t,
+                            max_t,
+                            super::super::toolbox_emit::move_targets_to(bf_dest),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw) => {
@@ -6666,15 +6615,13 @@ pub(super) fn lower_zone_moves_instruction(
                         if is_up_to_x {
                             builder.up_to_x_target_count = true;
                         }
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: min_t,
-                                maximum: max_t,
-                                action: PermanentTargetAction::MoveTo(SubjectDestination::Library(
-                                    pl,
-                                )),
-                            });
+                        builder.push_bounded_target_op(
+                            min_t,
+                            max_t,
+                            super::super::toolbox_emit::move_targets_to(
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -6685,15 +6632,13 @@ pub(super) fn lower_zone_moves_instruction(
                         clean.zone = None;
                         let bt = lower_battlefield_body_target(&clean, vocabulary)?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: *n,
-                                maximum: *n,
-                                action: PermanentTargetAction::MoveTo(SubjectDestination::Library(
-                                    pl,
-                                )),
-                            });
+                        builder.push_bounded_target_op(
+                            *n,
+                            *n,
+                            super::super::toolbox_emit::move_targets_to(
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -6706,15 +6651,13 @@ pub(super) fn lower_zone_moves_instruction(
                         clean.zone = None;
                         let bt = lower_battlefield_body_target(&clean, vocabulary)?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: *max,
-                                action: PermanentTargetAction::MoveTo(SubjectDestination::Library(
-                                    pl,
-                                )),
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            *max,
+                            super::super::toolbox_emit::move_targets_to(
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -6725,15 +6668,13 @@ pub(super) fn lower_zone_moves_instruction(
                         clean.zone = None;
                         let bt = lower_battlefield_body_target(&clean, vocabulary)?;
                         builder.bind_target(bt)?;
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: u16::MAX,
-                                action: PermanentTargetAction::MoveTo(SubjectDestination::Library(
-                                    pl,
-                                )),
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            u16::MAX,
+                            super::super::toolbox_emit::move_targets_to(
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -6751,15 +6692,13 @@ pub(super) fn lower_zone_moves_instruction(
                         } else {
                             builder.x_target_count = true;
                         }
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: u16::MAX,
-                                action: PermanentTargetAction::MoveTo(SubjectDestination::Library(
-                                    pl,
-                                )),
-                            });
+                        builder.push_bounded_target_op(
+                            0,
+                            u16::MAX,
+                            super::super::toolbox_emit::move_targets_to(
+                                SubjectDestination::Library(pl),
+                            ),
+                        );
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject { filter, count }
@@ -7459,18 +7398,18 @@ pub(super) fn lower_zone_moves_instruction(
                         if is_up_to_x {
                             builder.up_to_x_target_count = true;
                         }
-                        let action = match pd {
-                            PublicZoneDestination::Hand => PermanentTargetAction::ReturnToHand,
-                            PublicZoneDestination::Exile => PermanentTargetAction::Exile,
-                            _ => PermanentTargetAction::MoveTo(SubjectDestination::Graveyard),
+                        let op = match pd {
+                            PublicZoneDestination::Hand => {
+                                super::super::toolbox_emit::return_target_to_hand()
+                            }
+                            PublicZoneDestination::Exile => {
+                                super::super::toolbox_emit::exile_target()
+                            }
+                            _ => super::super::toolbox_emit::move_targets_to(
+                                SubjectDestination::Graveyard,
+                            ),
                         };
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: min_t,
-                                maximum: max_t,
-                                action,
-                            });
+                        builder.push_bounded_target_op(min_t, max_t, op);
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -7489,18 +7428,18 @@ pub(super) fn lower_zone_moves_instruction(
                         clean.zone = None;
                         let bt = lower_battlefield_body_target(&clean, vocabulary)?;
                         builder.bind_target(bt)?;
-                        let action = match pd {
-                            PublicZoneDestination::Hand => PermanentTargetAction::ReturnToHand,
-                            PublicZoneDestination::Exile => PermanentTargetAction::Exile,
-                            _ => PermanentTargetAction::MoveTo(SubjectDestination::Graveyard),
+                        let op = match pd {
+                            PublicZoneDestination::Hand => {
+                                super::super::toolbox_emit::return_target_to_hand()
+                            }
+                            PublicZoneDestination::Exile => {
+                                super::super::toolbox_emit::exile_target()
+                            }
+                            _ => super::super::toolbox_emit::move_targets_to(
+                                SubjectDestination::Graveyard,
+                            ),
                         };
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: *n,
-                                maximum: *n,
-                                action,
-                            });
+                        builder.push_bounded_target_op(*n, *n, op);
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -7519,18 +7458,18 @@ pub(super) fn lower_zone_moves_instruction(
                         clean.zone = None;
                         let bt = lower_battlefield_body_target(&clean, vocabulary)?;
                         builder.bind_target(bt)?;
-                        let action = match pd {
-                            PublicZoneDestination::Hand => PermanentTargetAction::ReturnToHand,
-                            PublicZoneDestination::Exile => PermanentTargetAction::Exile,
-                            _ => PermanentTargetAction::MoveTo(SubjectDestination::Graveyard),
+                        let op = match pd {
+                            PublicZoneDestination::Hand => {
+                                super::super::toolbox_emit::return_target_to_hand()
+                            }
+                            PublicZoneDestination::Exile => {
+                                super::super::toolbox_emit::exile_target()
+                            }
+                            _ => super::super::toolbox_emit::move_targets_to(
+                                SubjectDestination::Graveyard,
+                            ),
                         };
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: *max,
-                                action,
-                            });
+                        builder.push_bounded_target_op(0, *max, op);
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
@@ -7558,18 +7497,18 @@ pub(super) fn lower_zone_moves_instruction(
                         } else if *count == TargetCountAst::UpToX {
                             builder.up_to_x_target_count = true;
                         }
-                        let action = match pd {
-                            PublicZoneDestination::Hand => PermanentTargetAction::ReturnToHand,
-                            PublicZoneDestination::Exile => PermanentTargetAction::Exile,
-                            _ => PermanentTargetAction::MoveTo(SubjectDestination::Graveyard),
+                        let op = match pd {
+                            PublicZoneDestination::Hand => {
+                                super::super::toolbox_emit::return_target_to_hand()
+                            }
+                            PublicZoneDestination::Exile => {
+                                super::super::toolbox_emit::exile_target()
+                            }
+                            _ => super::super::toolbox_emit::move_targets_to(
+                                SubjectDestination::Graveyard,
+                            ),
                         };
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum: 0,
-                                maximum: u16::MAX,
-                                action,
-                            });
+                        builder.push_bounded_target_op(0, u16::MAX, op);
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject { filter, count }
@@ -10307,16 +10246,13 @@ pub(super) fn lower_zone_moves_instruction(
                         rp, cnt, false,
                     ));
             } else {
-                builder.instructions.push(Instruction::ExileTopPlay {
-                    count: cnt,
-                    library_owner,
-                    duration: spellwake_engine::program::ImpulsePlayDuration::ThisTurn,
-                    cast_only: false,
-                    free: false,
-                    any_color: false,
-                    face_down: *face_down,
-                    grant_play: false,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::exile_top_library_group(
+                        library_owner,
+                        cnt,
+                        *face_down,
+                    ));
             }
             Ok(())
         }
@@ -11201,9 +11137,9 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             Instruction::LookTopChooseExt {
                 reveal_only: true, ..
             } => continue,
-            Instruction::RevealUntilMatchExt { .. }
-            | Instruction::LookTopChooseExt { .. }
-            | Instruction::ExileTopPlay { .. } => return true,
+            Instruction::RevealUntilMatchExt { .. } | Instruction::LookTopChooseExt { .. } => {
+                return true;
+            }
             Instruction::ZoneOp(spec)
                 if matches!(
                     spec.destination,
@@ -11372,12 +11308,6 @@ pub(super) fn has_live_last_moved_producer(
                     LastMovedProducerKind::Any
                         | LastMovedProducerKind::Mill
                         | LastMovedProducerKind::Graveyard
-                );
-            }
-            Instruction::ExileTopPlay { .. } => {
-                return matches!(
-                    expected,
-                    LastMovedProducerKind::Any | LastMovedProducerKind::Exile
                 );
             }
             Instruction::Discard { .. } => {
@@ -12055,76 +11985,8 @@ fn try_upgrade_destroy_no_regen(op: &mut Instruction) -> bool {
     }
 }
 
-fn try_upgrade_affect_destroy_no_regen_in_ops(ops: &mut Vec<Instruction>) -> bool {
-    if let Some(pos) = ops.iter().rposition(|op| {
-        matches!(
-            op,
-            Instruction::AffectPermanentTargets {
-                action: PermanentTargetAction::Destroy,
-                ..
-            }
-        )
-    }) {
-        for op in ops.iter_mut() {
-            op.shift_jumps(1, pos + 1);
-        }
-        for (i, op) in ops[..pos].iter_mut().enumerate() {
-            if let Instruction::OptionalSequence { instructions, .. } = op
-                && i + 1 + *instructions > pos
-            {
-                *instructions += 1;
-            }
-        }
-        ops.insert(
-            pos,
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
-                spellwake_engine::toolbox::ObjectQuery::Targets,
-                ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                    BlockingRestriction::CannotBeRegenerated,
-                )]),
-                ResolvedDuration::UntilEndOfTurn,
-            ),
-        );
-        return true;
-    }
-    for op in ops.iter_mut().rev() {
-        let upgraded = match op {
-            Instruction::FixedTargetClause(body)
-            | Instruction::ForEach { body, .. }
-            | Instruction::ForEachPlayerQuery { body, .. }
-            | Instruction::RepeatLoop { body, .. }
-            | Instruction::ScheduleDelayedEventTrigger { body, .. }
-            | Instruction::ScheduleDelayedStepTrigger { body, .. }
-            | Instruction::EmitReflexiveTrigger { body } => {
-                try_upgrade_affect_destroy_no_regen_in_ops(&mut body.instructions)
-            }
-            Instruction::ChooseOption { options, .. } => {
-                let mut any = false;
-                for branch in options {
-                    if try_upgrade_affect_destroy_no_regen_in_ops(&mut branch.body.instructions) {
-                        any = true;
-                    }
-                }
-                any
-            }
-            _ => false,
-        };
-        if upgraded {
-            return true;
-        }
-    }
-    false
-}
-
 fn is_damage_instruction_for_no_regen(op: &Instruction) -> bool {
-    matches!(
-        op,
-        Instruction::DealDamage(_)
-            | Instruction::AffectPermanentTargets {
-                action: PermanentTargetAction::Damage(_),
-                ..
-            }
-    )
+    matches!(op, Instruction::DealDamage(_))
 }
 
 fn find_damage_instruction_for_no_regen(op: &Instruction) -> Option<&Instruction> {
@@ -12269,19 +12131,6 @@ fn damage_no_regen_object_query(
             }
             _ => None,
         },
-        Instruction::AffectPermanentTargets {
-            action: PermanentTargetAction::Damage(_),
-            ..
-        } => {
-            if is_permanent_body_target(target) {
-                Some(ObjectQuery::Targets)
-            } else {
-                Some(ObjectQuery::filtered(
-                    ObjectQuery::Targets,
-                    ObjectFilter::creature(),
-                ))
-            }
-        }
         _ => None,
     }
 }
@@ -12369,10 +12218,6 @@ fn extract_prior_resolving_player_for_shuffle(
         }
         | Instruction::LookTopChooseExt {
             library_owner: p, ..
-        }
-        | Instruction::ExileTopPlay {
-            library_owner: AffectedPlayers::One(p),
-            ..
         }
         | Instruction::Sacrifice {
             players: AffectedPlayers::One(p),
@@ -12480,7 +12325,6 @@ fn is_moved_object_instruction(op: &Instruction) -> bool {
             | Instruction::ChooseObjects { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::LookTopChooseExt { .. }
-            | Instruction::ExileTopPlay { .. }
             | Instruction::Discard { .. }
             | Instruction::SearchLibrary { .. }
     ) || matches!(

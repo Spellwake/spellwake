@@ -261,25 +261,32 @@ pub(super) fn compile(
         } else {
             signed.parse::<i32>().ok()?
         };
-        if let Some((target, instructions)) = match effect {
-            "Destroy up to three target creatures and/or other planeswalkers. Return each card put into a graveyard this way to the battlefield under your control." => {
-                Some((
+        if effect
+            == "Destroy up to three target creatures and/or other planeswalkers. Return each card put into a graveyard this way to the battlefield under your control."
+        {
+            let id = ActivatedAbilityId(u64::try_from(index).ok()?);
+            program.loyalty_costs.insert(id, loyalty_cost);
+            program.activated.push(ActivatedAbility {
+                id,
+                mana_cost: ManaCost::free(),
+                source_cost: SourceCost::None,
+                body: ExecutableBody::new(
                     BodyTarget::FilteredPermanent(ObjectFilter::either(
                         ObjectClause::creature(),
                         ObjectClause::planeswalker().other_than_trigger_source(),
                     )),
                     vec![
-                        Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: 3,
-                            action: spellwake_engine::program::PermanentTargetAction::Destroy,
-                        },
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_targets(),
                         Instruction::ZoneOp(Box::new(
                             spellwake_engine::toolbox::ZoneOpSpec::return_destroyed_this_way(),
                         )),
                     ],
-                ))
-            }
+                )
+                .with_permanent_target_bounds(0, 3),
+            });
+            continue;
+        }
+        if let Some((target, instructions)) = match effect {
             "Each player discards a card." => Some((
                 BodyTarget::None,
                 vec![Instruction::Discard {
@@ -305,12 +312,10 @@ pub(super) fn compile(
             "Tap target permanent. It doesn't untap during its controller's next untap step." => {
                 Some((
                     BodyTarget::SinglePermanent,
-                    vec![Instruction::AffectPermanentTargets {
-                        minimum: 1,
-                        maximum: 1,
-                        action:
-                            spellwake_engine::program::PermanentTargetAction::TapAndSkipNextUntap,
-                    }],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(true),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::skip_next_untap_targets(),
+                    ],
                 ))
             }
             "Draw a card for each tapped creature target player controls." => Some((
@@ -721,18 +726,45 @@ pub(super) fn compile(
                 let creation = TokenCreation::one(TokenDefinition::new(token, name, vocabulary).ok()?);
                 (BodyTarget::None, Instruction::CreateTokens { creations: vec![creation] })
             },
-            "Untap up to four target permanents." => (BodyTarget::SinglePermanent, Instruction::AffectPermanentTargets {
-                minimum: 0, maximum: 4, action: spellwake_engine::program::PermanentTargetAction::Untap,
-            }),
+            "Untap up to four target permanents." => {
+                let id = ActivatedAbilityId(u64::try_from(index).ok()?);
+                program.loyalty_costs.insert(id, loyalty_cost);
+                program.activated.push(ActivatedAbility {
+                    id,
+                    mana_cost: ManaCost::free(),
+                    source_cost: SourceCost::None,
+                    body: ExecutableBody::new(
+                        BodyTarget::SinglePermanent,
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(false)],
+                    )
+                    .with_permanent_target_bounds(0, 4),
+                });
+                continue;
+            }
             "Until end of turn, up to one target creature gets +1/+1 and gains first strike, vigilance, and lifelink." => {
                 use spellwake_engine::characteristics::{AbilityChange, ResolvedDuration, ResolvedPartSpec, ResolvedPartsSpec};
                 let parts = ResolvedPartsSpec(vec![
                     ResolvedPartSpec::ModifyPT(PowerToughness { power: 1.into(), toughness: 1.into() }),
                     ResolvedPartSpec::Abilities(AbilityChange::grant_keywords([KeywordAbility::FirstStrike, KeywordAbility::Vigilance, KeywordAbility::Lifelink])),
                 ]);
-                (BodyTarget::SingleCreature, Instruction::AffectPermanentTargets { minimum: 0, maximum: 1,
-                    action: spellwake_engine::program::PermanentTargetAction::Modify { parts, duration: ResolvedDuration::UntilEndOfTurn } })
-            },
+                let id = ActivatedAbilityId(u64::try_from(index).ok()?);
+                program.loyalty_costs.insert(id, loyalty_cost);
+                program.activated.push(ActivatedAbility {
+                    id,
+                    mana_cost: ManaCost::free(),
+                    source_cost: SourceCost::None,
+                    body: ExecutableBody::new(
+                        BodyTarget::SingleCreature,
+                        vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            parts,
+                            ResolvedDuration::UntilEndOfTurn,
+                        )],
+                    )
+                    .with_permanent_target_bounds(0, 1),
+                });
+                continue;
+            }
             "You get an emblem with \"If a source would deal damage to you or a planeswalker you control, prevent all but 1 of that damage.\"" => (
                 BodyTarget::None,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(

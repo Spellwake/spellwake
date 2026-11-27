@@ -949,11 +949,7 @@ pub(super) fn lower_keyword(
                             chooser: ResolvingPlayer::Controller,
                             instructions: 1,
                         },
-                        Instruction::AffectPermanentTargets {
-                            minimum: 1,
-                            maximum: 1,
-                            action: PermanentTargetAction::Untap,
-                        },
+                        super::toolbox_emit::set_targets_tapped(false),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                             spellwake_engine::toolbox::ObjectQuery::Targets,
                             ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(

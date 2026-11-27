@@ -7811,14 +7811,14 @@ fn has_prior_reveal_other(context: Option<(&BodyBuilder, bool)>) -> bool {
 fn has_prior_exile_non_target(context: Option<(&BodyBuilder, bool)>) -> bool {
     context.is_some_and(|(b, _)| {
         b.instructions.iter().any(|op| {
-            matches!(op, Instruction::ExileTopPlay { .. })
-                || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                    .is_some_and(|spec| {
-                        matches!(
-                            spec.destination,
-                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                        ) && !matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
-                    })
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op).is_some_and(
+                |spec| {
+                    matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    ) && !matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                },
+            )
         })
     })
 }

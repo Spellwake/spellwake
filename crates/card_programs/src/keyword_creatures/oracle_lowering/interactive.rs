@@ -900,8 +900,7 @@ pub(super) fn patch_any_color_cast_permission(op: &mut Instruction) -> bool {
                 false
             }
         }
-        Instruction::ExileTopPlay { any_color, .. }
-        | Instruction::LookTopChooseExt {
+        Instruction::LookTopChooseExt {
             keep_dest:
                 spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. }
                 | spellwake_engine::program::LookTopKeepDest::ExileLinked { any_color, .. },
@@ -2109,12 +2108,6 @@ fn has_live_interactive_last_moved(
                 | spellwake_engine::toolbox::PlayerMutation::BindResolutionX(_) => continue,
                 _ => return false,
             },
-            Instruction::ExileTopPlay { .. } => {
-                return matches!(
-                    expected,
-                    InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
-                );
-            }
             Instruction::Discard { .. } => {
                 return matches!(
                     expected,
@@ -2281,7 +2274,7 @@ fn strip_interactive_last_moved_predicates(
 }
 
 /// Lower `InstructionAst::PlayerChooseOption { chooser, options }` into `ChooseValue` /
-/// `ChooseOptionForPlayers` / `ChooseCreatureType`.
+/// `ChooseOptionForPlayers` / `PromptChoice`.
 pub(super) fn lower_player_choose_option(
     chooser: PlayerRefAst,
     options: &[String],
@@ -2429,6 +2422,8 @@ pub(super) fn try_lower_choose_option_ext(
             chooser: PlayerSelector::Bound(SEAT_BIND),
             domain: PromptDomain::Subtype {
                 kind: SubtypeChoiceKind::Creature,
+                excluding: BTreeSet::new(),
+                legacy_slot: None,
             },
             category: ChoiceCategory::Generic,
             bind_to: CHOICE_BIND,
@@ -2455,6 +2450,8 @@ pub(super) fn try_lower_choose_option_ext(
                 chooser: PlayerSelector::Resolving(rp),
                 domain: PromptDomain::Subtype {
                     kind: SubtypeChoiceKind::Planeswalker,
+                    excluding: BTreeSet::new(),
+                    legacy_slot: None,
                 },
                 category: ChoiceCategory::Generic,
                 bind_to: CHOICE_BIND,
@@ -3198,9 +3195,9 @@ fn lower_prevention_recipient(
             if !is_valid_prevention_recipient_target(builder.target)
                 || builder.x_target_count
                 || builder.up_to_x_target_count
-                || builder.instructions.iter().any(|op| {
-                    matches!(op, Instruction::AffectPermanentTargets { maximum, .. } if *maximum != 1)
-                })
+                || builder
+                    .permanent_target_bounds
+                    .is_some_and(|(_, max)| max != 1)
             {
                 return Err("oracle:unsupported-prevention-recipient");
             }
@@ -3311,37 +3308,23 @@ pub(super) fn lower_prevent_all_damage_from(
             if is_x {
                 builder.x_target_count = true;
             }
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: min_t,
-                    maximum: max_t,
-                    action: PermanentTargetAction::PreventDamageThisTurn {
-                        combat_only,
-                        both_directions,
-                    },
-                });
+            builder.push_bounded_target_op(
+                min_t,
+                max_t,
+                super::toolbox_emit::prevent_targets_damage_this_turn(combat_only, both_directions),
+            );
             return Ok(());
         }
         if let SubjectRefAst::Anaphora(text) = source
             && matches!(text.as_str(), "those creatures" | "those permanents")
-            && let Some((min_t, max_t)) = builder.instructions.iter().find_map(|op| match op {
-                Instruction::AffectPermanentTargets {
-                    minimum, maximum, ..
-                } => Some((*minimum, *maximum)),
-                _ => None,
-            })
+            && builder.permanent_target_bounds.is_some()
         {
             builder
                 .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: min_t,
-                    maximum: max_t,
-                    action: PermanentTargetAction::PreventDamageThisTurn {
-                        combat_only,
-                        both_directions,
-                    },
-                });
+                .push(super::toolbox_emit::prevent_targets_damage_this_turn(
+                    combat_only,
+                    both_directions,
+                ));
             return Ok(());
         }
     }
@@ -3518,10 +3501,11 @@ pub(super) fn lower_prevent_all_damage_from(
                 return Err("oracle:unsupported-prevention-source");
             }
             builder.bind_target(target)?;
-        } else if builder.x_target_count || builder.up_to_x_target_count
-            || builder.instructions.iter().any(|op| {
-                matches!(op, Instruction::AffectPermanentTargets { maximum, .. } if *maximum != 1)
-            })
+        } else if builder.x_target_count
+            || builder.up_to_x_target_count
+            || builder
+                .permanent_target_bounds
+                .is_some_and(|(_, max)| max != 1)
         {
             return Err("oracle:unsupported-prevention-source");
         }

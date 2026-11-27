@@ -49,6 +49,7 @@ pub enum ContinuousPayload {
         cast_only: bool,
         free: bool,
         any_color: bool,
+        impulse_duration: Option<crate::program::ImpulsePlayDuration>,
     },
     /// Generalized damage-prevention shield for this turn.
     PreventDamage(Box<TurnPreventionSpec>),
@@ -331,8 +332,36 @@ impl ApplyContinuousSpec {
                 cast_only,
                 free,
                 any_color,
+                impulse_duration: None,
             },
             duration,
+            condition: None,
+            one_shot: false,
+            as_emblem: None,
+            emblem_label: None,
+        }
+    }
+
+    /// Construct an impulse play/cast permission spec on `selector` with an explicit impulse window.
+    #[must_use]
+    pub fn impulse_play_permission(
+        selector: ObjectQuery,
+        player: PlayerSelector,
+        duration: crate::program::ImpulsePlayDuration,
+        cast_only: bool,
+        free: bool,
+        any_color: bool,
+    ) -> Self {
+        Self {
+            selector: Some(selector),
+            payload: ContinuousPayload::PlayPermission {
+                player,
+                cast_only,
+                free,
+                any_color,
+                impulse_duration: Some(duration),
+            },
+            duration: ResolvedDuration::UntilEndOfTurn,
             condition: None,
             one_shot: false,
             as_emblem: None,

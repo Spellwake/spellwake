@@ -489,7 +489,6 @@ impl EffectWindow {
             }
             Instruction::Jump { .. }
             | Instruction::OptionalSequence { .. }
-            | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::ChooseValue { .. }
@@ -508,12 +507,10 @@ impl EffectWindow {
             | Instruction::RepeatLoop { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::ChooseCreatureType { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }
-            | Instruction::AffectPermanentTargets { .. }
             | Instruction::Sacrifice { .. }
             | Instruction::Discard { .. }
             | Instruction::LookTopChooseExt { .. }

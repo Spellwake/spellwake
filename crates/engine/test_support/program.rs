@@ -4191,11 +4191,185 @@ impl Body {
                 })
             }
         };
-        let instructions = self
-            .instructions
-            .into_iter()
-            .map(|op| {
-                Ok(match op {
+        let mut permanent_target_bounds: Option<(u16, u16)> = None;
+        let mut instructions = Vec::new();
+        for op in self.instructions {
+            match op {
+                Op::ExileTopForPlay { until_next_from_source } => {
+                    instructions.push(Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::exile_top_library(
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                            ValueExpr::Literal(1.into()),
+                            false,
+                        ),
+                    )));
+                    instructions.push(Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::impulse_play_permission(
+                            spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
+                            ),
+                            if until_next_from_source {
+                                spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource
+                            } else {
+                                spellwake_engine::program::ImpulsePlayDuration::ThisTurn
+                            },
+                            false,
+                            false,
+                            false,
+                        ),
+                    )));
+                    continue;
+                }
+                Op::ModifyPermanentTargetAndPartner { parts, duration } => {
+                    permanent_target_bounds = Some((1, 1));
+                    instructions.push(Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
+                            spellwake_engine::toolbox::ObjectQuery::TargetsWithPairedPartner,
+                            ResolvedPartsSpec(
+                                parts
+                                    .into_iter()
+                                    .map(|part| part.native(vocabulary))
+                                    .collect::<Result<Vec<_>, _>>()?,
+                            ),
+                            duration.into(),
+                        ),
+                    )));
+                    continue;
+                }
+                Op::ModifyPermanentTargets { minimum, maximum, parts, duration } => {
+                    permanent_target_bounds = Some((minimum, maximum));
+                    instructions.push(Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::resolved_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            ResolvedPartsSpec(
+                                parts
+                                    .into_iter()
+                                    .map(|part| part.native(vocabulary))
+                                    .collect::<Result<Vec<_>, _>>()?,
+                            ),
+                            duration.into(),
+                        ),
+                    )));
+                    continue;
+                }
+                Op::AffectPermanentTargets { minimum, maximum, action } => {
+                    permanent_target_bounds = Some((minimum, maximum));
+                    match action.as_str() {
+                        "Destroy" => instructions.push(Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy {
+                                        allow_regenerate: true,
+                                    },
+                                },
+                            ),
+                        ))),
+                        "Exile" => instructions.push(Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::exile(),
+                            ),
+                        ))),
+                        "ReturnToHand" => instructions.push(Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ZoneDest::Hand,
+                            ),
+                        ))),
+                        "Tap" => instructions.push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                            ),
+                        ))),
+                        "ToggleTap" => instructions.push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+                            ),
+                        ))),
+                        "TapAndSkipNextUntap" => {
+                            instructions.push(Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ObjectMutation::SetTapped(true),
+                                ),
+                            )));
+                            instructions.push(Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ObjectMutation::SkipNextUntap,
+                                ),
+                            )));
+                        }
+                        "Untap" => instructions.push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                            ),
+                        ))),
+                        "PutPlusOneCounter" | "PutPlusOneCounterOnOthers" => {
+                            instructions.push(Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                                        kind: spellwake_engine::effects::CounterKind::PlusOne,
+                                        amount: ValueExpr::literal(1),
+                                    },
+                                ),
+                            )));
+                        }
+                        "PutCountersByCurrentType" => {
+                            instructions.push(Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::all(
+                                    spellwake_engine::toolbox::ObjectQuery::Filtered {
+                                        source: Box::new(
+                                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                                        ),
+                                        filter: Box::new(
+                                            spellwake_engine::program::ObjectFilter::creature(),
+                                        ),
+                                    },
+                                    spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                                        kind: spellwake_engine::effects::CounterKind::PlusOne,
+                                        amount: ValueExpr::literal(1),
+                                    },
+                                ),
+                            )));
+                            instructions.push(Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::all(
+                                    spellwake_engine::toolbox::ObjectQuery::Filtered {
+                                        source: Box::new(
+                                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                                        ),
+                                        filter: Box::new(
+                                            spellwake_engine::program::ObjectFilter::from_clause(
+                                                spellwake_engine::program::ObjectClause::planeswalker(),
+                                            ),
+                                        ),
+                                    },
+                                    spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                                        kind: spellwake_engine::effects::CounterKind::Loyalty,
+                                        amount: ValueExpr::literal(1),
+                                    },
+                                ),
+                            )));
+                        }
+                        "Regenerate" => instructions.push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                spellwake_engine::toolbox::ObjectMutation::Regenerate,
+                            ),
+                        ))),
+                        _ => return Err("unknown simultaneous target action".into()),
+                    }
+                    continue;
+                }
+                op => instructions.push(match op {
                     Op::OfferSourceCounters {
                         amount,
                         placed_destination,
@@ -4330,20 +4504,10 @@ impl Body {
                             owner_controls,
                         ),
                     )),
-                    Op::ExileTopForPlay { until_next_from_source } => Instruction::ExileTopPlay {
-                        count: ValueExpr::Literal(1.into()),
-                        library_owner: spellwake_engine::program::AffectedPlayers::One(spellwake_engine::program::ResolvingPlayer::Controller),
-                        duration: if until_next_from_source {
-                            spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource
-                        } else {
-                            spellwake_engine::program::ImpulsePlayDuration::ThisTurn
-                        },
-                        cast_only: false,
-                        free: false,
-                        any_color: false,
-                        face_down: false,
-                        grant_play: true,
-                    },
+                    Op::ExileTopForPlay { .. }
+                    | Op::ModifyPermanentTargetAndPartner { .. }
+                    | Op::ModifyPermanentTargets { .. }
+                    | Op::AffectPermanentTargets { .. } => unreachable!("handled above"),
                     Op::ExileTopFaceDown {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::ZoneScan { zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), filter: Box::new(spellwake_engine::program::ObjectFilter::any()), slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(spellwake_engine::program::ValueExpr::literal(1))) }, spellwake_engine::toolbox::ZoneDest::Exile { face_down: true, viewer: Some(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller)), link_to_source: true, delayed_return: None, link_group: None }))),
                     Op::AddFixedMana { produced } => Instruction::MutatePlayer(Box::new(
                         spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
@@ -4390,32 +4554,6 @@ impl Body {
                     Op::CreateEmblem { power_toughness, keywords } => Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::emblem(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller), spellwake_engine::emblem::EmblemDefinition::ControlledCreatureBonus { power_toughness: power_toughness.into(), keywords: keyword_set(keywords)? }))),
                     Op::DrawController { amount } => Instruction::DrawCards(Box::new(spellwake_engine::toolbox::DrawCardsSpec::simple(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller), amount.native(vocabulary)?))),
                     Op::ModifyAnyNumberOfPermanents {parts,duration} => Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(ResolvedPartsSpec(parts.into_iter().map(|part|part.native(vocabulary)).collect::<Result<_,_>>()?),duration.into()))),
-                    Op::ModifyPermanentTargetAndPartner { parts, duration } => Instruction::AffectPermanentTargets {
-                        minimum: 1, maximum: 1,
-                        action: spellwake_engine::program::PermanentTargetAction::ModifyWithPartner {
-                            parts: ResolvedPartsSpec(parts.into_iter().map(|part| part.native(vocabulary)).collect::<Result<Vec<_>, _>>()?),
-                            duration: duration.into(),
-                        },
-                    },
-                    Op::ModifyPermanentTargets { minimum, maximum, parts, duration } => Instruction::AffectPermanentTargets {
-                        minimum, maximum, action: spellwake_engine::program::PermanentTargetAction::Modify {
-                            parts: ResolvedPartsSpec(parts.into_iter().map(|part| part.native(vocabulary)).collect::<Result<Vec<_>, _>>()?), duration: duration.into(),
-                        },
-                    },
-                    Op::AffectPermanentTargets {minimum,maximum,action} => Instruction::AffectPermanentTargets {minimum,maximum,action: match action.as_str() {
-                        "Destroy" => spellwake_engine::program::PermanentTargetAction::Destroy,
-                        "Exile" => spellwake_engine::program::PermanentTargetAction::Exile,
-                        "ReturnToHand" => spellwake_engine::program::PermanentTargetAction::ReturnToHand,
-                        "Tap" => spellwake_engine::program::PermanentTargetAction::Tap,
-                        "ToggleTap" => spellwake_engine::program::PermanentTargetAction::ToggleTap,
-                        "TapAndSkipNextUntap" => spellwake_engine::program::PermanentTargetAction::TapAndSkipNextUntap,
-                        "Untap" => spellwake_engine::program::PermanentTargetAction::Untap,
-                        "PutPlusOneCounterOnOthers" => spellwake_engine::program::PermanentTargetAction::PutPlusOneCounterOnOthers,
-                        "PutCountersByCurrentType" => spellwake_engine::program::PermanentTargetAction::PutCountersByCurrentType,
-                        "PutPlusOneCounter" => spellwake_engine::program::PermanentTargetAction::PutPlusOneCounter,
-                        "Regenerate" => spellwake_engine::program::PermanentTargetAction::Regenerate,
-                        _ => return Err("unknown simultaneous target action".into()),
-                    }},
                     Op::MillEachPlayer {amount} => Instruction::ForEachPlayerQuery { selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(spellwake_engine::program::AffectedPlayers::EachPlayer)), bind_player: spellwake_engine::toolbox::BindingId(905), body: Box::new(spellwake_engine::program::ExecutableBody::new(spellwake_engine::program::BodyTarget::None, vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::ZoneScan { zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(spellwake_engine::toolbox::PlayerSelector::Bound(spellwake_engine::toolbox::BindingId(905)))), filter: Box::new(spellwake_engine::program::ObjectFilter::any()), slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(spellwake_engine::program::ValueExpr::literal(i64::from(amount)))) }, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Mill })))])) },
                     Op::ExileOnePerPlayerUntilSourceLeaves {} => Instruction::MutatePlayer(
                         Box::new(
@@ -4478,10 +4616,14 @@ impl Body {
                         players: players.into(),
                         amount: amount.native(vocabulary)?,
                     },
-                    Op::ChooseCreatureType { into, excluding } => Instruction::ChooseCreatureType {
-                        into: creature_types::slot(into)?,
-                        excluding: subtype_set(excluding, vocabulary, "excluded creature type")?,
-                    },
+                    Op::ChooseCreatureType { into, excluding } => Instruction::PromptChoice(
+                        Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                                creature_types::slot(into)?,
+                                subtype_set(excluding, vocabulary, "excluded creature type")?,
+                            ),
+                        ),
+                    ),
                     Op::Damage { amount } => Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec { source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource, recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets, amount: spellwake_engine::program::DamageAmountSpec::Expr(spellwake_engine::program::ValueExpr::Literal(amount)), exile_if_dies: false })),
                     Op::CreatePreventionShield { amount } => Instruction::ApplyContinuous(Box::new(
                         spellwake_engine::toolbox::ApplyContinuousSpec {
@@ -5068,10 +5210,14 @@ impl Body {
                             condition: None, one_shot: false, as_emblem: None, emblem_label: None,
                         }))
                     }
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        Ok(ExecutableBody::new(target, instructions))
+                }),
+            }
+        }
+        let mut body = ExecutableBody::new(target, instructions);
+        if let Some((min, max)) = permanent_target_bounds {
+            body = body.with_permanent_target_bounds(min, max);
+        }
+        Ok(body)
     }
 }
 #[derive(Deserialize)]
@@ -10883,7 +11029,18 @@ pub fn body(value: &ExecutableBody) -> Value {
                     json!({"op":"ApplyContinuous","spec":format!("{spec:?}")})
                 }
             }
-            Instruction::PromptChoice(spec) => json!({"op":"PromptChoice","spec":format!("{spec:?}")}),
+            Instruction::PromptChoice(spec) => {
+                if let spellwake_engine::toolbox::PromptDomain::Subtype {
+                    kind: spellwake_engine::toolbox::SubtypeChoiceKind::Creature,
+                    excluding,
+                    legacy_slot: Some(into),
+                } = &spec.domain
+                {
+                    json!({"op":"ChooseCreatureType","into":into.ordinal().to_string(),"excluding":excluding.iter().map(|value|projection::creature_type_id(*value)).collect::<Vec<_>>()})
+                } else {
+                    json!({"op":"PromptChoice","spec":format!("{spec:?}")})
+                }
+            }
             Instruction::BranchCondition { condition, destination } => {
                 if let spellwake_engine::toolbox::ConditionExpr::Resolution(cond) = condition.as_ref() {
                     json!({"op":"BranchIfFalse","condition":resolution_condition(cond),"destination":destination.to_string()})
@@ -10945,15 +11102,8 @@ pub fn body(value: &ExecutableBody) -> Value {
             }
             Instruction::CreateTokens { creations } =>
                 json!({"op":"CreateTokens","creations":creations.iter().map(token_creation).collect::<Vec<_>>()}),
-            Instruction::AffectPermanentTargets { action: spellwake_engine::program::PermanentTargetAction::ModifyWithPartner { parts, duration: value }, .. } =>
-                json!({"op":"ModifyPermanentTargetAndPartner","parts":parts_spec(parts),"duration":duration(*value)}),
-            Instruction::AffectPermanentTargets {minimum,maximum,action:spellwake_engine::program::PermanentTargetAction::Modify { parts, duration: value }} => json!({"op":"ModifyPermanentTargets","minimum":minimum,"maximum":maximum,"parts":parts_spec(parts),"duration":duration(*value)}),
-            Instruction::AffectPermanentTargets {minimum,maximum,action} => json!({"op":"AffectPermanentTargets","minimum":minimum,"maximum":maximum,"action":format!("{action:?}")}),
             Instruction::Sacrifice { players, amount, filter } => json!({"op":"Sacrifice","players":affected_players(*players),"amount":instruction_amount(amount),"filter":permanent_type_filter(filter)}),
             Instruction::Discard { players, amount } => json!({"op":"Discard","players":affected_players(*players),"amount":instruction_amount(amount)}),
-            Instruction::ChooseCreatureType { into, excluding } => {
-                json!({"op":"ChooseCreatureType","into":into.ordinal().to_string(),"excluding":excluding.iter().map(|value|projection::creature_type_id(*value)).collect::<Vec<_>>()})
-            }
             Instruction::SearchLibrary { filter } => {
                 use spellwake_engine::program::{
                     SearchBattlefieldPostEntry, SearchCardMatcher, SearchCount, SearchDestination,
@@ -11079,9 +11229,6 @@ pub fn body(value: &ExecutableBody) -> Value {
                 })
             }
             Instruction::FixedTargetClause(clause)=>json!({"op":"FixedTargetClause","body":body(clause)}),
-            Instruction::ExileTopPlay { count, library_owner, duration, cast_only, free, any_color, face_down, grant_play } => {
-                json!({"op":"ExileTopPlay","count":instruction_amount(count),"library_owner":affected_players(*library_owner),"duration":format!("{duration:?}"),"cast_only":cast_only,"free":free,"any_color":any_color,"face_down":face_down,"grant_play":grant_play})
-            }
             Instruction::RepeatLoop { count, body } => {
                 json!({"op":"RepeatLoop","count":instruction_amount(count),"body":format!("{body:?}")})
             }
@@ -14140,10 +14287,12 @@ mod tests {
                         ..
                     }
                 ) {
-                    instructions.push(Instruction::ChooseCreatureType {
-                        into: CreatureTypeSlot::new(0),
-                        excluding: BTreeSet::new(),
-                    });
+                    instructions.push(Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                            CreatureTypeSlot::new(0),
+                            BTreeSet::new(),
+                        ),
+                    )));
                 }
                 instructions.extend([
                     Instruction::Sacrifice {

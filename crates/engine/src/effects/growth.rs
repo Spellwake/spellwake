@@ -177,15 +177,6 @@ impl EffectWindow {
         source: Option<&SupportedAppearance>,
         world: &EvaluatedCharacteristics,
     ) -> bool {
-        if matches!(
-            body.instructions.as_slice(),
-            [Instruction::AffectPermanentTargets {
-                action: crate::program::PermanentTargetAction::PutPlusOneCounterOnOthers,
-                ..
-            }]
-        ) {
-            return source.is_some_and(|source| target != TargetRef::Object(source.object.id()));
-        }
         if !matches!(
             body.instructions.as_slice(),
             [Instruction::MutateObject(spec)]

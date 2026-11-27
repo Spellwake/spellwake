@@ -149,7 +149,13 @@ fn cmm_kindred_dominance_and_crippling_fear_preserve_the_chosen_type() {
         );
         let choose = cast_named(&initial, &price);
         let resolved = finish_graveyard_choices(
-            reply(&choose, DecisionReply::CreatureType(human)).into_state(),
+            reply(
+                &choose,
+                DecisionReply::PromptChoice(
+                    spellwake_engine::toolbox::PromptChoiceReply::CreatureType(human),
+                ),
+            )
+            .into_state(),
         );
         for id in [2, 3, 6] {
             assert_eq!(physical(&resolved, id).zone(), ObjectZone::Battlefield);

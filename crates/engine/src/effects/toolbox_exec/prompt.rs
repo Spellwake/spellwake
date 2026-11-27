@@ -301,13 +301,16 @@ impl EffectWindow {
                 };
                 ResolvedPromptDomain::CardType { allowed: types }
             }
-            PromptDomain::Subtype { kind } => match kind {
+            PromptDomain::Subtype {
+                kind, excluding, ..
+            } => match kind {
                 SubtypeChoiceKind::Creature => ResolvedPromptDomain::CreatureType {
                     allowed: self
                         .creature_vocabulary
                         .members()
                         .iter()
                         .filter_map(|m| self.creature_vocabulary.resolve_label(m))
+                        .filter(|id| !excluding.contains(id))
                         .collect(),
                 },
                 SubtypeChoiceKind::BasicLand => ResolvedPromptDomain::BasicLandType {
@@ -466,8 +469,44 @@ impl EffectWindow {
                 }
             }
             PromptChoiceReply::CreatureType(sub) => {
+                if let ResolvedPromptDomain::CreatureType { allowed } = resolved_domain
+                    && !allowed.contains(&sub)
+                {
+                    return Err(EffectError::IllegalCreatureType);
+                }
                 chosen_count = 1;
-                if let Some(cur) = self.resolution_cursor_mut() {
+                let legacy_slot = match &spec.domain {
+                    PromptDomain::Subtype { legacy_slot, .. } => *legacy_slot,
+                    _ => None,
+                };
+                if let Some(slot) = legacy_slot {
+                    let before = self.rules_snapshot(None)?;
+                    if let Some(cur) = self.resolution_cursor_mut() {
+                        if cur.values.insert(slot, sub).is_some() {
+                            return Err(EffectError::InconsistentProgram);
+                        }
+                        cur.env
+                            .bind(spec.bind_to, ExecValue::Subtypes(BTreeSet::from([sub])));
+                    }
+                    self.emit_from(
+                        EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before,
+                        None,
+                        append,
+                        |_, _, _| {
+                            Ok(vec![RulesOccurrence::CreatureTypeChosen {
+                                entry: entry.id(),
+                                instruction: index,
+                                slot,
+                                chooser,
+                                value: sub,
+                            }])
+                        },
+                    )?;
+                } else if let Some(cur) = self.resolution_cursor_mut() {
                     cur.env
                         .bind(spec.bind_to, ExecValue::Subtypes(BTreeSet::from([sub])));
                 }

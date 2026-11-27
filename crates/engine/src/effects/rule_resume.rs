@@ -660,27 +660,6 @@ impl EffectWindow {
                 next.progress_activation_cost(turn)
             }
             EffectDecision::ZoneReplacement(bound)
-                if matches!(self.pending_work, Some(PendingWork::ImpulseReplacement(_))) =>
-            {
-                let revision = self.next_revision(expected)?;
-                let DecisionReply::ZoneReplacement(reply) = reply else {
-                    return Err(EffectError::WrongDecisionKind);
-                };
-                let mut next = self.clone();
-                let Some(PendingWork::ImpulseReplacement(work)) = &mut next.pending_work else {
-                    return Err(EffectError::WrongResolutionFrame);
-                };
-                work.batch.accept(self.revision, bound, actor, reply)?;
-                next.revision = revision;
-                next.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    RulesJournal::default(),
-                )
-            }
-            EffectDecision::ZoneReplacement(bound)
                 if matches!(self.pending_work, Some(PendingWork::GraveyardShuffle(_))) =>
             {
                 let revision = self.next_revision(expected)?;
@@ -876,35 +855,6 @@ impl EffectWindow {
             }
             EffectDecision::LinkedReturnOrder(bound) => {
                 let revision = self.next_revision(expected)?;
-                if let Some(PendingWork::ImpulseReplacement(work)) = &self.pending_work {
-                    if self.impulse_graveyard_order(work)?.as_ref() != Some(bound)
-                        || actor != bound.chooser
-                    {
-                        return Err(EffectError::WrongResolutionFrame);
-                    }
-                    let DecisionReply::LinkedReturnOrder(order) = reply else {
-                        return Err(EffectError::WrongDecisionKind);
-                    };
-                    if order.len() != bound.objects.len()
-                        || order.iter().copied().collect::<BTreeSet<_>>()
-                            != bound.objects.iter().copied().collect()
-                    {
-                        return Err(EffectError::IllegalTimestampOrder);
-                    }
-                    let mut next = self.clone();
-                    next.revision = revision;
-                    let Some(PendingWork::ImpulseReplacement(work)) = &mut next.pending_work else {
-                        return Err(EffectError::WrongResolutionFrame);
-                    };
-                    work.graveyard_orders.insert(actor, order);
-                    return next.progress_rules(
-                        DamageJournal::default(),
-                        vec![],
-                        vec![],
-                        DrawJournal::default(),
-                        RulesJournal::default(),
-                    );
-                }
                 if let Some(PendingWork::SelectedActivationCost(work)) = &self.pending_work {
                     if self.selected_activation_cost_frame(work)?.as_ref() != Some(frame) {
                         return Err(EffectError::WrongResolutionFrame);
@@ -1298,21 +1248,7 @@ impl EffectWindow {
                     append,
                 )
             }
-            EffectDecision::CreatureType(bound) => {
-                self.ensure_resolution_or_idle()?;
-                let DecisionReply::CreatureType(selected) = reply else {
-                    return Err(EffectError::WrongDecisionKind);
-                };
-                let accepted = self.accept_creature_type(expected, bound, actor, selected)?;
-                let (next, (), append) = accepted.into_parts();
-                next.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    append,
-                )
-            }
+            EffectDecision::CreatureType(_) => Err(EffectError::WrongResolutionFrame),
             EffectDecision::Checks(checks) => {
                 self.resume_checks(expected, checks, actor, reply, turn)
             }

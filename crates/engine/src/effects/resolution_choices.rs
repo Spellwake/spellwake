@@ -245,7 +245,6 @@ pub enum PendingWorkKind {
     ZoneMove,
     LandPlay,
     ActivationCost,
-    ImpulseReplacement,
     LibraryTop,
     LookTop,
     /// One cursor owns frozen choices, owner orders and a resolving batch.
@@ -280,7 +279,6 @@ impl EffectWindow {
             | PendingWork::SelectedActivationCost(_)
             | PendingWork::GraveyardExile(_)
             | PendingWork::GraveyardShuffle(_) => PendingWorkKind::ActivationCost,
-            PendingWork::ImpulseReplacement(_) => PendingWorkKind::ImpulseReplacement,
             PendingWork::LibraryTop(_) => PendingWorkKind::LibraryTop,
             PendingWork::LookTop(_) => PendingWorkKind::LookTop,
             PendingWork::ResolutionSelection(_) => PendingWorkKind::ResolutionSelection,
@@ -360,7 +358,6 @@ impl EffectWindow {
                 | PendingWork::BattlefieldEntry(_)
                 | PendingWork::SearchEntry(_)
                 | PendingWork::LandPlay(_)
-                | PendingWork::ImpulseReplacement(_)
                 | PendingWork::Checks(_)
                 | PendingWork::Combat(_)
                 | PendingWork::Damage(_)
@@ -401,7 +398,6 @@ impl EffectWindow {
                 | PendingWork::SelectedActivationCost(_)
                 | PendingWork::GraveyardExile(_)
                 | PendingWork::GraveyardShuffle(_)
-                | PendingWork::ImpulseReplacement(_)
                 | PendingWork::ResolutionSelection(_)
                 | PendingWork::TokenEntry(_)
                 | PendingWork::Checks(_)
@@ -1125,10 +1121,6 @@ impl EffectWindow {
             return Err(EffectError::InconsistentProgram);
         }
         match instruction {
-            Instruction::AffectPermanentTargets { .. } => {
-                Ok(self.window.target_assessment().is_some()
-                    && !self.legal_permanent_targets()?.is_empty())
-            }
             Instruction::AdjustLife(spec) => {
                 if let crate::toolbox::LifeOp::Pay(amount) = &spec.op {
                     let entry = self
@@ -1333,12 +1325,18 @@ impl EffectWindow {
                 Ok(!requested.is_positive()
                     || RulesInteger::from_usize(matching_count) >= requested)
             }
-            Instruction::ExileTopPlay { .. }
-            | Instruction::ChooseObjects { .. }
+            Instruction::PromptChoice(spec) => match &spec.domain {
+                crate::toolbox::PromptDomain::Subtype {
+                    kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                    excluding,
+                    ..
+                } => Ok(excluding.len() < self.creature_vocabulary.len()),
+                _ => Ok(true),
+            },
+            Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::ChooseValue { .. }
             | Instruction::DrawCards(_)
-            | Instruction::PromptChoice(_)
             | Instruction::BranchCondition { .. }
             | Instruction::ForEach { .. }
             | Instruction::ForEachPlayerQuery { .. }
@@ -1673,9 +1671,6 @@ impl EffectWindow {
                     Ok(self.resolving_player(filter.searcher).is_ok())
                 }
             }
-            Instruction::ChooseCreatureType { excluding, .. } => {
-                Ok(excluding.len() < self.creature_vocabulary.len())
-            }
             Instruction::OptionalSequence { .. } => Err(EffectError::InconsistentProgram),
             Instruction::Jump { .. } => {
                 if is_sequence {
@@ -1936,10 +1931,8 @@ impl EffectWindow {
                 )?;
             }
             Instruction::Jump { .. }
-            | Instruction::AffectPermanentTargets { .. }
             | Instruction::Sacrifice { .. }
             | Instruction::Discard { .. }
-            | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::ChooseValue { .. }
@@ -1962,7 +1955,6 @@ impl EffectWindow {
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::ChooseCreatureType { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }

@@ -3,12 +3,12 @@
 //! Runtime integration tests for Pass F2-B Wave 7 primitives:
 //! - `ForEachPlayerQuery` + `ResolvingPlayer::LoopPlayer` (APNAP order)
 //! - `OfferAnyPlayer` (accepting player runs `cost_body` + `paid_body`, or `declined_body` if all decline)
-//! - `DealDamageToAnnouncedTargets` (multi-target equal damage) and `PermanentTargetAction::Damage`
+//! - `DealDamageToAnnouncedTargets` (multi-target equal damage) and bounded multi-target damage
 //! - `UntapOrTapSelect` (non-targeted selection, exact count and `up_to: true`)
 //! - `GrantChosenProtection` (`UntilControllerNextTurn`) and `ResolvedPartSpec::{ChosenColor,
 //!   ChosenBasicLandType, ProtectionFromEachOpponent, CannotBeTargetedByColors}`
 //! - `RemoveCountersFromSubject` (specific kind, any kind, remove all) and
-//!   `PermanentTargetAction::RemoveCounters`
+//!   bounded multi-target counter removal
 //! - `MoveGroupToLibrary` (`LibraryPlacement::BottomRandom`) and `MoveGraveyardGroupOwned`
 //!   (`under_owner_control`)
 //! - `ExileLibraryTopLinked` + `CastPermissionRule::ExileMatchingExt` (Nightveil Specter flow)
@@ -79,14 +79,13 @@ use spellwake_engine::{
         DynamicStatAnchor, EffectSubject, EntryCopyRule, EntryCopySpecExt, EntryCopyZone,
         EventValueKind, ExecutableBody, GraveyardSelfCast, Instruction, LibraryPlacement,
         LinkedExileGroup, LookTopKeepDest, LookTopRestDest, MatchObjectRef, MoveSubjectRef,
-        ObjectColorFilter, ObjectFilter, ObjectStatKind, PermanentTargetAction, PlayerRelation,
-        PlayerStatExpr, PowerFilter, Program, ProgramKind, ProtectionRecipients,
-        PublicZoneDestination, ResolutionChoiceDomain, ResolutionCondition, ResolvingPlayer,
-        SourceStateExpr, SourceZoneFilter, SpellFilter, Supertype, TemporaryRuleKind, TriggerEvent,
-        TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr,
-        ZoneActionKind, ZoneActionPredicate, ZoneObjectKind, ZoneReplacementAbility,
-        ZoneReplacementAbilityId, ZoneReplacementChoice, ZoneReplacementExtra,
-        ZoneReplacementSubject,
+        ObjectColorFilter, ObjectFilter, ObjectStatKind, PlayerRelation, PlayerStatExpr,
+        PowerFilter, Program, ProgramKind, ProtectionRecipients, PublicZoneDestination,
+        ResolutionChoiceDomain, ResolutionCondition, ResolvingPlayer, SourceStateExpr,
+        SourceZoneFilter, SpellFilter, Supertype, TemporaryRuleKind, TriggerEvent, TriggerGrouping,
+        TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr, ZoneActionKind,
+        ZoneActionPredicate, ZoneObjectKind, ZoneReplacementAbility, ZoneReplacementAbilityId,
+        ZoneReplacementChoice, ZoneReplacementExtra, ZoneReplacementSubject,
     },
     targets::TargetRef,
     token::{
@@ -448,7 +447,7 @@ fn advance_to_p1_upkeep_p0_priority(game: &GameState) -> NativeCandidate {
 // ============================================================================
 
 // ============================================================================
-// 3. DealDamageToAnnouncedTargets & PermanentTargetAction::Damage
+// 3. DealDamageToAnnouncedTargets & bounded multi-target DealDamage
 // ============================================================================
 
 #[test]
@@ -476,12 +475,18 @@ fn deal_damage_to_announced_targets_and_permanent_target_action_damage() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::AffectPermanentTargets {
-                    minimum: 1,
-                    maximum: 2,
-                    action: PermanentTargetAction::Damage(ValueExpr::literal(3)),
-                }],
-            ),
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec {
+                        source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
+                        recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
+                        amount: spellwake_engine::program::DamageAmountSpec::Expr(
+                            ValueExpr::literal(3),
+                        ),
+                        exile_if_dies: false,
+                    },
+                ))],
+            )
+            .with_permanent_target_bounds(1, 2),
         ),
         &vocab,
     );
@@ -534,7 +539,7 @@ fn deal_damage_to_announced_targets_and_permanent_target_action_damage() {
         2.into()
     );
 
-    // Part B: PermanentTargetAction::Damage deals 3 to both opp_c1 (lethal: 2+3=5) and opp_c2 (3).
+    // Part B: Bounded multi-target DealDamage deals 3 to both opp_c1 (lethal: 2+3=5) and opp_c2 (3).
     let cast_b = submit(
         after_a.state(),
         P0,
@@ -583,7 +588,7 @@ fn deal_damage_to_announced_targets_and_permanent_target_action_damage() {
 // ============================================================================
 
 // ============================================================================
-// 6. RemoveCountersFromSubject & PermanentTargetAction::RemoveCounters
+// 6. RemoveCountersFromSubject & bounded multi-target counter removal
 // ============================================================================
 
 // ============================================================================

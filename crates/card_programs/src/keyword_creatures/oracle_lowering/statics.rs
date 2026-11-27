@@ -6954,16 +6954,14 @@ fn try_lower_compound_exile_play_replacement(
     }
     let body = ExecutableBody::new(
         BodyTarget::None,
-        vec![Instruction::ExileTopPlay {
-            count: cnt,
-            library_owner: AffectedPlayers::One(ResolvingPlayer::Controller),
-            duration: impulse_dur,
-            cast_only: *cast_only,
-            free: *free,
-            any_color: false,
-            face_down: *face_down,
-            grant_play: true,
-        }],
+        vec![
+            super::toolbox_emit::exile_top_library_group(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                cnt,
+                *face_down,
+            ),
+            super::toolbox_emit::impulse_play_last_moved(impulse_dur, *cast_only, *free, false),
+        ],
     );
     let ability = StaticContinuousAbility::EventReplacement {
         id: ids.static_id(),
@@ -16078,11 +16076,7 @@ pub(super) fn lower_ability_change(
                                 chooser: ResolvingPlayer::Controller,
                                 instructions: 1,
                             },
-                            Instruction::AffectPermanentTargets {
-                                minimum: 1,
-                                maximum: 1,
-                                action: PermanentTargetAction::Untap,
-                            },
+                            super::toolbox_emit::set_targets_tapped(false),
                             crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
                                 spellwake_engine::toolbox::ObjectQuery::Targets,
                                 ResolvedPartsSpec(vec![

@@ -885,30 +885,15 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 )]);
                             if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
                                 && is_permanent_body_target(builder.target)
-                                && let Some((minimum, maximum)) =
-                                    builder.instructions.iter().rev().find_map(|op| {
-                                        if let Instruction::AffectPermanentTargets {
-                                            minimum,
-                                            maximum,
-                                            ..
-                                        } = op
-                                        {
-                                            Some((*minimum, *maximum))
-                                        } else {
-                                            None
-                                        }
-                                    })
+                                && builder.permanent_target_bounds.is_some()
                             {
-                                builder
-                                    .instructions
-                                    .push(Instruction::AffectPermanentTargets {
-                                        minimum,
-                                        maximum,
-                                        action: PermanentTargetAction::Modify {
-                                            parts,
-                                            duration: dur,
-                                        },
-                                    });
+                                builder.instructions.push(
+                                    super::super::toolbox_emit::apply_continuous_parts(
+                                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                                        parts,
+                                        dur,
+                                    ),
+                                );
                                 return Ok(());
                             }
                             let mut trial = builder.clone();
@@ -2683,30 +2668,15 @@ pub(super) fn lower_restrictions_statics_instruction(
                         Some(subj) => {
                             if matches!(subj, SubjectRefAst::Anaphora(_))
                                 && is_permanent_body_target(builder.target)
-                                && let Some((minimum, maximum)) =
-                                    builder.instructions.iter().rev().find_map(|op| {
-                                        if let Instruction::AffectPermanentTargets {
-                                            minimum,
-                                            maximum,
-                                            ..
-                                        } = op
-                                        {
-                                            Some((*minimum, *maximum))
-                                        } else {
-                                            None
-                                        }
-                                    })
+                                && builder.permanent_target_bounds.is_some()
                             {
-                                builder
-                                    .instructions
-                                    .push(Instruction::AffectPermanentTargets {
-                                        minimum,
-                                        maximum,
-                                        action: PermanentTargetAction::Modify {
-                                            parts,
-                                            duration: eff_br_dur,
-                                        },
-                                    });
+                                builder.instructions.push(
+                                    super::super::toolbox_emit::apply_continuous_parts(
+                                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                                        parts,
+                                        eff_br_dur,
+                                    ),
+                                );
                                 return Ok(());
                             }
                             let mut trial = builder.clone();
@@ -4403,9 +4373,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                 if matches!(&x_val, ValueExpr::Literal(n) if n.is_positive()) {
                     return Ok(());
                 }
-                let has_whole_body_target_op = builder.instructions.iter().any(|op| {
-                    matches!(op, Instruction::AffectPermanentTargets { .. })
-                        || matches!(
+                let has_whole_body_target_op = builder.permanent_target_bounds.is_some()
+                    || builder.instructions.iter().any(|op| {
+                        matches!(
                             op,
                             Instruction::ApplyContinuous(spec)
                                 if matches!(
@@ -4732,10 +4702,6 @@ pub(super) fn lower_restrictions_statics_instruction(
                         }
                         _ => None,
                     },
-                    Instruction::AffectPermanentTargets {
-                        action: PermanentTargetAction::Modify { parts, .. },
-                        ..
-                    } => Some(parts),
                     _ => None,
                 };
                 if let Some(p) = parts {
@@ -5952,16 +5918,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                         &f_clean, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: *n,
-                            maximum: *n,
-                            action: PermanentTargetAction::Modify {
-                                parts: ResolvedPartsSpec(parts),
-                                duration: dur,
-                            },
-                        });
+                    builder.push_bounded_target_op(*n, *n, super::super::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, ResolvedPartsSpec(parts), dur));
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -5974,16 +5931,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                         &f_clean, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: *max,
-                            action: PermanentTargetAction::Modify {
-                                parts: ResolvedPartsSpec(parts),
-                                duration: dur,
-                            },
-                        });
+                    builder.push_bounded_target_op(0, *max, super::super::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, ResolvedPartsSpec(parts), dur));
                     Ok(())
                 }
                 SubjectRefAst::TargetOneOf {
@@ -6013,16 +5961,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                         options, builder, in_trigger, vocabulary,
                     )?;
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: 1,
-                            action: PermanentTargetAction::Modify {
-                                parts: ResolvedPartsSpec(parts),
-                                duration: dur,
-                            },
-                        });
+                    builder.push_bounded_target_op(0, 1, super::super::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, ResolvedPartsSpec(parts), dur));
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -6040,16 +5979,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                     } else {
                         builder.x_target_count = true;
                     }
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: 0,
-                            maximum: u16::MAX,
-                            action: PermanentTargetAction::Modify {
-                                parts: ResolvedPartsSpec(parts),
-                                duration: dur,
-                            },
-                        });
+                    builder.push_bounded_target_op(0, u16::MAX, super::super::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, ResolvedPartsSpec(parts), dur));
                     Ok(())
                 }
                 SubjectRefAst::TargetObject {
@@ -6358,10 +6288,6 @@ pub(super) fn lower_restrictions_statics_instruction(
                         matches!(
                             op,
                             Instruction::DealDamage(_)
-                                | Instruction::AffectPermanentTargets {
-                                    action: PermanentTargetAction::Damage(_),
-                                    ..
-                                }
                         )
                     });
                 if has_damage_op {
@@ -8163,16 +8089,10 @@ fn try_lower_temp_exile_replacement(
             && (subj_low.contains("dealt damage by ~")
                 || subj_low.contains("dealt damage by this creature")
                 || subj_low.contains("dealt damage by this permanent")))
-            || builder.instructions.iter().any(|op| {
-                matches!(
-                    op,
-                    Instruction::DealDamage(_)
-                        | Instruction::AffectPermanentTargets {
-                            action: PermanentTargetAction::Damage(_),
-                            ..
-                        }
-                )
-            });
+            || builder
+                .instructions
+                .iter()
+                .any(|op| matches!(op, Instruction::DealDamage(_)));
         if has_damage_op {
             let any_types = if subj_low.contains("creature or planeswalker") {
                 Some(CardTypeMask::CREATURE.union(CardTypeMask::PLANESWALKER))

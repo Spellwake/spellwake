@@ -551,7 +551,11 @@ impl EffectWindow {
             .find_map(|(id, kind)| (id == target).then_some(kind))
     }
 
-    fn instruction_mode(&self, entry: StackEntryId, instruction: usize) -> Option<&SelectedMode> {
+    pub(super) fn instruction_mode(
+        &self,
+        entry: StackEntryId,
+        instruction: usize,
+    ) -> Option<&SelectedMode> {
         self.stack_modes(entry)
             .iter()
             .find(|mode| (mode.start..mode.end).contains(&instruction))

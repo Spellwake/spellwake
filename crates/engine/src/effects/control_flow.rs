@@ -136,12 +136,9 @@ impl EffectWindow {
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::AffectPermanentTargets { .. }
             | Instruction::Sacrifice { .. }
             | Instruction::Discard { .. }
-            | Instruction::ExileTopPlay { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::ChooseCreatureType { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
@@ -198,10 +195,21 @@ mod tests {
             body: ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::ChooseCreatureType {
-                        into: CreatureTypeSlot::new(0),
-                        excluding: BTreeSet::new(),
-                    },
+                    Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                        chooser: crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        domain: crate::toolbox::PromptDomain::Subtype {
+                            kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                            excluding: BTreeSet::new(),
+                            legacy_slot: Some(CreatureTypeSlot::new(0)),
+                        },
+                        category: crate::toolbox::ChoiceCategory::Generic,
+                        bind_to: crate::toolbox::BindingId(0),
+                        bind_unchosen: None,
+                        tag_partition: None,
+                        auto_resolve_trivial: false,
+                    })),
                     Instruction::BranchCondition {
                         condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(
                             crate::program::ResolutionCondition {
@@ -385,13 +393,20 @@ mod tests {
             }],
         }));
         let human = v.resolve_label("Human").unwrap();
-        let frame = EffectDecision::CreatureType(healthy.creature_type_frame().unwrap());
+        let frame = EffectDecision::PromptChoice(
+            healthy
+                .resolution_cursor()
+                .unwrap()
+                .pending_prompt_frame
+                .clone()
+                .unwrap(),
+        );
         let accepted = healthy
             .resume_rule(
                 healthy.revision(),
                 &frame,
                 A,
-                DecisionReply::CreatureType(human),
+                DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
                 None,
             )
             .unwrap();
@@ -407,12 +422,19 @@ mod tests {
         let mut exhausted = healthy;
         exhausted.window.set_test_next_object_identity(u64::MAX);
         let saved = exhausted.clone();
-        let frame = EffectDecision::CreatureType(exhausted.creature_type_frame().unwrap());
+        let frame = EffectDecision::PromptChoice(
+            exhausted
+                .resolution_cursor()
+                .unwrap()
+                .pending_prompt_frame
+                .clone()
+                .unwrap(),
+        );
         let result = exhausted.resume_rule(
             exhausted.revision(),
             &frame,
             A,
-            DecisionReply::CreatureType(human),
+            DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
             None,
         );
         assert!(result.is_err());

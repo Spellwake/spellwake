@@ -436,10 +436,21 @@ fn taking_optional_type_choice_preserves_the_actual_child_and_tail() {
             chooser: ResolvingPlayer::Controller,
             instructions: 1,
         },
-        Instruction::ChooseCreatureType {
-            into: CreatureTypeSlot::new(0),
-            excluding: BTreeSet::new(),
-        },
+        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+            chooser: crate::toolbox::PlayerSelector::Resolving(
+                crate::program::ResolvingPlayer::Controller,
+            ),
+            domain: crate::toolbox::PromptDomain::Subtype {
+                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                excluding: BTreeSet::new(),
+                legacy_slot: Some(CreatureTypeSlot::new(0)),
+            },
+            category: crate::toolbox::ChoiceCategory::Generic,
+            bind_to: crate::toolbox::BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+        })),
         gain(1),
     ]);
     let taken = reply(
@@ -449,7 +460,7 @@ fn taking_optional_type_choice_preserves_the_actual_child_and_tail() {
     .into_state();
     assert!(matches!(
         taken.pending_decision().unwrap().frame(),
-        RuleFrame::CreatureType(_)
+        RuleFrame::PromptChoice(_)
     ));
     assert_eq!(taken.execution().instruction_index(), Some(1));
     let human = taken
@@ -457,7 +468,10 @@ fn taking_optional_type_choice_preserves_the_actual_child_and_tail() {
         .creature_vocabulary()
         .resolve_label("Human")
         .unwrap();
-    let result = reply(&taken, DecisionReply::CreatureType(human));
+    let result = reply(
+        &taken,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+    );
     assert_eq!(result.state().execution().life_total(A), Some(&21.into()));
     assert!(
         !result

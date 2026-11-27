@@ -85,7 +85,11 @@ pub enum PromptDomain {
     /// Choose one card type from `allowed` (or the 7 standard types when empty).
     CardType { allowed: Vec<CardType> },
     /// Choose a subtype from a typed family.
-    Subtype { kind: SubtypeChoiceKind },
+    Subtype {
+        kind: SubtypeChoiceKind,
+        excluding: BTreeSet<CreatureTypeId>,
+        legacy_slot: Option<crate::program::CreatureTypeSlot>,
+    },
     /// Choose a card name (optionally nonland only).
     CardName { nonland_only: bool },
     /// Partition all objects from `query` into `pile_count` disjoint piles (e.g. Fact or Fiction,
@@ -114,6 +118,27 @@ pub struct PromptChoiceSpec {
 }
 
 impl PromptChoiceSpec {
+    /// Construct a creature-type choice spec bound to a legacy [`crate::program::CreatureTypeSlot`].
+    #[must_use]
+    pub fn choose_creature_type(
+        into: crate::program::CreatureTypeSlot,
+        excluding: BTreeSet<CreatureTypeId>,
+    ) -> Self {
+        Self {
+            chooser: PlayerSelector::Resolving(crate::program::ResolvingPlayer::Controller),
+            domain: PromptDomain::Subtype {
+                kind: SubtypeChoiceKind::Creature,
+                excluding,
+                legacy_slot: Some(into),
+            },
+            category: ChoiceCategory::Generic,
+            bind_to: BindingId(9900u16.saturating_add(into.ordinal())),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+        }
+    }
+
     #[must_use]
     pub fn uses_target(&self) -> bool {
         if self.chooser.uses_target() {
@@ -176,9 +201,18 @@ impl PromptChoiceSpec {
                 }
                 query.validate_vocabulary(vocabulary)?;
             }
+            PromptDomain::Subtype {
+                kind, excluding, ..
+            } => {
+                if excluding.iter().any(|id| vocabulary.label(*id).is_none()) {
+                    return Err(DefinitionError::ForeignCreatureType);
+                }
+                if *kind == SubtypeChoiceKind::Creature && excluding.len() == vocabulary.len() {
+                    return Err(DefinitionError::EmptyCreatureTypeDomain);
+                }
+            }
             PromptDomain::Color { .. }
             | PromptDomain::CardType { .. }
-            | PromptDomain::Subtype { .. }
             | PromptDomain::CardName { .. } => {}
         }
         Ok(())

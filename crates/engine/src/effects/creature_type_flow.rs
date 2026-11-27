@@ -1,6 +1,5 @@
 //! Resolution-local choices and once-current controlled-permanent counts.
 use super::*;
-use crate::occurrence::{EventCause, RulesOccurrence};
 
 fn source_zone_matches(
     recorded: crate::program::SourceZoneFilter,
@@ -226,100 +225,6 @@ fn matches_zone_move_record(
 }
 
 impl EffectWindow {
-    pub(super) fn creature_type_frame(&self) -> Result<CreatureTypeChoice, EffectError> {
-        let cursor = self
-            .resolution_cursor()
-            .ok_or(EffectError::WrongCreatureTypeFrame)?;
-        let entry = self
-            .window
-            .resolving()
-            .ok_or(EffectError::WrongCreatureTypeFrame)?;
-        let (into, chooser, excluding, previously_named) = match self.current_instruction()? {
-            Instruction::ChooseCreatureType { into, excluding } => {
-                if let Some(crate::toolbox::ExecValue::Players(seats)) =
-                    cursor.env.get(crate::toolbox::BindingId(u16::MAX))
-                    && let Some(&player) = seats.first()
-                {
-                    (
-                        *into,
-                        player,
-                        excluding.clone(),
-                        cursor.values.values().copied().collect(),
-                    )
-                } else {
-                    (*into, entry.controller(), excluding.clone(), Vec::new())
-                }
-            }
-            _ => return Err(EffectError::WrongCreatureTypeFrame),
-        };
-        if cursor.entry != entry.id() || cursor.values.contains_key(&into) {
-            return Err(EffectError::InconsistentProgram);
-        }
-        Ok(CreatureTypeChoice {
-            revision: self.revision,
-            entry: entry.id(),
-            instruction: cursor.instruction,
-            slot: into,
-            chooser,
-            vocabulary: self.creature_vocabulary.id(),
-            excluding,
-            previously_named,
-        })
-    }
-
-    /// The production one-instruction acceptance step. The caller then runs the
-    /// existing iterative driver; no priority or checks occur between these steps.
-    pub(crate) fn accept_creature_type(
-        &self,
-        expected: u64,
-        bound: &CreatureTypeChoice,
-        actor: SeatId,
-        selected: CreatureTypeId,
-    ) -> Result<RulesTransition<Self, ()>, EffectError> {
-        self.ensure_resolution_or_idle()?;
-        let revision = self.next_revision(expected)?;
-        if &self.creature_type_frame()? != bound {
-            return Err(EffectError::WrongCreatureTypeFrame);
-        }
-        if actor != bound.chooser {
-            return Err(EffectError::WrongChooser);
-        }
-        if self.creature_vocabulary.label(selected).is_none() || bound.excluding.contains(&selected)
-        {
-            return Err(EffectError::IllegalCreatureType);
-        }
-        let before = self.rules_snapshot(None)?;
-        let mut next = self.clone();
-        next.revision = revision;
-        let cursor = next
-            .resolution_cursor_mut()
-            .ok_or(EffectError::WrongCreatureTypeFrame)?;
-        if cursor.values.insert(bound.slot, selected).is_some() {
-            return Err(EffectError::InconsistentProgram);
-        }
-        let mut append = RulesJournal::default();
-        next.emit_from(
-            EventCause::Instruction {
-                entry: bound.entry,
-                instruction: bound.instruction,
-            },
-            &before,
-            None,
-            &mut append,
-            |_, _, _| {
-                Ok(vec![RulesOccurrence::CreatureTypeChosen {
-                    entry: bound.entry,
-                    instruction: bound.instruction,
-                    slot: bound.slot,
-                    chooser: actor,
-                    value: selected,
-                }])
-            },
-        )?;
-        next.advance_instruction()?;
-        Ok(RulesTransition::new(next, (), append))
-    }
-
     pub(super) fn resolve_value_expr(
         &self,
         controller: SeatId,

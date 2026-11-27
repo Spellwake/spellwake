@@ -1012,10 +1012,23 @@ fn optional_type_child_retains_cursor_rejects_reused_offer_and_excluded_type_the
     let vocabulary = creature_types::selected_vocabulary().unwrap();
     let human = vocabulary.resolve_label("Human").unwrap();
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
-        let state = pending(wrapped(Instruction::ChooseCreatureType {
-            into: CreatureTypeSlot::new(0),
-            excluding: BTreeSet::from([human]),
-        }));
+        let state = pending(wrapped(Instruction::PromptChoice(Box::new(
+            crate::toolbox::PromptChoiceSpec {
+                chooser: crate::toolbox::PlayerSelector::Resolving(
+                    crate::program::ResolvingPlayer::Controller,
+                ),
+                domain: crate::toolbox::PromptDomain::Subtype {
+                    kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                    excluding: BTreeSet::from([human]),
+                    legacy_slot: Some(CreatureTypeSlot::new(0)),
+                },
+                category: crate::toolbox::ChoiceCategory::Generic,
+                bind_to: crate::toolbox::BindingId(0),
+                bind_unchosen: None,
+                tag_partition: None,
+                auto_resolve_trivial: false,
+            },
+        ))));
         let old = command_reply(&state, DecisionReply::OptionalEffect(choice));
         let result = take_or_decline(&state, choice);
         if choice == OptionalEffectChoice::Decline {
@@ -1030,7 +1043,7 @@ fn optional_type_child_retains_cursor_rejects_reused_offer_and_excluded_type_the
         let child = result.state();
         assert!(matches!(
             child.pending_decision().unwrap().frame(),
-            RuleFrame::CreatureType(_)
+            RuleFrame::PromptChoice(_)
         ));
         assert_eq!(child.execution().instruction_index(), Some(1));
         assert!(
@@ -1045,11 +1058,17 @@ fn optional_type_child_retains_cursor_rejects_reused_offer_and_excluded_type_the
         reject(
             child,
             A,
-            command_reply(child, DecisionReply::CreatureType(human)),
-            GameError::Effect(EffectError::IllegalCreatureType),
+            command_reply(
+                child,
+                DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+            ),
+            GameError::Effect(EffectError::SelectionOutsideDomain),
         );
         let elf = vocabulary.resolve_label("Elf").unwrap();
-        let completed = reply(child, DecisionReply::CreatureType(elf));
+        let completed = reply(
+            child,
+            DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(elf)),
+        );
         assert_tail(&completed);
         assert_eq!(outcomes(&completed), 0);
         assert_eq!(occurrences(&completed).iter().filter(|row|matches!(row,RulesOccurrence::CreatureTypeChosen{slot,value,..} if *slot==CreatureTypeSlot::new(0) && *value==elf)).count(),1);
@@ -2666,10 +2685,21 @@ fn optional_type_literal_zero_draw_continuation_assigns_only_on_take() {
                 chooser: ResolvingPlayer::Controller,
                 instructions: 1,
             },
-            Instruction::ChooseCreatureType {
-                into: CreatureTypeSlot::new(0),
-                excluding: BTreeSet::new(),
-            },
+            Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                chooser: crate::toolbox::PlayerSelector::Resolving(
+                    crate::program::ResolvingPlayer::Controller,
+                ),
+                domain: crate::toolbox::PromptDomain::Subtype {
+                    kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                    excluding: BTreeSet::new(),
+                    legacy_slot: Some(CreatureTypeSlot::new(0)),
+                },
+                category: crate::toolbox::ChoiceCategory::Generic,
+                bind_to: crate::toolbox::BindingId(0),
+                bind_unchosen: None,
+                tag_partition: None,
+                auto_resolve_trivial: false,
+            })),
             crate::program::Instruction::DrawCards(Box::new(
                 crate::toolbox::DrawCardsSpec::simple(
                     crate::toolbox::PlayerSelector::Resolving(
@@ -2691,7 +2721,7 @@ fn optional_type_literal_zero_draw_continuation_assigns_only_on_take() {
         } else {
             assert!(matches!(
                 result.state().pending_decision().unwrap().frame(),
-                RuleFrame::CreatureType(_)
+                RuleFrame::PromptChoice(_)
             ));
             let human = result
                 .state()
@@ -2699,7 +2729,10 @@ fn optional_type_literal_zero_draw_continuation_assigns_only_on_take() {
                 .creature_vocabulary()
                 .resolve_label("Human")
                 .unwrap();
-            let completed = reply(result.state(), DecisionReply::CreatureType(human));
+            let completed = reply(
+                result.state(),
+                DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+            );
             assert!(completed.state().pending_decision().is_none());
             assert_eq!(occurrences(&completed).iter().filter(|row|matches!(row,RulesOccurrence::CreatureTypeChosen{slot,value,..} if *slot==CreatureTypeSlot::new(0) && *value==human)).count(),1);
             assert!(completed.draw_journal().events.is_empty());
@@ -2958,10 +2991,21 @@ fn same_original_typed_inputs_reexecute_every_payment_parent_child_journal_and_w
 #[test]
 fn nonempty_resolution_locals_survive_each_mana_prefix_and_both_optional_outcomes() {
     let state = pending(vec![
-        Instruction::ChooseCreatureType {
-            into: CreatureTypeSlot::new(0),
-            excluding: BTreeSet::new(),
-        },
+        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+            chooser: crate::toolbox::PlayerSelector::Resolving(
+                crate::program::ResolvingPlayer::Controller,
+            ),
+            domain: crate::toolbox::PromptDomain::Subtype {
+                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                excluding: BTreeSet::new(),
+                legacy_slot: Some(CreatureTypeSlot::new(0)),
+            },
+            category: crate::toolbox::ChoiceCategory::Generic,
+            bind_to: crate::toolbox::BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+        })),
         Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::Controller,
             fixed: ManaCost::generic(3.into()),
@@ -2978,7 +3022,7 @@ fn nonempty_resolution_locals_survive_each_mana_prefix_and_both_optional_outcome
     ]);
     assert!(matches!(
         state.pending_decision().unwrap().frame(),
-        RuleFrame::CreatureType(_)
+        RuleFrame::PromptChoice(_)
     ));
     let human = state
         .execution()
@@ -2986,7 +3030,11 @@ fn nonempty_resolution_locals_survive_each_mana_prefix_and_both_optional_outcome
         .resolve_label("Human")
         .unwrap();
     let expected = BTreeMap::from([(CreatureTypeSlot::new(0), human)]);
-    let state = reply(&state, DecisionReply::CreatureType(human)).into_state();
+    let state = reply(
+        &state,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+    )
+    .into_state();
     let entry = payment_frame(&state).entry();
     let assert_parent = |state: &GameState, suspended| {
         let Some(ResolutionChoiceState::Payment {

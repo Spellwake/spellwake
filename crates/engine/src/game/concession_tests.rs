@@ -1131,10 +1131,23 @@ fn concession_keeps_actual_cast_payment_and_tap_at_a_later_choice() {
         ManaCost::one(ManaType::Red),
         ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::ChooseCreatureType {
-                into: CreatureTypeSlot::new(0),
-                excluding: BTreeSet::new(),
-            }],
+            vec![Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec {
+                    chooser: crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    domain: crate::toolbox::PromptDomain::Subtype {
+                        kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                        excluding: BTreeSet::new(),
+                        legacy_slot: Some(CreatureTypeSlot::new(0)),
+                    },
+                    category: crate::toolbox::ChoiceCategory::Generic,
+                    bind_to: crate::toolbox::BindingId(0),
+                    bind_unchosen: None,
+                    tag_partition: None,
+                    auto_resolve_trivial: false,
+                },
+            ))],
         ),
     );
     let state = root(
@@ -1185,7 +1198,7 @@ fn concession_keeps_actual_cast_payment_and_tap_at_a_later_choice() {
     let state = step(&state, B, GameCommand::Pass);
     assert!(matches!(
         state.pending_decision().unwrap().frame(),
-        RuleFrame::CreatureType(_)
+        RuleFrame::PromptChoice(_)
     ));
     assert_eq!(state.execution().mana(A, ManaType::Red), 0.into());
     assert_eq!(

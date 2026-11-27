@@ -30,8 +30,7 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
         Instruction::Jump { .. }
         | Instruction::DrawCards(_)
         | Instruction::AdjustLife(_)
-        | Instruction::MutatePlayer(_)
-        | Instruction::ExileTopPlay { .. } => true,
+        | Instruction::MutatePlayer(_) => true,
         Instruction::ZoneOp(spec) => {
             matches!(spec.selection, crate::toolbox::ZoneSelection::All)
                 && (matches!(

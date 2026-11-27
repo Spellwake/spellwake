@@ -230,7 +230,12 @@ fn cmm_zones_distant_melody_counts_only_controlled_permanents_of_the_chosen_type
     );
     let choose = cast_named(&initial, &price);
     for (kind, n) in [(elf, 2), (goblin, 0)] {
-        let drawn = reply(&choose, DecisionReply::CreatureType(kind));
+        let drawn = reply(
+            &choose,
+            DecisionReply::PromptChoice(
+                spellwake_engine::toolbox::PromptChoiceReply::CreatureType(kind),
+            ),
+        );
         assert_eq!(drawn.draw_journal().events.len(), n);
         for id in [5, 6] {
             assert_eq!(

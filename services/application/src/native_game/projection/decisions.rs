@@ -734,7 +734,7 @@ impl Projection<'_, '_> {
                 DecisionKind::SelectResolution,
                 self.objects_range(f.objects(), 0, f.objects().len())?,
             ),
-            RuleFrame::LinkedReturnOrder(f) if source.execution().is_pending_exile_graveyard_order(f) || source.execution().is_looked_graveyard_order(f) => {
+            RuleFrame::LinkedReturnOrder(f) if source.execution().is_looked_graveyard_order(f) => {
                 let mut objects = Vec::new();
                 let mut labels = Vec::new();
                 for id in f.objects() {

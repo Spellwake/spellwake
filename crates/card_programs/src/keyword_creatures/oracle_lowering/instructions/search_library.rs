@@ -397,13 +397,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::Group(f) | SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -490,13 +488,11 @@ pub(super) fn lower_search_library_group(
                     filter, builder, in_trigger, vocabulary,
                 )?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: *n,
-                        maximum: *n,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    *n,
+                    *n,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -507,13 +503,11 @@ pub(super) fn lower_search_library_group(
                     filter, builder, in_trigger, vocabulary,
                 )?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: *n,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    *n,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetOneOf {
@@ -529,13 +523,11 @@ pub(super) fn lower_search_library_group(
                 } else {
                     1
                 };
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum,
-                        maximum: 1,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    minimum,
+                    1,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -547,13 +539,11 @@ pub(super) fn lower_search_library_group(
                 )?;
                 builder.bind_target(bt)?;
                 builder.x_target_count = true;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::Group(f)
@@ -639,24 +629,14 @@ pub(super) fn lower_search_library_group(
                         BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
                     ) =>
             {
-                let (minimum, maximum) = builder
-                    .instructions
-                    .iter()
-                    .rev()
-                    .find_map(|op| match op {
-                        Instruction::AffectPermanentTargets {
-                            minimum, maximum, ..
-                        } => Some((*minimum, *maximum)),
-                        _ => None,
-                    })
-                    .unwrap_or((1, 1));
+                if builder.permanent_target_bounds.is_none()
+                    && is_permanent_body_target(builder.target)
+                {
+                    builder.permanent_target_bounds = Some((1, 1));
+                }
                 builder
                     .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum,
-                        maximum,
-                        action: PermanentTargetAction::Tap,
-                    });
+                    .push(super::super::toolbox_emit::set_targets_tapped(true));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_) if builder.last_group_filter.is_some() => {
@@ -716,13 +696,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Tap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::set_targets_tapped(true),
+                );
                 Ok(())
             }
             SubjectRefAst::All(f) | SubjectRefAst::Each(f) if f.zone.is_none() => {
@@ -838,13 +816,11 @@ pub(super) fn lower_search_library_group(
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
                 builder.x_target_count = true;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Untap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::set_targets_tapped(false),
+                );
                 Ok(())
             }
             SubjectRefAst::Group(f)
@@ -930,24 +906,14 @@ pub(super) fn lower_search_library_group(
                         BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
                     ) =>
             {
-                let (minimum, maximum) = builder
-                    .instructions
-                    .iter()
-                    .rev()
-                    .find_map(|op| match op {
-                        Instruction::AffectPermanentTargets {
-                            minimum, maximum, ..
-                        } => Some((*minimum, *maximum)),
-                        _ => None,
-                    })
-                    .unwrap_or((1, 1));
+                if builder.permanent_target_bounds.is_none()
+                    && is_permanent_body_target(builder.target)
+                {
+                    builder.permanent_target_bounds = Some((1, 1));
+                }
                 builder
                     .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum,
-                        maximum,
-                        action: PermanentTargetAction::Untap,
-                    });
+                    .push(super::super::toolbox_emit::set_targets_tapped(false));
                 Ok(())
             }
             SubjectRefAst::Anaphora(_) if builder.last_group_filter.is_some() => {
@@ -1007,13 +973,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() && *n > 0 => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: *n,
-                        maximum: *n,
-                        action: PermanentTargetAction::Untap,
-                    });
+                builder.push_bounded_target_op(
+                    *n,
+                    *n,
+                    super::super::toolbox_emit::set_targets_tapped(false),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -1022,13 +986,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() && *n > 0 => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: *n,
-                        action: PermanentTargetAction::Untap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    *n,
+                    super::super::toolbox_emit::set_targets_tapped(false),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetOneOf {
@@ -1044,13 +1006,11 @@ pub(super) fn lower_search_library_group(
                 } else {
                     1
                 };
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum,
-                        maximum: 1,
-                        action: PermanentTargetAction::Untap,
-                    });
+                builder.push_bounded_target_op(
+                    minimum,
+                    1,
+                    super::super::toolbox_emit::set_targets_tapped(false),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -1059,13 +1019,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::Untap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::set_targets_tapped(false),
+                );
                 Ok(())
             }
             SubjectRefAst::Anaphora(raw)
@@ -1191,13 +1149,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 1,
-                        maximum: 1,
-                        action: PermanentTargetAction::ToggleTap,
-                    });
+                builder.push_bounded_target_op(
+                    1,
+                    1,
+                    super::super::toolbox_emit::toggle_targets_tapped(),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -1206,13 +1162,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() && *n >= 2 => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: *n,
-                        maximum: *n,
-                        action: PermanentTargetAction::ToggleTap,
-                    });
+                builder.push_bounded_target_op(
+                    *n,
+                    *n,
+                    super::super::toolbox_emit::toggle_targets_tapped(),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -1221,13 +1175,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() && *n > 0 => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: *n,
-                        action: PermanentTargetAction::ToggleTap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    *n,
+                    super::super::toolbox_emit::toggle_targets_tapped(),
+                );
                 Ok(())
             }
             SubjectRefAst::TargetObject {
@@ -1236,13 +1188,11 @@ pub(super) fn lower_search_library_group(
             } if filter.zone.is_none() => {
                 let bt = lower_battlefield_body_target(filter, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder
-                    .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum: 0,
-                        maximum: u16::MAX,
-                        action: PermanentTargetAction::ToggleTap,
-                    });
+                builder.push_bounded_target_op(
+                    0,
+                    u16::MAX,
+                    super::super::toolbox_emit::toggle_targets_tapped(),
+                );
                 Ok(())
             }
             SubjectRefAst::All(f) | SubjectRefAst::Each(f) if f.zone.is_none() => {
@@ -1293,14 +1243,6 @@ pub(super) fn lower_search_library_group(
                 return Ok(());
             }
             if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) {
-                if let Some(Instruction::AffectPermanentTargets {
-                    action: action @ PermanentTargetAction::Tap,
-                    ..
-                }) = builder.instructions.last_mut()
-                {
-                    *action = PermanentTargetAction::TapAndSkipNextUntap;
-                    return Ok(());
-                }
                 if matches!(
                     builder.target,
                     BodyTarget::SingleCreature
@@ -1334,13 +1276,11 @@ pub(super) fn lower_search_library_group(
                         _ => return Err("oracle:unsupported-skip-untap"),
                     };
                     builder.bind_target(bt)?;
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: min,
-                            maximum: max,
-                            action: PermanentTargetAction::SkipNextUntap,
-                        });
+                    builder.push_bounded_target_op(
+                        min,
+                        max,
+                        super::super::toolbox_emit::skip_next_untap_targets(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::TargetOneOf {
@@ -1356,13 +1296,11 @@ pub(super) fn lower_search_library_group(
                     } else {
                         1
                     };
-                    builder
-                        .instructions
-                        .push(Instruction::AffectPermanentTargets {
-                            minimum: min,
-                            maximum: 1,
-                            action: PermanentTargetAction::SkipNextUntap,
-                        });
+                    builder.push_bounded_target_op(
+                        min,
+                        1,
+                        super::super::toolbox_emit::skip_next_untap_targets(),
+                    );
                     Ok(())
                 }
                 SubjectRefAst::All(f) | SubjectRefAst::Each(f) | SubjectRefAst::Group(f)
@@ -1642,6 +1580,7 @@ pub(super) fn lower_search_library_group(
             if act_builder.target != builder.target
                 || act_builder.instructions.is_empty()
                 || act_builder.graveyard_target_bounds.is_some()
+                || act_builder.permanent_target_bounds.is_some()
                 || act_builder.x_target_count
                 || !act_builder
                     .instructions
@@ -2013,33 +1952,13 @@ pub(super) fn lower_search_library_group(
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
-                    if let Some((minimum, maximum)) =
-                        builder.instructions.iter().rev().find_map(|op| match op {
-                            Instruction::AffectPermanentTargets {
-                                minimum, maximum, ..
-                            } => Some((*minimum, *maximum)),
-                            _ => None,
-                        })
-                    {
-                        builder
-                            .instructions
-                            .push(Instruction::AffectPermanentTargets {
-                                minimum,
-                                maximum,
-                                action: PermanentTargetAction::Modify {
-                                    parts,
-                                    duration: dur,
-                                },
-                            });
-                    } else {
-                        builder.instructions.push(
-                            super::super::toolbox_emit::apply_continuous_parts(
-                                spellwake_engine::toolbox::ObjectQuery::Targets,
-                                parts,
-                                dur,
-                            ),
-                        );
-                    }
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::Targets,
+                            parts,
+                            dur,
+                        ));
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_)
@@ -2153,30 +2072,28 @@ pub(super) fn lower_search_library_group(
                         }
                         TargetCountAst::Exact(n) if *n >= 2 => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: *n,
-                                    maximum: *n,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                *n,
+                                *n,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::UpTo(n) if *n > 0 => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: *n,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                *n,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::ChosenX | TargetCountAst::UpToX if !in_trigger => {
@@ -2186,30 +2103,28 @@ pub(super) fn lower_search_library_group(
                             } else {
                                 builder.x_target_count = true;
                             }
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: u16::MAX,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                u16::MAX,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::AnyNumber => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: u16::MAX,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                u16::MAX,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         _ => Err("oracle:unsupported-target-subject"),
@@ -2233,30 +2148,28 @@ pub(super) fn lower_search_library_group(
                         }
                         TargetCountAst::Exact(n) if *n >= 2 => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: *n,
-                                    maximum: *n,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                *n,
+                                *n,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::UpTo(n) if *n > 0 => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: *n,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                *n,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::ChosenX | TargetCountAst::UpToX if !in_trigger => {
@@ -2266,30 +2179,28 @@ pub(super) fn lower_search_library_group(
                             } else {
                                 builder.x_target_count = true;
                             }
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: u16::MAX,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                u16::MAX,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         TargetCountAst::AnyNumber => {
                             builder.bind_target(bt)?;
-                            builder
-                                .instructions
-                                .push(Instruction::AffectPermanentTargets {
-                                    minimum: 0,
-                                    maximum: u16::MAX,
-                                    action: PermanentTargetAction::Modify {
-                                        parts,
-                                        duration: dur,
-                                    },
-                                });
+                            builder.push_bounded_target_op(
+                                0,
+                                u16::MAX,
+                                super::super::toolbox_emit::apply_continuous_parts(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    parts,
+                                    dur,
+                                ),
+                            );
                             Ok(())
                         }
                         _ => Err("oracle:unsupported-target-subject"),
@@ -3403,13 +3314,12 @@ pub(super) fn lower_search_library_group(
             let lib_low = library.trim().to_ascii_lowercase();
             let has_prior_moved = has_prior_moved_object(&builder.instructions);
             let has_prior_exile = builder.instructions.iter().rev().any(|op| {
-                matches!(op, Instruction::ExileTopPlay { .. })
-                    || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
-                        matches!(
-                            spec.destination,
-                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                        )
-                    })
+                super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                    matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                    )
+                })
             });
             if (lib_low == "ref" || (lib_low == "exiled" && !*reveal)) && has_prior_moved {
                 let dest = if *reveal {
@@ -3723,55 +3633,25 @@ pub(super) fn lower_search_library_group(
                 && count_limit.is_none()
                 && is_exile_top_anaphora
                 && dur_core != "now"
+                && let Some(Instruction::ZoneOp(spec)) = builder.instructions.last()
+                && let spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                    zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                    slice: spellwake_engine::toolbox::QuerySlice::Top(amount),
+                    ..
+                } = &spec.source
+                && let spellwake_engine::toolbox::ZoneDest::Exile { link_group, .. } =
+                    &spec.destination
+                && (link_group.is_none() || **amount != ValueExpr::literal(1))
             {
-                match builder.instructions.last_mut() {
-                    Some(Instruction::ExileTopPlay {
-                        duration: slot_dur,
-                        cast_only: slot_cast_only,
-                        free: slot_free,
-                        any_color: slot_any_color,
-                        grant_play: slot_grant_play,
-                        ..
-                    }) if !*slot_grant_play => {
-                        *slot_dur = impulse_dur;
-                        *slot_cast_only = *cast_only;
-                        *slot_free = *free;
-                        *slot_any_color = any_color;
-                        *slot_grant_play = true;
-                        return Ok(());
-                    }
-                    Some(last @ Instruction::ZoneOp(_)) => {
-                        if let Instruction::ZoneOp(spec) = last
-                            && let spellwake_engine::toolbox::ObjectQuery::ZoneScan {
-                                zone: spellwake_engine::toolbox::QueryZone::Library(p_sel),
-                                slice: spellwake_engine::toolbox::QuerySlice::Top(amount),
-                                ..
-                            } = &spec.source
-                            && let spellwake_engine::toolbox::PlayerSelector::Resolving(lib_p) =
-                                p_sel.as_ref()
-                            && let spellwake_engine::toolbox::ZoneDest::Exile {
-                                face_down,
-                                link_group,
-                                ..
-                            } = &spec.destination
-                            && (link_group.is_none() || **amount != ValueExpr::literal(1))
-                        {
-                            let face_down = *face_down;
-                            *last = Instruction::ExileTopPlay {
-                                count: (**amount).clone(),
-                                library_owner: AffectedPlayers::One(*lib_p),
-                                duration: impulse_dur,
-                                cast_only: *cast_only,
-                                free: *free,
-                                any_color,
-                                face_down,
-                                grant_play: true,
-                            };
-                            return Ok(());
-                        }
-                    }
-                    _ => {}
-                }
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::impulse_play_last_moved(
+                        impulse_dur,
+                        *cast_only,
+                        *free,
+                        any_color,
+                    ));
+                return Ok(());
             }
             let play_dur = resolved_dur.unwrap_or(match impulse_dur {
                 spellwake_engine::program::ImpulsePlayDuration::ThisTurn => {
@@ -4920,7 +4800,6 @@ fn try_lower_counter_matching_stack_objects(
 
 fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool) -> bool {
     match op {
-        Instruction::ExileTopPlay { .. } => true,
         Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
             if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
                 .is_some() =>

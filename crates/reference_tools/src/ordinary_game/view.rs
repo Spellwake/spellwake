@@ -1840,6 +1840,12 @@ fn check_ordinary_projection_scope(
         || matches!(
             state.pending_decision().map(|pending| pending.frame()),
             Some(RuleFrame::CreatureType(_))
+                | Some(RuleFrame::PromptChoice(
+                    spellwake_engine::toolbox::PromptChoiceFrame {
+                        domain: spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. },
+                        ..
+                    }
+                ))
         )
     {
         return Err(
@@ -2411,10 +2417,12 @@ mod tests {
                     },
                     ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::ChooseCreatureType {
-                            into: CreatureTypeSlot::new(0),
-                            excluding: Default::default(),
-                        }],
+                        vec![Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                                CreatureTypeSlot::new(0),
+                                Default::default(),
+                            ),
+                        ))],
                     ),
                 ),
             }],
@@ -2464,7 +2472,11 @@ mod tests {
             A,
             GameCommand::Reply {
                 decision: state.pending_decision().unwrap().id(),
-                choice: DecisionReply::CreatureType(vocabulary.resolve_label("Elf").unwrap()),
+                choice: DecisionReply::PromptChoice(
+                    spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+                        vocabulary.resolve_label("Elf").unwrap(),
+                    ),
+                ),
             },
         );
         assert!(complete.state().execution().resolution_state().is_none());

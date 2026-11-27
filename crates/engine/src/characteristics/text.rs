@@ -392,7 +392,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 ..
             }
             | Instruction::Discard { amount, .. }
-            | Instruction::ExileTopPlay { count: amount, .. }
             | Instruction::RepeatLoop { count: amount, .. } => rewrite_amount(amount),
             Instruction::ChooseObjects {
                 min,
@@ -663,10 +662,15 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::BranchCondition { condition, .. } => {
                 rewrite_condition_expr(change, condition);
             }
-            Instruction::ExileTopPlay { .. }
-            | Instruction::ChooseValue { .. }
-            | Instruction::ZoneOp(_)
-            | Instruction::PromptChoice(_)
+            Instruction::ZoneOp(spec) => {
+                rewrite_object_query(change, &mut spec.source);
+            }
+            Instruction::PromptChoice(spec) => {
+                if let crate::toolbox::PromptDomain::Subtype { excluding, .. } = &mut spec.domain {
+                    words(change, excluding);
+                }
+            }
+            Instruction::ChooseValue { .. }
             | Instruction::ForEach { .. }
             | Instruction::ForEachPlayerQuery { .. }
             | Instruction::BindEnv { .. }
@@ -690,7 +694,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     creation.definition.rewrite_creature_types(change);
                 }
             }
-            Instruction::ChooseCreatureType { excluding, .. } => words(change, excluding),
             Instruction::SearchLibrary { filter } => {
                 if let crate::program::SearchCount::UpToExpr(expr) = &mut filter.count {
                     rewrite_amount(expr);
@@ -711,25 +714,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     _ => {}
                 }
             }
-            Instruction::AffectPermanentTargets { action, .. } => match action {
-                crate::program::PermanentTargetAction::PutCounters { amount, .. }
-                | crate::program::PermanentTargetAction::Damage(amount) => {
-                    rewrite_amount(amount);
-                }
-                crate::program::PermanentTargetAction::RemoveCounters {
-                    amount: Some(amount),
-                    ..
-                } => {
-                    rewrite_amount(amount);
-                }
-                crate::program::PermanentTargetAction::Modify { parts: value, .. }
-                | crate::program::PermanentTargetAction::ModifyWithPartner {
-                    parts: value, ..
-                } => {
-                    parts(change, value);
-                }
-                _ => {}
-            },
             Instruction::RevealUntilMatchExt { filter, count, .. } => {
                 filter.rewrite_creature_type(change.from, change.to);
                 rewrite_amount(count);

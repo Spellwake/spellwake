@@ -1444,18 +1444,13 @@ pub(in super::super) fn rewrite_instruction_anaphora(
     match op {
         Instruction::Discard { amount, .. }
         | Instruction::Sacrifice { amount, .. }
-        | Instruction::ExileTopPlay { count: amount, .. }
         | Instruction::LookTopChooseExt { count: amount, .. }
         | Instruction::RevealUntilMatchExt { count: amount, .. }
         | Instruction::OfferDynamicManaPayment {
             extra_generic: amount,
             ..
         }
-        | Instruction::RepeatLoop { count: amount, .. }
-        | Instruction::AffectPermanentTargets {
-            action: PermanentTargetAction::PutCounters { amount, .. },
-            ..
-        } => {
+        | Instruction::RepeatLoop { count: amount, .. } => {
             rewrite_value_expr_anaphora(amount, replacement);
         }
         Instruction::AdjustLife(spec) => match &mut spec.op {
@@ -1676,7 +1671,6 @@ pub(in super::super) fn rewrite_body_prior_result(
             match op {
                 Instruction::Discard { amount, .. }
                 | Instruction::Sacrifice { amount, .. }
-                | Instruction::ExileTopPlay { count: amount, .. }
                 | Instruction::LookTopChooseExt { count: amount, .. }
                 | Instruction::RevealUntilMatchExt { count: amount, .. } => {
                     rewrite_value_expr_prior_result(amount, replacement);
@@ -2808,17 +2802,12 @@ pub(super) fn rewrite_body_trigger_subject_stats(
         match op {
             Instruction::Discard { amount, .. }
             | Instruction::Sacrifice { amount, .. }
-            | Instruction::ExileTopPlay { count: amount, .. }
             | Instruction::LookTopChooseExt { count: amount, .. }
             | Instruction::OfferDynamicManaPayment {
                 extra_generic: amount,
                 ..
             }
-            | Instruction::RepeatLoop { count: amount, .. }
-            | Instruction::AffectPermanentTargets {
-                action: PermanentTargetAction::PutCounters { amount, .. },
-                ..
-            } => {
+            | Instruction::RepeatLoop { count: amount, .. } => {
                 rewrite_value_expr_trigger_subject(amount, replacement);
             }
             Instruction::AdjustLife(spec) => match &mut spec.op {

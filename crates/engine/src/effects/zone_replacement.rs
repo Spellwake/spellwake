@@ -1620,8 +1620,7 @@ impl EffectWindow {
         selections: Vec<ResolutionAcceptedSelection>,
     ) -> Result<ZoneReplacementBatch, EffectError> {
         let action = match operation {
-            ResolutionSelectionOperation::ReturnAnnouncedTargets { .. }
-            | ResolutionSelectionOperation::ReturnSingle { .. } => {
+            ResolutionSelectionOperation::ReturnSingle { .. } => {
                 ZoneActionKind::EffectReturnSelected
             }
             ResolutionSelectionOperation::Populate
@@ -1631,9 +1630,6 @@ impl EffectWindow {
             | ResolutionSelectionOperation::CollectEvidence { .. }
             | ResolutionSelectionOperation::ChooseObjects { .. } => {
                 return Err(EffectError::InconsistentSelectionWork);
-            }
-            ResolutionSelectionOperation::DestroyAnnouncedTargets { .. } => {
-                ZoneActionKind::EffectDestroy
             }
             ResolutionSelectionOperation::ExileAnnouncedTargets { .. }
             | ResolutionSelectionOperation::ExileLinkedTargets { .. }

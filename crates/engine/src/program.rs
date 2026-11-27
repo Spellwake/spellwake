@@ -1339,55 +1339,6 @@ pub enum LinkedExileGroup {
     SourceLinked,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermanentTargetAction {
-    /// Destroy the currently legal, destructible members together.
-    Destroy,
-    ReturnToHand,
-    Tap,
-    TapAndSkipNextUntap,
-    SkipNextUntap,
-    Untap,
-    /// Change the selected permanent's tap state if the optional effect is accepted.
-    ToggleTap,
-    PutPlusOneCounter,
-    PutPlusOneCounterOnOthers,
-    /// Place `amount` counters of `kind` onto each still-legal targeted permanent.
-    PutCounters {
-        kind: crate::effects::CounterKind,
-        amount: ValueExpr,
-    },
-    Exile,
-    PutCountersByCurrentType,
-    ModifyWithPartner {
-        parts: ResolvedPartsSpec,
-        duration: ResolvedDuration,
-    },
-    /// A temporary continuous effect on the one still-legal selected permanent.
-    Modify {
-        parts: ResolvedPartsSpec,
-        duration: ResolvedDuration,
-    },
-    /// Apply a combat requirement, goad, or removal from combat to each still-legal targeted permanent.
-    RequireCombatAction(CombatActionKind),
-    /// Move each still-legal targeted permanent to an arbitrary destination.
-    MoveTo(SubjectDestination),
-    /// Deal `amount` damage from the resolving source to each still-legal targeted permanent.
-    Damage(ValueExpr),
-    /// Remove `amount` (or all if `None`) counters of `kind` (or any kind if `None`) from each targeted permanent.
-    RemoveCounters {
-        kind: Option<crate::effects::CounterKind>,
-        amount: Option<ValueExpr>,
-    },
-    /// Create a regeneration shield for each still-legal targeted permanent.
-    Regenerate,
-    /// Prevent damage dealt by (and optionally to) each still-legal targeted permanent this turn.
-    PreventDamageThisTurn {
-        combat_only: bool,
-        both_directions: bool,
-    },
-}
-
 /// Position in the physical card owner's library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlashbackSubject {
@@ -2558,18 +2509,6 @@ pub struct CopyExceptions {
 // Legacy OfferAnyPlayer/Sacrifice variants stay inline while Phase 8 consolidates them onto boxed toolbox specs.
 #[allow(clippy::large_enum_variant)]
 pub enum Instruction {
-    /// Exile the top `count` cards of `library_owner`'s library, optionally face down,
-    /// and optionally grant play/cast permission for `duration` (optionally with any-color mana fixing).
-    ExileTopPlay {
-        count: ValueExpr,
-        library_owner: AffectedPlayers,
-        duration: ImpulsePlayDuration,
-        cast_only: bool,
-        free: bool,
-        any_color: bool,
-        face_down: bool,
-        grant_play: bool,
-    },
     /// Resolution-time non-target object selection with optional constraints (`distinct_powers`,
     /// `max_total_power`) and optional keep-vs-rest `unchosen_action`. Chosen object IDs are
     /// recorded in `last_moved_objects` and `vowed_creatures` for downstream instructions.
@@ -2632,16 +2571,6 @@ pub enum Instruction {
     },
     CreateTokens {
         creations: Vec<crate::token::TokenCreation>,
-    },
-    ChooseCreatureType {
-        into: CreatureTypeSlot,
-        excluding: BTreeSet<CreatureTypeId>,
-    },
-    /// Distinct permanent targets are announced together and checked individually as resolution begins.
-    AffectPermanentTargets {
-        minimum: u16,
-        maximum: u16,
-        action: PermanentTargetAction,
     },
     /// Each affected player chooses as many eligible controlled permanents as
     /// possible, then the complete selection is sacrificed simultaneously.
@@ -2794,8 +2723,7 @@ impl Instruction {
                 }
                 _ => {}
             },
-            Self::ExileTopPlay { .. }
-            | Self::ChooseObjects { .. }
+            Self::ChooseObjects { .. }
             | Self::ChooseOption { .. }
             | Self::ChooseValue { .. }
             | Self::LookTopChooseExt { .. }
@@ -2808,8 +2736,6 @@ impl Instruction {
             | Self::SearchLibrary { .. }
             | Self::OptionalSequence { .. }
             | Self::CreateTokens { .. }
-            | Self::ChooseCreatureType { .. }
-            | Self::AffectPermanentTargets { .. }
             | Self::Sacrifice { .. }
             | Self::Discard { .. }
             | Self::DrawCards(_)
@@ -2886,7 +2812,6 @@ impl Instruction {
             Self::Discard { players, .. } | Self::Sacrifice { players, .. } => {
                 is_target_affected(*players)
             }
-            Self::ExileTopPlay { library_owner, .. } => is_target_affected(*library_owner),
             Self::RepeatLoop { body, .. } => body.instructions.iter().any(Self::uses_mode_target),
             Self::ChooseOption { chooser, options } => {
                 is_target_player(*chooser)
@@ -2973,12 +2898,10 @@ impl Instruction {
                 .as_ref()
                 .is_some_and(crate::toolbox::PlayerSelector::uses_target),
             Self::StackOp(spec) => spec.uses_target(),
-            Self::AffectPermanentTargets { .. } => true,
             Self::ScheduleDelayedStepTrigger { .. }
             | Self::EmitReflexiveTrigger { .. }
             | Self::FixedTargetClause(..)
-            | Self::Jump { .. }
-            | Self::ChooseCreatureType { .. } => false,
+            | Self::Jump { .. } => false,
         }
     }
     /// Whether this operation can be the single effect of an optional wrapper.
@@ -3023,8 +2946,7 @@ impl Instruction {
                 spec.recipients,
                 crate::toolbox::DamageTargetQuery::FromGrantingPermanent
             ),
-            Self::ExileTopPlay { .. }
-            | Self::ChooseObjects { .. }
+            Self::ChooseObjects { .. }
             | Self::ChooseOption { .. }
             | Self::ChooseValue { .. }
             | Self::FixedTargetClause(_)
@@ -3044,9 +2966,7 @@ impl Instruction {
             | Self::RepeatLoop { .. }
             | Self::ScheduleDelayedStepTrigger { .. }
             | Self::EmitReflexiveTrigger { .. }
-            | Self::CreateTokens { .. }
-            | Self::ChooseCreatureType { .. }
-            | Self::AffectPermanentTargets { .. } => true,
+            | Self::CreateTokens { .. } => true,
             Self::SearchLibrary { filter } if filter.supports_optional_wrapper() => true,
             Self::Discard {
                 players: AffectedPlayers::One(_),
@@ -3064,103 +2984,6 @@ impl Instruction {
             | Self::Sacrifice { .. }
             | Self::Discard { .. } => false,
         }
-    }
-
-    /// Whether this instruction can accompany [`Instruction::AffectPermanentTargets`]
-    /// with `(minimum, maximum)` without consuming an incompatible single permanent target.
-    pub(crate) fn allowed_with_affect_permanent_targets(&self, minimum: u16, maximum: u16) -> bool {
-        if matches!(self, Self::FixedTargetClause(_))
-            || matches!(
-                self,
-                Self::ZoneOp(spec)
-                    if matches!(
-                        spec.destination,
-                        crate::toolbox::ZoneDest::Delayed(
-                            crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort { .. }
-                        )
-                    )
-            )
-            || matches!(
-                self,
-                Self::DealDamage(spec)
-                    if matches!(
-                        spec.recipients,
-                        crate::toolbox::DamageTargetQuery::DivideThree
-                            | crate::toolbox::DamageTargetQuery::OrderedTargets { .. }
-                            | crate::toolbox::DamageTargetQuery::Divided { .. }
-                            | crate::toolbox::DamageTargetQuery::AnnouncedTargets { .. }
-                    )
-            )
-            || matches!(
-                self,
-                Self::MutateObject(spec)
-                    if matches!(
-                        spec.op,
-                        crate::toolbox::ObjectMutation::DistributeCounters { .. }
-                    )
-            )
-            || matches!(
-                self,
-                Self::ZoneOp(spec)
-                    if matches!(spec.source, crate::toolbox::ObjectQuery::DestroyedThisWay)
-            )
-        {
-            return false;
-        }
-        if let Self::AffectPermanentTargets {
-            minimum: m2,
-            maximum: x2,
-            ..
-        } = self
-        {
-            return (*m2, *x2) == (minimum, maximum);
-        }
-        if matches!(
-            self,
-            Self::ZoneOp(_)
-                | Self::DrawCards(_)
-                | Self::MutateObject(_)
-                | Self::AdjustLife(_)
-                | Self::DealDamage(_)
-                | Self::MutatePlayer(_)
-                | Self::ApplyContinuous(_)
-        ) && minimum <= 1
-            && maximum == 1
-        {
-            return true;
-        }
-        if !self.uses_mode_target() {
-            return true;
-        }
-        matches!(
-            self,
-            Self::OfferDynamicManaPayment { .. }
-                | Self::ZoneOp(_)
-                | Self::DrawCards(_)
-                | Self::MutateObject(_)
-                | Self::AdjustLife(_)
-                | Self::DealDamage(_)
-                | Self::MutatePlayer(_)
-                | Self::ApplyContinuous(_)
-                | Self::StackOp(_)
-                | Self::ForEachPlayerQuery { .. }
-                | Self::Discard { .. }
-                | Self::CreateTokens { .. }
-                | Self::ExileTopPlay { .. }
-                | Self::LookTopChooseExt { .. }
-                | Self::ChooseObjects { .. }
-                | Self::ChooseOption { .. }
-                | Self::RepeatLoop { .. }
-                | Self::RevealUntilMatchExt { .. }
-                | Self::BranchCondition { .. }
-                | Self::Jump { .. }
-                | Self::OptionalSequence { .. }
-                | Self::ScheduleDelayedStepTrigger { .. }
-                | Self::ScheduleDelayedEventTrigger { .. }
-                | Self::EmitReflexiveTrigger { .. }
-                | Self::ChooseValue { .. }
-                | Self::SearchLibrary { .. }
-        )
     }
 }
 /// Disturb casts a transforming card from its own graveyard using the reverse face and this price.
@@ -3663,6 +3486,7 @@ pub struct ExecutableBody {
     pub instructions: Vec<Instruction>,
     pub(crate) triggered_modes: Option<TriggeredModes>,
     graveyard_target_bounds: Option<(usize, usize)>,
+    pub permanent_target_bounds: Option<(u16, u16)>,
     x_target_count: bool,
     up_to_x_target_count: bool,
     up_to_one_target: bool,
@@ -3804,7 +3628,9 @@ fn validate_toolbox_object_query(
 ) -> Result<Option<OperandFamily>, DefinitionError> {
     use crate::toolbox::{ObjectQuery, QuerySlice};
     match query {
-        ObjectQuery::Targets => Ok(Some(toolbox_object_target_family(target)?)),
+        ObjectQuery::Targets | ObjectQuery::TargetsWithPairedPartner => {
+            Ok(Some(toolbox_object_target_family(target)?))
+        }
         ObjectQuery::LinkedTarget { .. } => Ok(None),
         ObjectQuery::EffectSubject(subject) => match subject.as_ref() {
             EffectSubject::TargetObject
@@ -3932,6 +3758,11 @@ fn validate_toolbox_zone_op(
                 f = toolbox_merge_family(f, amount.required_operand_family(target)?)?;
             }
             if let Some(attach) = attach_to {
+                if matches!(attach.as_ref(), crate::toolbox::ObjectQuery::Source)
+                    && !context.has_source()
+                {
+                    return Err(DefinitionError::InvalidInstruction);
+                }
                 f = toolbox_merge_family(
                     f,
                     validate_toolbox_object_query(
@@ -3944,12 +3775,25 @@ fn validate_toolbox_zone_op(
             }
             f
         }
-        ZoneDest::Exile { viewer, .. } => match viewer {
-            Some(p) => {
-                validate_toolbox_player_selector(p, context, target, definitely_exiled_target)?
+        ZoneDest::Exile {
+            viewer,
+            delayed_return,
+            ..
+        } => {
+            if matches!(
+                delayed_return,
+                Some(DelayedReturnTiming::UntilSourceLeaves | DelayedReturnTiming::LinkedGroup(_))
+            ) && !context.has_source()
+            {
+                return Err(DefinitionError::InvalidInstruction);
             }
-            None => None,
-        },
+            match viewer {
+                Some(p) => {
+                    validate_toolbox_player_selector(p, context, target, definitely_exiled_target)?
+                }
+                None => None,
+            }
+        }
         ZoneDest::LookOnly { viewer } => {
             validate_toolbox_player_selector(viewer, context, target, definitely_exiled_target)?
         }
@@ -4103,10 +3947,13 @@ impl ExecutableBody {
 
     pub fn permanent_target_bounds(&self) -> Option<(usize, usize)> {
         self.graveyard_target_bounds
-            .or_else(|| self.inferred_permanent_target_bounds())
+            .or_else(|| self.non_graveyard_target_bounds())
     }
 
-    fn inferred_permanent_target_bounds(&self) -> Option<(usize, usize)> {
+    fn non_graveyard_target_bounds(&self) -> Option<(usize, usize)> {
+        if let Some((minimum, maximum)) = self.permanent_target_bounds {
+            return Some((usize::from(minimum), usize::from(maximum)));
+        }
         if let Some(total) = self.target_division_total() {
             return Some((1, usize::from(total)));
         }
@@ -4139,7 +3986,6 @@ impl ExecutableBody {
             {
                 Some((0, usize::MAX))
             }
-
             [Instruction::MutatePlayer(spec)]
                 if matches!(
                     spec.op,
@@ -4165,119 +4011,7 @@ impl ExecutableBody {
             {
                 Some((0, usize::MAX))
             }
-            [
-                Instruction::AffectPermanentTargets {
-                    minimum: 0,
-                    maximum: u16::MAX,
-                    action: PermanentTargetAction::Exile,
-                },
-                Instruction::ZoneOp(spec),
-            ] if matches!(
-                spec.destination,
-                crate::toolbox::ZoneDest::Delayed(
-                    crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort {
-                        next_end_step: true,
-                        ..
-                    }
-                )
-            ) =>
-            {
-                Some((0, usize::MAX))
-            }
-            [
-                Instruction::OptionalSequence {
-                    chooser: ResolvingPlayer::Controller,
-                    instructions: 2,
-                },
-                Instruction::AffectPermanentTargets {
-                    minimum,
-                    maximum,
-                    action: PermanentTargetAction::Exile,
-                },
-                Instruction::ZoneOp(spec),
-            ] if matches!(
-                spec.destination,
-                crate::toolbox::ZoneDest::Delayed(
-                    crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort { .. }
-                )
-            ) =>
-            {
-                Some((usize::from(*minimum), usize::from(*maximum)))
-            }
-            [
-                Instruction::AffectPermanentTargets {
-                    minimum,
-                    maximum,
-                    action:
-                        PermanentTargetAction::TapAndSkipNextUntap
-                        | PermanentTargetAction::Tap
-                        | PermanentTargetAction::Untap,
-                },
-                Instruction::DrawCards(_) | Instruction::AdjustLife(_),
-            ] => Some((usize::from(*minimum), usize::from(*maximum))),
-            [
-                Instruction::AffectPermanentTargets {
-                    minimum,
-                    maximum,
-                    action:
-                        PermanentTargetAction::TapAndSkipNextUntap
-                        | PermanentTargetAction::Tap
-                        | PermanentTargetAction::Untap,
-                },
-                Instruction::MutatePlayer(spec),
-            ] if spec.resolving_player() == Some(ResolvingPlayer::Controller)
-                && matches!(
-                    spec.op,
-                    crate::toolbox::PlayerMutation::Scry(_)
-                        | crate::toolbox::PlayerMutation::Surveil(_)
-                ) =>
-            {
-                Some((usize::from(*minimum), usize::from(*maximum)))
-            }
-            [
-                Instruction::AffectPermanentTargets {
-                    minimum,
-                    maximum,
-                    action: PermanentTargetAction::Destroy,
-                },
-                Instruction::ZoneOp(spec),
-            ] if matches!(spec.source, crate::toolbox::ObjectQuery::DestroyedThisWay) => {
-                Some((usize::from(*minimum), usize::from(*maximum)))
-            }
-            [
-                Instruction::AffectPermanentTargets {
-                    minimum,
-                    maximum,
-                    action: PermanentTargetAction::Exile,
-                },
-                Instruction::ZoneOp(spec),
-                ..,
-            ] if matches!(
-                spec.destination,
-                crate::toolbox::ZoneDest::Delayed(
-                    crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort { .. }
-                )
-            ) =>
-            {
-                Some((usize::from(*minimum), usize::from(*maximum)))
-            }
-            [
-                Instruction::OfferDynamicManaPayment { .. },
-                Instruction::AffectPermanentTargets {
-                    minimum,
-                    maximum,
-                    action: PermanentTargetAction::TapAndSkipNextUntap,
-                },
-            ]
-            | [
-                Instruction::AffectPermanentTargets {
-                    minimum, maximum, ..
-                },
-            ] => Some((usize::from(*minimum), usize::from(*maximum))),
             _ => self.instructions.iter().find_map(|op| match op {
-                Instruction::AffectPermanentTargets {
-                    minimum, maximum, ..
-                } => Some((usize::from(*minimum), usize::from(*maximum))),
                 Instruction::DealDamage(spec) => match spec.recipients {
                     crate::toolbox::DamageTargetQuery::AnnouncedTargets {
                         min_targets,
@@ -4326,10 +4060,17 @@ impl ExecutableBody {
             instructions,
             triggered_modes: None,
             graveyard_target_bounds: None,
+            permanent_target_bounds: None,
             x_target_count: false,
             up_to_x_target_count: false,
             up_to_one_target: false,
         }
+    }
+
+    /// Set explicit `(minimum, maximum)` bounds for multi-permanent target clauses.
+    pub fn with_permanent_target_bounds(mut self, minimum: u16, maximum: u16) -> Self {
+        self.permanent_target_bounds = Some((minimum, maximum));
+        self
     }
 
     /// Allow 0 or 1 permanent target to be chosen ("up to one target ...").
@@ -4437,8 +4178,27 @@ impl ExecutableBody {
             );
             if !valid_target
                 || self.graveyard_target_bounds.is_some()
+                || self
+                    .permanent_target_bounds
+                    .is_some_and(|bounds| bounds != (0, 1))
                 || self.x_target_count
                 || self.up_to_x_target_count
+            {
+                return Err(DefinitionError::InvalidInstruction);
+            }
+        }
+        if let Some((minimum, maximum)) = self.permanent_target_bounds {
+            let valid_target = matches!(
+                self.target,
+                BodyTarget::SingleCreature
+                    | BodyTarget::SinglePermanent
+                    | BodyTarget::SinglePlaneswalker
+                    | BodyTarget::FilteredPermanent(_)
+            );
+            if minimum > maximum
+                || maximum == 0
+                || !valid_target
+                || self.graveyard_target_bounds.is_some()
             {
                 return Err(DefinitionError::InvalidInstruction);
             }
@@ -4485,7 +4245,7 @@ impl ExecutableBody {
             };
             if minimum > maximum
                 || maximum == 0
-                || self.inferred_permanent_target_bounds().is_some()
+                || self.non_graveyard_target_bounds().is_some()
                 || !valid_gy_target_and_ops
             {
                 return Err(DefinitionError::InvalidInstruction);
@@ -4594,8 +4354,13 @@ impl ExecutableBody {
             .instructions
             .iter()
             .filter_map(|op| {
-                if let Instruction::ChooseCreatureType { into, .. } = op {
-                    Some(*into)
+                if let Instruction::PromptChoice(spec) = op
+                    && let crate::toolbox::PromptDomain::Subtype {
+                        legacy_slot: Some(slot),
+                        ..
+                    } = &spec.domain
+                {
+                    Some(*slot)
                 } else {
                     None
                 }
@@ -4660,7 +4425,12 @@ impl ExecutableBody {
             );
             let mut defined_slots = facts.definitely.clone();
             let mut donor_moved = facts.donor_moved;
-            if let Instruction::ChooseCreatureType { into, .. } = instruction {
+            if let Instruction::PromptChoice(spec) = instruction
+                && let crate::toolbox::PromptDomain::Subtype {
+                    legacy_slot: Some(into),
+                    ..
+                } = &spec.domain
+            {
                 if reachable && facts.possibly.contains(into) {
                     return Err(DefinitionError::DuplicateCreatureTypeSlot);
                 }
@@ -4726,6 +4496,26 @@ impl ExecutableBody {
                                             )
                                     )
                                 };
+                                let is_target_exile = |op: &Instruction| {
+                                    matches!(
+                                        op,
+                                        Instruction::ZoneOp(s)
+                                            if (matches!(
+                                                s.source,
+                                                crate::toolbox::ObjectQuery::Targets
+                                            ) || matches!(
+                                                &s.source,
+                                                crate::toolbox::ObjectQuery::EffectSubject(subj)
+                                                    if matches!(
+                                                        subj.as_ref(),
+                                                        EffectSubject::TargetObject
+                                                    )
+                                            )) && matches!(
+                                                s.destination,
+                                                crate::toolbox::ZoneDest::Exile { .. }
+                                            )
+                                    )
+                                };
                                 let optional_return = index == 2
                                     && matches!(
                                         self.instructions.as_slice(),
@@ -4734,12 +4524,9 @@ impl ExecutableBody {
                                                 chooser: ResolvingPlayer::Controller,
                                                 instructions: 2
                                             },
-                                            Instruction::AffectPermanentTargets {
-                                                action: PermanentTargetAction::Exile,
-                                                ..
-                                            },
+                                            second,
                                             third,
-                                        ] if is_cohort(third, false)
+                                        ] if is_target_exile(second) && is_cohort(third, false)
                                     );
                                 let returning_source = index == 1
                                     && self.target == BodyTarget::None
@@ -4750,14 +4537,7 @@ impl ExecutableBody {
                                 let direct_return = index == 1
                                     && matches!(
                                         self.instructions.as_slice(),
-                                        [
-                                            Instruction::AffectPermanentTargets {
-                                                action: PermanentTargetAction::Exile,
-                                                ..
-                                            },
-                                            second,
-                                            ..
-                                        ] if is_cohort(second, false)
+                                        [first, second, ..] if is_target_exile(first) && is_cohort(second, false)
                                     );
                                 if !optional_return && !returning_source && !direct_return {
                                     return Err(DefinitionError::InvalidInstruction);
@@ -4783,14 +4563,26 @@ impl ExecutableBody {
                                 .is_some_and(|op| {
                                     matches!(
                                         op,
-                                        Instruction::AffectPermanentTargets {
-                                            action: PermanentTargetAction::Destroy,
-                                            ..
-                                        }
+                                        Instruction::ZoneOp(prev)
+                                            if matches!(
+                                                prev.destination,
+                                                crate::toolbox::ZoneDest::Graveyard {
+                                                    semantics: crate::toolbox::GraveyardSemantics::Destroy { .. }
+                                                }
+                                            )
                                     )
                                 })
                         {
                             return Err(DefinitionError::InvalidInstruction);
+                        }
+                        if let crate::toolbox::ObjectQuery::ZoneScan {
+                            slice:
+                                crate::toolbox::QuerySlice::Top(expr)
+                                | crate::toolbox::QuerySlice::Bottom(expr),
+                            ..
+                        } = &spec.source
+                        {
+                            expr.validate_amount(&defined_slots, context, &facts, vocabulary)?;
                         }
                         let family = validate_toolbox_zone_op(
                             spec,
@@ -6637,7 +6429,42 @@ impl ExecutableBody {
                                     )?;
                                 }
                             }
-                            if matches!(spec.selector, Some(crate::toolbox::ObjectQuery::Targets)) {
+                            let is_pair = matches!(
+                                spec.selector,
+                                Some(crate::toolbox::ObjectQuery::TargetsWithPairedPartner)
+                            );
+                            if is_pair
+                                && self
+                                    .permanent_target_bounds()
+                                    .is_some_and(|bounds| bounds != (1, 1))
+                            {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            if (is_pair
+                                || (matches!(
+                                    spec.selector,
+                                    Some(crate::toolbox::ObjectQuery::Targets)
+                                ) && self
+                                    .permanent_target_bounds()
+                                    .is_some_and(|(_, max)| max > 1)))
+                                && parts.0.iter().any(|part| {
+                                    matches!(
+                                        part,
+                                        crate::characteristics::ResolvedPartSpec::Control(
+                                            crate::characteristics::ControlRecipient::TargetOwner
+                                        )
+                                    )
+                                })
+                            {
+                                return Err(DefinitionError::InvalidInstruction);
+                            }
+                            if matches!(
+                                spec.selector,
+                                Some(
+                                    crate::toolbox::ObjectQuery::Targets
+                                        | crate::toolbox::ObjectQuery::TargetsWithPairedPartner
+                                )
+                            ) {
                                 Some(OperandFamily::Permanent)
                             } else {
                                 None
@@ -6897,6 +6724,14 @@ impl ExecutableBody {
                 }
                 Instruction::PromptChoice(spec) => {
                     spec.validate_vocabulary(vocabulary)?;
+                    if let crate::toolbox::PromptDomain::Subtype {
+                        legacy_slot: Some(into),
+                        ..
+                    } = &spec.domain
+                        && !defined_slots.insert(*into)
+                    {
+                        return Err(DefinitionError::DuplicateCreatureTypeSlot);
+                    }
                     validate_toolbox_player_selector(
                         &spec.chooser,
                         context,
@@ -7618,21 +7453,6 @@ impl ExecutableBody {
                     }
                     token_family
                 }
-                Instruction::ChooseCreatureType { into, excluding } => {
-                    if excluding
-                        .iter()
-                        .any(|value| vocabulary.label(*value).is_none())
-                    {
-                        return Err(DefinitionError::ForeignCreatureType);
-                    }
-                    if excluding.len() == vocabulary.len() {
-                        return Err(DefinitionError::EmptyCreatureTypeDomain);
-                    }
-                    if !defined_slots.insert(*into) {
-                        return Err(DefinitionError::DuplicateCreatureTypeSlot);
-                    }
-                    None
-                }
                 Instruction::FixedTargetClause(body) => {
                     let only_second_target_bounds = body.permanent_target_bounds() == Some((2, 2))
                         && body.instructions.iter().any(|op| {
@@ -7914,344 +7734,6 @@ impl ExecutableBody {
                         )?;
                     }
                     None
-                }
-                Instruction::AffectPermanentTargets {
-                    minimum,
-                    maximum,
-                    action,
-                } => {
-                    if *action == PermanentTargetAction::PutPlusOneCounterOnOthers
-                        && !matches!(context, BodyContext::TriggerBound { .. })
-                    {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    let payment_then_freeze = matches!(
-                        self.instructions.as_slice(),
-                        [
-                            Instruction::OfferDynamicManaPayment {
-                                payer: ResolvingPlayer::Controller,
-                                paid_destination: 1,
-                                declined_destination: 2,
-                                ..
-                            },
-                            Instruction::AffectPermanentTargets { .. },
-                        ]
-                    );
-                    let untap_during_targeted_change = *minimum == 1
-                        && *maximum == 1
-                        && (matches!(
-                            self.instructions.as_slice(),
-                            [
-                                Instruction::ApplyContinuous(_),
-                                Instruction::AffectPermanentTargets {
-                                    action: PermanentTargetAction::Untap,
-                                    ..
-                                },
-                                Instruction::ApplyContinuous(_),
-                            ]
-                        ) || (index == 1
-                            && matches!(
-                                self.instructions.as_slice(),
-                                [
-                                    Instruction::ApplyContinuous(_) | Instruction::MutateObject(_),
-                                    Instruction::AffectPermanentTargets {
-                                        action: PermanentTargetAction::Untap
-                                            | PermanentTargetAction::Tap,
-                                        ..
-                                    },
-                                ]
-                            )));
-                    let freeze_then_draw = index == 0
-                        && matches!(
-                            self.instructions.as_slice(),
-                            [
-                                Instruction::AffectPermanentTargets {
-                                    minimum: 1,
-                                    maximum: 1,
-                                    action: PermanentTargetAction::TapAndSkipNextUntap
-                                        | PermanentTargetAction::Tap
-                                        | PermanentTargetAction::Untap,
-                                },
-                                Instruction::DrawCards(_) | Instruction::AdjustLife(_),
-                            ]
-                        )
-                        || (index == 0
-                            && matches!(
-                                self.instructions.as_slice(),
-                                [
-                                    Instruction::AffectPermanentTargets {
-                                        minimum: 1,
-                                        maximum: 1,
-                                        action: PermanentTargetAction::TapAndSkipNextUntap
-                                            | PermanentTargetAction::Tap
-                                            | PermanentTargetAction::Untap,
-                                    },
-                                    Instruction::MutatePlayer(spec),
-                                ] if spec.resolving_player() == Some(ResolvingPlayer::Controller)
-                                    && matches!(
-                                        spec.op,
-                                        crate::toolbox::PlayerMutation::Scry(_)
-                                            | crate::toolbox::PlayerMutation::Surveil(_)
-                                    )
-                            ));
-                    let tap_before_other_effect = index == 0
-                        && matches!(
-                            self.instructions.as_slice(),
-                            [
-                                Instruction::AffectPermanentTargets {
-                                    minimum: 1,
-                                    maximum: 1,
-                                    action: PermanentTargetAction::Tap
-                                },
-                                Instruction::BranchCondition { .. },
-                                Instruction::ZoneOp(_),
-                            ]
-                        );
-                    let optional_toggle = index == 1
-                        && matches!(
-                            self.instructions.as_slice(),
-                            [
-                                Instruction::OptionalSequence {
-                                    chooser: ResolvingPlayer::Controller,
-                                    instructions: 1,
-                                },
-                                Instruction::AffectPermanentTargets {
-                                    minimum: 1,
-                                    maximum: 1,
-                                    action: PermanentTargetAction::ToggleTap
-                                },
-                            ]
-                        );
-                    let toggle_in_sequence = *action == PermanentTargetAction::ToggleTap
-                        && (*minimum, *maximum) == (1, 1);
-                    if *action == PermanentTargetAction::ToggleTap
-                        && !optional_toggle
-                        && !toggle_in_sequence
-                    {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    let tap_or_untap_sequence = (*minimum, *maximum) == (1, 1)
-                        && match action {
-                            PermanentTargetAction::Tap => {
-                                index == 1
-                                    && matches!(
-                                        self.instructions.as_slice(),
-                                        [
-                                            Instruction::OptionalSequence {
-                                                instructions: 1,
-                                                ..
-                                            },
-                                            Instruction::AffectPermanentTargets { .. }
-                                        ]
-                                    )
-                            }
-                            PermanentTargetAction::Untap => {
-                                index == 0
-                                    && matches!(
-                                        self.instructions.as_slice(),
-                                        [
-                                            Instruction::AffectPermanentTargets { .. },
-                                            Instruction::ApplyContinuous(_)
-                                        ]
-                                    )
-                            }
-                            _ => false,
-                        };
-                    let optional_blink = index == 1
-                        && matches!(
-                            self.instructions.as_slice(),
-                            [
-                                Instruction::OptionalSequence {
-                                    chooser: ResolvingPlayer::Controller,
-                                    instructions: 2
-                                },
-                                Instruction::AffectPermanentTargets {
-                                    minimum: 1,
-                                    maximum: 1,
-                                    action: PermanentTargetAction::Exile
-                                },
-                                Instruction::ZoneOp(spec),
-                            ] if matches!(
-                                spec.destination,
-                                crate::toolbox::ZoneDest::Delayed(
-                                    crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort {
-                                        next_end_step: false,
-                                        ..
-                                    }
-                                )
-                            )
-                        );
-                    let destroy_then_return = *action == PermanentTargetAction::Destroy
-                        && index == 0
-                        && matches!(
-                            self.instructions.as_slice(),
-                            [_, Instruction::ZoneOp(spec)]
-                                if matches!(spec.source, crate::toolbox::ObjectQuery::DestroyedThisWay)
-                        );
-                    let trailing_non_target_followups =
-                        self.instructions.iter().enumerate().all(|(i, op)| {
-                            i == index
-                                || op.allowed_with_affect_permanent_targets(*minimum, *maximum)
-                        });
-                    let single_target_in_sequence = (*minimum, *maximum) == (1, 1)
-                        && matches!(
-                            action,
-                            PermanentTargetAction::Tap
-                                | PermanentTargetAction::Untap
-                                | PermanentTargetAction::ToggleTap
-                                | PermanentTargetAction::TapAndSkipNextUntap
-                                | PermanentTargetAction::SkipNextUntap
-                                | PermanentTargetAction::PutPlusOneCounter
-                                | PermanentTargetAction::PutCounters { .. }
-                                | PermanentTargetAction::Destroy
-                                | PermanentTargetAction::Exile
-                                | PermanentTargetAction::ReturnToHand
-                                | PermanentTargetAction::RequireCombatAction(_)
-                                | PermanentTargetAction::MoveTo(_)
-                                | PermanentTargetAction::Modify { .. }
-                                | PermanentTargetAction::ModifyWithPartner { .. }
-                                | PermanentTargetAction::Regenerate
-                                | PermanentTargetAction::PreventDamageThisTurn { .. }
-                        )
-                        && self.instructions.iter().all(|op| {
-                            !matches!(op, Instruction::FixedTargetClause(_))
-                                && !matches!(
-                                    op,
-                                    Instruction::AffectPermanentTargets {
-                                        minimum,
-                                        maximum,
-                                        ..
-                                    } if (*minimum, *maximum) != (1, 1)
-                                )
-                        });
-                    let optional_affect =
-                        matches!(
-                            self.instructions.as_slice(),
-                            [
-                                Instruction::OptionalSequence {
-                                    instructions: 1,
-                                    ..
-                                },
-                                Instruction::AffectPermanentTargets { .. },
-                            ]
-                        ) && (!matches!(action, PermanentTargetAction::ToggleTap)
-                            || (*minimum, *maximum) == (1, 1));
-                    if minimum > maximum
-                        || *maximum == 0
-                        || self.instructions.len() != 1
-                            && !trailing_non_target_followups
-                            && !single_target_in_sequence
-                            && !payment_then_freeze
-                            && !destroy_then_return
-                            && !untap_during_targeted_change
-                            && !tap_or_untap_sequence
-                            && !freeze_then_draw
-                            && !optional_blink
-                            && !optional_toggle
-                            && !optional_affect
-                            && !tap_before_other_effect
-                            && !matches!(
-                                self.instructions.as_slice(),
-                                [
-                                    Instruction::AffectPermanentTargets {
-                                        action: PermanentTargetAction::Exile,
-                                        ..
-                                    },
-                                    Instruction::ZoneOp(spec),
-                                    ..
-                                ] if matches!(
-                                    spec.destination,
-                                    crate::toolbox::ZoneDest::Delayed(
-                                        crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort { .. }
-                                    )
-                                )
-                            )
-                        || !matches!(
-                            self.target,
-                            BodyTarget::SingleCreature
-                                | BodyTarget::SinglePermanent
-                                | BodyTarget::SinglePlaneswalker
-                                | BodyTarget::FilteredPermanent(_)
-                        )
-                    {
-                        return Err(DefinitionError::InvalidInstruction);
-                    }
-                    if let PermanentTargetAction::PutCounters { kind, amount } = action {
-                        if !kind.is_permanent() {
-                            return Err(DefinitionError::InvalidInstruction);
-                        }
-                        amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    }
-                    if let PermanentTargetAction::MoveTo(destination) = action {
-                        let needs_source = matches!(
-                            destination,
-                            SubjectDestination::Exile {
-                                delayed_return: Some(
-                                    DelayedReturnTiming::UntilSourceLeaves
-                                        | DelayedReturnTiming::LinkedGroup(_)
-                                )
-                            } | SubjectDestination::Battlefield {
-                                attach_to_self: true,
-                                ..
-                            }
-                        );
-                        if needs_source && !context.has_source() {
-                            return Err(DefinitionError::InvalidInstruction);
-                        }
-                    }
-                    if let PermanentTargetAction::Damage(amount) = action {
-                        amount.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    }
-                    if let PermanentTargetAction::RemoveCounters { kind, amount } = action {
-                        if let Some(k) = kind
-                            && !k.is_permanent()
-                        {
-                            return Err(DefinitionError::InvalidInstruction);
-                        }
-                        if let Some(expr) = amount {
-                            expr.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                        }
-                    }
-                    if let PermanentTargetAction::Modify { parts, .. }
-                    | PermanentTargetAction::ModifyWithPartner { parts, .. } = action
-                    {
-                        let pair =
-                            matches!(action, PermanentTargetAction::ModifyWithPartner { .. });
-                        if pair && (*minimum, *maximum) != (1, 1) {
-                            return Err(DefinitionError::InvalidInstruction);
-                        }
-                        if (*maximum > 1 || pair)
-                            && parts.0.iter().any(|part| {
-                                matches!(
-                                    part,
-                                    crate::characteristics::ResolvedPartSpec::Control(
-                                        crate::characteristics::ControlRecipient::TargetOwner
-                                    )
-                                )
-                            })
-                        {
-                            return Err(DefinitionError::InvalidInstruction);
-                        }
-                        parts
-                            .validate(vocabulary, &defined_slots)
-                            .map_err(|_| DefinitionError::ContinuousEffect)?;
-                        for part in &parts.0 {
-                            if let crate::characteristics::ResolvedPartSpec::SetPower(expr)
-                            | crate::characteristics::ResolvedPartSpec::SetToughness(expr) = part
-                            {
-                                expr.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                            }
-                        }
-                    }
-                    Some(OperandFamily::Permanent)
-                }
-                Instruction::ExileTopPlay {
-                    count,
-                    library_owner,
-                    ..
-                } => {
-                    count.validate_amount(&defined_slots, context, &facts, vocabulary)?;
-                    library_owner.validate(context, self.target, facts.definitely_exiled_target)?
                 }
                 Instruction::ChooseObjects {
                     players,
@@ -8619,7 +8101,12 @@ impl ExecutableBody {
                 facts.definitely = defined_slots;
                 facts.donor_moved = donor_moved;
                 facts.record_maybe_from_definite();
-                if let Instruction::ChooseCreatureType { into, .. } = instruction {
+                if let Instruction::PromptChoice(spec) = instruction
+                    && let crate::toolbox::PromptDomain::Subtype {
+                        legacy_slot: Some(into),
+                        ..
+                    } = &spec.domain
+                {
                     facts.possibly.insert(*into);
                 }
                 let next = index
@@ -8749,10 +8236,8 @@ impl ExecutableBody {
                         facts.merge_into(&mut incoming[*declined_destination]);
                     }
                     Instruction::CreateTokens { .. }
-                    | Instruction::ChooseCreatureType { .. }
                     | Instruction::ScheduleDelayedStepTrigger { .. }
                     | Instruction::EmitReflexiveTrigger { .. }
-                    | Instruction::ExileTopPlay { .. }
                     | Instruction::ChooseObjects { .. }
                     | Instruction::ChooseOption { .. }
                     | Instruction::ChooseValue { .. }
@@ -8762,7 +8247,6 @@ impl ExecutableBody {
                     | Instruction::RepeatLoop { .. }
                     | Instruction::FixedTargetClause(_)
                     | Instruction::SearchLibrary { .. }
-                    | Instruction::AffectPermanentTargets { .. }
                     | Instruction::Sacrifice { .. }
                     | Instruction::Discard { .. }
                     | Instruction::DrawCards(_)
@@ -12483,7 +11967,6 @@ impl Program {
                         op,
                         Instruction::Discard { amount, .. }
                             | Instruction::Sacrifice { amount, .. }
-                            | Instruction::ExileTopPlay { count: amount, .. }
                             | Instruction::LookTopChooseExt { count: amount, .. }
                             | Instruction::RepeatLoop { count: amount, .. }
                             if expr_uses_source(amount)
@@ -12776,8 +12259,7 @@ impl Program {
                             | AffectedPlayers::EachPlayer => true,
                         };
                         match operation {
-                            Instruction::ChooseCreatureType { .. }
-                            | Instruction::ScheduleDelayedStepTrigger { .. }
+                            Instruction::ScheduleDelayedStepTrigger { .. }
                             | Instruction::EmitReflexiveTrigger { .. }
                             | Instruction::SearchLibrary { .. }
                             | Instruction::Jump { .. }
@@ -12804,7 +12286,6 @@ impl Program {
                             | Instruction::SideDeckOp { .. }
                             | Instruction::StackOp(_)
                             | Instruction::ChooseObjects { .. }
-                            | Instruction::ExileTopPlay { .. }
                             | Instruction::LookTopChooseExt { .. }
                             | Instruction::RevealUntilMatchExt { .. } => {
                                 !operation.uses_mode_target()

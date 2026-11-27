@@ -21,10 +21,12 @@ fn branch(destination: usize) -> Instruction {
     }
 }
 fn choose() -> Instruction {
-    Instruction::ChooseCreatureType {
-        into: CreatureTypeSlot::new(0),
-        excluding: BTreeSet::new(),
-    }
+    Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec::choose_creature_type(
+            CreatureTypeSlot::new(0),
+            BTreeSet::new(),
+        ),
+    ))
 }
 fn read() -> Instruction {
     crate::program::Instruction::DrawCards(Box::new(crate::toolbox::DrawCardsSpec::simple(

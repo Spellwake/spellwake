@@ -15,8 +15,8 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination},
     priority::SeatId,
     program::{
-        BodyTarget, CardType, CreatureTypeSlot, ExecutableBody, Instruction, Program, ProgramKind,
-        TriggeredAbility, TriggeredAbilityId, ValueExpr,
+        BodyTarget, CardType, ExecutableBody, Instruction, Program, ProgramKind, TriggeredAbility,
+        TriggeredAbilityId, ValueExpr,
     },
     setup::GameSeed,
 };
@@ -134,10 +134,12 @@ pub fn body(
         .iter()
         .map(|row| {
             Ok(match text(row, "op")? {
-                "ChooseCreatureType" => Instruction::ChooseCreatureType {
-                    into: creature_types::slot(row["into"].clone())?,
-                    excluding: type_set(&row["excluding"], full, other)?,
-                },
+                "ChooseCreatureType" => Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                        creature_types::slot(row["into"].clone())?,
+                        type_set(&row["excluding"], full, other)?,
+                    ),
+                )),
                 "DrawController" => Instruction::DrawCards(Box::new(
                     spellwake_engine::toolbox::DrawCardsSpec::simple(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -597,14 +599,17 @@ pub fn public_pending(
         state = value.into_state();
     }
     let entry = entry.ok_or("actual S cast entry missing")?;
-    let Some(RuleFrame::CreatureType(frame)) = state.pending_decision().map(|value| value.frame())
+    let Some(RuleFrame::PromptChoice(frame)) = state.pending_decision().map(|value| value.frame())
     else {
-        return Err("literal public preparation did not reach actual CreatureType Pending".into());
+        return Err("literal public preparation did not reach actual PromptChoice Pending".into());
     };
-    if frame.entry() != entry
-        || frame.instruction() != 0
-        || frame.slot() != CreatureTypeSlot::new(0)
-        || frame.chooser() != SeatId(0)
+    if frame.entry != entry
+        || frame.instruction != 0
+        || frame.chooser != SeatId(0)
+        || !matches!(
+            frame.domain,
+            spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. }
+        )
     {
         return Err("actual first frame differs from explicit public template boundary".into());
     }

@@ -3654,10 +3654,7 @@ fn phase14_mutate_object_goad_permanent_persists_across_turns() {
 
 #[test]
 fn phase15_per_extra_target_cost_strive_charges_for_second_target() {
-    use spellwake_engine::{
-        mana::{CastingPayment, ManaType},
-        program::PermanentTargetAction,
-    };
+    use spellwake_engine::mana::{CastingPayment, ManaType};
     use std::collections::BTreeMap;
 
     let vocab = vocabulary();
@@ -3665,12 +3662,12 @@ fn phase15_per_extra_target_cost_strive_charges_for_second_target() {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::FilteredPermanent(ObjectFilter::creature()),
-            vec![Instruction::AffectPermanentTargets {
-                minimum: 1,
-                maximum: u16::MAX,
-                action: PermanentTargetAction::Tap,
-            }],
-        ),
+            vec![Instruction::MutateObject(Box::new(MutateObjectSpec::all(
+                ObjectQuery::Targets,
+                ObjectMutation::SetTapped(true),
+            )))],
+        )
+        .with_permanent_target_bounds(1, u16::MAX),
     );
     strive_spell.per_extra_target_cost = Some(ManaCost {
         generic: 1.into(),

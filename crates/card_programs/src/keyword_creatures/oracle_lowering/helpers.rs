@@ -1327,19 +1327,6 @@ fn last_instruction_created_tokens_local(ops: &[Instruction]) -> bool {
         )
 }
 
-fn existing_affect_permanent_targets_bounds(ops: &[Instruction]) -> Option<(u16, u16)> {
-    ops.iter().rev().find_map(|op| {
-        if let Instruction::AffectPermanentTargets {
-            minimum, maximum, ..
-        } = op
-        {
-            Some((*minimum, *maximum))
-        } else {
-            None
-        }
-    })
-}
-
 fn rewrite_object_filter_controller_local(
     obj: &mut ObjectFilter,
     from: ControllerFilter,
@@ -1821,16 +1808,15 @@ pub(super) fn lower_modify_pt_part(
                 filter, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: *n,
-                    maximum: *n,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                *n,
+                *n,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -1841,16 +1827,15 @@ pub(super) fn lower_modify_pt_part(
                 filter, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: 0,
-                    maximum: *max,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                0,
+                *max,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -1866,16 +1851,15 @@ pub(super) fn lower_modify_pt_part(
             } else {
                 builder.x_target_count = true;
             }
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: 0,
-                    maximum: u16::MAX,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                0,
+                u16::MAX,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -1920,16 +1904,15 @@ pub(super) fn lower_modify_pt_part(
                 options, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: *n,
-                    maximum: *n,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                *n,
+                *n,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetOneOf {
@@ -1940,16 +1923,15 @@ pub(super) fn lower_modify_pt_part(
                 options, builder, in_trigger, vocabulary,
             )?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: 0,
-                    maximum: *max,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                0,
+                *max,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetOneOf {
@@ -1965,16 +1947,15 @@ pub(super) fn lower_modify_pt_part(
             } else {
                 builder.x_target_count = true;
             }
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: 0,
-                    maximum: u16::MAX,
-                    action: PermanentTargetAction::Modify {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                0,
+                u16::MAX,
+                super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    ResolvedPartsSpec(vec![part]),
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetOneOf {
@@ -2012,19 +1993,14 @@ pub(super) fn lower_modify_pt_part(
             Ok(())
         }
         SubjectRefAst::Anaphora(_) if is_permanent_body_target(builder.target) => {
-            if let Some((minimum, maximum)) =
-                existing_affect_permanent_targets_bounds(&builder.instructions)
-            {
+            if builder.permanent_target_bounds.is_some() {
                 builder
                     .instructions
-                    .push(Instruction::AffectPermanentTargets {
-                        minimum,
-                        maximum,
-                        action: PermanentTargetAction::Modify {
-                            parts: ResolvedPartsSpec(vec![part]),
-                            duration: dur,
-                        },
-                    });
+                    .push(super::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        ResolvedPartsSpec(vec![part]),
+                        dur,
+                    ));
             } else if builder.instructions.iter().any(|op| {
                 matches!(
                     op,
@@ -5139,14 +5115,10 @@ pub(super) fn predefined_token_def(
                     source_cost: SourceCost::TapSacrifice,
                     body: ExecutableBody::new(
                         BodyTarget::SingleCreature,
-                        vec![Instruction::AffectPermanentTargets {
-                            minimum: 1,
-                            maximum: 1,
-                            action: PermanentTargetAction::PutCounters {
-                                kind: CounterKind::PlusOne,
-                                amount: ValueExpr::literal(1),
-                            },
-                        }],
+                        vec![super::toolbox_emit::put_counters_on_target(
+                            CounterKind::PlusOne,
+                            ValueExpr::literal(1),
+                        )],
                     ),
                 }],
             );

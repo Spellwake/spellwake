@@ -49,12 +49,14 @@ pub(super) fn rishkar(
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::SingleCreature,
-            vec![Instruction::AffectPermanentTargets {
-                minimum: 0,
-                maximum: 2,
-                action: spellwake_engine::program::PermanentTargetAction::PutPlusOneCounter,
-            }],
-        ),
+            vec![
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                    spellwake_engine::effects::CounterKind::PlusOne,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                ),
+            ],
+        )
+        .with_permanent_target_bounds(0, 2),
     });
     Some(program)
 }

@@ -564,6 +564,7 @@ pub(in super::super) fn lower_resolution_condition(
         | ConditionAst::EventOccurredThisTurn { .. } => {
             let snap_target = builder.target;
             let snap_gy = builder.graveyard_target_bounds;
+            let snap_perm = builder.permanent_target_bounds;
             let snap_x = builder.x_target_count;
             let snap_up_to_x = builder.up_to_x_target_count;
             let snap_group = builder.last_group_filter;
@@ -572,6 +573,7 @@ pub(in super::super) fn lower_resolution_condition(
                 Err("oracle:unsupported-if-condition") => {
                     builder.target = snap_target;
                     builder.graveyard_target_bounds = snap_gy;
+                    builder.permanent_target_bounds = snap_perm;
                     builder.x_target_count = snap_x;
                     builder.up_to_x_target_count = snap_up_to_x;
                     builder.last_group_filter = snap_group;
@@ -590,6 +592,7 @@ pub(in super::super) fn lower_resolution_condition(
                             Err("oracle:unsupported-if-condition") => {
                                 builder.target = snap_target;
                                 builder.graveyard_target_bounds = snap_gy;
+                                builder.permanent_target_bounds = snap_perm;
                                 builder.x_target_count = snap_x;
                                 builder.up_to_x_target_count = snap_up_to_x;
                                 builder.last_group_filter = snap_group;
@@ -4746,7 +4749,6 @@ pub(super) fn lower_subject_to_object_query(
                             | Instruction::ForEachPlayerQuery { .. }
                             | Instruction::Sacrifice { .. }
                             | Instruction::Discard { .. }
-                            | Instruction::ExileTopPlay { .. }
                             | Instruction::LookTopChooseExt { .. }
                     ) || matches!(
                         op,
@@ -4864,6 +4866,7 @@ pub(super) fn lower_condition_expr(
     }
     let snap_target = builder.target;
     let snap_gy = builder.graveyard_target_bounds;
+    let snap_perm = builder.permanent_target_bounds;
     let snap_x = builder.x_target_count;
     let snap_up_to_x = builder.up_to_x_target_count;
     let snap_group = builder.last_group_filter;
@@ -4876,6 +4879,7 @@ pub(super) fn lower_condition_expr(
     }
     builder.target = snap_target;
     builder.graveyard_target_bounds = snap_gy;
+    builder.permanent_target_bounds = snap_perm;
     builder.x_target_count = snap_x;
     builder.up_to_x_target_count = snap_up_to_x;
     builder.last_group_filter = snap_group;

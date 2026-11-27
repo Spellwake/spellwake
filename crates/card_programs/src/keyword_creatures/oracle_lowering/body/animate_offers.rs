@@ -693,14 +693,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     _ => {}
                 }
             }
-            Instruction::ExileTopPlay {
-                count,
-                library_owner,
-                ..
-            } => {
-                rewrite_offer_chosen_to_loop_ve(count);
-                rewrite_offer_chosen_to_loop_ap(library_owner);
-            }
             Instruction::ZoneOp(spec) => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
                     spec,
@@ -1081,6 +1073,9 @@ pub(super) fn lower_offer_loop_player_sub_body(
     }
     if outer_builder.graveyard_target_bounds.is_none() {
         outer_builder.graveyard_target_bounds = sub.graveyard_target_bounds;
+    }
+    if outer_builder.permanent_target_bounds.is_none() {
+        outer_builder.permanent_target_bounds = sub.permanent_target_bounds;
     }
     outer_builder.x_target_count |= sub.x_target_count;
     Ok(ExecutableBody::new(BodyTarget::None, sub.instructions))
@@ -2124,16 +2119,15 @@ pub(in super::super) fn lower_animate_or_set_pt(
             inner.zone = None;
             let bt = lower_battlefield_body_target(&inner, vocabulary)?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: *n,
-                    maximum: *n,
-                    action: PermanentTargetAction::Modify {
-                        parts: spec,
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                *n,
+                *n,
+                super::super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -2144,16 +2138,15 @@ pub(in super::super) fn lower_animate_or_set_pt(
             inner.zone = None;
             let bt = lower_battlefield_body_target(&inner, vocabulary)?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: 0,
-                    maximum: *max,
-                    action: PermanentTargetAction::Modify {
-                        parts: spec,
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                0,
+                *max,
+                super::super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::TargetObject {
@@ -2180,16 +2173,15 @@ pub(in super::super) fn lower_animate_or_set_pt(
             let bt = lower_battlefield_body_target(&inner, vocabulary)?;
             builder.bind_target(bt)?;
             builder.x_target_count = true;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: 0,
-                    maximum: u16::MAX,
-                    action: PermanentTargetAction::Modify {
-                        parts: spec,
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                0,
+                u16::MAX,
+                super::super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spec,
+                    dur,
+                ),
+            );
             Ok(())
         }
         SubjectRefAst::Anaphora(_) if has_perm_target => {

@@ -679,10 +679,12 @@ fn placement_target_survives_a_later_resolution_type_choice_and_materialized_lay
         instruction(),
         BodyTarget::SingleCreature,
         vec![
-            Instruction::ChooseCreatureType {
-                into: slot,
-                excluding: BTreeSet::new(),
-            },
+            Instruction::PromptChoice(Box::new(
+                spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                    slot,
+                    BTreeSet::new(),
+                ),
+            )),
             tr::effect(
                 vec![tr::type_part(
                     TypeOperation::Keep,
@@ -720,11 +722,14 @@ fn placement_target_survives_a_later_resolution_type_choice_and_materialized_lay
         .trigger
         .clone();
     let pending = resolve(chosen.state());
-    let RuleFrame::CreatureType(frame) = pending.state().pending_decision().unwrap().frame() else {
+    let RuleFrame::PromptChoice(frame) = pending.state().pending_decision().unwrap().frame() else {
         panic!("nested type choice")
     };
-    assert_eq!(frame.entry(), entry);
-    assert_eq!(frame.slot(), slot);
+    assert_eq!(frame.entry, entry);
+    assert!(matches!(
+        frame.domain,
+        spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. }
+    ));
     assert_eq!(
         pending
             .state()
@@ -753,7 +758,13 @@ fn placement_target_survives_a_later_resolution_type_choice_and_materialized_lay
         .creature_vocabulary()
         .resolve_label("Elf")
         .unwrap();
-    let continued = tr::reply(pending.state(), P0, DecisionReply::CreatureType(elf));
+    let continued = tr::reply(
+        pending.state(),
+        P0,
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+            elf,
+        )),
+    );
     assert!(
         tr::current(continued.state(), creature)
             .current_creature_subtypes

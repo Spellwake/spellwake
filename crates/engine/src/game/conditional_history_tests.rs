@@ -41,10 +41,21 @@ fn before_resolution() -> GameState {
             ))),
             destination: 3,
         },
-        Instruction::ChooseCreatureType {
-            into: CreatureTypeSlot::new(0),
-            excluding: BTreeSet::new(),
-        },
+        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+            chooser: crate::toolbox::PlayerSelector::Resolving(
+                crate::program::ResolvingPlayer::Controller,
+            ),
+            domain: crate::toolbox::PromptDomain::Subtype {
+                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                excluding: BTreeSet::new(),
+                legacy_slot: Some(CreatureTypeSlot::new(0)),
+            },
+            category: crate::toolbox::ChoiceCategory::Generic,
+            bind_to: crate::toolbox::BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+        })),
         Instruction::Jump { destination: 4 },
         gain(99),
         gain(1),
@@ -196,7 +207,9 @@ fn actual_recorder_retains_control_facts_before_pause_after_reply_and_rejected_c
         actor: B,
         command: GameCommand::Reply {
             decision,
-            choice: DecisionReply::CreatureType(human),
+            choice: DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(
+                human,
+            )),
         },
     };
     let unchanged = pending.state().clone();
@@ -235,7 +248,9 @@ fn actual_recorder_retains_control_facts_before_pause_after_reply_and_rejected_c
         actor: A,
         command: GameCommand::Reply {
             decision,
-            choice: DecisionReply::CreatureType(human),
+            choice: DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(
+                human,
+            )),
         },
     };
     let completed = pending.state().advance(reply.clone());

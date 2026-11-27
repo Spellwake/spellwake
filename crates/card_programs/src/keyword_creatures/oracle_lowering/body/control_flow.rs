@@ -1324,6 +1324,7 @@ pub(super) struct LoweredReplacePair {
     alt_ops: Vec<Instruction>,
     merged_target: BodyTarget,
     merged_gy: Option<(usize, usize)>,
+    merged_perm: Option<(u16, u16)>,
     x_target_count: bool,
     up_to_x_target_count: bool,
     last_group_filter: Option<ObjectFilter>,
@@ -1365,6 +1366,7 @@ pub(super) fn lower_replace_pair(
     base_builder.has_source = builder.has_source;
     base_builder.target = builder.target;
     base_builder.graveyard_target_bounds = builder.graveyard_target_bounds;
+    base_builder.permanent_target_bounds = builder.permanent_target_bounds;
     base_builder.x_target_count = builder.x_target_count;
     base_builder.last_group_filter = builder.last_group_filter;
     lower_instruction_seq(
@@ -1381,6 +1383,7 @@ pub(super) fn lower_replace_pair(
     alt_builder.has_source = builder.has_source;
     alt_builder.target = builder.target;
     alt_builder.graveyard_target_bounds = builder.graveyard_target_bounds;
+    alt_builder.permanent_target_bounds = builder.permanent_target_bounds;
     alt_builder.x_target_count = builder.x_target_count;
     alt_builder.up_to_x_target_count = builder.up_to_x_target_count;
     alt_builder.last_group_filter = builder.last_group_filter;
@@ -1408,6 +1411,7 @@ pub(super) fn lower_replace_pair(
         alt_builder.has_source = builder.has_source;
         alt_builder.target = base_builder.target;
         alt_builder.graveyard_target_bounds = base_builder.graveyard_target_bounds;
+        alt_builder.permanent_target_bounds = base_builder.permanent_target_bounds;
         alt_builder.x_target_count = base_builder.x_target_count;
         alt_builder.up_to_x_target_count = base_builder.up_to_x_target_count;
         alt_builder.last_group_filter =
@@ -1438,6 +1442,14 @@ pub(super) fn lower_replace_pair(
         (Some(_), None) | (None, None) => true,
         (None, Some(_)) => false,
     };
+    let perm_compatible = match (
+        base_builder.permanent_target_bounds,
+        alt_builder.permanent_target_bounds,
+    ) {
+        (Some(a), Some(b)) => a == b,
+        (Some(_), None) | (None, None) => true,
+        (None, Some(_)) => false,
+    };
     let alt_introduces_fixed_target = alt_builder
         .instructions
         .iter()
@@ -1448,6 +1460,7 @@ pub(super) fn lower_replace_pair(
         .any(|op| matches!(op, Instruction::FixedTargetClause(_)));
     if !targets_compatible
         || !gy_compatible
+        || !perm_compatible
         || (alt_builder.x_target_count && !base_builder.x_target_count)
         || (alt_builder.up_to_x_target_count && !base_builder.up_to_x_target_count)
         || (alt_introduces_fixed_target && !base_has_fixed_target)
@@ -1456,6 +1469,7 @@ pub(super) fn lower_replace_pair(
     }
     let merged_target = base_builder.target;
     let merged_gy = base_builder.graveyard_target_bounds;
+    let merged_perm = base_builder.permanent_target_bounds;
     let last_group_filter = base_builder
         .last_group_filter
         .or(alt_builder.last_group_filter);
@@ -1465,6 +1479,7 @@ pub(super) fn lower_replace_pair(
         alt_ops: alt_builder.instructions,
         merged_target,
         merged_gy,
+        merged_perm,
         x_target_count: base_builder.x_target_count || alt_builder.x_target_count,
         up_to_x_target_count: base_builder.up_to_x_target_count || alt_builder.up_to_x_target_count,
         last_group_filter,
@@ -1882,173 +1897,13 @@ pub(super) fn lower_multi_target_fixed_clauses(
             if clause.graveyard_target_bounds == Some((1, 1)) {
                 clause.graveyard_target_bounds = None;
             }
-            // Rewrite single-target (1, 1) AffectPermanentTargets / DealDamageToAnnouncedTargets
-            // into equivalent single-target instructions so FixedTargetClause validation does not
-            // reject exact-1 target clauses on permanent_target_bounds().
-            let has_internal_jumps = clause.instructions.iter().any(|op| {
-                matches!(
-                    op,
-                    Instruction::BranchCondition { .. }
-                        | Instruction::Jump { .. }
-                        | Instruction::OptionalSequence { .. }
-                        | Instruction::OfferDynamicManaPayment { .. }
-                ) || matches!(
-                    op,
-                    Instruction::MutatePlayer(spec)
-                        if matches!(
-                            spec.op,
-                            spellwake_engine::toolbox::PlayerMutation::FlipCoins {
-                                lose_destination: Some(_),
-                                ..
-                            } | spellwake_engine::toolbox::PlayerMutation::OfferSourceCounters { .. }
-                        )
-                )
-            });
+            if clause.permanent_target_bounds == Some((1, 1)) {
+                clause.permanent_target_bounds = None;
+            }
             let single_instruction = clause.instructions.len() == 1;
             let mut normalized_ops = Vec::with_capacity(clause.instructions.len());
             for op in clause.instructions {
                 match op {
-                    Instruction::AffectPermanentTargets {
-                        minimum: 1,
-                        maximum: 1,
-                        action,
-                    } => match action {
-                        spellwake_engine::program::PermanentTargetAction::Tap => {
-                            normalized_ops.push(super::super::toolbox_emit::set_subject_tapped(
-                                EffectSubject::TargetObject,
-                                true,
-                            ));
-                        }
-                        spellwake_engine::program::PermanentTargetAction::Untap => {
-                            normalized_ops.push(super::super::toolbox_emit::set_subject_tapped(
-                                EffectSubject::TargetObject,
-                                false,
-                            ));
-                        }
-                        spellwake_engine::program::PermanentTargetAction::SkipNextUntap => {
-                            normalized_ops.push(super::super::toolbox_emit::skip_next_untap(
-                                EffectSubject::TargetObject,
-                            ));
-                        }
-                        spellwake_engine::program::PermanentTargetAction::TapAndSkipNextUntap
-                            if !has_internal_jumps =>
-                        {
-                            normalized_ops.push(super::super::toolbox_emit::set_subject_tapped(
-                                EffectSubject::TargetObject,
-                                true,
-                            ));
-                            normalized_ops.push(super::super::toolbox_emit::skip_next_untap(
-                                EffectSubject::TargetObject,
-                            ));
-                        }
-                        spellwake_engine::program::PermanentTargetAction::Destroy => {
-                            normalized_ops.push(super::super::toolbox_emit::zone_op(
-                                spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                                    spellwake_engine::toolbox::ObjectQuery::Targets,
-                                    spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                        semantics:
-                                            spellwake_engine::toolbox::GraveyardSemantics::Destroy {
-                                                allow_regenerate: true,
-                                            },
-                                    },
-                                ),
-                            ));
-                        }
-                        spellwake_engine::program::PermanentTargetAction::Exile => {
-                            normalized_ops.push(super::super::toolbox_emit::exile_target());
-                        }
-                        spellwake_engine::program::PermanentTargetAction::ReturnToHand => {
-                            normalized_ops
-                                .push(super::super::toolbox_emit::return_to_owners_hand());
-                        }
-                        spellwake_engine::program::PermanentTargetAction::MoveTo(destination) => {
-                            normalized_ops.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(MoveSubjectRef::TargetObject, destination));
-                        }
-                        spellwake_engine::program::PermanentTargetAction::PutPlusOneCounter => {
-                            normalized_ops.push(
-                                super::super::toolbox_emit::put_counters_on_subject(
-                                    EffectSubject::TargetObject,
-                                    spellwake_engine::effects::CounterKind::PlusOne,
-                                    ValueExpr::literal(1),
-                                ),
-                            );
-                        }
-                        spellwake_engine::program::PermanentTargetAction::PutCounters {
-                            kind,
-                            amount,
-                        } => {
-                            normalized_ops.push(
-                                super::super::toolbox_emit::put_counters_on_subject(
-                                    EffectSubject::TargetObject,
-                                    kind,
-                                    amount,
-                                ),
-                            );
-                        }
-                        spellwake_engine::program::PermanentTargetAction::RemoveCounters {
-                            kind,
-                            amount,
-                        } => {
-                            normalized_ops.push(match amount {
-                                Some(a) => {
-                                    super::super::toolbox_emit::remove_counters_from_subject(
-                                        EffectSubject::TargetObject,
-                                        kind,
-                                        a,
-                                    )
-                                }
-                                None => super::super::toolbox_emit::mutate_subject(
-                                    EffectSubject::TargetObject,
-                                    spellwake_engine::toolbox::ObjectMutation::ClearCounters {
-                                        kind,
-                                    },
-                                ),
-                            });
-                        }
-                        spellwake_engine::program::PermanentTargetAction::Modify {
-                            parts,
-                            duration,
-                        } => {
-                            normalized_ops.push(
-                                super::super::toolbox_emit::apply_continuous_parts(
-                                    spellwake_engine::toolbox::ObjectQuery::EffectSubject(
-                                        Box::new(EffectSubject::TargetObject),
-                                    ),
-                                    parts,
-                                    duration,
-                                ),
-                            );
-                        }
-                        spellwake_engine::program::PermanentTargetAction::RequireCombatAction(
-                            kind,
-                        ) => {
-                            normalized_ops.push(super::super::toolbox_emit::require_combat_action(
-                                EffectSubject::TargetObject,
-                                kind,
-                            ));
-                        }
-                        spellwake_engine::program::PermanentTargetAction::Regenerate => {
-                            normalized_ops.push(super::super::toolbox_emit::regenerate_subject(
-                                EffectSubject::TargetObject,
-                            ));
-                        }
-                        spellwake_engine::program::PermanentTargetAction::Damage(amount)
-                            if single_instruction =>
-                        {
-                            normalized_ops.push(super::super::toolbox_emit::deal_damage(
-                                spellwake_engine::toolbox::DamageTargetQuery::Targets,
-                                amount,
-                                false,
-                            ));
-                        }
-                        other => {
-                            normalized_ops.push(Instruction::AffectPermanentTargets {
-                                minimum: 1,
-                                maximum: 1,
-                                action: other,
-                            });
-                        }
-                    },
                     Instruction::DealDamage(mut spec)
                         if single_instruction
                             && matches!(
@@ -2069,6 +1924,7 @@ pub(super) fn lower_multi_target_fixed_clauses(
             if clause.target == BodyTarget::None
                 || clause.instructions.is_empty()
                 || clause.graveyard_target_bounds.is_some()
+                || clause.permanent_target_bounds.is_some()
             {
                 return Err("oracle:invalid-fixed-clause");
             }
@@ -4788,6 +4644,7 @@ pub(super) fn try_fuse_choose_keyword_grant(
         .is_err()
             || br.instructions.is_empty()
             || br.graveyard_target_bounds.is_some()
+            || br.permanent_target_bounds.is_some()
             || br.x_target_count
             || br.up_to_x_target_count
             || br.up_to_one_target
@@ -4896,6 +4753,7 @@ pub(super) fn emit_condition_branches(
     let snap_len = builder.instructions.len();
     let snap_target = builder.target;
     let snap_gy = builder.graveyard_target_bounds;
+    let snap_perm = builder.permanent_target_bounds;
     let snap_x = builder.x_target_count;
     let snap_up_to_x = builder.up_to_x_target_count;
     let snap_group = builder.last_group_filter;
@@ -4905,6 +4763,7 @@ pub(super) fn emit_condition_branches(
             builder.instructions.truncate(snap_len);
             builder.target = snap_target;
             builder.graveyard_target_bounds = snap_gy;
+            builder.permanent_target_bounds = snap_perm;
             builder.x_target_count = snap_x;
             builder.up_to_x_target_count = snap_up_to_x;
             builder.last_group_filter = snap_group;
@@ -6343,21 +6202,18 @@ pub(in super::super) fn lower_instruction_seq(
         {
             let bt = lower_battlefield_body_target(filter, vocabulary)?;
             builder.bind_target(bt)?;
-            builder
-                .instructions
-                .push(Instruction::AffectPermanentTargets {
-                    minimum: 1,
-                    maximum: 1,
-                    action: PermanentTargetAction::ModifyWithPartner {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(
-                            PowerToughness {
-                                power: p.into(),
-                                toughness: t.into(),
-                            },
-                        )]),
-                        duration: dur,
-                    },
-                });
+            builder.push_bounded_target_op(
+                1,
+                1,
+                super::super::toolbox_emit::apply_continuous_parts(
+                    spellwake_engine::toolbox::ObjectQuery::TargetsWithPairedPartner,
+                    ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(PowerToughness {
+                        power: p.into(),
+                        toughness: t.into(),
+                    })]),
+                    dur,
+                ),
+            );
             i += 2;
             continue;
         }
@@ -6507,6 +6363,9 @@ pub(in super::super) fn lower_instruction_seq(
             if builder.graveyard_target_bounds.is_none() {
                 builder.graveyard_target_bounds = pair.merged_gy;
             }
+            if builder.permanent_target_bounds.is_none() {
+                builder.permanent_target_bounds = pair.merged_perm;
+            }
             builder.x_target_count |= pair.x_target_count;
             builder.up_to_x_target_count |= pair.up_to_x_target_count;
             if builder.last_group_filter.is_none() {
@@ -6643,6 +6502,9 @@ pub(in super::super) fn lower_instruction_seq(
             if builder.graveyard_target_bounds.is_none() {
                 builder.graveyard_target_bounds = pair.merged_gy;
             }
+            if builder.permanent_target_bounds.is_none() {
+                builder.permanent_target_bounds = pair.merged_perm;
+            }
             builder.x_target_count |= pair.x_target_count;
             builder.up_to_x_target_count |= pair.up_to_x_target_count;
             if builder.last_group_filter.is_none() {
@@ -6753,6 +6615,9 @@ pub(in super::super) fn lower_instruction_seq(
             if builder.graveyard_target_bounds.is_none() {
                 builder.graveyard_target_bounds = pair.merged_gy;
             }
+            if builder.permanent_target_bounds.is_none() {
+                builder.permanent_target_bounds = pair.merged_perm;
+            }
             builder.x_target_count |= pair.x_target_count;
             builder.up_to_x_target_count |= pair.up_to_x_target_count;
             if builder.last_group_filter.is_none() {
@@ -6816,6 +6681,9 @@ pub(in super::super) fn lower_instruction_seq(
             }
             if builder.graveyard_target_bounds.is_none() {
                 builder.graveyard_target_bounds = pair.merged_gy;
+            }
+            if builder.permanent_target_bounds.is_none() {
+                builder.permanent_target_bounds = pair.merged_perm;
             }
             builder.x_target_count |= pair.x_target_count;
             builder.up_to_x_target_count |= pair.up_to_x_target_count;
@@ -6989,8 +6857,8 @@ pub(in super::super) fn lower_instruction_seq(
             )?;
             let ab_change = lower_ability_change(keywords, vocabulary)?;
             let pure_kws = lower_keyword_list(keywords).ok();
-            match builder.instructions.last_mut() {
-                Some(Instruction::ApplyContinuous(spec)) => match &mut spec.payload {
+            if let Some(Instruction::ApplyContinuous(spec)) = builder.instructions.last_mut() {
+                match &mut spec.payload {
                     spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
                         keywords: prev_kws,
                         ..
@@ -7013,20 +6881,7 @@ pub(in super::super) fn lower_instruction_seq(
                         continue;
                     }
                     _ => {}
-                },
-                Some(Instruction::AffectPermanentTargets {
-                    action: PermanentTargetAction::Modify { parts, .. },
-                    ..
-                }) if !parts
-                    .0
-                    .iter()
-                    .any(|p| matches!(p, ResolvedPartSpec::Abilities(_))) =>
-                {
-                    parts.0.push(ResolvedPartSpec::Abilities(ab_change));
-                    i += 2;
-                    continue;
                 }
-                _ => {}
             }
             i += 1;
             continue;
@@ -7376,6 +7231,7 @@ pub(in super::super) fn lower_instruction_seq(
                 .iter()
                 .any(|op| matches!(op, Instruction::FixedTargetClause(_)));
             let prev_gy = builder.graveyard_target_bounds;
+            let prev_perm = builder.permanent_target_bounds;
             let prev_x = builder.x_target_count;
             let prev_up_to_x = builder.up_to_x_target_count;
             let prev_group = builder.last_group_filter;
@@ -7386,6 +7242,7 @@ pub(in super::super) fn lower_instruction_seq(
                         builder.instructions.truncate(prev_len);
                         builder.target = prev_target;
                         builder.graveyard_target_bounds = prev_gy;
+                        builder.permanent_target_bounds = prev_perm;
                         builder.x_target_count = prev_x;
                         builder.up_to_x_target_count = prev_up_to_x;
                         builder.last_group_filter = prev_group;
@@ -7413,6 +7270,9 @@ pub(in super::super) fn lower_instruction_seq(
                         }
                         if builder.graveyard_target_bounds.is_none() {
                             builder.graveyard_target_bounds = then_builder.graveyard_target_bounds;
+                        }
+                        if builder.permanent_target_bounds.is_none() {
+                            builder.permanent_target_bounds = then_builder.permanent_target_bounds;
                         }
                         builder.x_target_count |= then_builder.x_target_count;
                         builder.up_to_x_target_count |= then_builder.up_to_x_target_count;
@@ -7577,6 +7437,7 @@ pub(in super::super) fn lower_instruction_seq(
                 probe.has_source = builder.has_source;
                 probe.target = builder.target;
                 probe.graveyard_target_bounds = builder.graveyard_target_bounds;
+                probe.permanent_target_bounds = builder.permanent_target_bounds;
                 probe.x_target_count = builder.x_target_count;
                 probe.up_to_x_target_count = builder.up_to_x_target_count;
                 probe.last_group_filter = builder.last_group_filter;
@@ -7640,6 +7501,9 @@ pub(in super::super) fn lower_instruction_seq(
                             if probe.graveyard_target_bounds.is_none() {
                                 probe.graveyard_target_bounds = dec_sub.graveyard_target_bounds;
                             }
+                            if probe.permanent_target_bounds.is_none() {
+                                probe.permanent_target_bounds = dec_sub.permanent_target_bounds;
+                            }
                             probe.x_target_count |= dec_sub.x_target_count;
                             probe.up_to_x_target_count |= dec_sub.up_to_x_target_count;
                             Some(ExecutableBody::new(BodyTarget::None, dec_sub.instructions))
@@ -7651,6 +7515,9 @@ pub(in super::super) fn lower_instruction_seq(
                     }
                     if builder.graveyard_target_bounds.is_none() {
                         builder.graveyard_target_bounds = probe.graveyard_target_bounds;
+                    }
+                    if builder.permanent_target_bounds.is_none() {
+                        builder.permanent_target_bounds = probe.permanent_target_bounds;
                     }
                     builder.x_target_count |= probe.x_target_count;
                     builder.up_to_x_target_count |= probe.up_to_x_target_count;
@@ -8225,6 +8092,9 @@ pub(in super::super) fn lower_instruction_seq(
                     if outer.graveyard_target_bounds.is_none() {
                         outer.graveyard_target_bounds = sub.graveyard_target_bounds;
                     }
+                    if outer.permanent_target_bounds.is_none() {
+                        outer.permanent_target_bounds = sub.permanent_target_bounds;
+                    }
                     outer.x_target_count |= sub.x_target_count;
                     outer.up_to_x_target_count |= sub.up_to_x_target_count;
                     outer.up_to_one_target |= sub.up_to_one_target;
@@ -8411,6 +8281,9 @@ pub(in super::super) fn lower_instruction_seq(
                                 if builder.graveyard_target_bounds.is_none() {
                                     builder.graveyard_target_bounds = sub.graveyard_target_bounds;
                                 }
+                                if builder.permanent_target_bounds.is_none() {
+                                    builder.permanent_target_bounds = sub.permanent_target_bounds;
+                                }
                                 builder.x_target_count |= sub.x_target_count;
                                 builder.up_to_x_target_count |= sub.up_to_x_target_count;
                                 builder.up_to_one_target |= sub.up_to_one_target;
@@ -8456,6 +8329,9 @@ pub(in super::super) fn lower_instruction_seq(
                                 }
                                 if builder.graveyard_target_bounds.is_none() {
                                     builder.graveyard_target_bounds = sub.graveyard_target_bounds;
+                                }
+                                if builder.permanent_target_bounds.is_none() {
+                                    builder.permanent_target_bounds = sub.permanent_target_bounds;
                                 }
                                 builder.x_target_count |= sub.x_target_count;
                                 builder.up_to_x_target_count |= sub.up_to_x_target_count;
@@ -9017,7 +8893,6 @@ pub(in super::super) fn lower_instruction_seq(
                         | Instruction::ForEachPlayerQuery { .. }
                         | Instruction::Sacrifice { .. }
                         | Instruction::Discard { .. }
-                        | Instruction::ExileTopPlay { .. }
                         | Instruction::LookTopChooseExt { .. }
                         | Instruction::RevealUntilMatchExt { .. }
                         | Instruction::SearchLibrary { .. }
@@ -9361,23 +9236,18 @@ pub(in super::super) fn lower_instruction_seq(
                     .is_ok()
                         && probe.instructions.len() > start
                         && probe.instructions.get(start).is_some_and(|op| {
-                            matches!(op, Instruction::ExileTopPlay { .. })
-                                || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(
-                                    |spec| {
-                                        matches!(
-                                            &spec.source,
-                                            spellwake_engine::toolbox::ObjectQuery::ZoneScan {
-                                                zone: spellwake_engine::toolbox::QueryZone::Library(
-                                                    _
-                                                ),
-                                                ..
-                                            }
-                                        ) && matches!(
-                                            spec.destination,
-                                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                                        )
-                                    },
+                            super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                                matches!(
+                                    &spec.source,
+                                    spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                        zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                                        ..
+                                    }
+                                ) && matches!(
+                                    spec.destination,
+                                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
                                 )
+                            })
                         })
                     {
                         let span = probe.instructions.len() - start;
@@ -9443,7 +9313,7 @@ pub(in super::super) fn lower_instruction_seq(
             i += 1;
             continue;
         }
-        // Fuse paired impulse draw: ExileTopLibrary + GrantCastPermission (+ optional ManaSpendRestriction) -> ExileTopForPlay / ExileTopPlay
+        // Fuse paired impulse draw: ExileTopLibrary + GrantCastPermission (+ optional ManaSpendRestriction) -> ZoneOp + PlayPermission
         if i + 1 < ins.len()
             && let InstructionAst::ExileTopLibrary {
                 actor: None | Some(PlayerRefAst::You),
@@ -9581,16 +9451,21 @@ pub(in super::super) fn lower_instruction_seq(
                         ),
                     );
                 } else {
-                    builder.instructions.push(Instruction::ExileTopPlay {
-                        count: cnt,
-                        library_owner,
-                        duration: impulse_dur,
-                        cast_only: *cast_only,
-                        free: *free,
-                        any_color,
-                        face_down: *face_down,
-                        grant_play: true,
-                    });
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::exile_top_library_group(
+                            library_owner,
+                            cnt,
+                            *face_down,
+                        ));
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::impulse_play_last_moved(
+                            impulse_dur,
+                            *cast_only,
+                            *free,
+                            any_color,
+                        ));
                 }
                 i += step;
                 continue;
@@ -9713,16 +9588,13 @@ pub(in super::super) fn lower_instruction_seq(
                     step = 4;
                 }
                 let cnt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
-                builder.instructions.push(Instruction::ExileTopPlay {
-                    count: cnt,
-                    library_owner,
-                    duration: impulse_dur,
-                    cast_only: *cast_only,
-                    free: *free,
-                    any_color,
-                    face_down: *face_down,
-                    grant_play: false,
-                });
+                builder
+                    .instructions
+                    .push(super::super::toolbox_emit::exile_top_library_group(
+                        library_owner,
+                        cnt,
+                        *face_down,
+                    ));
                 builder
                     .instructions
                     .push(Instruction::MutatePlayer(Box::new(
@@ -9872,6 +9744,17 @@ pub(in super::super) fn lower_instruction_seq(
                                     | spellwake_engine::toolbox::ZoneDest::Hand => {
                                         let single = match &spec.source {
                                         spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                            zone: spellwake_engine::toolbox::QueryZone::Library(ps),
+                                            slice: spellwake_engine::toolbox::QuerySlice::Top(n), ..
+                                        } => **n == ValueExpr::literal(1)
+                                            && matches!(
+                                                ps.as_ref(),
+                                                spellwake_engine::toolbox::PlayerSelector::Resolving(_)
+                                                    | spellwake_engine::toolbox::PlayerSelector::Group(
+                                                        AffectedPlayers::One(_)
+                                                    )
+                                            ),
+                                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
                                             slice: spellwake_engine::toolbox::QuerySlice::Top(n), ..
                                         } => **n == ValueExpr::literal(1),
                                         spellwake_engine::toolbox::ObjectQuery::Targets
@@ -9887,17 +9770,6 @@ pub(in super::super) fn lower_instruction_seq(
                                     }
                                     _ => {}
                                 }
-                            }
-                            Instruction::ExileTopPlay {
-                                count,
-                                library_owner,
-                                ..
-                            } => {
-                                found = Some(
-                                    *count == ValueExpr::literal(1)
-                                        && matches!(library_owner, AffectedPlayers::One(_)),
-                                );
-                                break;
                             }
                             Instruction::ForEachPlayerQuery { selector, body, .. }
                                 if matches!(
@@ -13228,7 +13100,7 @@ pub(in super::super) fn lower_instruction_seq(
         }
         // Fold trailing "you may spend mana as though it were mana of any color/type"
         // (direct, Optional, or wrapped in IfCondition(CastSpellThisWay)) onto prior
-        // PlayPermission / ExileTopPlay / ZoneCastPermission / ExileTopForPlay.
+        // PlayPermission / ZoneCastPermission.
         if is_any_color_spend_restriction(&ins[i]) {
             let mut patched = false;
             for op in builder.instructions.iter_mut().rev() {
@@ -13253,8 +13125,7 @@ pub(in super::super) fn lower_instruction_seq(
                         }
                         _ => {}
                     },
-                    Instruction::ExileTopPlay { any_color, .. }
-                    | Instruction::LookTopChooseExt {
+                    Instruction::LookTopChooseExt {
                         keep_dest:
                             spellwake_engine::program::LookTopKeepDest::Exile { any_color, .. },
                         ..
@@ -13310,13 +13181,12 @@ pub(in super::super) fn lower_instruction_seq(
             let ll = library.trim().to_ascii_lowercase();
             if (ll == "exiled"
                 && builder.instructions.iter().rev().any(|op| {
-                    matches!(op, Instruction::ExileTopPlay { .. })
-                        || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
-                            matches!(
-                                spec.destination,
-                                spellwake_engine::toolbox::ZoneDest::Exile { .. }
-                            )
-                        })
+                    super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                        matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                        )
+                    })
                 }))
                 || (ll == "ref"
                     && builder.instructions.iter().rev().any(|op| {
@@ -14127,21 +13997,19 @@ pub(in super::super) fn lower_instruction_seq(
                 && builder.target.guarantees_creature()
                 && !builder.instructions.is_empty()
                 && builder.graveyard_target_bounds.is_none()
+                && builder.permanent_target_bounds.is_none()
                 && !builder.x_target_count
                 && !builder.up_to_x_target_count
                 && !builder.instructions.iter().any(|op| {
-                    matches!(
-                        op,
-                        Instruction::FixedTargetClause(_)
-                            | Instruction::AffectPermanentTargets { .. }
-                    ) || matches!(
-                        op,
-                        Instruction::MutateObject(spec)
-                            if matches!(
-                                spec.op,
-                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
-                            )
-                    )
+                    matches!(op, Instruction::FixedTargetClause(_))
+                        || matches!(
+                            op,
+                            Instruction::MutateObject(spec)
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                )
+                        )
                 })
             {
                 let mut first_ops = std::mem::take(&mut builder.instructions);
@@ -14474,21 +14342,19 @@ pub(in super::super) fn lower_instruction_seq(
                 )
                 && !builder.instructions.is_empty()
                 && builder.graveyard_target_bounds.is_none()
+                && builder.permanent_target_bounds.is_none()
                 && !builder.x_target_count
                 && !builder.up_to_x_target_count
                 && !builder.instructions.iter().any(|op| {
-                    matches!(
-                        op,
-                        Instruction::FixedTargetClause(_)
-                            | Instruction::AffectPermanentTargets { .. }
-                    ) || matches!(
-                        op,
-                        Instruction::MutateObject(spec)
-                            if matches!(
-                                spec.op,
-                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
-                            )
-                    )
+                    matches!(op, Instruction::FixedTargetClause(_))
+                        || matches!(
+                            op,
+                            Instruction::MutateObject(spec)
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                )
+                        )
                 })
             {
                 let mut inner_b = fb.as_ref().clone();
@@ -14650,21 +14516,19 @@ pub(in super::super) fn lower_instruction_seq(
                 && builder.target.guarantees_creature()
                 && !builder.instructions.is_empty()
                 && builder.graveyard_target_bounds.is_none()
+                && builder.permanent_target_bounds.is_none()
                 && !builder.x_target_count
                 && !builder.up_to_x_target_count
                 && !builder.instructions.iter().any(|op| {
-                    matches!(
-                        op,
-                        Instruction::FixedTargetClause(_)
-                            | Instruction::AffectPermanentTargets { .. }
-                    ) || matches!(
-                        op,
-                        Instruction::MutateObject(spec)
-                            if matches!(
-                                spec.op,
-                                spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
-                            )
-                    )
+                    matches!(op, Instruction::FixedTargetClause(_))
+                        || matches!(
+                            op,
+                            Instruction::MutateObject(spec)
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                                )
+                        )
                 })
                 && let Ok(mut bt_b) = lower_battlefield_body_target(fb, vocabulary)
                 && bt_b.guarantees_creature()
@@ -15208,6 +15072,8 @@ fn try_lower_interactive_choice_prompt(
                     *chooser,
                     PromptDomain::Subtype {
                         kind: SubtypeChoiceKind::Creature,
+                        excluding: BTreeSet::new(),
+                        legacy_slot: None,
                     },
                     ChoiceCategory::Generic,
                     false,
@@ -15220,6 +15086,8 @@ fn try_lower_interactive_choice_prompt(
                     *chooser,
                     PromptDomain::Subtype {
                         kind: SubtypeChoiceKind::BasicLand,
+                        excluding: BTreeSet::new(),
+                        legacy_slot: None,
                     },
                     ChoiceCategory::Generic,
                     false,
@@ -15232,6 +15100,8 @@ fn try_lower_interactive_choice_prompt(
                     *chooser,
                     PromptDomain::Subtype {
                         kind: SubtypeChoiceKind::Planeswalker,
+                        excluding: BTreeSet::new(),
+                        legacy_slot: None,
                     },
                     ChoiceCategory::Generic,
                     false,

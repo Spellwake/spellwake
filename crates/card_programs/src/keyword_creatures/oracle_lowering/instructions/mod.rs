@@ -1260,7 +1260,6 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
         ),
         Instruction::Discard { amount, .. }
         | Instruction::Sacrifice { amount, .. }
-        | Instruction::ExileTopPlay { count: amount, .. }
         | Instruction::LookTopChooseExt { count: amount, .. } => value_expr_uses_chosen_x(amount),
 
         Instruction::ChooseObjects {

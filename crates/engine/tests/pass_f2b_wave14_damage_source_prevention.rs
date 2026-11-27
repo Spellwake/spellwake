@@ -20,10 +20,7 @@ use spellwake_engine::{
     game::{DecisionReply, GameCommand, GameInput, GameState, NativeCandidate, RuleFrame},
     mana::{CastingPayment, ManaCost, ManaPayment, ManaType},
     object_identity::{CardId, ObjectDestination, ObjectZone},
-    program::{
-        BodyTarget, ColorMask, ExecutableBody, Instruction, PermanentTargetAction, Program,
-        SpellFilter,
-    },
+    program::{BodyTarget, ColorMask, ExecutableBody, Instruction, Program, SpellFilter},
     targets::TargetRef,
 };
 use std::collections::BTreeSet;
@@ -460,17 +457,26 @@ fn chosen_color_and_filtered_source_recipient_scopes_match_exact_subsets() {
 
 #[test]
 fn multi_target_permanent_prevention_prevents_announced_targets_only() {
-    let soul_parry = spell(
+    let soul_parry = card(
         10,
-        BodyTarget::SingleCreature,
-        vec![Instruction::AffectPermanentTargets {
-            minimum: 1,
-            maximum: 2,
-            action: PermanentTargetAction::PreventDamageThisTurn {
-                combat_only: false,
-                both_directions: false,
-            },
-        }],
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(
+                        TurnPreventionSpec {
+                            combat_only: false,
+                            source: PreventionSourceSpec::AllPermanentTargets,
+                            recipient: PreventionRecipientSpec::Any,
+                            both_directions: false,
+                        },
+                    ),
+                ))],
+            )
+            .with_permanent_target_bounds(1, 2),
+        ),
+        false,
     );
     let game = world(
         vocabulary(),

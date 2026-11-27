@@ -194,6 +194,8 @@ pub enum ObjectQuery {
     },
     /// Every still-legal object target announced for the resolving spell or ability.
     Targets,
+    /// Every still-legal permanent target announced for the resolving entry plus any soulbond paired partner.
+    TargetsWithPairedPartner,
     /// The resolving spell or ability's source object.
     Source,
     /// Triggering subject object(s) of the resolving triggered ability.
@@ -288,7 +290,7 @@ impl ObjectQuery {
     #[must_use]
     pub fn uses_target(&self) -> bool {
         match self {
-            Self::Targets => true,
+            Self::Targets | Self::TargetsWithPairedPartner => true,
             Self::LinkedTarget { .. } => false,
             Self::Empty
             | Self::Fixed(_)
@@ -341,6 +343,7 @@ impl ObjectQuery {
             | Self::Fixed(_)
             | Self::Bound(_)
             | Self::Targets
+            | Self::TargetsWithPairedPartner
             | Self::Source
             | Self::TriggerSubject
             | Self::AttachedHost

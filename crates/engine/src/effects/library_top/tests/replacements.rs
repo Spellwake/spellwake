@@ -790,10 +790,23 @@ fn real_chosen_type_and_captured_trigger_counts_reauthorize_the_owned_library_cu
             )
         } else {
             let creature = Program::creature(None, 1.into(), 1.into(), BTreeSet::from([elf]));
-            let mut main = vec![Instruction::ChooseCreatureType {
-                into: CreatureTypeSlot::new(0),
-                excluding: BTreeSet::new(),
-            }];
+            let mut main = vec![Instruction::PromptChoice(Box::new(
+                crate::toolbox::PromptChoiceSpec {
+                    chooser: crate::toolbox::PlayerSelector::Resolving(
+                        crate::program::ResolvingPlayer::Controller,
+                    ),
+                    domain: crate::toolbox::PromptDomain::Subtype {
+                        kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                        excluding: BTreeSet::new(),
+                        legacy_slot: Some(CreatureTypeSlot::new(0)),
+                    },
+                    category: crate::toolbox::ChoiceCategory::Generic,
+                    bind_to: crate::toolbox::BindingId(0),
+                    bind_unchosen: None,
+                    tag_partition: None,
+                    auto_resolve_trivial: false,
+                },
+            ))];
             main.extend(body);
             (main, vec![redirect, creature.clone(), creature])
         };
@@ -828,9 +841,11 @@ fn real_chosen_type_and_captured_trigger_counts_reauthorize_the_owned_library_cu
         } else {
             assert!(matches!(
                 run.state.pending_decision().unwrap().frame(),
-                RuleFrame::CreatureType(_)
+                RuleFrame::PromptChoice(_)
             ));
-            run.reply(DecisionReply::CreatureType(elf));
+            run.reply(DecisionReply::PromptChoice(
+                crate::toolbox::PromptChoiceReply::CreatureType(elf),
+            ));
         }
         let before = owned(run.state.execution()).domain.clone();
         assert_eq!(before.len(), 2);

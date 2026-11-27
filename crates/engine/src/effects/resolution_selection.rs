@@ -105,19 +105,12 @@ pub enum ResolutionSelectionOperation {
         source: Option<ObjectId>,
         monarch_controller: Option<SeatId>,
     },
-    /// Automatically determined destruction cohort, including permanents owned by other players.
-    ReturnAnnouncedTargets {
-        objects: BTreeSet<ObjectId>,
-    },
     ExileAnnouncedTargets {
         objects: BTreeSet<ObjectId>,
     },
     ExileLinkedTargets {
         objects: BTreeSet<ObjectId>,
         source: ObjectId,
-    },
-    DestroyAnnouncedTargets {
-        objects: BTreeSet<ObjectId>,
     },
     /// Evaluated types filter a separately checked physical permanent domain.
     Sacrifice {
@@ -163,10 +156,7 @@ impl ResolutionSelectionOperation {
             Self::Populate => ResolutionSelectionKind::Populate,
             Self::Bolster { .. } => ResolutionSelectionKind::Bolster,
             Self::Amass { .. } => ResolutionSelectionKind::Amass,
-            Self::ReturnAnnouncedTargets { .. } | Self::ReturnSingle { .. } => {
-                ResolutionSelectionKind::ReturnToHand
-            }
-            Self::DestroyAnnouncedTargets { .. } => ResolutionSelectionKind::Destroy,
+            Self::ReturnSingle { .. } => ResolutionSelectionKind::ReturnToHand,
             Self::ExileAnnouncedTargets { .. }
             | Self::ExileLinkedTargets { .. }
             | Self::ExileSingle { .. } => ResolutionSelectionKind::Exile,
@@ -194,10 +184,8 @@ impl ResolutionSelectionOperation {
                 return Err(EffectError::InconsistentSelectionWork);
             }
             Self::ExileAnnouncedTargets { .. }
-            | Self::ReturnAnnouncedTargets { .. }
             | Self::ExileLinkedTargets { .. }
             | Self::ReturnSingle { .. }
-            | Self::DestroyAnnouncedTargets { .. }
             | Self::ExileSingle { .. } => ResolutionSelectionMove::BattlefieldEffect {
                 player: selected.player,
                 object: selected.object,
@@ -227,10 +215,7 @@ impl ResolutionSelectionOperation {
             | Self::ChooseObjects { .. } => {
                 return Err(EffectError::InconsistentSelectionWork);
             }
-            Self::ReturnAnnouncedTargets { .. } | Self::ReturnSingle { .. } => {
-                ZoneReason::ReturnToOwnersHand
-            }
-            Self::DestroyAnnouncedTargets { .. } => ZoneReason::Destroyed,
+            Self::ReturnSingle { .. } => ZoneReason::ReturnToOwnersHand,
             Self::ExileAnnouncedTargets { .. }
             | Self::ExileLinkedTargets { .. }
             | Self::ExileSingle { .. } => ZoneReason::ExiledByEffect,
@@ -648,7 +633,6 @@ impl EffectWindow {
                 | PendingWork::SelectedActivationCost(_)
                 | PendingWork::GraveyardExile(_)
                 | PendingWork::GraveyardShuffle(_)
-                | PendingWork::ImpulseReplacement(_)
                 | PendingWork::Resolution(_)
                 | PendingWork::OptionalEffect(_)
                 | PendingWork::ResolutionPayment(_)
@@ -682,7 +666,6 @@ impl EffectWindow {
                 | PendingWork::SelectedActivationCost(_)
                 | PendingWork::GraveyardExile(_)
                 | PendingWork::GraveyardShuffle(_)
-                | PendingWork::ImpulseReplacement(_)
                 | PendingWork::Resolution(_)
                 | PendingWork::OptionalEffect(_)
                 | PendingWork::ResolutionPayment(_)
@@ -1072,27 +1055,6 @@ impl EffectWindow {
                     ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
                 )
             }
-            Instruction::AffectPermanentTargets {
-                action:
-                    action @ (crate::program::PermanentTargetAction::ReturnToHand
-                    | crate::program::PermanentTargetAction::Destroy
-                    | crate::program::PermanentTargetAction::Exile),
-                ..
-            } => {
-                let objects = self.legal_permanent_targets()?;
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                let operation = match action {
-                    crate::program::PermanentTargetAction::Destroy => {
-                        ResolutionSelectionOperation::DestroyAnnouncedTargets { objects }
-                    }
-                    crate::program::PermanentTargetAction::Exile => {
-                        ResolutionSelectionOperation::ExileAnnouncedTargets { objects }
-                    }
-                    _ => ResolutionSelectionOperation::ReturnAnnouncedTargets { objects },
-                };
-                (AffectedPlayers::EachPlayer, &all, operation)
-            }
-            Instruction::AffectPermanentTargets { .. } => return Ok(false),
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
@@ -1320,7 +1282,6 @@ impl EffectWindow {
             | Instruction::OptionalSequence { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseValue { .. }
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
@@ -1336,7 +1297,6 @@ impl EffectWindow {
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::ChooseCreatureType { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
@@ -1861,9 +1821,7 @@ impl EffectWindow {
                                 ResolutionSelectionOperation::RandomSacrifice { .. }
                                     | ResolutionSelectionOperation::ExileAnnouncedTargets { .. }
                                     | ResolutionSelectionOperation::ExileLinkedTargets { .. }
-                                    | ResolutionSelectionOperation::ReturnAnnouncedTargets { .. }
                                     | ResolutionSelectionOperation::ReturnSingle { .. }
-                                    | ResolutionSelectionOperation::DestroyAnnouncedTargets { .. }
                                     | ResolutionSelectionOperation::ExileSingle { .. }
                             )
                         {
@@ -2258,7 +2216,6 @@ impl EffectWindow {
                             ResolutionSelectionOperation::RevealedHand { .. }
                                 | ResolutionSelectionOperation::ExileAnnouncedTargets { .. }
                                 | ResolutionSelectionOperation::ExileLinkedTargets { .. }
-                                | ResolutionSelectionOperation::ReturnAnnouncedTargets { .. }
                                 | ResolutionSelectionOperation::ReturnSingle { .. }
                                 | ResolutionSelectionOperation::ExileSingle { .. }
                         ))
@@ -2777,27 +2734,6 @@ impl EffectWindow {
             {
                 AffectedPlayers::EachPlayer
             }
-            (
-                ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
-                Instruction::AffectPermanentTargets {
-                    action: crate::program::PermanentTargetAction::Exile,
-                    ..
-                },
-            )
-            | (
-                ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
-                Instruction::AffectPermanentTargets {
-                    action: crate::program::PermanentTargetAction::Destroy,
-                    ..
-                },
-            )
-            | (
-                ResolutionSelectionOperation::ReturnAnnouncedTargets { objects },
-                Instruction::AffectPermanentTargets {
-                    action: crate::program::PermanentTargetAction::ReturnToHand,
-                    ..
-                },
-            ) if *objects == self.legal_permanent_targets()? => AffectedPlayers::EachPlayer,
             (ResolutionSelectionOperation::ReturnSingle { object }, Instruction::ZoneOp(spec))
                 if matches!(
                     spec.destination,
@@ -2985,7 +2921,6 @@ impl EffectWindow {
             ResolutionSelectionOperation::RevealedHand { .. }
                 | ResolutionSelectionOperation::ExileAnnouncedTargets { .. }
                 | ResolutionSelectionOperation::ExileLinkedTargets { .. }
-                | ResolutionSelectionOperation::ReturnAnnouncedTargets { .. }
                 | ResolutionSelectionOperation::ReturnSingle { .. }
         ) && !batch.logical.is_empty()
             && batch.replacements.is_none()
@@ -3098,32 +3033,6 @@ impl EffectWindow {
                 (movement.after.zone() == ObjectZone::Exile && movement.after.card_id().is_some())
                     .then_some(movement.after.id())
             });
-        }
-        if matches!(
-            operation,
-            ResolutionSelectionOperation::DestroyAnnouncedTargets { .. }
-        ) && self
-            .payloads
-            .get(&cursor.entry)
-            .and_then(StackPayload::instructions)
-            .and_then(|ops| ops.get(cursor.instruction + 1))
-            .is_some_and(|next_op| {
-                matches!(
-                    next_op,
-                    Instruction::ZoneOp(spec)
-                        if matches!(spec.source, crate::toolbox::ObjectQuery::DestroyedThisWay)
-                )
-            })
-        {
-            cursor.results.destroyed_cards_to_graveyard = ordered
-                .iter()
-                .flat_map(|(movement, _)| movement.arrivals())
-                .filter(|id| {
-                    self.window.cards().get(*id).is_some_and(|card| {
-                        card.card_id().is_some() && matches!(card.zone(), ObjectZone::Graveyard(_))
-                    })
-                })
-                .collect();
         }
         if (matches!(
             operation,
@@ -3324,17 +3233,8 @@ impl EffectWindow {
                         })
                 }
             }
-            ResolutionSelectionOperation::DestroyAnnouncedTargets { objects } => {
-                objects.contains(&object.id())
-                    && object.zone() == ObjectZone::Battlefield
-                    && evaluated.get(object.id()).is_some_and(|p| {
-                        p.controller == Some(player)
-                            && !p.has_keyword(KeywordAbility::Indestructible)
-                    })
-            }
             ResolutionSelectionOperation::ExileAnnouncedTargets { objects }
-            | ResolutionSelectionOperation::ExileLinkedTargets { objects, .. }
-            | ResolutionSelectionOperation::ReturnAnnouncedTargets { objects } => {
+            | ResolutionSelectionOperation::ExileLinkedTargets { objects, .. } => {
                 objects.contains(&object.id())
                     && object.zone() == ObjectZone::Battlefield
                     && evaluated

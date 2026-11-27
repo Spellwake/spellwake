@@ -832,6 +832,7 @@ pub(super) fn lower_control_misc_instruction(
                         || s.up_to_x_target_count
                         || s.up_to_one_target
                         || s.graveyard_target_bounds.is_some()
+                        || s.permanent_target_bounds.is_some()
                 }) {
                     return Err("oracle:choice-branch-target");
                 }
@@ -1193,7 +1194,6 @@ pub(super) fn lower_control_misc_instruction(
                     Some(
                         Instruction::ZoneOp(_)
                             | Instruction::ForEachPlayerQuery { .. }
-                            | Instruction::ExileTopPlay { .. }
                             | Instruction::LookTopChooseExt { .. }
                             | Instruction::RevealUntilMatchExt { .. }
                             | Instruction::ChooseObjects { .. }
@@ -3499,9 +3499,7 @@ fn try_lower_choose_objects_new_primitives(
         || builder.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::ZoneOp(_)
-                    | Instruction::ForEachPlayerQuery { .. }
-                    | Instruction::ExileTopPlay { .. }
+                Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
             ) || matches!(
                 op,
                 Instruction::MutatePlayer(spec)
@@ -4859,6 +4857,8 @@ pub(in super::super) fn parse_choice_kind(
         "a planeswalker type" | "a planeswalker subtype" => Ok(ParsedChoiceKind::Prompt(
             spellwake_engine::toolbox::PromptDomain::Subtype {
                 kind: spellwake_engine::toolbox::SubtypeChoiceKind::Planeswalker,
+                excluding: BTreeSet::new(),
+                legacy_slot: None,
             },
         )),
         "an opponent" | "an opponent of your choice" => {
@@ -5310,6 +5310,8 @@ pub(in super::super) fn emit_choice_for_player_ref(
                                     domain: spellwake_engine::toolbox::PromptDomain::Subtype {
                                         kind:
                                             spellwake_engine::toolbox::SubtypeChoiceKind::Creature,
+                                        excluding: BTreeSet::new(),
+                                        legacy_slot: None,
                                     },
                                     category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                     bind_to: PROMPT_CHOICE_BIND,
@@ -5374,6 +5376,8 @@ pub(in super::super) fn emit_choice_for_player_ref(
                                 ),
                                 domain: spellwake_engine::toolbox::PromptDomain::Subtype {
                                     kind: spellwake_engine::toolbox::SubtypeChoiceKind::Creature,
+                                    excluding: BTreeSet::new(),
+                                    legacy_slot: None,
                                 },
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 bind_to: PROMPT_CHOICE_BIND,
@@ -5418,10 +5422,11 @@ pub(in super::super) fn emit_choice_for_player_ref(
                     if rp == ResolvingPlayer::Controller =>
                 {
                     let slot = ids.creature_type_slot();
-                    builder.instructions.push(Instruction::ChooseCreatureType {
-                        into: slot,
-                        excluding,
-                    });
+                    builder
+                        .instructions
+                        .push(super::super::toolbox_emit::choose_creature_type(
+                            slot, excluding,
+                        ));
                     Ok(())
                 }
                 ParsedChoiceKind::CreatureType { .. } => {
@@ -5432,6 +5437,8 @@ pub(in super::super) fn emit_choice_for_player_ref(
                                 chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
                                 domain: spellwake_engine::toolbox::PromptDomain::Subtype {
                                     kind: spellwake_engine::toolbox::SubtypeChoiceKind::Creature,
+                                    excluding: BTreeSet::new(),
+                                    legacy_slot: None,
                                 },
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                                 bind_to: PROMPT_CHOICE_BIND,
@@ -5681,6 +5688,9 @@ pub(super) fn splice_probed_body(
 ) -> Result<(), &'static str> {
     if builder.graveyard_target_bounds.is_none() {
         builder.graveyard_target_bounds = probed.graveyard_target_bounds;
+    }
+    if builder.permanent_target_bounds.is_none() {
+        builder.permanent_target_bounds = probed.permanent_target_bounds;
     }
     builder.x_target_count |= probed.x_target_count;
     builder.up_to_x_target_count |= probed.up_to_x_target_count;
@@ -7003,14 +7013,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     _ => {}
                 }
             }
-            Instruction::ExileTopPlay {
-                count,
-                library_owner,
-                ..
-            } => {
-                rewrite_chosen_to_loop_ve(count);
-                rewrite_chosen_to_loop_ap(library_owner);
-            }
             Instruction::ZoneOp(spec) => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_zone_op(
                     spec,
@@ -7400,6 +7402,9 @@ pub(in super::super) fn lower_loop_player_sub_body(
     }
     if outer_builder.graveyard_target_bounds.is_none() {
         outer_builder.graveyard_target_bounds = sub.graveyard_target_bounds;
+    }
+    if outer_builder.permanent_target_bounds.is_none() {
+        outer_builder.permanent_target_bounds = sub.permanent_target_bounds;
     }
     outer_builder.x_target_count |= sub.x_target_count;
     outer_builder.up_to_x_target_count |= sub.up_to_x_target_count;
@@ -7923,7 +7928,6 @@ fn instruction_produces_card_pool(op: &Instruction) -> bool {
         | Instruction::ForEachPlayerQuery { .. }
         | Instruction::LookTopChooseExt { .. }
         | Instruction::RevealUntilMatchExt { .. }
-        | Instruction::ExileTopPlay { .. }
         | Instruction::SearchLibrary { .. }
         | Instruction::ChooseObjects { .. } => true,
         Instruction::MutatePlayer(spec) => {

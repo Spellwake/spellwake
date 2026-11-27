@@ -242,10 +242,12 @@ fn chosen_text_and_control_are_one_owned_effect_with_separate_layer_components()
                 2,
                 BodyTarget::SinglePermanent,
                 vec![
-                    Instruction::ChooseCreatureType {
-                        into: slot,
-                        excluding: subtypes(&v, &["Vampire"]),
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                            slot,
+                            subtypes(&v, &["Vampire"]),
+                        ),
+                    )),
                     effect(
                         vec![
                             ResolvedPartSpec::Control(ControlRecipient::ResolvingController),
@@ -267,7 +269,9 @@ fn chosen_text_and_control_are_one_owned_effect_with_separate_layer_components()
     let done = reply(
         pending.state(),
         P0,
-        DecisionReply::CreatureType(kind(&v, "Elf")),
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+            kind(&v, "Elf"),
+        )),
     );
     assert_eq!(current(done.state(), target).controller, Some(P0));
     assert_eq!(
@@ -650,10 +654,12 @@ fn copied_text_spells_choose_independent_words_and_retarget_independent_objects(
                 3,
                 BodyTarget::SinglePermanent,
                 vec![
-                    Instruction::ChooseCreatureType {
-                        into: slot,
-                        excluding: subtypes(&v, &["Vampire"]),
-                    },
+                    Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                            slot,
+                            subtypes(&v, &["Vampire"]),
+                        ),
+                    )),
                     effect(
                         vec![ResolvedPartSpec::Text(CreatureTypeTextChangeSpec {
                             from: CreatureTypeWord::Chosen(slot),
@@ -697,7 +703,9 @@ fn copied_text_spells_choose_independent_words_and_retarget_independent_objects(
     let copy_done = reply(
         copy_choice.state(),
         P0,
-        DecisionReply::CreatureType(kind(&v, "Goblin")),
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+            kind(&v, "Goblin"),
+        )),
     );
     assert_eq!(
         current_subtypes(copy_done.state(), goblin),
@@ -711,7 +719,9 @@ fn copied_text_spells_choose_independent_words_and_retarget_independent_objects(
     let done = reply(
         original_choice.state(),
         P0,
-        DecisionReply::CreatureType(kind(&v, "Elf")),
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+            kind(&v, "Elf"),
+        )),
     );
     assert_eq!(
         current_subtypes(done.state(), elf),

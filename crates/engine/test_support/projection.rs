@@ -3223,11 +3223,6 @@ pub fn pending_work(execution: &EffectWindow) -> Result<Value, String> {
         Some(PendingWorkKind::LookTop) => {
             return Err("historical pending-work projection excludes private top-look work".into());
         }
-        Some(PendingWorkKind::ImpulseReplacement) => {
-            return Err(
-                "historical pending-work projection excludes impulse replacement work".into(),
-            );
-        }
         Some(
             PendingWorkKind::BattlefieldEntry
             | PendingWorkKind::PermanentEntry
@@ -3382,14 +3377,8 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
     let operation = match value.operation {
         ResolutionSelectionOperation::Populate => json!({"tag":"Populate"}),
         ResolutionSelectionOperation::ChooseObjects { .. } => json!({"tag":"ChooseObjects"}),
-        ResolutionSelectionOperation::DestroyAnnouncedTargets { objects } => {
-            json!({"tag":"DestroyAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
-        }
         ResolutionSelectionOperation::ExileAnnouncedTargets { objects } => {
             json!({"tag":"ExileAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
-        }
-        ResolutionSelectionOperation::ReturnAnnouncedTargets { objects } => {
-            json!({"tag":"ReturnAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
         }
         ResolutionSelectionOperation::Blight { amount } => {
             json!({"tag":"Blight","amount":amount})

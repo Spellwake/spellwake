@@ -19,9 +19,9 @@ use spellwake_engine::{
     program::{
         AffectedPlayers, AttackRequirement, BodyTarget, CardType, CardTypeMask, Comparison,
         EffectSubject, ExecutableBody, Instruction, LibraryPlacement, ObjectFilter,
-        PermanentTargetAction, PermanentTypeFilter, PlayerRelation, Program, ProgramKind,
-        ResolutionCondition, ResolvingPlayer, SpellModes, TriggerGrouping, TriggerSpec,
-        TriggeredAbility, TriggeredAbilityId, ValueExpr,
+        PermanentTypeFilter, PlayerRelation, Program, ProgramKind, ResolutionCondition,
+        ResolvingPlayer, SpellModes, TriggerGrouping, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId, ValueExpr,
     },
     turn::Step,
 };
@@ -41,14 +41,6 @@ fn skip_unless_present(value: ValueExpr, destination: usize) -> Instruction {
             }),
         )),
         destination,
-    }
-}
-
-fn affect(minimum: u16, maximum: u16, action: PermanentTargetAction) -> Instruction {
-    Instruction::AffectPermanentTargets {
-        minimum,
-        maximum,
-        action,
     }
 }
 
@@ -76,7 +68,7 @@ fn optional_tap_change() -> Vec<Instruction> {
             chooser: ResolvingPlayer::Controller,
             instructions: 1,
         },
-        affect(1, 1, PermanentTargetAction::ToggleTap),
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::toggle_targets_tapped(),
     ]
 }
 
@@ -406,14 +398,13 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         "Target creature gets +2/+2 until end of turn. If it's paired with a creature, that creature also gets +2/+2 until end of turn." => {
             (
                 SingleCreature,
-                vec![affect(
-                    1,
-                    1,
-                    PermanentTargetAction::ModifyWithPartner {
-                        parts: ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(stats(2, 2))]),
-                        duration: ResolvedDuration::UntilEndOfTurn,
-                    },
-                )],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::TargetsWithPairedPartner,
+                        ResolvedPartsSpec(vec![ResolvedPartSpec::ModifyPT(stats(2, 2))]),
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                ],
             )
         }
         "Counter target spell that targets a player." => (
@@ -422,19 +413,17 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
             ),
             vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard)))],
         ),
-        "Up to two target creatures can't be blocked this turn." => (
-            SingleCreature,
-            vec![affect(
-                0,
-                2,
-                PermanentTargetAction::Modify {
-                    parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+        "Up to two target creatures can't be blocked this turn." => {
+            return Some(
+                ExecutableBody::new(
+                    SingleCreature,
+                    vec![modify_target(vec![ResolvedPartSpec::BlockingRestriction(
                         BlockingRestriction::CannotBeBlocked,
-                    )]),
-                    duration: ResolvedDuration::UntilEndOfTurn,
-                },
-            )],
-        ),
+                    )])],
+                )
+                .with_permanent_target_bounds(0, 2),
+            );
+        }
         "Return all nonland permanents to their owners' hands." => (
             NoTarget,
             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::move_group(ObjectFilter::nonland(), spellwake_engine::program::PublicZoneDestination::Hand)],
@@ -494,10 +483,15 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                 draw(2),
             ],
         ),
-        "Return up to two target creatures to their owners' hands." => (
-            SingleCreature,
-            vec![affect(0, 2, PermanentTargetAction::ReturnToHand)],
-        ),
+        "Return up to two target creatures to their owners' hands." => {
+            return Some(
+                ExecutableBody::new(
+                    SingleCreature,
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand()],
+                )
+                .with_permanent_target_bounds(0, 2),
+            );
+        }
         "Target player discards two cards and loses 2 life." => (
             SinglePlayer,
             vec![
@@ -1007,7 +1001,7 @@ fn blink(optional: bool) -> Vec<Instruction> {
         });
     }
     instructions.extend([
-        affect(1, 1, PermanentTargetAction::Exile),
+        crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
         Instruction::ZoneOp(Box::new(
             spellwake_engine::toolbox::ZoneOpSpec::return_exiled_target_cohort(false, false),
         )),
@@ -1676,7 +1670,7 @@ fn creature(
                 SourceCost::Tap,
                 SingleCreature,
                 vec![
-                    affect(1, 1, PermanentTargetAction::Tap),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(true),
                     skip_unless_present(
                         spellwake_engine::program::ValueExpr::object_matches(spellwake_engine::program::MatchObjectRef::TargetObject, spellwake_engine::program::ObjectFilter::creature().with_subtype(
                             vocabulary.resolve_label("Zombie")?,

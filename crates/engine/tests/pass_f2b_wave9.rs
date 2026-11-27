@@ -20,8 +20,8 @@
 //! - `ObjectFilterFlags::{DIED_THIS_TURN, PUT_INTO_GY_THIS_TURN, PUT_INTO_GY_FROM_LIBRARY_THIS_TURN}`
 //!   in `Instruction::MoveGraveyardGroup`
 //! - `SourceZoneFilter::LastMoved` on `TemporaryRuleKind::ZoneCastPermission` snapshotting
-//!   `ExileTopPlay` exiled objects and revoking after zone change
-//! - `Instruction::RegenerateSubject`, `PermanentTargetAction::Regenerate`,
+//!   impulse-exiled objects and revoking after zone change
+//! - `Instruction::RegenerateSubject`, multi-target regenerate,
 //!   `EffectSubject::MatchingOtherThanTarget` (`Dark Dabbling`), and
 //!   `EffectSubject::TargetAndSharingColorMatching`
 //! - `PlayerMutation::AddMana` (fixed and interactive choice for non-controller) and
@@ -75,12 +75,11 @@ use spellwake_engine::{
         EffectManaYield, EffectSubject, EndStepCast, EntryCopyRule, EntryCopySpecExt,
         EntryCopyZone, EventValueKind, ExecutableBody, ExtremeLifeTieMode, ImpulsePlayDuration,
         Instruction, LibrarySearch, MoveSubjectRef, ObjectClause, ObjectColorFilter, ObjectFilter,
-        ObjectFilterFlags, PermanentDefinition, PermanentTargetAction, PlayerRelation,
-        PlayerTriggerAction, Program, ProgramKind, ResolutionCondition, ResolvingPlayer,
-        SearchCardMatcher, SearchManaValue, SourceStateExpr, SourceZoneFilter, StatusTriggerKind,
-        SubtypeFilter, Supertype, TemporaryRuleKind, TriggerCondition, TriggerEvent,
-        TriggerGrouping, TriggerPlayerScope, TriggerSpec, TriggerZone, TriggeredAbility,
-        TriggeredAbilityId, ValueExpr,
+        ObjectFilterFlags, PermanentDefinition, PlayerRelation, PlayerTriggerAction, Program,
+        ProgramKind, ResolutionCondition, ResolvingPlayer, SearchCardMatcher, SearchManaValue,
+        SourceStateExpr, SourceZoneFilter, StatusTriggerKind, SubtypeFilter, Supertype,
+        TemporaryRuleKind, TriggerCondition, TriggerEvent, TriggerGrouping, TriggerPlayerScope,
+        TriggerSpec, TriggerZone, TriggeredAbility, TriggeredAbilityId, ValueExpr,
     },
     setup::GameSeed,
     targets::TargetRef,
@@ -932,7 +931,7 @@ fn died_this_turn_and_put_into_gy_from_library_graveyard_return() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 12. RegenerateSubject, PermanentTargetAction::Regenerate, MatchingOtherThanTarget,
+// 12. RegenerateSubject, multi-target regenerate, MatchingOtherThanTarget,
 //     and TargetAndSharingColorMatching
 // ---------------------------------------------------------------------------
 

@@ -210,10 +210,12 @@ fn text_parts_validate_singular_words_local_scope_and_strict_wire_context() {
         ExecutableBody::new(
             BodyTarget::SinglePermanent,
             vec![
-                Instruction::ChooseCreatureType {
-                    into: slot,
-                    excluding: BTreeSet::from([vampire]),
-                },
+                Instruction::PromptChoice(Box::new(
+                    crate::toolbox::PromptChoiceSpec::choose_creature_type(
+                        slot,
+                        BTreeSet::from([vampire]),
+                    ),
+                )),
                 {
                     struct _Tmp {
                         parts: crate::characteristics::ResolvedPartsSpec,
@@ -521,10 +523,12 @@ fn permanent(types: &[CardType], pt: Option<PowerToughness>) -> Program {
     )
 }
 fn choice_ability(targetless: bool) -> ActivatedAbility {
-    let mut instructions = vec![Instruction::ChooseCreatureType {
-        into: CreatureTypeSlot::new(0),
-        excluding: BTreeSet::new(),
-    }];
+    let mut instructions = vec![Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec::choose_creature_type(
+            CreatureTypeSlot::new(0),
+            BTreeSet::new(),
+        ),
+    ))];
     if !targetless {
         instructions.push(crate::program::Instruction::DealDamage(Box::new(
             crate::toolbox::DealDamageSpec {

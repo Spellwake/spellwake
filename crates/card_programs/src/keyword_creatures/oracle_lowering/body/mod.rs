@@ -60,6 +60,7 @@ pub(super) struct BodyBuilder {
     pub(super) target: BodyTarget,
     pub(super) instructions: Vec<Instruction>,
     pub(super) graveyard_target_bounds: Option<(usize, usize)>,
+    pub(super) permanent_target_bounds: Option<(u16, u16)>,
     pub(super) x_target_count: bool,
     pub(super) up_to_x_target_count: bool,
     pub(super) up_to_one_target: bool,
@@ -74,6 +75,7 @@ impl BodyBuilder {
             target: BodyTarget::None,
             instructions: Vec::new(),
             graveyard_target_bounds: None,
+            permanent_target_bounds: None,
             x_target_count: false,
             up_to_x_target_count: false,
             up_to_one_target: false,
@@ -113,6 +115,11 @@ impl BodyBuilder {
         }
     }
 
+    pub(super) fn push_bounded_target_op(&mut self, minimum: u16, maximum: u16, op: Instruction) {
+        self.permanent_target_bounds = Some((minimum, maximum));
+        self.instructions.push(op);
+    }
+
     pub(super) fn finish(self) -> Result<ExecutableBody, &'static str> {
         if self.instructions.is_empty() {
             return Err("oracle:empty-body");
@@ -134,6 +141,9 @@ impl BodyBuilder {
             Some((min, max)) => body.with_graveyard_target_bounds(min, max),
             None => body,
         };
+        if let Some((min, max)) = self.permanent_target_bounds {
+            body = body.with_permanent_target_bounds(min, max);
+        }
         if self.x_target_count {
             body = body.with_x_target_count();
         }

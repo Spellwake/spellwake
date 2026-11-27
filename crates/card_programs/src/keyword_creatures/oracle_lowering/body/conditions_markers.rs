@@ -675,10 +675,7 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
         }
         MatchObjectRef::LastMovedToExile
             if builder.instructions.iter().rev().take(2).any(|op| {
-                matches!(
-                    op,
-                    Instruction::ExileTopPlay { .. }
-                ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
+                super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
                     matches!(
                         &spec.source,
                         spellwake_engine::toolbox::ObjectQuery::ZoneScan {

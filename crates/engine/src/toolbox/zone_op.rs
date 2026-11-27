@@ -272,6 +272,60 @@ impl ZoneDest {
             attach_to: None,
         }
     }
+
+    /// Convert a [`crate::program::SubjectDestination`] into an orthogonal [`ZoneDest`].
+    #[must_use]
+    pub fn from_subject_dest(dest: crate::program::SubjectDestination) -> Self {
+        use crate::program::SubjectDestination;
+        match dest {
+            SubjectDestination::Battlefield {
+                tapped,
+                attacking,
+                transformed,
+                under_owner_control,
+                with_counter,
+                attach_to_self,
+            } => Self::Battlefield {
+                controller: if under_owner_control {
+                    ZoneController::Owner
+                } else {
+                    ZoneController::Player(Box::new(PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    )))
+                },
+                tapped,
+                attacking,
+                transformed,
+                face_down: None,
+                entering_counters: with_counter
+                    .map(|(kind, count)| {
+                        (
+                            kind,
+                            Box::new(ValueExpr::literal(RulesInteger::from_usize(usize::from(
+                                count,
+                            )))),
+                        )
+                    })
+                    .into_iter()
+                    .collect(),
+                attach_to: attach_to_self.then(|| Box::new(ObjectQuery::Source)),
+            },
+            SubjectDestination::Hand => Self::Hand,
+            SubjectDestination::Graveyard => Self::Graveyard {
+                semantics: GraveyardSemantics::Move,
+            },
+            SubjectDestination::Exile { delayed_return } => Self::Exile {
+                face_down: false,
+                viewer: None,
+                link_to_source: false,
+                delayed_return,
+                link_group: None,
+            },
+            SubjectDestination::Library(placement) => Self::Library {
+                position: LibraryOrderPos::from_placement(placement),
+            },
+        }
+    }
 }
 
 /// Complete universal zone-operation pipeline specification.
@@ -315,6 +369,32 @@ impl ZoneOpSpec {
     #[must_use]
     pub fn move_all(source: ObjectQuery, destination: ZoneDest) -> Self {
         Self::simple(source, ZoneSelection::All, destination)
+    }
+
+    /// Exile the top `count` cards of each `owners` library, optionally face down.
+    #[must_use]
+    pub fn exile_top_library(owners: PlayerSelector, count: ValueExpr, face_down: bool) -> Self {
+        Self {
+            source: ObjectQuery::ZoneScan {
+                zone: QueryZone::Library(Box::new(owners)),
+                filter: Box::new(ObjectFilter::any()),
+                slice: QuerySlice::Top(Box::new(count)),
+            },
+            selection: ZoneSelection::All,
+            destination: ZoneDest::Exile {
+                face_down,
+                viewer: face_down.then_some(PlayerSelector::Resolving(ResolvingPlayer::Controller)),
+                link_to_source: false,
+                delayed_return: None,
+                link_group: None,
+            },
+            bind_moved: None,
+            bind_snapshots: None,
+            bind_unchosen: None,
+            bind_succeeded: None,
+            tag_moved: None,
+            shuffle_library: None,
+        }
     }
 
     /// Construct a pure library shuffle for `player`.

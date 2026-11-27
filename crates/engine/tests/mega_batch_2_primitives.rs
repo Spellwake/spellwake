@@ -41,10 +41,10 @@ use spellwake_engine::{
     program::{
         AffectedPlayers, BodyTarget, CardType, DamageAmountSpec, DamageRecipientsRef,
         DamageSourceRef, EffectSubject, ExecutableBody, Instruction, LookTopKeepDest,
-        LookTopRestDest, ObjectFilter, PermanentDefinition, PermanentTargetAction,
-        PlaneswalkerSubtype, PlayerRelation, PlayerTriggerAction, Program, ProgramKind,
-        ResolvingPlayer, SourceZoneFilter, SpellFilter, TemporaryRuleKind, TriggerEvent,
-        TriggerGrouping, TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr, ValueZone,
+        LookTopRestDest, ObjectFilter, PermanentDefinition, PlaneswalkerSubtype, PlayerRelation,
+        PlayerTriggerAction, Program, ProgramKind, ResolvingPlayer, SourceZoneFilter, SpellFilter,
+        TemporaryRuleKind, TriggerEvent, TriggerGrouping, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId, ValueExpr, ValueZone,
     },
     targets::TargetRef,
 };
@@ -123,12 +123,17 @@ fn divide_damage_expr_and_up_to_x_target_count_enforce_bounds() {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SingleCreature,
-            vec![Instruction::AffectPermanentTargets {
-                action: PermanentTargetAction::PutPlusOneCounter,
-                minimum: 0,
-                maximum: u16::MAX,
-            }],
+            vec![Instruction::MutateObject(Box::new(
+                spellwake_engine::toolbox::MutateObjectSpec::all(
+                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                    spellwake_engine::toolbox::ObjectMutation::AddCounters {
+                        kind: spellwake_engine::effects::CounterKind::PlusOne,
+                        amount: ValueExpr::literal(1),
+                    },
+                ),
+            ))],
         )
+        .with_permanent_target_bounds(0, u16::MAX)
         .with_up_to_x_target_count(),
     );
     up_to_x.x_mana_symbols = 1;

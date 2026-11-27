@@ -517,6 +517,7 @@ fn public(selection: &shared::Selection) -> Result<(Vec<shared::CallRecord>, Nat
     if recipe["op"] == "EffectWindow::resume_rule" {
         let frame = match native.state.pending_decision().map(|value| value.frame()) {
             Some(RuleFrame::CreatureType(frame)) => EffectDecision::CreatureType(frame.clone()),
+            Some(RuleFrame::PromptChoice(frame)) => EffectDecision::PromptChoice(frame.clone()),
             _ => return Err("actual expected frame missing".into()),
         };
         let source = native.state.execution();
@@ -527,11 +528,14 @@ fn public(selection: &shared::Selection) -> Result<(Vec<shared::CallRecord>, Nat
                 .ok_or("actual revision addition exhausted")?;
         }
         let actor = packet::seat(text(recipe, "actor")?)?;
-        let reply = DecisionReply::CreatureType(fixture::lookup(
-            &recipe["reply"],
-            &selection.vocabulary,
-            &other,
-        )?);
+        let chosen = fixture::lookup(&recipe["reply"], &selection.vocabulary, &other)?;
+        let reply = if matches!(frame, EffectDecision::PromptChoice(_)) {
+            DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+                chosen,
+            ))
+        } else {
+            DecisionReply::CreatureType(chosen)
+        };
         let args = (expected, frame.clone(), actor, reply);
         let first = Cell::new(true);
         let (result, record) = shared::borrowed_call(
@@ -580,11 +584,15 @@ fn public(selection: &shared::Selection) -> Result<(Vec<shared::CallRecord>, Nat
                 choice: if recipe["reply"].is_string() {
                     DecisionReply::CopyTargets(CopyTargetChoice::Retain)
                 } else {
-                    DecisionReply::CreatureType(fixture::lookup(
-                        &recipe["selection"],
-                        &selection.vocabulary,
-                        &other,
-                    )?)
+                    let chosen =
+                        fixture::lookup(&recipe["selection"], &selection.vocabulary, &other)?;
+                    if matches!(pending.frame(), RuleFrame::PromptChoice(_)) {
+                        DecisionReply::PromptChoice(
+                            spellwake_engine::toolbox::PromptChoiceReply::CreatureType(chosen),
+                        )
+                    } else {
+                        DecisionReply::CreatureType(chosen)
+                    }
                 },
             },
         };
@@ -652,7 +660,13 @@ fn public(selection: &shared::Selection) -> Result<(Vec<shared::CallRecord>, Nat
             actor,
             command: GameCommand::Reply {
                 decision: pending.id(),
-                choice: DecisionReply::CreatureType(id),
+                choice: if matches!(pending.frame(), RuleFrame::PromptChoice(_)) {
+                    DecisionReply::PromptChoice(
+                        spellwake_engine::toolbox::PromptChoiceReply::CreatureType(id),
+                    )
+                } else {
+                    DecisionReply::CreatureType(id)
+                },
             },
         };
         let (result, record) = fixture::advance(&native.state, &input, true);

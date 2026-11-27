@@ -14,8 +14,8 @@ use spellwake_engine::{
     mana::{ManaAbility, ManaAbilityId, ManaCost, ManaOutput, ManaType},
     program::{
         BodyTarget, Comparison, EffectSubject, ExecutableBody, Instruction, LibraryPlacement,
-        ObjectClause, ObjectFilter, PermanentTargetAction, PlayerRelation, PowerFilter, Program,
-        ProgramKind, ResolutionCondition, ResolvingPlayer, ValueExpr,
+        ObjectClause, ObjectFilter, PlayerRelation, PowerFilter, Program, ProgramKind,
+        ResolutionCondition, ResolvingPlayer, ValueExpr,
     },
     turn::Step,
 };
@@ -43,25 +43,10 @@ fn keywords(values: impl IntoIterator<Item = KeywordAbility>) -> ResolvedPartSpe
     ResolvedPartSpec::Abilities(AbilityChange::grant_keywords(values))
 }
 
-fn affect(minimum: u16, maximum: u16, action: PermanentTargetAction) -> Instruction {
-    Instruction::AffectPermanentTargets {
-        minimum,
-        maximum,
-        action,
-    }
-}
-
 fn cannot_block() -> Instruction {
-    affect(
-        0,
-        2,
-        PermanentTargetAction::Modify {
-            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
-                BlockingRestriction::CannotBlock,
-            )]),
-            duration: ResolvedDuration::UntilEndOfTurn,
-        },
-    )
+    modify(vec![ResolvedPartSpec::BlockingRestriction(
+        BlockingRestriction::CannotBlock,
+    )])
 }
 
 fn choose_effect(
@@ -840,7 +825,7 @@ pub(super) fn spell(
         "Untap target creature. It gets +2/+4 and gains reach until end of turn." => (
             SingleCreature,
             vec![
-                affect(1, 1, PermanentTargetAction::Untap),
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(false),
                 modify(vec![
                     ResolvedPartSpec::ModifyPT(stats(2, 4)),
                     keywords([KeywordAbility::Reach]),
@@ -855,10 +840,15 @@ pub(super) fn spell(
         "Draw two cards, then discard a card at random." => {
             (NoTarget, vec![draw(2), crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_one_at_random(ResolvingPlayer::Controller)])
         }
-        "Tap up to two target creatures." => (
-            SingleCreature,
-            vec![affect(0, 2, PermanentTargetAction::Tap)],
-        ),
+        "Tap up to two target creatures." => {
+            return Some(
+                ExecutableBody::new(
+                    SingleCreature,
+                    vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(true)],
+                )
+                .with_permanent_target_bounds(0, 2),
+            );
+        }
         "Look at the top four cards of your library. Put one of them into your hand and the rest into your graveyard." => {
             (
                 NoTarget,
@@ -882,7 +872,10 @@ pub(super) fn spell(
             (BodyTarget::AnyGraveyardCard, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()])
         }
         "Up to two target creatures can't block this turn." => {
-            (SingleCreature, vec![cannot_block()])
+            return Some(
+                ExecutableBody::new(SingleCreature, vec![cannot_block()])
+                    .with_permanent_target_bounds(0, 2),
+            );
         }
         "Target creature can't be blocked this turn." => (
             SingleCreature,
@@ -913,7 +906,7 @@ pub(super) fn spell(
                     modify(vec![ResolvedPartSpec::Control(
                         spellwake_engine::characteristics::ControlRecipient::ResolvingController,
                     )]),
-                    affect(1, 1, PermanentTargetAction::Untap),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(false),
                     modify(vec![keywords([
                         KeywordAbility::Trample,
                         KeywordAbility::Haste,
@@ -3013,7 +3006,15 @@ pub(super) fn compile(
             )],
         ),
         "Haste\nWhen this creature enters, up to two target creatures can't block this turn." => {
-            ("Haste", vec![(etb, SingleCreature, vec![cannot_block()])])
+            let mut program = base("Haste")?;
+            program.triggered.push(spellwake_engine::program::TriggeredAbility {
+                id: spellwake_engine::program::TriggeredAbilityId(0),
+                condition: etb,
+                grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
+                body: ExecutableBody::new(SingleCreature, vec![cannot_block()])
+                    .with_permanent_target_bounds(0, 2),
+            });
+            return Some(program);
         }
         "This creature can't block.\nYou may cast this card from your graveyard as long as you control a Zombie." =>
         {

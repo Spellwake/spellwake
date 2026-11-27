@@ -1982,3 +1982,141 @@ pub(crate) fn gain_control(
         },
     )))
 }
+
+#[must_use]
+pub(crate) fn destroy_targets() -> Instruction {
+    zone_op(ZoneOpSpec::move_all(
+        ObjectQuery::Targets,
+        ZoneDest::Graveyard {
+            semantics: GraveyardSemantics::Destroy {
+                allow_regenerate: true,
+            },
+        },
+    ))
+}
+
+#[must_use]
+pub(crate) fn move_targets_to(destination: SubjectDestination) -> Instruction {
+    zone_op(ZoneOpSpec::move_all(
+        ObjectQuery::Targets,
+        ZoneDest::from_subject_dest(destination),
+    ))
+}
+
+#[must_use]
+pub(crate) fn set_targets_tapped(tapped: bool) -> Instruction {
+    mutate_all(
+        ObjectQuery::Targets,
+        spellwake_engine::toolbox::ObjectMutation::SetTapped(tapped),
+    )
+}
+
+#[must_use]
+pub(crate) fn toggle_targets_tapped() -> Instruction {
+    mutate_all(
+        ObjectQuery::Targets,
+        spellwake_engine::toolbox::ObjectMutation::ToggleTapped,
+    )
+}
+
+#[must_use]
+pub(crate) fn skip_next_untap_targets() -> Instruction {
+    mutate_all(
+        ObjectQuery::Targets,
+        spellwake_engine::toolbox::ObjectMutation::SkipNextUntap,
+    )
+}
+
+#[must_use]
+pub(crate) fn remove_counters_from_targets(
+    kind: Option<CounterKind>,
+    amount: Option<ValueExpr>,
+) -> Instruction {
+    match amount {
+        Some(amt) => remove_counters(ObjectQuery::Targets, kind, amt),
+        None => mutate_all(
+            ObjectQuery::Targets,
+            spellwake_engine::toolbox::ObjectMutation::ClearCounters { kind },
+        ),
+    }
+}
+
+#[must_use]
+pub(crate) fn require_combat_action_targets(
+    kind: spellwake_engine::program::CombatActionKind,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::combat_action(ObjectQuery::Targets, kind),
+    ))
+}
+
+#[must_use]
+pub(crate) fn prevent_targets_damage_this_turn(
+    combat_only: bool,
+    both_directions: bool,
+) -> Instruction {
+    prevent_damage_spec(spellwake_engine::damage::TurnPreventionSpec {
+        combat_only,
+        source: spellwake_engine::damage::PreventionSourceSpec::AllPermanentTargets,
+        recipient: spellwake_engine::damage::PreventionRecipientSpec::Any,
+        both_directions,
+    })
+}
+
+#[must_use]
+pub(crate) fn exile_top_library_group(
+    owners: AffectedPlayers,
+    count: ValueExpr,
+    face_down: bool,
+) -> Instruction {
+    zone_op(ZoneOpSpec::exile_top_library(
+        PlayerSelector::Group(owners),
+        count,
+        face_down,
+    ))
+}
+
+#[must_use]
+pub(crate) fn impulse_play_last_moved(
+    duration: spellwake_engine::program::ImpulsePlayDuration,
+    cast_only: bool,
+    free: bool,
+    any_color: bool,
+) -> Instruction {
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::impulse_play_permission(
+            ObjectQuery::from_move_subject(MoveSubjectRef::LastMoved),
+            PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            duration,
+            cast_only,
+            free,
+            any_color,
+        ),
+    ))
+}
+
+#[must_use]
+pub(crate) fn choose_creature_type(
+    into: spellwake_engine::program::CreatureTypeSlot,
+    excluding: std::collections::BTreeSet<spellwake_contracts::creature_types::CreatureTypeId>,
+) -> Instruction {
+    Instruction::PromptChoice(Box::new(
+        spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(into, excluding),
+    ))
+}
+
+#[must_use]
+pub(crate) fn put_counters_on_targets_by_current_type() -> [Instruction; 2] {
+    [
+        put_counters_on_query(
+            ObjectQuery::filtered(ObjectQuery::Targets, ObjectFilter::creature()),
+            CounterKind::PlusOne,
+            ValueExpr::literal(1),
+        ),
+        put_counters_on_query(
+            ObjectQuery::filtered(ObjectQuery::Targets, ObjectFilter::planeswalker()),
+            CounterKind::Loyalty,
+            ValueExpr::literal(1),
+        ),
+    ]
+}

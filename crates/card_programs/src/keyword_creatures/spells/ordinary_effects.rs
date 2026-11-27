@@ -103,11 +103,7 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
             _ => return None,
         };
         let mut instructions = vec![
-            Instruction::AffectPermanentTargets {
-                minimum: 1,
-                maximum: 1,
-                action: spellwake_engine::program::PermanentTargetAction::Exile,
-            },
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
             Instruction::ZoneOp(Box::new(
                 spellwake_engine::toolbox::ZoneOpSpec::return_exiled_target_cohort(
                     false,
@@ -152,22 +148,21 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         _ => None,
     };
     if let Some((filter, minimum, maximum, next_end_step)) = exile_return {
-        return Some(ExecutableBody::new(
-            BodyTarget::FilteredPermanent(filter),
-            vec![
-                Instruction::AffectPermanentTargets {
-                    minimum,
-                    maximum,
-                    action: spellwake_engine::program::PermanentTargetAction::Exile,
-                },
-                Instruction::ZoneOp(Box::new(
-                    spellwake_engine::toolbox::ZoneOpSpec::return_exiled_target_cohort(
-                        next_end_step,
-                        false,
-                    ),
-                )),
-            ],
-        ));
+        return Some(
+            ExecutableBody::new(
+                BodyTarget::FilteredPermanent(filter),
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
+                    Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::return_exiled_target_cohort(
+                            next_end_step,
+                            false,
+                        ),
+                    )),
+                ],
+            )
+            .with_permanent_target_bounds(minimum, maximum),
+        );
     }
     if text.trim() == "Gain control of target noncreature spell. You may choose new targets for it."
     {
@@ -582,61 +577,62 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
             BodyTarget::SinglePermanent,
             2,
             2,
-            spellwake_engine::program::PermanentTargetAction::Exile,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target(),
         )),
         "destroy two target creatures." => Some((
             BodyTarget::SingleCreature,
             2,
             2,
-            spellwake_engine::program::PermanentTargetAction::Destroy,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_targets(),
         )),
         "return six target nonland permanents to their owners' hands." => Some((
             BodyTarget::FilteredPermanent(ObjectFilter::nonland()),
             6,
             6,
-            spellwake_engine::program::PermanentTargetAction::ReturnToHand,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::return_target_to_hand(),
         )),
         "put a +1/+1 counter on each of up to two other target creatures." => Some((
-            BodyTarget::SingleCreature,
+            BodyTarget::FilteredPermanent(ObjectFilter::creature().other_than_ability_source()),
             0,
             2,
-            spellwake_engine::program::PermanentTargetAction::PutPlusOneCounterOnOthers,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                spellwake_engine::effects::CounterKind::PlusOne,
+                spellwake_engine::program::ValueExpr::literal(1),
+            ),
         )),
         "put a +1/+1 counter on each of up to two target creatures." => Some((
             BodyTarget::SingleCreature,
             0,
             2,
-            spellwake_engine::program::PermanentTargetAction::PutPlusOneCounter,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_target(
+                spellwake_engine::effects::CounterKind::PlusOne,
+                spellwake_engine::program::ValueExpr::literal(1),
+            ),
         )),
         "untap target permanent." => Some((
             BodyTarget::SinglePermanent,
             1,
             1,
-            spellwake_engine::program::PermanentTargetAction::Untap,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(false),
         )),
         "untap another target permanent." => Some((
             BodyTarget::FilteredPermanent(ObjectFilter::permanent().other_than_ability_source()),
             1,
             1,
-            spellwake_engine::program::PermanentTargetAction::Untap,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(false),
         )),
         "untap up to four target permanents." => Some((
             BodyTarget::SinglePermanent,
             0,
             4,
-            spellwake_engine::program::PermanentTargetAction::Untap,
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::set_targets_tapped(false),
         )),
         _ => None,
     };
-    if let Some((target, minimum, maximum, action)) = multi {
-        return Some(ExecutableBody::new(
-            target,
-            vec![Instruction::AffectPermanentTargets {
-                minimum,
-                maximum,
-                action,
-            }],
-        ));
+    if let Some((target, minimum, maximum, op)) = multi {
+        return Some(
+            ExecutableBody::new(target, vec![op]).with_permanent_target_bounds(minimum, maximum),
+        );
     }
     if lower == "each player sacrifices all permanents they control that are one or more colors." {
         return Some(ExecutableBody::new(
@@ -750,10 +746,10 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
             return Some(ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::ChooseCreatureType {
-                        into: slot,
-                        excluding: BTreeSet::new(),
-                    },
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::choose_creature_type(
+                        slot,
+                        BTreeSet::new(),
+                    ),
                     operation,
                 ],
             ));
@@ -766,10 +762,10 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::ChooseCreatureType {
-                    into: slot,
-                    excluding: BTreeSet::new(),
-                },
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::choose_creature_type(
+                    slot,
+                    BTreeSet::new(),
+                ),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::count_battlefield(
                         spellwake_engine::program::ObjectFilter::any()

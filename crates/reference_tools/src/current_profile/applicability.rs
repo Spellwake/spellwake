@@ -290,14 +290,13 @@ native!(ExecutableBody, self, {
     {
         return Err(ApplicabilityError);
     }
-    if self.triggered_modes().is_some() {
+    if self.triggered_modes().is_some() || self.permanent_target_bounds.is_some() {
         return Err(ApplicabilityError);
     }
     self.instructions.iter().try_for_each(|value| match value {
         Instruction::OfferDynamicManaPayment { .. }
         | Instruction::ChooseObjects { .. }
         | Instruction::ChooseOption { .. }
-        | Instruction::PromptChoice(_)
         | Instruction::ForEach { .. }
         | Instruction::ForEachPlayerQuery { .. }
         | Instruction::BindEnv { .. }
@@ -309,9 +308,22 @@ native!(ExecutableBody, self, {
         | Instruction::SearchLibrary { .. }
         | Instruction::ScheduleDelayedStepTrigger { .. }
         | Instruction::EmitReflexiveTrigger { .. }
-        | Instruction::AffectPermanentTargets { .. }
         | Instruction::Sacrifice { .. }
         | Instruction::Discard { .. } => Err(ApplicabilityError),
+        Instruction::PromptChoice(spec) => {
+            if matches!(
+                &spec.domain,
+                spellwake_engine::toolbox::PromptDomain::Subtype {
+                    kind: spellwake_engine::toolbox::SubtypeChoiceKind::Creature,
+                    legacy_slot: Some(_),
+                    ..
+                }
+            ) {
+                Ok(())
+            } else {
+                Err(ApplicabilityError)
+            }
+        }
         Instruction::OptionalSequence {
             instructions: 1, ..
         } => Ok(()),
@@ -331,6 +343,20 @@ native!(ExecutableBody, self, {
                 && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Hand)
                 && spec.shuffle_library.is_none()
                 && self.target != spellwake_engine::program::BodyTarget::SingleOwnGraveyardCard)
+                || (matches!(
+                    &spec.source,
+                    spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                        zone: spellwake_engine::toolbox::QueryZone::Library(_),
+                        slice: spellwake_engine::toolbox::QuerySlice::Top(_),
+                        ..
+                    }
+                ) && matches!(
+                    spec.selection,
+                    spellwake_engine::toolbox::ZoneSelection::All
+                ) && matches!(
+                    spec.destination,
+                    spellwake_engine::toolbox::ZoneDest::Exile { .. }
+                ) && spec.shuffle_library.is_none())
             {
                 Ok(())
             } else {
@@ -492,8 +518,6 @@ native!(ExecutableBody, self, {
             Err(ApplicabilityError)
         }
         Instruction::Jump { .. }
-        | Instruction::ChooseCreatureType { .. }
-        | Instruction::ExileTopPlay { .. }
         | Instruction::RepeatLoop { .. }
         | Instruction::ChooseValue { .. }
         | Instruction::LookTopChooseExt { .. }
@@ -1082,7 +1106,6 @@ native!(EffectWindow, self, {
             | PendingWorkKind::LandPlay
             | PendingWorkKind::ZoneMove
             | PendingWorkKind::ActivationCost
-            | PendingWorkKind::ImpulseReplacement
             | PendingWorkKind::CastRecovery,
         ) => Err(ApplicabilityError),
         Some(
@@ -1165,6 +1188,14 @@ native!(RuleFrame, self, {
         | RuleFrame::CopyTargets(_)
         | RuleFrame::ManaColor(_)
         | RuleFrame::CreatureType(_) => Ok(()),
+        RuleFrame::PromptChoice(frame)
+            if matches!(
+                frame.domain,
+                spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. }
+            ) =>
+        {
+            Ok(())
+        }
         RuleFrame::LoyaltyRemoval(_)
         | RuleFrame::ResolutionManaColor(_)
         | RuleFrame::OptionIndex(_)
@@ -1218,6 +1249,14 @@ native!(EffectDecision, self, {
         | EffectDecision::TriggerTarget(_)
         | EffectDecision::CopyTargets(_)
         | EffectDecision::CreatureType(_) => Ok(()),
+        EffectDecision::PromptChoice(frame)
+            if matches!(
+                frame.domain,
+                spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. }
+            ) =>
+        {
+            Ok(())
+        }
         EffectDecision::LoyaltyRemoval(_)
         | EffectDecision::ResolutionManaColor(_)
         | EffectDecision::OptionIndex(_)
@@ -1305,6 +1344,9 @@ native!(spellwake_engine::effects::DecisionReply, self, {
         | DecisionReply::TokenAuraChoice(_)
         | DecisionReply::LinkedReturnOrder(_)
         | DecisionReply::LinkedAuraChoice(_) => Err(ApplicabilityError),
+        DecisionReply::PromptChoice(
+            spellwake_engine::toolbox::PromptChoiceReply::CreatureType(_),
+        ) => Ok(()),
         DecisionReply::TransformOrder(_) | DecisionReply::PromptChoice(_) => {
             Err(ApplicabilityError)
         }

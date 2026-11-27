@@ -309,6 +309,7 @@ impl EffectWindow {
                 cast_only,
                 free,
                 any_color,
+                impulse_duration,
             } => {
                 let grantee = self
                     .eval_player_selector_at(
@@ -320,7 +321,12 @@ impl EffectWindow {
                     .into_iter()
                     .next()
                     .unwrap_or(controller);
-                let play_duration = match spec.duration {
+                let exile_source = match entry.kind() {
+                    StackKind::TriggeredAbility { source }
+                    | StackKind::ActivatedAbility { source } => Some(source.id()),
+                    _ => None,
+                };
+                let fallback_duration = match spec.duration {
                     crate::characteristics::ResolvedDuration::UntilEndOfTurn
                     | crate::characteristics::ResolvedDuration::UntilEndOfCombat => {
                         CardPlayDuration::ThroughTurn
@@ -350,15 +356,52 @@ impl EffectWindow {
                         ObjectZone::Hand(_) => CardPlayZone::Hand,
                         _ => continue,
                     };
-                    self.card_play_permissions.insert(CardPlayPermission {
-                        zone,
-                        object: obj,
-                        player: grantee,
-                        duration: play_duration,
-                        any_color: *any_color,
-                        free: *free,
-                        cast_only: *cast_only,
-                    });
+                    if *cast_only
+                        && self
+                            .copiable_program(obj)
+                            .is_some_and(|program| program.has_type(CardType::Land))
+                    {
+                        continue;
+                    }
+                    let permission = (obj, grantee);
+                    if let Some(imp_dur) = *impulse_duration {
+                        if imp_dur == crate::program::ImpulsePlayDuration::UntilNextFromSource
+                            && zone == CardPlayZone::Exile
+                            && let Some(source) = exile_source
+                        {
+                            self.exile_play_until_next.insert(source, permission);
+                            if *free {
+                                self.free_exiled_cards.insert(permission);
+                            }
+                            continue;
+                        }
+                        let play_duration = self.map_impulse_play_duration(imp_dur, grantee);
+                        self.card_play_permissions.insert(CardPlayPermission {
+                            zone,
+                            object: obj,
+                            player: grantee,
+                            duration: play_duration,
+                            any_color: *any_color,
+                            free: *free,
+                            cast_only: *cast_only,
+                        });
+                        if *free && zone == CardPlayZone::Exile {
+                            self.free_exiled_cards.insert(permission);
+                        }
+                    } else {
+                        self.card_play_permissions.insert(CardPlayPermission {
+                            zone,
+                            object: obj,
+                            player: grantee,
+                            duration: fallback_duration,
+                            any_color: *any_color,
+                            free: *free,
+                            cast_only: *cast_only,
+                        });
+                        if *free && zone == CardPlayZone::Exile {
+                            self.free_exiled_cards.insert(permission);
+                        }
+                    }
                 }
             }
             ContinuousPayload::PreventDamage(prev_spec) => {
@@ -1065,6 +1108,16 @@ impl EffectWindow {
                 Ok(StepOutcome::Continue)
             }
             Instruction::PromptChoice(spec) => {
+                if let crate::toolbox::PromptDomain::Subtype {
+                    legacy_slot: Some(slot),
+                    ..
+                } = &spec.domain
+                    && self
+                        .resolution_cursor()
+                        .is_some_and(|c| c.values.contains_key(slot))
+                {
+                    return Err(EffectError::InconsistentProgram);
+                }
                 let actor = self
                     .eval_player_selector_at(
                         controller,

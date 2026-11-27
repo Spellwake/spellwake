@@ -201,10 +201,12 @@ fn optional_and_creature_type_use_actual_chooser_options_and_exclusions() {
 
     let source = start(
         vec![
-            Instruction::ChooseCreatureType {
-                into: CreatureTypeSlot::new(0),
-                excluding: BTreeSet::from([excluded]),
-            },
+            Instruction::PromptChoice(Box::new(
+                spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+                    CreatureTypeSlot::new(0),
+                    BTreeSet::from([excluded]),
+                ),
+            )),
             Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::gain(
                 spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
                 spellwake_engine::program::ValueExpr::literal(2),
@@ -214,7 +216,7 @@ fn optional_and_creature_type_use_actual_chooser_options_and_exclusions() {
     );
     assert!(matches!(
         source.pending_decision().unwrap().frame(),
-        RuleFrame::CreatureType(_)
+        RuleFrame::PromptChoice(_)
     ));
     let mut view = scope(&source, viewer_a());
     let before = view.references.len();
@@ -234,10 +236,14 @@ fn optional_and_creature_type_use_actual_chooser_options_and_exclusions() {
     );
     let result = reply(
         &source,
-        |view| PlayerChoice::Option {
-            option: view.issue(NativeReference::CreatureType(allowed)).unwrap(),
+        |view| PlayerChoice::PromptChoice {
+            reply: crate::player_wire::PlayerPromptReply::Options {
+                options: vec![view.issue(NativeReference::CreatureType(allowed)).unwrap()],
+            },
         },
-        DecisionReply::CreatureType(allowed),
+        DecisionReply::PromptChoice(
+            spellwake_engine::toolbox::PromptChoiceReply::CreatureType(allowed),
+        ),
     );
     assert_eq!(result.execution().life_total(A), Some(&22.into()));
 }

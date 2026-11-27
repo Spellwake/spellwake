@@ -19,7 +19,7 @@
 //!   `ActivationRestriction::OnlyOpponents` and `ActivationRestriction::AnyPlayer`
 //! - Newly admitted `OptionalEffect` / `OptionalSequence` primitives (`UntapUpTo`,
 //!   `DoubleCountersOnTargets`, `RegenerateSource`, and internal `OptionalSequence` jump bounds)
-//! - `TriggerZone::Any` on spell programs and `Instruction::AffectPermanentTargets` companion
+//! - `TriggerZone::Any` on spell programs and bounded multi-target companion
 //!   follow-up validation and execution.
 #[path = "../test_support/creature_vocabulary.rs"]
 mod creature_vocabulary;
@@ -56,9 +56,9 @@ use spellwake_engine::{
         AffectedPlayers, BodyTarget, CardType, Comparison, DamageAmountSpec, DamageRecipientsRef,
         DamageSourceRef, DefinitionError, EffectSubject, EntryCounterAbility, ExecutableBody,
         GraveyardSelfCast, Instruction, LibrarySearch, ModalUniqueness, ObjectFilter,
-        PermanentTargetAction, PlayerRelation, PlayerStatExpr, PlayerTriggerAction, Program,
-        ResolutionCondition, ResolvingPlayer, SearchCardMatcher, SourceStateExpr, SpellFilter,
-        Supertype, TriggerGrouping, TriggerSpec, TriggerZone, TriggeredAbility, TriggeredAbilityId,
+        PlayerRelation, PlayerStatExpr, PlayerTriggerAction, Program, ResolutionCondition,
+        ResolvingPlayer, SearchCardMatcher, SourceStateExpr, SpellFilter, Supertype,
+        TriggerGrouping, TriggerSpec, TriggerZone, TriggeredAbility, TriggeredAbilityId,
         TriggeredModes, ValueExpr,
     },
     targets::TargetRef,
@@ -459,5 +459,5 @@ fn triggered_fixed_target_clause_fight_resolves_and_handles_removed_target() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 11. TriggerZone::Any on a spell program & AffectPermanentTargets follow-ups
+// 11. TriggerZone::Any on a spell program & bounded multi-target follow-ups
 // ---------------------------------------------------------------------------

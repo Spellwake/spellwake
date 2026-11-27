@@ -1012,10 +1012,12 @@ pub(crate) fn elf_count(game: &GameState, v: &CreatureTypeVocabulary) -> usize {
 }
 
 pub(crate) fn type_choice_body() -> Instruction {
-    Instruction::ChooseCreatureType {
-        into: CreatureTypeSlot::new(0),
-        excluding: BTreeSet::new(),
-    }
+    Instruction::PromptChoice(Box::new(
+        spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
+            CreatureTypeSlot::new(0),
+            BTreeSet::new(),
+        ),
+    ))
 }
 
 pub(crate) fn chosen_draw() -> Instruction {
@@ -1034,12 +1036,15 @@ pub(crate) fn chosen_draw() -> Instruction {
 }
 
 pub(crate) fn assert_type_frame(game: &GameState, entry: StackEntryId) {
-    let RuleFrame::CreatureType(frame) = game.pending_decision().unwrap().frame() else {
+    let RuleFrame::PromptChoice(frame) = game.pending_decision().unwrap().frame() else {
         panic!("exact frozen q0 choice")
     };
-    assert_eq!(frame.entry(), entry);
-    assert_eq!(frame.slot(), CreatureTypeSlot::new(0));
-    assert_eq!(frame.chooser(), P0);
+    assert_eq!(frame.entry, entry);
+    assert_eq!(frame.chooser, P0);
+    assert!(matches!(
+        frame.domain,
+        spellwake_engine::toolbox::ResolvedPromptDomain::CreatureType { .. }
+    ));
     assert!(
         game.execution()
             .resolution_state()
@@ -1263,7 +1268,9 @@ pub(crate) fn chosen_count_draw_cuts() {
     let completed = reply(
         pending.state(),
         P0,
-        DecisionReply::CreatureType(v.resolve_label("Elf").unwrap()),
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+            v.resolve_label("Elf").unwrap(),
+        )),
     );
     let occurrences = all_occurrences(&completed);
     let changes = occurrences

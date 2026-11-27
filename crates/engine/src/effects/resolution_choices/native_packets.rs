@@ -286,10 +286,21 @@ fn skipped_local_definition() {
                 BodyTarget::None,
                 vec![
                     first,
-                    Instruction::ChooseCreatureType {
-                        into: CreatureTypeSlot::new(0),
-                        excluding: BTreeSet::new(),
-                    },
+                    Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                        chooser: crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        domain: crate::toolbox::PromptDomain::Subtype {
+                            kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                            excluding: BTreeSet::new(),
+                            legacy_slot: Some(CreatureTypeSlot::new(0)),
+                        },
+                        category: crate::toolbox::ChoiceCategory::Generic,
+                        bind_to: crate::toolbox::BindingId(0),
+                        bind_unchosen: None,
+                        tag_partition: None,
+                        auto_resolve_trivial: false,
+                    })),
                     Instruction::CreateTokens {
                         creations: vec![creation.clone()],
                     },
@@ -323,15 +334,37 @@ fn skipped_local_definition() {
                             paid_destination,
                             declined_destination,
                         },
-                        Instruction::ChooseCreatureType {
-                            into: CreatureTypeSlot::new(0),
-                            excluding: BTreeSet::new(),
-                        },
+                        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                            chooser: crate::toolbox::PlayerSelector::Resolving(
+                                crate::program::ResolvingPlayer::Controller,
+                            ),
+                            domain: crate::toolbox::PromptDomain::Subtype {
+                                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                                excluding: BTreeSet::new(),
+                                legacy_slot: Some(CreatureTypeSlot::new(0)),
+                            },
+                            category: crate::toolbox::ChoiceCategory::Generic,
+                            bind_to: crate::toolbox::BindingId(0),
+                            bind_unchosen: None,
+                            tag_partition: None,
+                            auto_resolve_trivial: false,
+                        })),
                         Instruction::Jump { destination: 4 },
-                        Instruction::ChooseCreatureType {
-                            into: other_slot,
-                            excluding: BTreeSet::new(),
-                        },
+                        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                            chooser: crate::toolbox::PlayerSelector::Resolving(
+                                crate::program::ResolvingPlayer::Controller,
+                            ),
+                            domain: crate::toolbox::PromptDomain::Subtype {
+                                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                                excluding: BTreeSet::new(),
+                                legacy_slot: Some(other_slot),
+                            },
+                            category: crate::toolbox::ChoiceCategory::Generic,
+                            bind_to: crate::toolbox::BindingId(0),
+                            bind_unchosen: None,
+                            tag_partition: None,
+                            auto_resolve_trivial: false,
+                        })),
                         Instruction::CreateTokens {
                             creations: vec![creation.clone()],
                         },

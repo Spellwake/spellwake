@@ -523,10 +523,21 @@ fn optional_token_two_apnap_order_children_keep_locals_and_reject_each_bad_reply
     creation.amount = crate::program::ValueExpr::Literal(2.into());
     creation.recipients = TokenRecipients::EachPlayer;
     let state = pending(vec![
-        Instruction::ChooseCreatureType {
-            into: CreatureTypeSlot::new(0),
-            excluding: BTreeSet::new(),
-        },
+        Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+            chooser: crate::toolbox::PlayerSelector::Resolving(
+                crate::program::ResolvingPlayer::Controller,
+            ),
+            domain: crate::toolbox::PromptDomain::Subtype {
+                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                excluding: BTreeSet::new(),
+                legacy_slot: Some(CreatureTypeSlot::new(0)),
+            },
+            category: crate::toolbox::ChoiceCategory::Generic,
+            bind_to: crate::toolbox::BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+        })),
         Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
             instructions: 1,
@@ -541,7 +552,10 @@ fn optional_token_two_apnap_order_children_keep_locals_and_reject_each_bad_reply
         .creature_vocabulary()
         .resolve_label("Human")
         .unwrap();
-    let optional = reply(&state, DecisionReply::CreatureType(human));
+    let optional = reply(
+        &state,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+    );
     let declined = reply(
         optional.state(),
         DecisionReply::OptionalEffect(OptionalEffectChoice::Decline),
@@ -988,10 +1002,21 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
                 A,
                 BodyTarget::SingleCreature,
                 vec![
-                    Instruction::ChooseCreatureType {
-                        into: CreatureTypeSlot::new(0),
-                        excluding: BTreeSet::new(),
-                    },
+                    Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
+                        chooser: crate::toolbox::PlayerSelector::Resolving(
+                            crate::program::ResolvingPlayer::Controller,
+                        ),
+                        domain: crate::toolbox::PromptDomain::Subtype {
+                            kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                            excluding: BTreeSet::new(),
+                            legacy_slot: Some(CreatureTypeSlot::new(0)),
+                        },
+                        category: crate::toolbox::ChoiceCategory::Generic,
+                        bind_to: crate::toolbox::BindingId(0),
+                        bind_unchosen: None,
+                        tag_partition: None,
+                        auto_resolve_trivial: false,
+                    })),
                     Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec {
                         selector: None,
                         payload: crate::toolbox::ContinuousPayload::TargetPreventionShield {
@@ -1037,7 +1062,10 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
         .creature_vocabulary()
         .resolve_label("Human")
         .unwrap();
-    let optional = reply(type_child.state(), DecisionReply::CreatureType(human));
+    let optional = reply(
+        type_child.state(),
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(human)),
+    );
     let payload = projection::resolving_payload(optional.state().execution());
     let declined = reply(
         optional.state(),
@@ -1144,10 +1172,23 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
 #[test]
 fn optional_type_child_rejects_an_unexcluded_member_of_a_foreign_vocabulary_then_accepts_the_real_member()
  {
-    let state = pending(wrapped(Instruction::ChooseCreatureType {
-        into: CreatureTypeSlot::new(0),
-        excluding: BTreeSet::new(),
-    }));
+    let state = pending(wrapped(Instruction::PromptChoice(Box::new(
+        crate::toolbox::PromptChoiceSpec {
+            chooser: crate::toolbox::PlayerSelector::Resolving(
+                crate::program::ResolvingPlayer::Controller,
+            ),
+            domain: crate::toolbox::PromptDomain::Subtype {
+                kind: crate::toolbox::SubtypeChoiceKind::Creature,
+                excluding: BTreeSet::new(),
+                legacy_slot: Some(CreatureTypeSlot::new(0)),
+            },
+            category: crate::toolbox::ChoiceCategory::Generic,
+            bind_to: crate::toolbox::BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+        },
+    ))));
     let taken = reply(
         &state,
         DecisionReply::OptionalEffect(OptionalEffectChoice::Take),
@@ -1167,10 +1208,16 @@ fn optional_type_child_rejects_an_unexcluded_member_of_a_foreign_vocabulary_then
     reject(
         child,
         A,
-        command_reply(child, DecisionReply::CreatureType(foreign)),
-        GameError::Effect(EffectError::IllegalCreatureType),
+        command_reply(
+            child,
+            DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(foreign)),
+        ),
+        GameError::Effect(EffectError::SelectionOutsideDomain),
     );
-    let completed = reply(child, DecisionReply::CreatureType(real));
+    let completed = reply(
+        child,
+        DecisionReply::PromptChoice(crate::toolbox::PromptChoiceReply::CreatureType(real)),
+    );
     assert_tail(&completed);
     assert_eq!(outcomes(&completed), 0);
     assert_eq!(occurrences(&completed).iter().filter(|row| matches!(row, RulesOccurrence::CreatureTypeChosen { value, .. } if *value == real)).count(), 1);

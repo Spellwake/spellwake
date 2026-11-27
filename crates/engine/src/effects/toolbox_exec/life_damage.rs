@@ -744,9 +744,18 @@ impl EffectWindow {
         let fixed_targets: Option<Vec<DamageRecipient>> = match &spec.recipients {
             DamageTargetQuery::Targets => {
                 let mut out = Vec::new();
-                if let Ok(t) = self.instruction_target(entry)
-                    && legal_target(&t)
-                {
+                let mode = cursor_snap
+                    .as_ref()
+                    .and_then(|c| self.instruction_mode(c.entry, c.instruction));
+                for t in entry.targets().targets() {
+                    if !legal_target(&t) {
+                        continue;
+                    }
+                    if let Some(m) = mode
+                        && !m.targets().any(|(id, _)| id == t.choice().id)
+                    {
+                        continue;
+                    }
                     match t.choice().target {
                         TargetRef::Player(p) => out.push(DamageRecipient::Player(p)),
                         TargetRef::Object(id) => {

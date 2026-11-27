@@ -251,16 +251,31 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[7],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::ExileTopPlay {
-                        count: ValueExpr::literal(2),
-                        library_owner: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        duration: crate::program::ImpulsePlayDuration::ThisTurn,
-                        cast_only: false,
-                        free: false,
-                        any_color: false,
-                        face_down: false,
-                        grant_play: true,
-                    }],
+                    vec![
+                        Instruction::ZoneOp(Box::new(
+                            crate::toolbox::ZoneOpSpec::exile_top_library(
+                                crate::toolbox::PlayerSelector::Group(AffectedPlayers::One(
+                                    ResolvingPlayer::Controller,
+                                )),
+                                ValueExpr::literal(2),
+                                false,
+                            ),
+                        )),
+                        Instruction::ApplyContinuous(Box::new(
+                            crate::toolbox::ApplyContinuousSpec::impulse_play_permission(
+                                crate::toolbox::ObjectQuery::from_move_subject(
+                                    crate::program::MoveSubjectRef::LastMoved,
+                                ),
+                                crate::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                crate::program::ImpulsePlayDuration::ThisTurn,
+                                false,
+                                false,
+                                false,
+                            ),
+                        )),
+                    ],
                 ),
             },
             DungeonRoom {
