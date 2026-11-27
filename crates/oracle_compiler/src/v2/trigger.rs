@@ -421,7 +421,7 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                     || ts.eat_phrase(&["from", "anywhere", "other", "than", "your", "hand"])
                     || ts.eat_phrase(&["from", "anywhere", "other", "than", "exile"]);
                 let _ = ts.eat_phrase(&["using", "mana", "produced", "by"]) && ts.eat_tilde();
-                let _ = ts.eat_phrase(&["each", "turn"]);
+                let _ = ts.eat_phrase(&["each", "turn"]) || ts.eat_phrase(&["in", "a", "turn"]);
                 let mut evs = vec![TriggerEvent::SpellCast {
                     caster: player,
                     spell,
@@ -485,6 +485,18 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                     let _ = opt(ts, parse_subject_ref);
                 }
                 if ts.eat_word("with") {
+                    let mw_cp = ts.checkpoint();
+                    if ts.eat_tilde()
+                        && ts.eat_word("and")
+                        && let Ok(filter) = try_parse(ts, parse_object_filter)
+                    {
+                        return Ok(vec![TriggerEvent::PlayerAttacksWith {
+                            player,
+                            filter,
+                            min_count: 2,
+                        }]);
+                    }
+                    ts.restore(mw_cp);
                     let _ = ts.eat_word("exactly");
                     let min_count = ts
                         .next_number(false)

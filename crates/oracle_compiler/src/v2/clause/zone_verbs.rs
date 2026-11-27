@@ -1166,9 +1166,19 @@ fn parse_zone_verb_frame_inner(
             } else {
                 opt(ts, parse_value_expr)
             };
-            if let Some(base) = base_cnt
-                && let Ok(kind) = try_parse(ts, parse_counter_kind)
+            let kind_opt = if ts.eat_phrase(&["counter", "of", "that", "kind"])
+                || ts.eat_phrase(&["counters", "of", "that", "kind"])
+            {
+                Some(CounterKind::Any)
+            } else if let Ok(k) = try_parse(ts, parse_counter_kind)
                 && (ts.eat_word("counter") || ts.eat_word("counters"))
+            {
+                Some(k)
+            } else {
+                None
+            };
+            if let Some(base) = base_cnt
+                && let Some(kind) = kind_opt
             {
                 let mut pairs = vec![(base, kind)];
                 let mut is_choice = false;
@@ -2135,6 +2145,26 @@ fn parse_zone_verb_frame_inner(
                 }
             }
             ts.restore(lp_cp);
+        }
+        // `look at <zone>` (`an opponent's hand`, `target opponent's hand`, `Gustha's Scepter`)
+        {
+            let zcp = ts.checkpoint();
+            if let Ok(zref) = try_parse(ts, parse_zone_ref) {
+                return Ok((
+                    vec![Effect::ZoneOp {
+                        actor,
+                        op: ZoneOpKind::LookAt,
+                        subject: SubjectRef::Player(actor),
+                        from: vec![zref],
+                        to: None,
+                        modifiers: EntryModifiers::default(),
+                        except: None,
+                        count: None,
+                    }],
+                    (),
+                ));
+            }
+            ts.restore(zcp);
         }
         // `look at <subj> [for as long as ...]` (`Look at target opponent's hand`, `Gustha's Scepter`, `Jester's Scepter`)
         if let Ok(subject) = try_parse(ts, parse_subject_ref) {

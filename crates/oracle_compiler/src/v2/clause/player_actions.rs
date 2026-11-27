@@ -12,6 +12,20 @@ use crate::v2::value::parse_value_expr;
 
 pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec> {
     let _ = ts.eat_phrase(&["an", "additional"]);
+    {
+        let tm_cp = ts.checkpoint();
+        if ts.eat_phrase(&["that", "much"])
+            && let Some(mc) = ts.eat_mana_cost()
+        {
+            return Ok(ManaSpec::Scaled {
+                base: Box::new(ManaSpec::Exact(mc)),
+                scale: ValueExpr::PriorActionCount(
+                    crate::v2::ir::PriorActionKind::DealtDamageThisWay,
+                ),
+            });
+        }
+        ts.restore(tm_cp);
+    }
     if ts.eat_phrase(&["an", "amount", "of"])
         && let Some(mc) = ts.eat_mana_cost()
         && ts.eat_phrase(&["equal", "to"])

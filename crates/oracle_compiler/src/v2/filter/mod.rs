@@ -101,6 +101,7 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     }
     if ts.eat_phrase(&["that", "attacking", "player"])
         || ts.eat_phrase(&["that", "player"])
+        || ts.eat_phrase(&["that", "opponent"])
         || ts.eat_phrase(&["the", "player"])
         || ts.eat_phrase(&["those", "players"])
         || ts.eat_word("they")
@@ -123,7 +124,11 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
         || ts.eat_phrase(&["that", "land's", "controller"])
         || ts.eat_phrase(&["that", "artifact's", "controller"])
         || ts.eat_phrase(&["that", "source's", "controller"])
+        || ts.eat_phrase(&["the", "source's", "controller"])
         || ts.eat_phrase(&["that", "source's", "owner"])
+        || ts.eat_phrase(&["the", "source's", "owner"])
+        || ts.eat_phrase(&["the", "exiled", "card's", "owner"])
+        || ts.eat_phrase(&["the", "exiled", "card's", "controller"])
         || ts.eat_phrase(&["that", "card's", "owner"])
         || ts.eat_phrase(&["that", "creature's", "owner"])
         || ts.eat_phrase(&["target", "creature's", "controller"])
@@ -147,6 +152,10 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     }
     if ts.eat_phrase(&["that", "spell's", "controller"]) {
         return Ok(PlayerRef::ThatSpellController);
+    }
+    if ts.eat_phrase(&["the", "controller", "of"]) {
+        let _ = try_parse(ts, parse_subject_ref);
+        return Ok(PlayerRef::ItsController);
     }
     if ts.eat_phrase(&["its", "controller"]) {
         return Ok(PlayerRef::ItsController);
@@ -608,6 +617,15 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
 
     loop {
         let cp = ts.checkpoint();
+        // Handle `non-~` (tokenized as `Word("non")`, `Minus`, `Tilde`, e.g. `non-~ creatures`)
+        if ts.eat_word("non") && matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Minus)) && {
+            ts.next_tok();
+            ts.eat_tilde()
+        } {
+            flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
+            continue;
+        }
+        ts.restore(cp);
         // Handle `differently named` anywhere in modifier list
         if ts.eat_phrase(&["differently", "named"]) {
             flt.flags = flt.flags.union(FilterFlags::DIFFERENT_NAMES);
@@ -1116,6 +1134,22 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                 if let Some(c) = lookup_color(&low) {
                     ts.next_word();
                     flt.any_colors = flt.any_colors.union(c);
+                    // Support comma/or color lists (`red, white, or black creature card`)
+                    loop {
+                        let ccp = ts.checkpoint();
+                        let had_comma = ts.eat_comma();
+                        let had_conj = ts.eat_word("or") || ts.eat_word("and/or");
+                        if (had_comma || had_conj)
+                            && let Some(nw) = ts.peek_word()
+                            && let Some(nc) = lookup_color(&nw.to_ascii_lowercase())
+                        {
+                            ts.next_word();
+                            flt.any_colors = flt.any_colors.union(nc);
+                            continue;
+                        }
+                        ts.restore(ccp);
+                        break;
+                    }
                 } else if let Some(st) = lookup_supertype(&low) {
                     ts.next_word();
                     flt.required_supertypes = flt.required_supertypes.union(st);

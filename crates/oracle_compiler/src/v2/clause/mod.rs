@@ -9,12 +9,16 @@
 
 pub(crate) mod player_actions;
 mod player_verbs;
+mod restrictions;
 mod subject_combat;
 mod subject_verbs;
 pub(crate) mod tokens;
 mod zone_verbs;
 
 use crate::v2::clause::player_verbs::parse_player_verb_frame;
+use crate::v2::clause::restrictions::{
+    parse_activation_restrictions, parse_additional_combat, parse_temporary_static_clause,
+};
 use crate::v2::clause::subject_verbs::parse_subject_verb_frame;
 use crate::v2::condition::parse_condition;
 use crate::v2::cost::parse_cost_atom;
@@ -194,6 +198,15 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         }
         ts.restore(xcp);
     }
+    if ts.eat_phrase(&["repeat", "the", "following", "process"])
+        && let Ok(cnt) = try_parse(ts, parse_value_expr)
+        && ts.eat_word("times")
+    {
+        return Ok(vec![Effect::ForEach {
+            over: ForEachDomain::Count(cnt),
+            body: Vec::new(),
+        }]);
+    }
     if ts.eat_phrase(&["the", "game", "is", "a", "draw"]) {
         return Ok(vec![Effect::MutatePlayer {
             player: PlayerRef::You,
@@ -281,10 +294,10 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         return Ok(extra);
     }
 
-    // 0. `, where X is <ValueExpr>` binder (supports BOTH trailing and mid-sentence `, where X is <expr>, <rest>`)
-    if let Some(where_idx) = find_where_x_is(ts.tokens, ts.pos) {
-        let body_slice = &ts.tokens[ts.pos..where_idx];
-        let after_where = &ts.tokens[where_idx + 4..];
+    // 0. `, where X is <ValueExpr>` binder (supports BOTH trailing and mid-sentence `, where X is <expr>, <rest>`, plus `"..., " where X is`)
+    if let Some((body_end, expr_start)) = find_where_x_is(ts.tokens, ts.pos) {
+        let body_slice = &ts.tokens[ts.pos..body_end];
+        let after_where = &ts.tokens[expr_start..];
         let mut expr_ts = ts.sub_stream(after_where, ParseStage::Effect);
         if let Ok(x_expr) = parse_value_expr(&mut expr_ts) {
             if expr_ts.is_eof() {
@@ -405,14 +418,29 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             } else {
                 None
             };
-            if let Some(ok) = succeeded
-                && ts.eat_comma()
-            {
-                let body = parse_sentence_top(ts)?;
-                return Ok(vec![Effect::IfPrevious {
-                    succeeded: ok,
-                    body,
-                }]);
+            if let Some(ok) = succeeded {
+                let extra_or_cond = if ts.eat_phrase(&["or", "if"]) {
+                    opt(ts, parse_condition)
+                } else {
+                    None
+                };
+                if ts.eat_comma() {
+                    let body = parse_sentence_top(ts)?;
+                    if let Some(or_c) = extra_or_cond {
+                        return Ok(vec![Effect::BranchCondition {
+                            condition: or_c,
+                            then_body: body.clone(),
+                            else_body: vec![Effect::IfPrevious {
+                                succeeded: ok,
+                                body,
+                            }],
+                        }]);
+                    }
+                    return Ok(vec![Effect::IfPrevious {
+                        succeeded: ok,
+                        body,
+                    }]);
+                }
             }
         }
         ts.restore(cp);
@@ -708,6 +736,20 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["for", "each"]) {
+            if ts.eat_phrase(&["kind", "of", "counter"])
+                && (ts.eat_word("on") || ts.eat_word("among"))
+                && let Ok(subj) = try_parse(ts, parse_subject_ref)
+                && ts.eat_comma()
+            {
+                let body = parse_sentence_top(ts)?;
+                return Ok(vec![Effect::ForEach {
+                    over: ForEachDomain::EachUnitOfValue(crate::v2::ir::ValueExpr::CounterCount {
+                        subject: Box::new(subj),
+                        kind: crate::v2::ir::CounterKind::Any,
+                    }),
+                    body,
+                }]);
+            }
             if (ts.eat_phrase(&["1", "damage", "prevented", "this", "way"])
                 || ts.eat_phrase(&["one", "damage", "prevented", "this", "way"]))
                 && ts.eat_comma()
@@ -1043,14 +1085,15 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         } else {
             None
         };
-        if let Some(player) = life_player
-            && let Ok(amount) = try_parse(ts, parse_value_expr)
-        {
-            return Ok(vec![Effect::AdjustLife {
-                player,
-                amount,
-                op: crate::v2::ir::LifeOp::Set,
-            }]);
+        if let Some(player) = life_player {
+            let _ = ts.eat_phrase(&["equal", "to"]);
+            if let Ok(amount) = try_parse(ts, parse_value_expr) {
+                return Ok(vec![Effect::AdjustLife {
+                    player,
+                    amount,
+                    op: crate::v2::ir::LifeOp::Set,
+                }]);
+            }
         }
         ts.restore(lcp);
     }
@@ -1174,6 +1217,30 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                 || ts.eat_phrase(&["only", "as", "a", "sorcery"])
             {
                 restrs.push(ActivationRestriction::AsSorcery);
+            } else if ts.eat_phrase(&["but", "only", "during"])
+                || ts.eat_phrase(&["only", "during"])
+            {
+                if ts.eat_phrase(&["their", "turn", "before", "the", "end", "step"])
+                    || ts.eat_phrase(&["their", "turn"])
+                    || ts.eat_phrase(&["your", "turn"])
+                {
+                    restrs.push(ActivationRestriction::DuringYourTurn);
+                } else if ts.eat_phrase(&["any", "upkeep", "step"])
+                    || ts.eat_phrase(&["any", "upkeep"])
+                    || ts.eat_phrase(&["their", "upkeep"])
+                {
+                    restrs.push(ActivationRestriction::DuringYourUpkeep);
+                } else if ts.eat_phrase(&["their", "draw", "step"])
+                    || ts.eat_phrase(&["your", "draw", "step"])
+                {
+                    restrs.push(ActivationRestriction::OnlyIf(Box::new(
+                        crate::v2::ir::ConditionExpr::EventCheck(
+                            crate::v2::ir::EventCheckKind::DuringStep(
+                                crate::ast::TurnStepAst::DrawStep,
+                            ),
+                        ),
+                    )));
+                }
             }
             return Ok(vec![Effect::Restriction(restrs)]);
         }
@@ -1274,10 +1341,9 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             } else {
                 tail_ts.restore(pcp);
                 let _ = tail_ts.eat_word("pays") || tail_ts.eat_word("pay");
-                if let Ok(c) = try_parse(&mut tail_ts, parse_cost_atom)
-                    && tail_ts.is_eof()
-                {
-                    Some(c)
+                if let Ok(c) = try_parse(&mut tail_ts, parse_cost_atom) {
+                    let _ = opt(&mut tail_ts, crate::v2::value::parse_for_each_expr);
+                    if tail_ts.is_eof() { Some(c) } else { None }
                 } else {
                     tail_ts.restore(pcp);
                     if (tail_ts.eat_word("pays") || tail_ts.eat_word("pay"))
@@ -1354,7 +1420,34 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         }
     }
 
-    // 11. Trailing `at the beginning of <step>` / `at end of combat` delayed suffix on a sentence
+    // 11. Trailing `at the beginning of <step>` / `at end of combat` / `when ~ leaves the battlefield` delayed suffix
+    if let Some(w_idx) = find_top_level_word(ts.tokens, ts.pos, "when")
+        && w_idx > ts.pos
+        && w_idx + 5 == ts.tokens.len()
+        && matches!(ts.tokens[w_idx + 1].kind, TokenKind::Tilde)
+        && matches!(ts.tokens[w_idx + 2].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("leaves"))
+        && matches!(ts.tokens[w_idx + 3].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("the"))
+        && matches!(ts.tokens[w_idx + 4].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("battlefield"))
+    {
+        let body_slice = &ts.tokens[ts.pos..w_idx];
+        let mut body_ts = ts.sub_stream(body_slice, ParseStage::Effect);
+        if let Ok(body) = parse_clause_seq(&mut body_ts, None)
+            && body_ts.is_eof()
+        {
+            ts.pos = ts.tokens.len();
+            return Ok(vec![Effect::DelayedTrigger {
+                trigger: DelayedTriggerKind::Event(crate::v2::ir::TriggerSpec {
+                    events: vec![crate::v2::ir::TriggerEvent::ZoneChange {
+                        from: Some(crate::v2::ir::ZoneKind::Battlefield),
+                        to: None,
+                        subject: SubjectRef::SelfObject,
+                    }],
+                    intervening_if: None,
+                }),
+                body,
+            }]);
+        }
+    }
     if let Some(eoc_idx) = find_phrase_index(ts.tokens, ts.pos, &["at", "end", "of", "combat"])
         && eoc_idx > ts.pos
         && eoc_idx + 4 == ts.tokens.len()
@@ -1939,6 +2032,37 @@ fn parse_single_clause(
                     Some(player),
                 ));
             }
+            // `<player> who controls [N or more] <flt> <verb>` (`Shatter the Sky`, `Depopulate`)
+            {
+                let ccp = ts.checkpoint();
+                if ts.eat_phrase(&["who", "controls"]) || ts.eat_phrase(&["who", "control"]) {
+                    let min_count = ts
+                        .next_number(false)
+                        .and_then(|n| u16::try_from(n).ok())
+                        .unwrap_or(1);
+                    let _ = ts.eat_phrase(&["or", "more"]);
+                    if let Ok(flt) = try_parse(ts, parse_object_filter)
+                        && let Ok((body, _)) = try_parse(ts, |s| parse_player_verb_frame(s, player))
+                    {
+                        return Ok((
+                            vec![Effect::ForEach {
+                                over: ForEachDomain::Player(player),
+                                body: vec![Effect::BranchCondition {
+                                    condition: crate::v2::ir::ConditionExpr::Controls {
+                                        player: PlayerRef::ThatPlayer,
+                                        filter: Box::new(flt),
+                                        min_count,
+                                    },
+                                    then_body: body,
+                                    else_body: Vec::new(),
+                                }],
+                            }],
+                            Some(player),
+                        ));
+                    }
+                }
+                ts.restore(ccp);
+            }
             // `<player> who has <N> or more <kind> counters <verb>` (`Feed the Infection`, `Ixhel`)
             {
                 let wcp = ts.checkpoint();
@@ -2062,224 +2186,7 @@ fn parse_single_clause(
     Ok((effs, inherited_actor))
 }
 
-fn parse_additional_combat(ts: &mut TokenStream<'_>) -> PResult<Effect> {
-    let _ = ts.eat_phrase(&["after", "this", "phase"])
-        || ts.eat_phrase(&["after", "this", "main", "phase"])
-        || ts.eat_phrase(&["after", "this", "combat", "phase"]);
-    let _ = ts.eat_comma();
-    if ts.eat_phrase(&["there", "is", "an", "additional", "combat", "phase"])
-        || ts.eat_phrase(&["there's", "an", "additional", "combat", "phase"])
-    {
-        let _ = ts.eat_phrase(&["after", "this", "phase"]);
-        let followed_by_main =
-            ts.eat_phrase(&["followed", "by", "an", "additional", "main", "phase"]);
-        return Ok(Effect::MutatePlayer {
-            player: PlayerRef::You,
-            mutation: PlayerMutation::AdditionalCombat { followed_by_main },
-            duration: Duration::UntilEndOfTurn,
-        });
-    }
-    Err(ts.err("expected additional combat phase clause"))
-}
-
-fn parse_temporary_static_clause(ts: &mut TokenStream<'_>) -> PResult<Effect> {
-    // `players and permanents can't be the targets of spells or activated abilities`
-    if ts.eat_phrase(&[
-        "players",
-        "and",
-        "permanents",
-        "can't",
-        "be",
-        "the",
-        "targets",
-        "of",
-    ]) {
-        let src = parse_object_filter(ts)?;
-        return Ok(Effect::ApplyContinuous {
-            effect: Box::new(StaticAbility::RuleRestriction {
-                subject: Some(SubjectRef::Compound(vec![
-                    SubjectRef::Player(PlayerRef::EachPlayer),
-                    SubjectRef::All(Box::new(ObjectFilter {
-                        any_permanent: true,
-                        ..Default::default()
-                    })),
-                ])),
-                rule: RuleRestrictionKind::CantBeTargetedBy(Box::new(src)),
-                condition: None,
-            }),
-            duration: Duration::UntilEndOfTurn,
-        });
-    }
-    // `The next enchantment spell you cast this turn can't be countered`
-    if ts.peek_phrase(&["the", "next"]) {
-        let st = parse_static_ability(ts)?;
-        return Ok(Effect::ApplyContinuous {
-            effect: Box::new(st),
-            duration: Duration::UntilEndOfTurn,
-        });
-    }
-    Err(ts.err("not a temporary static clause"))
-}
-
-fn parse_activation_restrictions(ts: &mut TokenStream<'_>) -> PResult<Vec<ActivationRestriction>> {
-    // `Activate no more than [twice | <N> times] each turn` (`Manaforge Cinder`, `Pit Imp`, `Phyrexian Battleflies`)
-    {
-        let ncp = ts.checkpoint();
-        if ts.eat_phrase(&["activate", "no", "more", "than"])
-            && (ts.eat_phrase(&["twice", "each", "turn"])
-                || (ts.next_number(false).is_some() && ts.eat_phrase(&["times", "each", "turn"])))
-        {
-            return Ok(vec![ActivationRestriction::OnceEachTurn]);
-        }
-        ts.restore(ncp);
-    }
-    let valid_head = ts.eat_phrase(&["activate", "only"])
-        || ts.eat_phrase(&["cast", "this", "spell", "only"])
-        || {
-            let cp = ts.checkpoint();
-            if ts.eat_word("cast") && ts.eat_tilde() && ts.eat_word("only") {
-                true
-            } else {
-                ts.restore(cp);
-                false
-            }
-        };
-    if !valid_head {
-        return Err(ts.err("expected `Activate only` or `Cast ... only`"));
-    }
-    let mut out = Vec::new();
-    loop {
-        if ts.eat_phrase(&["as", "a", "sorcery"]) {
-            out.push(ActivationRestriction::AsSorcery);
-        } else if ts.eat_phrase(&["as", "an", "instant"]) {
-            out.push(ActivationRestriction::AsInstant);
-        } else if ts.eat_phrase(&["during", "your", "upkeep"]) {
-            out.push(ActivationRestriction::DuringYourUpkeep);
-        } else if ts.eat_phrase(&["during", "an", "opponent's", "upkeep"])
-            || ts.eat_phrase(&["during", "each", "opponent's", "upkeep"])
-        {
-            out.push(ActivationRestriction::OnlyIf(Box::new(
-                crate::v2::ir::ConditionExpr::And(
-                    Box::new(crate::v2::ir::ConditionExpr::Not(Box::new(
-                        crate::v2::ir::ConditionExpr::Flag(
-                            crate::v2::ir::ConditionFlag::IsYourTurn,
-                        ),
-                    ))),
-                    Box::new(crate::v2::ir::ConditionExpr::EventCheck(
-                        crate::v2::ir::EventCheckKind::DuringStep(crate::ast::TurnStepAst::Upkeep),
-                    )),
-                ),
-            )));
-        } else if ts.eat_phrase(&["during", "your", "turn"])
-            || ts.eat_phrase(&["on", "your", "turn"])
-        {
-            out.push(ActivationRestriction::DuringYourTurn);
-            if ts.eat_comma() && ts.eat_phrase(&["before", "attackers", "are", "declared"]) {
-                out.push(ActivationRestriction::BeforeAttackers);
-            }
-        } else if ts.eat_phrase(&["during", "an", "opponent's", "turn"])
-            || ts.eat_phrase(&["on", "an", "opponent's", "turn"])
-            || ts.eat_phrase(&["during", "opponents'", "turns"])
-        {
-            out.push(ActivationRestriction::OnlyIf(Box::new(
-                crate::v2::ir::ConditionExpr::Not(Box::new(crate::v2::ir::ConditionExpr::Flag(
-                    crate::v2::ir::ConditionFlag::IsYourTurn,
-                ))),
-            )));
-        } else if ts.eat_phrase(&["during", "combat", "on", "an", "opponent's", "turn"])
-            || ts.eat_phrase(&["during", "combat", "on", "opponents'", "turns"])
-        {
-            out.push(ActivationRestriction::DuringCombat);
-            out.push(ActivationRestriction::OnlyIf(Box::new(
-                crate::v2::ir::ConditionExpr::Not(Box::new(crate::v2::ir::ConditionExpr::Flag(
-                    crate::v2::ir::ConditionFlag::IsYourTurn,
-                ))),
-            )));
-        } else if ts.eat_phrase(&["during", "combat", "on", "your", "turn"]) {
-            out.push(ActivationRestriction::DuringCombat);
-            out.push(ActivationRestriction::DuringYourTurn);
-        } else if ts.eat_phrase(&["during", "the", "declare", "attackers", "step"]) {
-            out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::DeclareAttackers,
-            ));
-        } else if ts.eat_phrase(&["during", "the", "declare", "blockers", "step"]) {
-            out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::DeclareBlockers,
-            ));
-        } else if ts.eat_phrase(&["during", "the", "combat", "damage", "step"]) {
-            out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::CombatDamage,
-            ));
-        } else if ts.eat_phrase(&["during", "the", "end", "of", "combat", "step"]) {
-            out.push(ActivationRestriction::DuringEndOfCombat);
-        } else if ts.eat_phrase(&["during", "combat", "before", "blockers", "are", "declared"]) {
-            out.push(ActivationRestriction::DuringCombat);
-            out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::DeclareAttackers,
-            ));
-        } else if ts.eat_phrase(&["during", "combat", "after", "blockers", "are", "declared"]) {
-            out.push(ActivationRestriction::DuringCombat);
-            out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::DeclareBlockers,
-            ));
-        } else if ts.eat_phrase(&["during", "combat"]) {
-            out.push(ActivationRestriction::DuringCombat);
-        } else if ts.eat_phrase(&["before", "blockers", "are", "declared"]) {
-            out.push(ActivationRestriction::DuringCombatStep(
-                crate::v2::ir::CombatStepKind::DeclareAttackers,
-            ));
-        } else if ts.eat_phrase(&["before", "attackers", "are", "declared"]) {
-            out.push(ActivationRestriction::BeforeAttackers);
-        } else if ts.eat_phrase(&["once", "each", "turn"]) {
-            out.push(ActivationRestriction::OnceEachTurn);
-        } else if ts.eat_word("once") {
-            out.push(ActivationRestriction::Once);
-        } else if ts.eat_phrase(&["if", "you've", "controlled"])
-            && ts.eat_tilde()
-            && ts.eat_phrase(&[
-                "continuously",
-                "since",
-                "the",
-                "beginning",
-                "of",
-                "your",
-                "most",
-                "recent",
-                "turn",
-            ])
-        {
-            out.push(ActivationRestriction::ControlledContinuously);
-        } else if ts.eat_word("if") {
-            // Split before trailing `and only ...` (`Activate only if <cond> and only once each turn`)
-            if let Some(ao_idx) = find_phrase_index(ts.tokens, ts.pos, &["and", "only"])
-                && ao_idx > ts.pos
-            {
-                let cond_slice = &ts.tokens[ts.pos..ao_idx];
-                let mut cond_ts = ts.sub_stream(cond_slice, ParseStage::Effect);
-                let cond = parse_condition(&mut cond_ts)?;
-                cond_ts.expect_eof()?;
-                ts.pos = ao_idx;
-                out.push(ActivationRestriction::OnlyIf(Box::new(cond)));
-            } else {
-                let mut cond = parse_condition(ts)?;
-                if ts.eat_phrase(&["or", "if"]) {
-                    let c2 = parse_condition(ts)?;
-                    cond = crate::v2::ir::ConditionExpr::Or(Box::new(cond), Box::new(c2));
-                }
-                out.push(ActivationRestriction::OnlyIf(Box::new(cond)));
-            }
-        } else {
-            return Err(ts.err("expected timing restriction after `Activate only`"));
-        }
-        if ts.eat_phrase(&["and", "only"]) || ts.eat_word("and") {
-            continue;
-        }
-        break;
-    }
-    Ok(out)
-}
-
-fn find_where_x_is(tokens: &[Token<'_>], start: usize) -> Option<usize> {
+fn find_where_x_is(tokens: &[Token<'_>], start: usize) -> Option<(usize, usize)> {
     if tokens.len() < start + 5 {
         return None;
     }
@@ -2289,7 +2196,14 @@ fn find_where_x_is(tokens: &[Token<'_>], start: usize) -> Option<usize> {
             && matches!(tokens[i + 2].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("x"))
             && matches!(tokens[i + 3].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("is"))
         {
-            return Some(i);
+            return Some((i, i + 4));
+        }
+        if matches!(tokens[i].kind, TokenKind::Quoted(q) if q.ends_with(','))
+            && matches!(tokens[i + 1].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("where"))
+            && matches!(tokens[i + 2].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("x"))
+            && matches!(tokens[i + 3].kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("is"))
+        {
+            return Some((i + 1, i + 4));
         }
     }
     None
@@ -2315,7 +2229,11 @@ fn find_top_level_word(tokens: &[Token<'_>], start: usize, word: &str) -> Option
     None
 }
 
-fn find_phrase_index(tokens: &[Token<'_>], start: usize, words: &[&str]) -> Option<usize> {
+pub(super) fn find_phrase_index(
+    tokens: &[Token<'_>],
+    start: usize,
+    words: &[&str],
+) -> Option<usize> {
     if words.is_empty() || tokens.len() < start + words.len() {
         return None;
     }

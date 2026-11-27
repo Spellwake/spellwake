@@ -460,6 +460,110 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             });
         }
         ts.restore(pcp);
+        if ts.eat_phrase(&["you", "haven't", "cast", "it"])
+            || ts.eat_phrase(&["you", "haven't", "cast", "the", "card"])
+            || ts.eat_phrase(&["you", "haven't", "played", "it"])
+            || ts.eat_phrase(&["you", "haven't", "played", "the", "card"])
+        {
+            return Ok(ConditionExpr::Not(Box::new(ConditionExpr::SubjectCheck {
+                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+                kind: SubjectConditionKind::WasCast,
+            })));
+        }
+        ts.restore(pcp);
+        if ts.eat_phrase(&["any", "of", "that", "mana", "is", "spent", "on"])
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+        {
+            return Ok(ConditionExpr::FilterCheck {
+                filter: Box::new(flt),
+                kind: FilterConditionKind::ManaSpentFrom,
+                value: 1,
+            });
+        }
+        ts.restore(pcp);
+        if ts.eat_phrase(&["that", "creature's", "power", "is"]) {
+            if ts.eat_phrase(&["greater", "than"])
+                && let Ok(other) = try_parse(ts, parse_subject_ref)
+            {
+                let _ = ts.eat_word("'s");
+                let _ = ts.eat_word("power") || ts.eat_word("toughness");
+                return Ok(ConditionExpr::HasGreaterStatThan {
+                    subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThatCreature)),
+                    other: Box::new(other),
+                    stat: Some(StatKind::Power),
+                });
+            }
+            if let Ok(rhs) = try_parse(ts, parse_value_expr) {
+                let op = if ts.eat_phrase(&["or", "less"]) {
+                    CompareOp::Le
+                } else if ts.eat_phrase(&["or", "greater"]) {
+                    CompareOp::Ge
+                } else {
+                    CompareOp::Eq
+                };
+                return Ok(ConditionExpr::Compare {
+                    lhs: Box::new(ValueExpr::ObjectStat {
+                        subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThatCreature)),
+                        stat: StatKind::Power,
+                    }),
+                    op,
+                    rhs: Box::new(rhs),
+                });
+            }
+        }
+        ts.restore(pcp);
+        if ts.eat_phrase(&[
+            "that", "creature", "was", "dealt", "excess", "damage", "this", "turn",
+        ]) {
+            return Ok(ConditionExpr::SubjectCheck {
+                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThatCreature)),
+                kind: SubjectConditionKind::DealtDamageThisTurn { combat_only: false },
+            });
+        }
+        ts.restore(pcp);
+        if ts.eat_phrase(&[
+            "that", "creature", "wasn't", "dealt", "damage", "this", "turn",
+        ]) {
+            return Ok(ConditionExpr::Not(Box::new(ConditionExpr::SubjectCheck {
+                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThatCreature)),
+                kind: SubjectConditionKind::DealtDamageThisTurn { combat_only: false },
+            })));
+        }
+        ts.restore(pcp);
+        if ts.eat_phrase(&["that", "creature", "entered", "from"])
+            && let Ok(z) = try_parse(ts, parse_zone_ref)
+        {
+            return Ok(ConditionExpr::CastFromZone {
+                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThatCreature)),
+                zone: z,
+            });
+        }
+        ts.restore(pcp);
+        if let Ok(flt) = try_parse(ts, parse_object_filter) {
+            if ts.eat_phrase(&["is", "dealt", "damage", "this", "way"])
+                || ts.eat_phrase(&["was", "dealt", "damage", "this", "way"])
+            {
+                return Ok(ConditionExpr::PriorActionMatched {
+                    action: PriorActionKind::DealtDamageThisWay,
+                    filter: Box::new(flt),
+                });
+            }
+            if ts.eat_phrase(&["is", "put", "into", "exile", "this", "way"]) {
+                return Ok(ConditionExpr::PriorActionMatched {
+                    action: PriorActionKind::ExiledThisWay,
+                    filter: Box::new(flt),
+                });
+            }
+            if ts.eat_phrase(&["enters", "this", "way"])
+                || ts.eat_phrase(&["entered", "this", "way"])
+            {
+                return Ok(ConditionExpr::PriorActionMatched {
+                    action: PriorActionKind::ReturnedThisWay,
+                    filter: Box::new(flt),
+                });
+            }
+        }
+        ts.restore(pcp);
         if ts.eat_phrase(&[
             "you", "cast", "it", "from", "anywhere", "other", "than", "your", "hand",
         ]) || ts.eat_phrase(&[

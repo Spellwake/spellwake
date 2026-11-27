@@ -550,6 +550,14 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
     if ts.eat_word("everything") {
         return Some(KeywordParam::Everything);
     }
+    if ts.eat_phrase(&["all", "colors"]) || ts.eat_phrase(&["each", "color"]) {
+        let all_colors = ColorMask::WHITE
+            .union(ColorMask::BLUE)
+            .union(ColorMask::BLACK)
+            .union(ColorMask::RED)
+            .union(ColorMask::GREEN);
+        return Some(KeywordParam::Color(all_colors));
+    }
     if ts.eat_phrase(&["the", "color", "of", "your", "choice"])
         || ts.eat_phrase(&["a", "color", "of", "your", "choice"])
         || ts.eat_phrase(&["the", "chosen", "color"])

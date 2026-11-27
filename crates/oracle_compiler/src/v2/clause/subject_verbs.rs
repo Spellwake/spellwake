@@ -153,6 +153,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         let mut out = Vec::new();
         loop {
             let amount = parse_value_expr(ts)?;
+            let _ = ts.eat_word("of");
             if !ts.eat_word("damage") {
                 return Err(ts.err("expected `damage` after amount"));
             }
@@ -286,6 +287,30 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                 let _ = ts.eat_phrase(&["your", "choice", "of"]);
                 let (kws, _) = parse_keyword_list(ts)?;
                 gained_kws = Some(kws);
+                let qcp = ts.checkpoint();
+                let _ = ts.eat_comma();
+                if ts.eat_word("and")
+                    && let Some(quoted) = ts.next_quoted()
+                {
+                    let compiled = compile_face_v2(
+                        FaceInput {
+                            name: "~",
+                            type_line: "Permanent",
+                            oracle_text: quoted,
+                        },
+                        ts.vocab,
+                    );
+                    if !compiled.is_ok() {
+                        return Err(compiled
+                            .errors
+                            .into_iter()
+                            .next()
+                            .unwrap_or_else(|| ts.err("failed to compile granted ability text")));
+                    }
+                    gained_ability = Some(compiled);
+                } else {
+                    ts.restore(qcp);
+                }
             }
         }
         let mut lost_kws = None;
@@ -466,6 +491,19 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                 duration: Duration::UntilEndOfTurn,
             });
         }
+        // Optional trailing `and doesn't/don't untap during your/its controller's next untap step` (`Homarid Warrior`)
+        if (ts.eat_phrase(&["and", "doesn't", "untap", "during"])
+            || ts.eat_phrase(&["and", "don't", "untap", "during"]))
+            && (ts.eat_phrase(&["your", "next", "untap", "step"])
+                || ts.eat_phrase(&["its", "controller's", "next", "untap", "step"])
+                || ts.eat_phrase(&["their", "controllers'", "next", "untap", "steps"]))
+        {
+            out.push(Effect::MutateObject {
+                subject: subject.clone(),
+                mutation: ObjectMutation::StateAction(ObjectStateAction::DoesntUntapNextUntap),
+                duration: Duration::UntilYourNextTurn,
+            });
+        }
         // Optional trailing `and must be blocked this turn if able` / `and attacks this turn if able`
         if ts.eat_phrase(&["and", "must", "be", "blocked", "this", "turn", "if", "able"]) {
             out.push(Effect::ApplyContinuous {
@@ -643,10 +681,12 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         let is_choice = ts.eat_phrase(&["your", "choice", "of"]);
         let (kws, _) = parse_keyword_list(ts)?;
         let mut extra_pt = None;
+        let mut extra_pt_scale = None;
         if (ts.eat_phrase(&["and", "gets"]) || ts.eat_phrase(&["and", "get"]))
             && let Some((p, t)) = ts.next_pt_mod()
         {
             extra_pt = Some((p, t));
+            extra_pt_scale = opt(ts, parse_for_each_expr).map(Box::new);
         }
         let mut extra_ability = None;
         {
@@ -778,7 +818,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                 mutation: ObjectMutation::ModifyPT {
                     power,
                     toughness,
-                    scale: None,
+                    scale: extra_pt_scale,
                 },
                 duration: duration.clone(),
             });
@@ -812,6 +852,19 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                     condition: None,
                 }),
                 duration: Duration::UntilEndOfTurn,
+            });
+        }
+        // Optional trailing `and doesn't/don't untap during your/its controller's next untap step` (`Homarid Warrior`)
+        if (ts.eat_phrase(&["and", "doesn't", "untap", "during"])
+            || ts.eat_phrase(&["and", "don't", "untap", "during"]))
+            && (ts.eat_phrase(&["your", "next", "untap", "step"])
+                || ts.eat_phrase(&["its", "controller's", "next", "untap", "step"])
+                || ts.eat_phrase(&["their", "controllers'", "next", "untap", "steps"]))
+        {
+            out.push(Effect::MutateObject {
+                subject: subject.clone(),
+                mutation: ObjectMutation::StateAction(ObjectStateAction::DoesntUntapNextUntap),
+                duration: Duration::UntilYourNextTurn,
             });
         }
         // Optional trailing `and must be blocked this turn if able` / `and attacks this turn if able`
@@ -1546,7 +1599,9 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             keywords.extend(kws);
         }
         let mut retained_type = None;
-        if (ts.eat_phrase(&["that's", "still", "a"]) || ts.eat_phrase(&["that's", "still", "an"]))
+        if (ts.eat_phrase(&["that's", "still", "a"])
+            || ts.eat_phrase(&["that's", "still", "an"])
+            || ts.eat_phrase(&["that", "are", "still"]))
             && let Some(w) = ts.peek_word()
             && let Some(ct) = lookup_card_type(&w.to_ascii_lowercase())
         {
@@ -1753,15 +1808,32 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         ts.restore(ccp);
     }
 
-    // 5d. `<subj> attacks this turn if able` / `<subj> blocks [<tgt>] this turn if able` / `<subj> must be blocked this turn if able`
+    // 5d. `<subj> attacks [<player>] this turn/combat if able` / `<subj> blocks [<tgt>] this turn if able` / `<subj> must be blocked this turn if able`
     if ts.eat_phrase(&["attacks", "this", "turn", "if", "able"])
         || ts.eat_phrase(&["attack", "this", "turn", "if", "able"])
+        || ts.eat_phrase(&["attacks", "this", "combat", "if", "able"])
+        || ts.eat_phrase(&["attack", "this", "combat", "if", "able"])
     {
         return Ok(vec![Effect::MutateObject {
             subject,
             mutation: ObjectMutation::StateAction(ObjectStateAction::MustAttackEachCombat),
             duration: Duration::UntilEndOfTurn,
         }]);
+    }
+    {
+        let acp = ts.checkpoint();
+        if (ts.eat_word("attacks") || ts.eat_word("attack"))
+            && try_parse(ts, parse_subject_ref).is_ok()
+            && (ts.eat_phrase(&["this", "combat", "if", "able"])
+                || ts.eat_phrase(&["this", "turn", "if", "able"]))
+        {
+            return Ok(vec![Effect::MutateObject {
+                subject,
+                mutation: ObjectMutation::StateAction(ObjectStateAction::MustAttackEachCombat),
+                duration: Duration::UntilEndOfCombat,
+            }]);
+        }
+        ts.restore(acp);
     }
     if ts.eat_phrase(&["must", "be", "blocked", "this", "turn", "if", "able"]) {
         return Ok(vec![Effect::ApplyContinuous {
@@ -2117,10 +2189,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         }]);
     }
     if ts.eat_word("connives") || ts.eat_word("connive") {
-        let amt = ts
-            .next_number(false)
-            .map(ValueExpr::Const)
-            .unwrap_or(ValueExpr::Const(1));
+        let amt = opt(ts, parse_value_expr).unwrap_or(ValueExpr::Const(1));
         return Ok(vec![Effect::MutatePlayer {
             player: PlayerRef::You,
             mutation: PlayerMutation::ScaledAction {

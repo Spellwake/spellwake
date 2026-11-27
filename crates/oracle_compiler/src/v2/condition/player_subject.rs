@@ -1152,10 +1152,69 @@ pub(super) fn parse_player_or_subject_condition(
                     }
                     ts.restore(scp);
                 }
-                // `<subj> has <a/an/N> [or more] <kind> counter(s) on it`
+                // `<subj> has dealt <N> or more damage [to <tgt>] this turn` (`Hidetsugu Consumes All`)
+                {
+                    let dcp = ts.checkpoint();
+                    if ts.eat_word("dealt")
+                        && let Some(min_d) = ts.next_number(false)
+                        && ts.eat_phrase(&["or", "more", "damage"])
+                    {
+                        if ts.eat_word("to") {
+                            let _ = try_parse(ts, parse_subject_ref);
+                        }
+                        if ts.eat_phrase(&["this", "turn"]) {
+                            return Ok(ConditionExpr::SubjectCheck {
+                                subject: Box::new(subj),
+                                kind: crate::v2::ir::SubjectConditionKind::DamageDealtThisTurn {
+                                    min_damage: u16::try_from(min_d.max(1)).unwrap_or(1),
+                                },
+                            });
+                        }
+                    }
+                    ts.restore(dcp);
+                }
+                // `<subj> has [greater power [or toughness] than <other>]` (`Evolving Adaptive`, `Pelt Collector`)
+                {
+                    let gcp = ts.checkpoint();
+                    if ts.eat_word("greater") {
+                        let stat = if ts.eat_phrase(&["power", "or", "toughness"])
+                            || ts.eat_phrase(&["power", "and/or", "toughness"])
+                        {
+                            None
+                        } else if ts.eat_word("power") {
+                            Some(crate::ast::StatKind::Power)
+                        } else if ts.eat_word("toughness") {
+                            Some(crate::ast::StatKind::Toughness)
+                        } else {
+                            None
+                        };
+                        if ts.eat_word("than")
+                            && let Ok(other) = try_parse(ts, parse_subject_ref)
+                        {
+                            return Ok(ConditionExpr::HasGreaterStatThan {
+                                subject: Box::new(subj),
+                                other: Box::new(other),
+                                stat,
+                            });
+                        }
+                    }
+                    ts.restore(gcp);
+                }
+                // `<subj> has [fewer than | at least | exactly | <a/an/N> [or more/less]] <kind> counter(s) on it` (`Ayara's Oathsworn`)
                 let hcp = ts.checkpoint();
-                if let Some(n) = ts.next_number(true) {
-                    let op = if ts.eat_phrase(&["or", "more"]) {
+                let prefix_op = if ts.eat_phrase(&["fewer", "than"]) {
+                    Some(CompareOp::Lt)
+                } else if ts.eat_phrase(&["at", "least"]) {
+                    Some(CompareOp::Ge)
+                } else if ts.eat_word("exactly") {
+                    Some(CompareOp::Eq)
+                } else {
+                    None
+                };
+                if let Some(n) = ts.next_number(prefix_op.is_none()) {
+                    let op = if let Some(pop) = prefix_op {
+                        pop
+                    } else if ts.eat_phrase(&["or", "more"]) {
                         CompareOp::Ge
                     } else if ts.eat_phrase(&["or", "less"]) || ts.eat_phrase(&["or", "fewer"]) {
                         CompareOp::Le

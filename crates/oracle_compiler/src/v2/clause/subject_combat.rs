@@ -27,7 +27,16 @@ pub(super) fn parse_subject_cant(
                 .peek_word()
                 .is_some_and(|w| w.eq_ignore_ascii_case("unless"))
             {
-                opt(ts, parse_subject_ref).unwrap_or_else(|| subject.clone())
+                let t1 = opt(ts, parse_subject_ref).unwrap_or_else(|| subject.clone());
+                let ocp = ts.checkpoint();
+                if ts.eat_word("or")
+                    && let Ok(t2) = try_parse(ts, parse_subject_ref)
+                {
+                    SubjectRef::Compound(vec![t1, t2])
+                } else {
+                    ts.restore(ocp);
+                    t1
+                }
             } else {
                 subject.clone()
             };

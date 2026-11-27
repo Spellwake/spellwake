@@ -603,8 +603,10 @@ fn parse_static_core(
             }
             true
         } else {
-            (ts.eat_phrase(&["activated", "abilities", "of"])
+            ((ts.eat_phrase(&["activated", "abilities", "of"])
+                || ts.eat_phrase(&["loyalty", "abilities", "of"]))
                 && try_parse(ts, parse_object_filter).is_ok())
+                || ts.eat_phrase(&["activated", "abilities"])
                 || (ts.eat_tilde() && ts.eat_phrase(&["'s", "equip", "ability"]))
         };
         if matched_head
@@ -620,6 +622,8 @@ fn parse_static_core(
             };
             if let Some(less) = less {
                 let scale = opt(ts, parse_for_each_expr);
+                let _ = ts.eat_phrase(&["unless", "they're", "mana", "abilities"])
+                    || ts.eat_phrase(&["unless", "they", "are", "mana", "abilities"]);
                 let extra_cond = if ts.eat_word("if") {
                     opt(ts, parse_condition)
                 } else {
@@ -641,14 +645,23 @@ fn parse_static_core(
         ts.restore(ecp);
     }
     if ts.eat_phrase(&["all", "creatures", "able", "to", "block"])
-        && let Ok(subject) = try_parse(ts, parse_subject_ref)
-        && ts.eat_phrase(&["do", "so"])
+        && let Ok(mut subject) = try_parse(ts, parse_subject_ref)
     {
-        return Ok(StaticAbility::SubjectRule {
-            subject,
-            rule: SubjectStaticRule::AllMustBlock,
-            condition: None,
-        });
+        let ocp = ts.checkpoint();
+        if ts.eat_word("or")
+            && let Ok(other) = try_parse(ts, parse_subject_ref)
+        {
+            subject = SubjectRef::Compound(vec![subject, other]);
+        } else {
+            ts.restore(ocp);
+        }
+        if ts.eat_phrase(&["do", "so"]) {
+            return Ok(StaticAbility::SubjectRule {
+                subject,
+                rule: SubjectStaticRule::AllMustBlock,
+                condition: None,
+            });
+        }
     }
     {
         let cp = ts.checkpoint();
@@ -1380,18 +1393,23 @@ fn parse_static_core(
                 }
                 ts.restore(alt_cp);
             }
-            if player == PlayerRef::You
-                && ts.eat_phrase(&["may", "have"])
-                && ts.eat_tilde()
-                && ts.eat_phrase(&[
-                    "assign", "its", "combat", "damage", "as", "though", "it", "weren't", "blocked",
-                ])
             {
-                return Ok(StaticAbility::SubjectRule {
-                    subject: SubjectRef::SelfObject,
-                    rule: SubjectStaticRule::AssignDamageAsUnblocked,
-                    condition: None,
-                });
+                let asgn_cp = ts.checkpoint();
+                if player == PlayerRef::You
+                    && ts.eat_phrase(&["may", "have"])
+                    && let Ok(subj) = try_parse(ts, parse_subject_ref)
+                    && ts.eat_phrase(&[
+                        "assign", "its", "combat", "damage", "as", "though", "it", "weren't",
+                        "blocked",
+                    ])
+                {
+                    return Ok(StaticAbility::SubjectRule {
+                        subject: subj,
+                        rule: SubjectStaticRule::AssignDamageAsUnblocked,
+                        condition: None,
+                    });
+                }
+                ts.restore(asgn_cp);
             }
             let mcp = ts.checkpoint();
             if player == PlayerRef::You

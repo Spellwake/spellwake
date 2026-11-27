@@ -5009,3 +5009,400 @@ fn v2_wave12_compositional_grammar_deep_ir_assertions() {
         FilterPredicate::AmongPriorCards,
     );
 }
+
+#[test]
+fn v2_wave13_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        Ability, CopyException, DelayedTriggerKind, Duration, Effect, FilterFlags, KeywordKind,
+        KeywordParam, ObjectMutation, PlayerMutation, PlayerRef, PriorActionKind,
+        RuleRestrictionKind, ScaledPlayerAction, StaticAbility, SubjectRef, SubjectStaticRule,
+        TriggerEvent, ValueExpr, ZoneKind,
+    };
+
+    let vocab_path = std::env::var("SPELLWAKE_CREATURE_VOCABULARY_INPUT")
+        .expect("SPELLWAKE_CREATURE_VOCABULARY_INPUT must be set");
+    let vocab = Vocabulary::load_from_file(std::path::Path::new(&vocab_path)).expect("load vocab");
+
+    let wave13_cards: &[(&str, &str, &str)] = &[
+        (
+            "Skyclave Apparition",
+            "Creature - Kor Spirit",
+            "When Skyclave Apparition enters, exile up to one target nonland, nontoken permanent you don't control with mana value 4 or less.\nWhen Skyclave Apparition leaves the battlefield, the exiled card's owner creates an X/X blue Illusion creature token, where X is the mana value of the exiled card.",
+        ),
+        (
+            "Spell Queller",
+            "Creature - Spirit",
+            "Flash\nFlying\nWhen Spell Queller enters, exile target spell with mana value 4 or less.\nWhen Spell Queller leaves the battlefield, the exiled card's owner may cast that card without paying its mana cost.",
+        ),
+        (
+            "Torment of Hailfire",
+            "Sorcery",
+            "Repeat the following process X times. Each opponent loses 3 life unless that player sacrifices a nonland permanent of their choice or discards a card.",
+        ),
+        (
+            "Sea Gate Stormcaller",
+            "Creature - Human Wizard",
+            "Kicker {4}{U}\nWhen Sea Gate Stormcaller enters, copy the next instant or sorcery spell with mana value 2 or less you cast this turn when you cast it. If Sea Gate Stormcaller was kicked, copy that spell twice instead. You may choose new targets for the copies.",
+        ),
+        (
+            "Adeline, Resplendent Cathar",
+            "Legendary Creature - Human Knight",
+            "Vigilance\nAdeline's power is equal to the number of creatures you control.\nWhenever you attack, for each opponent, create a 1/1 white Human creature token that's tapped and attacking that player or a planeswalker they control.",
+        ),
+        (
+            "Raffine, Scheming Seer",
+            "Legendary Creature - Sphinx Demon",
+            "Flying, ward {1}\nWhenever you attack, target attacking creature connives X, where X is the number of attacking creatures.",
+        ),
+        (
+            "Neheb, the Eternal",
+            "Legendary Creature - Zombie Minotaur Warrior",
+            "Afflict 3\nAt the beginning of your postcombat main phase, add {R} for each 1 life your opponents have lost this turn.",
+        ),
+        (
+            "Daybreak Coronet",
+            "Enchantment - Aura",
+            "Enchant creature with another Aura attached to it\nEnchanted creature gets +3/+3 and has first strike, vigilance, and lifelink.",
+        ),
+        (
+            "Thalia, Heretic Cathar",
+            "Legendary Creature - Human Soldier",
+            "First strike\nCreatures and nonbasic lands your opponents control enter tapped.",
+        ),
+        (
+            "Tymna the Weaver",
+            "Legendary Creature - Human Cleric",
+            "Lifelink\nAt the beginning of your postcombat main phase, you may pay X life, where X is the number of opponents that were dealt combat damage this turn. If you do, draw X cards.\nPartner",
+        ),
+        (
+            "Lazav, Dimir Mastermind",
+            "Legendary Creature - Shapeshifter",
+            "Hexproof\nWhenever a creature card is put into an opponent's graveyard from anywhere, you may have Lazav become a copy of that card, except its name is Lazav, Dimir Mastermind, it's legendary in addition to its other types, and it has hexproof and this ability.",
+        ),
+        (
+            "Shatter the Sky",
+            "Sorcery",
+            "Each player who controls a creature with power 4 or greater draws a card. Then destroy all creatures.",
+        ),
+        (
+            "Depopulate",
+            "Sorcery",
+            "Each player who controls a multicolored creature draws a card. Then destroy all creatures.",
+        ),
+        (
+            "Dovescape",
+            "Enchantment",
+            "Whenever a player casts a noncreature spell, counter that spell. That player creates X 1/1 white and blue Bird creature tokens with flying, where X is the spell's mana value.",
+        ),
+        (
+            "Decimate",
+            "Sorcery",
+            "Destroy target artifact, target creature, target enchantment, and target land.",
+        ),
+        (
+            "Chaotic Transformation",
+            "Sorcery",
+            "Exile up to one target artifact, up to one target creature, up to one target enchantment, up to one target planeswalker, and/or up to one target land. For each permanent exiled this way, its controller reveals cards from the top of their library until they reveal a card that shares a card type with it, puts that card onto the battlefield, then shuffles.",
+        ),
+        (
+            "Children of Korlis",
+            "Creature - Human Rebel Cleric",
+            "Sacrifice this creature: You gain life equal to the life you've lost this turn.",
+        ),
+        (
+            "Raid Bombardment",
+            "Enchantment",
+            "Whenever a creature you control with power 2 or less attacks, this enchantment deals 1 damage to the player or planeswalker that creature is attacking.",
+        ),
+        (
+            "Portcullis",
+            "Artifact",
+            "Whenever a creature enters, if there are two or more other creatures on the battlefield, exile that creature. Return that card to the battlefield under its owner's control when this artifact leaves the battlefield.",
+        ),
+        (
+            "Rude Awakening",
+            "Sorcery",
+            "Choose one \u{2014}\n\u{2022} Untap all lands you control.\n\u{2022} Until end of turn, lands you control become 2/2 creatures that are still lands.\nEntwine {2}{G}",
+        ),
+        (
+            "Etched Champion",
+            "Artifact Creature - Soldier",
+            "Metalcraft \u{2014} This creature has protection from each color as long as you control three or more artifacts.",
+        ),
+        (
+            "Akroma's Will",
+            "Instant",
+            "Choose one. If you control a commander as you cast this spell, you may choose both.\n\u{2022} Creatures you control gain flying, vigilance, double strike, lifelink, indestructible, and protection from each color until end of turn.\n\u{2022} Creatures you control gain trample and protection from each color until end of turn.",
+        ),
+        (
+            "Emergent Ultimatum",
+            "Sorcery",
+            "Search your library for up to three monocolored cards with different names and exile them. An opponent chooses one of those cards. Shuffle that card into your library. You may cast the other cards without paying their mana costs. Exile Emergent Ultimatum.",
+        ),
+        (
+            "Dragon's Disciple",
+            "Creature - Human Monk",
+            "As this creature enters, you may reveal a Dragon card from your hand. If you do or if you control a Dragon, this creature enters with a +1/+1 counter on it.\nDragons you control have ward {1}.",
+        ),
+        (
+            "Fear of Burning Alive",
+            "Enchantment Creature - Nightmare",
+            "When this creature enters, it deals 4 damage to each opponent.\nDelirium \u{2014} Whenever a source you control deals noncombat damage to an opponent, if there are four or more card types among cards in your graveyard, this creature deals that amount of damage to target creature that player controls.",
+        ),
+        (
+            "Gaea's Revenge",
+            "Creature - Elemental",
+            "This spell can't be countered.\nHaste\nThis creature can't be the target of nongreen spells or abilities from nongreen sources.",
+        ),
+        (
+            "Noble Quarry",
+            "Enchantment Creature - Unicorn",
+            "Bestow {5}{G}\nAll creatures able to block this creature or enchanted creature do so.\nEnchanted creature gets +1/+1.",
+        ),
+        (
+            "Superior Spider-Man",
+            "Legendary Creature - Spider Human Hero",
+            "Mind Swap \u{2014} You may have Superior Spider-Man enter as a copy of any creature card in a graveyard, except his name is Superior Spider-Man and he's a 4/4 Spider Human Hero in addition to his other types. When you do, exile that card.",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in wave13_cards {
+        let compiled = compile_v2_strict(name, type_line, oracle_text, &vocab);
+        assert!(
+            !compiled.faces[0].abilities.is_empty()
+                || !compiled.faces[0].spell_effects.is_empty()
+                || !compiled.faces[0].statics.is_empty()
+                || !compiled.faces[0].replacements.is_empty(),
+            "{name} compiled with empty face"
+        );
+    }
+
+    // Deep IR assertions for Wave 13 compositional grammar (zero IR edits):
+
+    // 1. Thalia, Heretic Cathar -> Compound(Creatures, nonbasic lands) with EntersTapped
+    let thalia = compile_v2_strict(
+        "Thalia, Heretic Cathar",
+        "Legendary Creature - Human Soldier",
+        "First strike\nCreatures and nonbasic lands your opponents control enter tapped.",
+        &vocab,
+    );
+    assert!(thalia.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::SubjectRule {
+            subject: SubjectRef::Compound(parts),
+            rule: SubjectStaticRule::EntersTapped,
+            ..
+        } if parts.len() == 2
+    )));
+
+    // 2. Lazav, Dimir Mastermind -> BecomeCopy with KeepOwnName, AddSupertypes, AddKeywords, HasThisAbility
+    let lazav = compile_v2_strict(
+        "Lazav, Dimir Mastermind",
+        "Legendary Creature - Shapeshifter",
+        "Hexproof\nWhenever a creature card is put into an opponent's graveyard from anywhere, you may have Lazav become a copy of that card, except its name is Lazav, Dimir Mastermind, it's legendary in addition to its other types, and it has hexproof and this ability.",
+        &vocab,
+    );
+    assert!(lazav.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { body, .. } => body.iter().any(|e| match e {
+            Effect::Optional { body: inner, .. } => inner.iter().any(|ie| match ie {
+                Effect::MutateObject {
+                    mutation: ObjectMutation::BecomeCopy { exceptions, .. },
+                    ..
+                } => {
+                    exceptions.contains(&CopyException::KeepOwnName)
+                        && exceptions.contains(&CopyException::HasThisAbility)
+                }
+                _ => false,
+            }),
+            _ => false,
+        }),
+        _ => false,
+    }));
+
+    // 3. Decimate -> 4-target Compound SubjectRef
+    let decimate = compile_v2_strict(
+        "Decimate",
+        "Sorcery",
+        "Destroy target artifact, target creature, target enchantment, and target land.",
+        &vocab,
+    );
+    assert!(decimate.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::ZoneOp {
+            subject: SubjectRef::Compound(targets),
+            ..
+        } if targets.len() == 4
+    )));
+
+    // 4. Raffine, Scheming Seer -> ScaledPlayerAction::Connive bound to X
+    let raffine = compile_v2_strict(
+        "Raffine, Scheming Seer",
+        "Legendary Creature - Sphinx Demon",
+        "Whenever you attack, target attacking creature connives X, where X is the number of attacking creatures.",
+        &vocab,
+    );
+    assert!(raffine.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { body, .. } => body.iter().any(|e| matches!(
+            e,
+            Effect::BindVariable { body: inner, .. }
+                if inner.iter().any(|ie| matches!(
+                    ie,
+                    Effect::MutatePlayer {
+                        mutation: PlayerMutation::ScaledAction {
+                            kind: ScaledPlayerAction::Connive,
+                            ..
+                        },
+                        ..
+                    }
+                ))
+        )),
+        _ => false,
+    }));
+
+    // 5. Shatter the Sky -> ForEach(EachPlayer) -> BranchCondition(Controls) -> Draw
+    let shatter = compile_v2_strict(
+        "Shatter the Sky",
+        "Sorcery",
+        "Each player who controls a creature with power 4 or greater draws a card. Then destroy all creatures.",
+        &vocab,
+    );
+    assert!(shatter.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::ForEach { body, .. }
+            if body.iter().any(|b| matches!(b, Effect::BranchCondition { .. }))
+    )));
+
+    // 6. Portcullis -> DelayedTrigger(ZoneChange from Battlefield) on `when ~ leaves the battlefield`
+    let portcullis = compile_v2_strict(
+        "Portcullis",
+        "Artifact",
+        "Whenever a creature enters, if there are two or more other creatures on the battlefield, exile that creature. Return that card to the battlefield under its owner's control when this artifact leaves the battlefield.",
+        &vocab,
+    );
+    assert!(portcullis.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { body, .. } => body.iter().any(|e| matches!(
+            e,
+            Effect::DelayedTrigger {
+                trigger: DelayedTriggerKind::Event(spec),
+                ..
+            } if spec.events.iter().any(|ev| matches!(
+                ev,
+                TriggerEvent::ZoneChange {
+                    from: Some(ZoneKind::Battlefield),
+                    to: None,
+                    subject: SubjectRef::SelfObject,
+                }
+            ))
+        )),
+        _ => false,
+    }));
+
+    // 7. Etched Champion -> Protection from all 5 colors (`each color`)
+    let etched = compile_v2_strict(
+        "Etched Champion",
+        "Artifact Creature - Soldier",
+        "Metalcraft \u{2014} This creature has protection from each color as long as you control three or more artifacts.",
+        &vocab,
+    );
+    assert!(etched.faces[0].statics.iter().any(|s| match s {
+        StaticAbility::GrantKeywords {
+            keywords,
+            condition: Some(_),
+            ..
+        } => keywords.iter().any(|k| {
+            k.kind == KeywordKind::Protection
+                && matches!(k.param, Some(KeywordParam::Color(c)) if c.0 == 0b1_1111)
+        }),
+        _ => false,
+    }));
+
+    // 8. Fear of Burning Alive -> `deals that amount of damage to <tgt>` -> PriorActionCount
+    let fear = compile_v2_strict(
+        "Fear of Burning Alive",
+        "Enchantment Creature - Nightmare",
+        "Delirium \u{2014} Whenever a source you control deals noncombat damage to an opponent, if there are four or more card types among cards in your graveyard, this creature deals that amount of damage to target creature that player controls.",
+        &vocab,
+    );
+    assert!(fear.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { body, .. } => body.iter().any(|e| matches!(
+            e,
+            Effect::DealDamage {
+                amount: ValueExpr::PriorActionCount(PriorActionKind::DealtDamageThisWay),
+                ..
+            }
+        )),
+        _ => false,
+    }));
+
+    // 9. Gaea's Revenge -> CantBeTargetedBy with `from nongreen sources`
+    let gaea = compile_v2_strict(
+        "Gaea's Revenge",
+        "Creature - Elemental",
+        "This creature can't be the target of nongreen spells or abilities from nongreen sources.",
+        &vocab,
+    );
+    assert!(gaea.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::RuleRestriction {
+            rule: RuleRestrictionKind::CantBeTargetedBy(_),
+            ..
+        }
+    )));
+
+    // 10. Noble Quarry -> AllMustBlock with Compound([SelfObject, EnchantedCreature])
+    let noble = compile_v2_strict(
+        "Noble Quarry",
+        "Enchantment Creature - Unicorn",
+        "All creatures able to block this creature or enchanted creature do so.",
+        &vocab,
+    );
+    assert!(noble.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::SubjectRule {
+            subject: SubjectRef::Compound(parts),
+            rule: SubjectStaticRule::AllMustBlock,
+            ..
+        } if parts.len() == 2
+    )));
+
+    // 11. Gideon, the Oathsworn -> `non-~` sets EXCLUDE_SELF flag on PlayerAttacksWith
+    let gideon = compile_v2_strict(
+        "Gideon, the Oathsworn",
+        "Legendary Planeswalker - Gideon",
+        "Whenever you attack with two or more non-Gideon creatures, put a +1/+1 counter on each of those creatures.",
+        &vocab,
+    );
+    assert!(gideon.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { trigger, .. } => trigger.events.iter().any(|ev| matches!(
+            ev,
+            TriggerEvent::PlayerAttacksWith {
+                filter,
+                min_count: 2,
+                ..
+            } if filter.flags.contains(FilterFlags::EXCLUDE_SELF)
+        )),
+        _ => false,
+    }));
+
+    // 12. Rude Awakening -> RetainTypes(LAND) via `that are still lands`
+    let rude = compile_v2_strict(
+        "Rude Awakening",
+        "Sorcery",
+        "Until end of turn, lands you control become 2/2 creatures that are still lands.",
+        &vocab,
+    );
+    assert!(rude.faces[0].spell_effects.iter().any(|e| match e {
+        Effect::ScopedDuration {
+            duration: Duration::UntilEndOfTurn,
+            body,
+        } => body.iter().any(|b| matches!(
+            b,
+            Effect::MutateObject {
+                mutation: ObjectMutation::RetainTypes(_),
+                ..
+            }
+        )),
+        _ => false,
+    }));
+    let _ = PlayerRef::You;
+}

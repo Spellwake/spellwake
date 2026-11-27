@@ -263,9 +263,13 @@ pub(crate) fn parse_token_creation(
     if !saw_token_word || (power_expr.is_none() && card_types.is_empty() && subtypes.is_empty()) {
         return Err(ts.err("expected P/T or token types before `token`"));
     }
-    // Optional `named <Capitalized Name>` (e.g. `create a colorless artifact token named Lotus with "..."`)
+    // Optional `named [~'s] <Capitalized Name>` (e.g. `create a colorless artifact token named Lotus`, `named ~'s Pridemate`)
     if ts.eat_word("named") {
         let mut words_eaten = 0usize;
+        if ts.eat_tilde() {
+            let _ = ts.eat_word("'s");
+            words_eaten += 1;
+        }
         while words_eaten < 4
             && let Some(w) = ts.peek_word()
             && w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
@@ -286,7 +290,7 @@ pub(crate) fn parse_token_creation(
                     FaceInput {
                         name: "~",
                         type_line: "Creature",
-                        oracle_text: quoted,
+                        oracle_text: quoted.trim_end_matches(','),
                     },
                     ts.vocab,
                 );
@@ -360,6 +364,8 @@ pub(crate) fn parse_token_creation(
             || ts.eat_phrase(&["the", "defending", "player"])
             || ts.eat_phrase(&["defending", "player"])
             || ts.eat_word("them");
+        let _ = ts.eat_phrase(&["or", "a", "planeswalker", "they", "control"])
+            || ts.eat_phrase(&["or", "a", "planeswalker", "that", "player", "controls"]);
     } else if ts.eat_phrase(&["that's", "attacking"])
         || ts.eat_phrase(&["that", "are", "attacking"])
         || ts.eat_word("attacking")
@@ -370,6 +376,8 @@ pub(crate) fn parse_token_creation(
             || ts.eat_phrase(&["the", "defending", "player"])
             || ts.eat_phrase(&["defending", "player"])
             || ts.eat_word("them");
+        let _ = ts.eat_phrase(&["or", "a", "planeswalker", "they", "control"])
+            || ts.eat_phrase(&["or", "a", "planeswalker", "that", "player", "controls"]);
     } else if ts.eat_word("tapped") {
         mods.tapped = true;
     }
@@ -492,6 +500,12 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
                     });
                 } else {
                     exceptions.push(CopyException::AddKeywords(kws));
+                    let tacp = ts.checkpoint();
+                    if ts.eat_phrase(&["and", "this", "ability"]) {
+                        exceptions.push(CopyException::HasThisAbility);
+                    } else {
+                        ts.restore(tacp);
+                    }
                 }
             } else {
                 ts.restore(item_cp);
@@ -571,6 +585,8 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
             let keep_existing_types = ts
                 .eat_phrase(&["in", "addition", "to", "its", "other", "types"])
                 || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"])
+                || ts.eat_phrase(&["in", "addition", "to", "his", "other", "types"])
+                || ts.eat_phrase(&["in", "addition", "to", "her", "other", "types"])
                 || ts.eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
                 || ts.eat_phrase(&[
                     "in", "addition", "to", "its", "other", "colors", "and", "types",

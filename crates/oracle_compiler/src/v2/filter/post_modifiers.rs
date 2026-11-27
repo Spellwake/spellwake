@@ -215,16 +215,102 @@ pub(super) fn parse_filter_post_modifiers(
             flt.flags = flt.flags.union(FilterFlags::AT_RANDOM);
             continue;
         }
+        // `with the same <name|mana value|power|toughness|total power and toughness> as <subj>` (`Reflector Mage`, `Inventive Iteration`, `Wild Pair`, `Unhinged Beast Hunt`)
+        {
+            let scp = ts.checkpoint();
+            if ts.eat_phrase(&["with", "the", "same"]) {
+                let prop = if ts.eat_word("name") {
+                    Some(SharedProperty::Name)
+                } else if ts.eat_phrase(&["mana", "value"]) {
+                    Some(SharedProperty::ManaValue)
+                } else if ts.eat_phrase(&["total", "power", "and", "toughness"])
+                    || ts.eat_phrase(&["power", "and/or", "same", "toughness"])
+                    || ts.eat_phrase(&["power", "and/or", "toughness"])
+                    || ts.eat_word("power")
+                {
+                    Some(SharedProperty::Power)
+                } else if ts.eat_word("toughness") {
+                    Some(SharedProperty::Toughness)
+                } else {
+                    None
+                };
+                if let Some(property) = prop {
+                    let reference = if ts.eat_word("as") {
+                        try_parse(ts, parse_subject_ref).ok()
+                    } else {
+                        Some(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It))
+                    };
+                    if let Some(reference) = reference {
+                        flt.predicates.push(FilterPredicate::SharesPropertyWith {
+                            property,
+                            reference: Box::new(reference),
+                            negated: false,
+                        });
+                        continue;
+                    }
+                }
+            }
+            ts.restore(scp);
+        }
+        if ts.eat_phrase(&["with", "that", "spell's", "mana", "value"]) {
+            flt.stat_bounds.push(StatBound {
+                stat: StatKind::ManaValue,
+                op: CompareOp::Eq,
+                value: Box::new(ValueExpr::ObjectStat {
+                    subject: Box::new(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatSpell)),
+                    stat: StatKind::ManaValue,
+                }),
+            });
+            continue;
+        }
+        if ts.eat_phrase(&["with", "another", "aura", "attached", "to", "it"]) {
+            flt.flags = flt.flags.union(FilterFlags::ENCHANTED);
+            continue;
+        }
         if ts.eat_phrase(&["with", "one", "or", "more", "targets"]) {
             flt.flags = flt.flags.union(FilterFlags::SINGLE_TARGET);
             continue;
         }
-        if ts.eat_phrase(&["from", "among", "those", "exiled", "cards"])
+        if ts.eat_phrase(&["from", "among", "cards", "revealed", "this", "way"])
+            || ts.eat_phrase(&["from", "among", "cards", "exiled", "this", "way"])
+            || ts.eat_phrase(&["from", "among", "those", "exiled", "cards"])
             || ts.eat_phrase(&["from", "among", "those", "cards"])
             || ts.eat_phrase(&["from", "among", "them"])
         {
             flt.predicates.push(FilterPredicate::AmongPriorCards);
             continue;
+        }
+        if ts.eat_phrase(&["that", "player", "milled", "this", "way"])
+            || ts.eat_phrase(&["they", "milled", "this", "way"])
+        {
+            flt.predicates.push(FilterPredicate::AffectedByPriorAction(
+                PriorActionKind::MilledThisWay,
+            ));
+            continue;
+        }
+        // `from [a/an] <source filter>` (`Abstruse Archaic`, `Weaver of Harmony`, `Gaea's Revenge`: `from a colorless source`, `from nongreen sources`)
+        {
+            let fcp = ts.checkpoint();
+            if ts.eat_word("from")
+                && try_parse(ts, parse_zone_ref).is_err()
+                && !ts.peek_phrase(&["among"])
+                && !ts.peek_phrase(&["anywhere"])
+                && let Ok(src_flt) = try_parse(ts, parse_object_filter)
+                && (src_flt.any_permanent
+                    || !src_flt.any_colors.is_empty()
+                    || !src_flt.forbidden_colors.is_empty()
+                    || !src_flt.any_types.is_empty()
+                    || !src_flt.all_types.is_empty()
+                    || !src_flt.forbidden_types.is_empty()
+                    || src_flt.color_arity.is_some())
+            {
+                flt.predicates
+                    .push(FilterPredicate::TargetsSubject(Box::new(
+                        SubjectRef::Group(Box::new(src_flt)),
+                    )));
+                continue;
+            }
+            ts.restore(fcp);
         }
         {
             let bcp = ts.checkpoint();
@@ -239,6 +325,25 @@ pub(super) fn parse_filter_post_modifiers(
                 continue;
             }
             ts.restore(bcp);
+        }
+        if ts.eat_phrase(&["that", "blocked", "this", "turn"])
+            || ts.eat_phrase(&["that", "blocked", "this", "combat"])
+        {
+            flt.combat = Some(CombatState::Blocking);
+            continue;
+        }
+        if ts.eat_phrase(&["it", "blocked", "this", "combat"])
+            || ts.eat_phrase(&["it", "blocked", "this", "turn"])
+            || ts.eat_phrase(&["that", "was", "blocked", "by", "it", "this", "combat"])
+        {
+            flt.combat = Some(CombatState::BlockedBySelf);
+            continue;
+        }
+        if ts.eat_phrase(&["that", "attacked", "this", "turn"])
+            || ts.eat_phrase(&["that", "attacked", "this", "combat"])
+        {
+            flt.combat = Some(CombatState::Attacking);
+            continue;
         }
         if ts.eat_phrase(&["controlled", "by", "different", "players"]) {
             flt.flags = flt.flags.union(FilterFlags::DIFFERENT_NAMES);
@@ -1802,6 +1907,14 @@ fn parse_stat_comparison(ts: &mut TokenStream<'_>) -> PResult<(CompareOp, ValueE
     } else if ts.eat_phrase(&["or", "greater"]) {
         Ok((CompareOp::Ge, val))
     } else {
-        Ok((CompareOp::Eq, val))
+        let ocp = ts.checkpoint();
+        if ts.eat_word("or")
+            && let Ok(hi) = try_parse(ts, parse_value_expr)
+        {
+            Ok((CompareOp::Le, hi))
+        } else {
+            ts.restore(ocp);
+            Ok((CompareOp::Eq, val))
+        }
     }
 }

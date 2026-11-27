@@ -224,15 +224,26 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                         },
                     ]));
                 }
-                // Support `<target1> and [up to <N> | another | <N>] [other] target <flt2>` (`Hull Breach`, `Relic Crush`, `Blizzard Brawl`, `Grim Contest`)
-                let ccp = ts.checkpoint();
-                if ts.eat_word("and")
-                    && let Ok(other) = try_parse(ts, parse_trailing_target_conjunct)
-                {
-                    return Ok(SubjectRef::Compound(vec![first_target, other]));
+                // Support `<target1>[, <target2>, ...][,] [and | and/or] [up to <N> | another | <N>] [other] target <fltN>`
+                // (`Hull Breach`, `Relic Crush`, `Blizzard Brawl`, `Chaotic Transformation`, `Boom Box`, `Decimate`, `Casualties of War`)
+                let mut targets = vec![first_target];
+                loop {
+                    let ccp = ts.checkpoint();
+                    let had_comma = ts.eat_comma();
+                    let had_conj = ts.eat_word("and") || ts.eat_word("and/or");
+                    if (had_comma || had_conj)
+                        && let Ok(other) = try_parse(ts, parse_trailing_target_conjunct)
+                    {
+                        targets.push(other);
+                        continue;
+                    }
+                    ts.restore(ccp);
+                    break;
                 }
-                ts.restore(ccp);
-                return Ok(first_target);
+                if targets.len() > 1 {
+                    return Ok(SubjectRef::Compound(targets));
+                }
+                return Ok(targets.remove(0));
             }
         }
         ts.restore(cp);
@@ -370,7 +381,9 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                 && let Ok(extra) = try_parse(ts, parse_object_filter)
             {
                 let _ = ts.eat_phrase(&["it's", "attacking"])
-                    || ts.eat_phrase(&["they're", "attacking"]);
+                    || ts.eat_phrase(&["they're", "attacking"])
+                    || ts.eat_phrase(&["that", "creature", "is", "attacking"])
+                    || ts.eat_phrase(&["those", "creatures", "are", "attacking"]);
                 return Ok(SubjectRef::Compound(vec![
                     SubjectRef::Player(p),
                     SubjectRef::Group(Box::new(extra)),

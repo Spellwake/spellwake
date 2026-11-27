@@ -43,6 +43,96 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
         ts.restore(cp);
     }
 
+    // 1a0c2. `If ~ would enter and it wasn't cast or no mana was spent to cast it, exile it instead.` (`Primeval Spawn`)
+    //        `If ~ would be dealt damage, prevent that damage and remove a +1/+1 counter from it.` (`Unbreathing Horde`)
+    //        `If ~ would deal combat damage to a player, prevent that damage. <rider>` (`Sokrates, Athenian Teacher`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_tilde() && ts.eat_word("would") {
+            let wcp = ts.checkpoint();
+            if ts.eat_phrase(&[
+                "enter", "and", "it", "wasn't", "cast", "or", "no", "mana", "was", "spent", "to",
+                "cast", "it",
+            ]) && ts.eat_comma()
+                && ts.eat_phrase(&["exile", "it", "instead"])
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::ConditionalEnters {
+                        condition: crate::v2::ir::ConditionExpr::SubjectCheck {
+                            subject: Box::new(SubjectRef::SelfObject),
+                            kind: crate::v2::ir::SubjectConditionKind::NotCastOrNoManaSpent,
+                        },
+                        inner: Box::new(Replacement::Rule(
+                            ReplacementRuleKind::LeaveBattlefieldExileInstead,
+                        )),
+                    });
+                }
+            }
+            ts.restore(wcp);
+            if ts.eat_phrase(&["be", "dealt", "damage"])
+                && ts.eat_comma()
+                && ts.eat_phrase(&["prevent", "that", "damage", "and"])
+                && let Ok(rider) = try_parse(ts, parse_effect_sentence)
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::DamageRule(
+                        DamageReplacement::PreventWithRider {
+                            target: SubjectRef::SelfObject,
+                            condition: None,
+                            rider,
+                        },
+                    ));
+                }
+            }
+            ts.restore(wcp);
+            if ts.eat_phrase(&["deal", "combat", "damage", "to"])
+                && let Ok(target) = try_parse(ts, parse_subject_ref)
+                && ts.eat_comma()
+                && ts.eat_phrase(&["prevent", "that", "damage"])
+                && ts.eat_period()
+                && let Ok(rider) = try_parse(ts, parse_effect_sentence)
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::DamageRule(
+                        DamageReplacement::PreventWithRider {
+                            target,
+                            condition: None,
+                            rider,
+                        },
+                    ));
+                }
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 1a0c3. `If a source would deal damage to ~, prevent that damage. <rider>` (`Swans of Bryn Argoll`)
+    {
+        let cp = ts.checkpoint();
+        if ts.eat_phrase(&["a", "source", "would", "deal", "damage", "to"])
+            && ts.eat_tilde()
+            && ts.eat_comma()
+            && ts.eat_phrase(&["prevent", "that", "damage"])
+            && ts.eat_period()
+            && let Ok(rider) = try_parse(ts, parse_effect_sentence)
+        {
+            let _ = ts.eat_period();
+            if ts.is_eof() {
+                return Ok(Replacement::DamageRule(
+                    DamageReplacement::PreventWithRider {
+                        target: SubjectRef::SelfObject,
+                        condition: None,
+                        rider,
+                    },
+                ));
+            }
+        }
+        ts.restore(cp);
+    }
+
     // 1a0c. `If ~ would leave the battlefield, exile it instead of putting it anywhere else.` (`Llanowar Greenwidow` + Unearth/Flashback/Disturb/Escape)
     {
         let cp = ts.checkpoint();

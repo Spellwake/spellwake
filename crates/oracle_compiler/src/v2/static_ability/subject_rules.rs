@@ -15,8 +15,41 @@ pub(super) fn parse_subject_static_ability(
     condition: Option<ConditionExpr>,
 ) -> PResult<StaticAbility> {
     // 3. Subject-headed static abilities (`<subj> gets/get +X/+Y [and has/have <kws>]`,
-    //    `<subj> can't be the targets of <flt>`, `<subj> can't attack`, etc.)
-    let subject = parse_subject_ref(ts)?;
+    //    `<subj> can't be the targets of <flt>`, `<subj> can't attack`,
+    //    `<flt1> and <flt2> enter tapped`, etc.)
+    let mut subject = parse_subject_ref(ts)?;
+    {
+        let conj_cp = ts.checkpoint();
+        if matches!(subject, crate::v2::ir::SubjectRef::Group(_))
+            && ts.eat_word("and")
+            && let Ok(other_flt) = try_parse(ts, parse_object_filter)
+            && ts.peek_word().is_some_and(|w| {
+                matches!(
+                    w.to_ascii_lowercase().as_str(),
+                    "enter"
+                        | "enters"
+                        | "get"
+                        | "gets"
+                        | "have"
+                        | "has"
+                        | "can't"
+                        | "don't"
+                        | "doesn't"
+                        | "are"
+                        | "is"
+                        | "lose"
+                        | "loses"
+                )
+            })
+        {
+            subject = crate::v2::ir::SubjectRef::Compound(vec![
+                subject,
+                crate::v2::ir::SubjectRef::Group(Box::new(other_flt)),
+            ]);
+        } else {
+            ts.restore(conj_cp);
+        }
+    }
 
     // `<subj> gets/get [an additional] +X/+Y [for each <expr>] [, has/have <kws>] [and has/have <kws>] [and can't <rule>] [for each <expr>]`
     if ts.eat_word("gets") || ts.eat_word("get") {

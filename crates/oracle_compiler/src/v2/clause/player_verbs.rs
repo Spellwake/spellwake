@@ -556,12 +556,30 @@ pub(super) fn parse_player_verb_frame(
             ts.restore(acp);
         }
         let cp2 = ts.checkpoint();
-        if let Ok(subj) = try_parse(ts, parse_subject_ref) {
-            let _ = if ts.eat_word("from") {
-                opt(ts, parse_zone_ref)
-            } else {
-                None
-            };
+        let subj_opt = if ts.eat_phrase(&["the", "other", "cards"])
+            || ts.eat_phrase(&["the", "other", "card"])
+        {
+            Some(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::OtherPile))
+        } else {
+            try_parse(ts, parse_subject_ref).ok()
+        };
+        if let Some(subj) = subj_opt {
+            if ts.eat_word("from") {
+                loop {
+                    let _ = ts.eat_phrase(&["among", "cards", "you", "own", "in"])
+                        || ts.eat_phrase(&["among", "cards", "in"]);
+                    let _ = opt(ts, parse_zone_ref);
+                    let fcp = ts.checkpoint();
+                    let _ = ts.eat_comma();
+                    let _ = ts.eat_word("or") || ts.eat_word("and");
+                    if ts.eat_word("from") {
+                        continue;
+                    }
+                    ts.restore(fcp);
+                    break;
+                }
+            }
+            let _ = ts.eat_phrase(&["if", "able"]);
             let mut free = ts.eat_phrase(&["without", "paying", "its", "mana", "cost"])
                 || ts.eat_phrase(&["without", "paying", "their", "mana", "costs"]);
             let alt_costs = if !free && ts.eat_word("by") {
@@ -627,6 +645,11 @@ pub(super) fn parse_player_verb_frame(
                 count: crate::v2::ir::TargetCount::Exact(1),
                 another: false,
             }
+        } else if ts.eat_phrase(&["each", "creature's"]) {
+            SubjectRef::Each(Box::new(ObjectFilter {
+                any_types: crate::ast::CardTypeMask::CREATURE,
+                ..Default::default()
+            }))
         } else if ts.eat_phrase(&["that", "creature's"]) {
             SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatCreature)
         } else if ts.eat_phrase(&["enchanted", "creature's"]) {
@@ -713,6 +736,52 @@ pub(super) fn parse_player_verb_frame(
                 }],
                 (),
             ));
+        }
+        // `have <subj>'s base power and toughness become <P>/<T> [or <P2>/<T2>] [dur]` (`Mirkwood Meditator`, `Master of Winds`)
+        {
+            let bpt_cp = ts.checkpoint();
+            if let Ok(subj) = try_parse(ts, parse_subject_ref)
+                && ts.eat_phrase(&["'s", "base", "power", "and", "toughness", "become"])
+                && let Some((p1, t1)) = ts.next_base_pt()
+            {
+                let alt_pt = if ts.eat_word("or") {
+                    ts.next_base_pt()
+                } else {
+                    None
+                };
+                let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+                let eff1 = Effect::MutateObject {
+                    subject: subj.clone(),
+                    mutation: ObjectMutation::SetDynamicBasePT {
+                        power: ValueExpr::Const(p1),
+                        toughness: ValueExpr::Const(t1),
+                        add_types: crate::ast::CardTypeMask::EMPTY,
+                        keep_existing_types: true,
+                    },
+                    duration: duration.clone(),
+                };
+                if let Some((p2, t2)) = alt_pt {
+                    let eff2 = Effect::MutateObject {
+                        subject: subj,
+                        mutation: ObjectMutation::SetDynamicBasePT {
+                            power: ValueExpr::Const(p2),
+                            toughness: ValueExpr::Const(t2),
+                            add_types: crate::ast::CardTypeMask::EMPTY,
+                            keep_existing_types: true,
+                        },
+                        duration,
+                    };
+                    return Ok((
+                        vec![Effect::PromptChoice {
+                            chooser: actor,
+                            kind: ChoiceKind::ChooseBranch(vec![vec![eff1], vec![eff2]]),
+                        }],
+                        (),
+                    ));
+                }
+                return Ok((vec![eff1], ()));
+            }
+            ts.restore(bpt_cp);
         }
         // `have the base power [and toughness] of <subj> become [equal to] <val> [dur]` (`Sita Varma`, `Exuberant Wolfbear`)
         {
@@ -863,57 +932,7 @@ pub(super) fn parse_player_verb_frame(
                 || ts.eat_phrase(&["becomes", "a", "copy", "of"]))
                 && let Ok(copy_src) = try_parse(ts, parse_subject_ref)
             {
-                let mut exceptions = Vec::new();
-                let ecp = ts.checkpoint();
-                if ts.eat_comma() && ts.eat_word("except") {
-                    loop {
-                        let icp = ts.checkpoint();
-                        if ts.eat_phrase(&["it", "has", "this", "ability"])
-                            || ts.eat_phrase(&["they", "have", "this", "ability"])
-                        {
-                            exceptions.push(crate::v2::ir::CopyException::HasThisAbility);
-                        } else if ts.eat_phrase(&["its", "name", "is"]) && ts.eat_tilde() {
-                            exceptions.push(crate::v2::ir::CopyException::KeepOwnName);
-                        } else if ts.eat_phrase(&["it", "isn't", "legendary"])
-                            || ts.eat_phrase(&["it's", "not", "legendary"])
-                        {
-                            exceptions.push(crate::v2::ir::CopyException::NotLegendary);
-                        } else if (ts.eat_phrase(&["it", "has"]) || ts.eat_word("has"))
-                            && let Ok((kws, _)) =
-                                try_parse(ts, crate::v2::filter::parse_keyword_list)
-                        {
-                            exceptions.push(crate::v2::ir::CopyException::AddKeywords(kws));
-                        } else if let Some(quoted) = ts.next_quoted() {
-                            let compiled = compile_face_v2(
-                                FaceInput {
-                                    name: "~",
-                                    type_line: "Permanent",
-                                    oracle_text: quoted,
-                                },
-                                ts.vocab,
-                            );
-                            if compiled.is_ok() {
-                                exceptions.push(crate::v2::ir::CopyException::AddAbility(
-                                    Box::new(compiled),
-                                ));
-                            } else {
-                                ts.restore(icp);
-                                break;
-                            }
-                        } else {
-                            ts.restore(icp);
-                            break;
-                        }
-                        let scp = ts.checkpoint();
-                        if !ts.eat_comma() && !ts.eat_word("and") {
-                            ts.restore(scp);
-                            break;
-                        }
-                    }
-                    if exceptions.is_empty() {
-                        ts.restore(ecp);
-                    }
-                }
+                let exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
                 let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
                 return Ok((
                     vec![Effect::MutateObject {
@@ -990,8 +1009,74 @@ pub(super) fn parse_player_verb_frame(
         return Err(ts.err("expected die specification after `roll`"));
     }
 
-    // 3f. `copy(ies) <subj> [twice | <N> times] [for each <expr>] [, except ...]` (`Copy target instant or sorcery spell`, `Jaya`, `Donal`, `Tawnos`, `Fork`, `The Sixth Doctor`)
+    // 3f. `copy(ies) <subj> [twice | <N> times] [for each <expr>] [, except ...]` (`Copy target instant or sorcery spell`, `Sea Gate Stormcaller`, `Jaya`, `Donal`, `Tawnos`, `Fork`, `The Sixth Doctor`)
     if ts.eat_word("copy") || ts.eat_word("copies") {
+        // `copy the next <flt> [you cast] this turn when you cast it` / `copy the next loyalty ability you activate this turn when you activate it`
+        // (`Sea Gate Stormcaller`, `Flamehold Grappler`, `Tzaangor Shaman`, `Jaya's Phoenix`)
+        {
+            let ncp = ts.checkpoint();
+            if ts.eat_phrase(&["the", "next"]) {
+                if ts.eat_phrase(&[
+                    "loyalty", "ability", "you", "activate", "this", "turn", "when", "you",
+                    "activate", "it",
+                ]) {
+                    return Ok((
+                        vec![Effect::DelayedTrigger {
+                            trigger: crate::v2::ir::DelayedTriggerKind::Event(
+                                crate::v2::ir::TriggerSpec {
+                                    events: vec![crate::v2::ir::TriggerEvent::AbilityActivated {
+                                        player: actor,
+                                        non_mana_only: true,
+                                    }],
+                                    intervening_if: None,
+                                },
+                            ),
+                            body: vec![Effect::CopyObject {
+                                actor,
+                                subject: SubjectRef::Anaphora(
+                                    crate::v2::ir::AnaphoraRef::ThatSpell,
+                                ),
+                                count: ValueExpr::Const(1),
+                                modifiers: EntryModifiers::default(),
+                                exceptions: Vec::new(),
+                            }],
+                        }],
+                        (),
+                    ));
+                }
+                if let Ok(flt) = try_parse(ts, parse_object_filter)
+                    && (ts
+                        .eat_phrase(&["you", "cast", "this", "turn", "when", "you", "cast", "it"])
+                        || ts.eat_phrase(&["this", "turn", "when", "you", "cast", "it"]))
+                {
+                    return Ok((
+                        vec![Effect::DelayedTrigger {
+                            trigger: crate::v2::ir::DelayedTriggerKind::Event(
+                                crate::v2::ir::TriggerSpec {
+                                    events: vec![crate::v2::ir::TriggerEvent::SpellCast {
+                                        caster: actor,
+                                        spell: Some(flt),
+                                        from_outside_hand: false,
+                                    }],
+                                    intervening_if: None,
+                                },
+                            ),
+                            body: vec![Effect::CopyObject {
+                                actor,
+                                subject: SubjectRef::Anaphora(
+                                    crate::v2::ir::AnaphoraRef::ThatSpell,
+                                ),
+                                count: ValueExpr::Const(1),
+                                modifiers: EntryModifiers::default(),
+                                exceptions: Vec::new(),
+                            }],
+                        }],
+                        (),
+                    ));
+                }
+            }
+            ts.restore(ncp);
+        }
         let subject = if ts.eat_phrase(&["that", "spell", "or", "ability"]) {
             SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatSpell)
         } else {
@@ -1011,16 +1096,43 @@ pub(super) fn parse_player_verb_frame(
             }
         };
         let exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
-        return Ok((
-            vec![Effect::CopyObject {
-                actor,
-                subject,
-                count,
-                modifiers: EntryModifiers::default(),
-                exceptions,
-            }],
-            (),
-        ));
+        let mut out = vec![Effect::CopyObject {
+            actor,
+            subject,
+            count,
+            modifiers: EntryModifiers::default(),
+            exceptions,
+        }];
+        // Optional trailing `[,] and [you] may choose new targets for the copy/copies` (`Bonus Round`, `Shiko and Narset`)
+        {
+            let rcp = ts.checkpoint();
+            let _ = ts.eat_comma();
+            if ts.eat_word("and") {
+                let _ = ts.eat_word("you");
+                if ts.eat_phrase(&["may", "choose", "new", "targets", "for", "the", "copy"])
+                    || ts.eat_phrase(&["may", "choose", "new", "targets", "for", "the", "copies"])
+                {
+                    out.push(Effect::Optional {
+                        actor,
+                        body: vec![Effect::MutatePlayer {
+                            player: actor,
+                            mutation: PlayerMutation::Retarget {
+                                subject: Box::new(SubjectRef::Anaphora(
+                                    crate::v2::ir::AnaphoraRef::ThatSpell,
+                                )),
+                                new_target: None,
+                            },
+                            duration: Duration::Instant,
+                        }],
+                    });
+                } else {
+                    ts.restore(rcp);
+                }
+            } else {
+                ts.restore(rcp);
+            }
+        }
+        return Ok((out, ()));
     }
 
     // 3f3. `change the text of <subj> by replacing all instances of [one color word / one basic land type / one creature type] with another [of your choice] [dur]` (`Sleight of Mind`, `New Blood`, `Magical Hack`, `Mind Bend`, 13+ cards)
@@ -1534,6 +1646,12 @@ pub(super) fn parse_player_verb_frame(
             ts.restore(bcp);
         }
         if ts.eat_phrase(&["a", "creature", "type"]) {
+            if ts.eat_phrase(&["other", "than"])
+                && let Some(w) = ts.peek_word()
+                && ts.vocab.lookup_subtype(&w.to_ascii_lowercase()).is_some()
+            {
+                ts.next_word();
+            }
             return Ok((
                 vec![Effect::PromptChoice {
                     chooser: actor,
@@ -1597,7 +1715,10 @@ pub(super) fn parse_player_verb_frame(
                 (),
             ));
         }
-        if ts.eat_phrase(&["a", "card", "name"]) {
+        if ts.eat_phrase(&["a", "card", "name"])
+            || ts.eat_phrase(&["any", "card", "name"])
+            || (ts.eat_phrase(&["the", "name", "of"]) && try_parse(ts, parse_object_filter).is_ok())
+        {
             return Ok((
                 vec![Effect::PromptChoice {
                     chooser: actor,
@@ -1737,16 +1858,26 @@ pub(super) fn parse_player_verb_frame(
             let ucp = ts.checkpoint();
             if ts.eat_word("unless") {
                 if ts.eat_phrase(&["its", "controller", "pays"]) {
-                    let base_cost = parse_cost_atom(ts)?;
-                    let final_cost = match base_cost {
-                        Cost::Mana(mc) => {
-                            if let Some(scale) = opt(ts, parse_for_each_expr) {
-                                Cost::ScaledMana { base: mc, scale }
-                            } else {
-                                Cost::Mana(mc)
-                            }
+                    let final_cost = if ts.eat_phrase(&["mana", "equal", "to"]) {
+                        let scale = parse_value_expr(ts)?;
+                        Cost::ScaledMana {
+                            base: crate::v2::ir::ManaCost {
+                                symbols: vec![ManaSymbol::Generic(1)],
+                            },
+                            scale,
                         }
-                        other => other,
+                    } else {
+                        let base_cost = parse_cost_atom(ts)?;
+                        match base_cost {
+                            Cost::Mana(mc) => {
+                                if let Some(scale) = opt(ts, parse_for_each_expr) {
+                                    Cost::ScaledMana { base: mc, scale }
+                                } else {
+                                    Cost::Mana(mc)
+                                }
+                            }
+                            other => other,
+                        }
                     };
                     return Ok((
                         vec![Effect::ZoneOp {
@@ -1976,6 +2107,29 @@ pub(super) fn parse_player_verb_frame(
             }],
             (),
         ));
+    }
+
+    // 26b. `give <subj> another counter of that kind` (`Powerful Broker`, `Maulfist Revolutionary`, `Skyship Plunderer`)
+    {
+        let gcp = ts.checkpoint();
+        if (ts.eat_word("give") || ts.eat_word("gives"))
+            && let Ok(subject) = try_parse(ts, parse_subject_ref)
+            && (ts.eat_phrase(&["another", "counter", "of", "that", "kind"])
+                || ts.eat_phrase(&["a", "counter", "of", "that", "kind"]))
+        {
+            return Ok((
+                vec![Effect::MutateObject {
+                    subject,
+                    mutation: ObjectMutation::PutCounters {
+                        kind: CounterKind::Any,
+                        count: ValueExpr::Const(1),
+                    },
+                    duration: Duration::Instant,
+                }],
+                (),
+            ));
+        }
+        ts.restore(gcp);
     }
 
     // 27. `prevent ... damage ...`
