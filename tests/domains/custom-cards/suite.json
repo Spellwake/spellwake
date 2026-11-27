@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "slug": "custom-cards",
+  "label": "Custom Cards",
+  "category": "service-domain",
+  "readinessStage": "active",
+  "description": "Open Play custom card compiler and Oracle standardization, Custom Card Studio vault and revision saving, portable export/import codecs, and Patron play-gate enforcement.",
+  "localOnly": false,
+  "unqualifiedReason": null,
+  "hostedCredentials": [
+    "OPENAI_API_KEY"
+  ],
+  "notes": "Compiler, contracts, studio vault, card frame rendering, export/import codec, and Patron play-gate are verified locally. Vision OCR fallback for third-party images without Spellwake iTXt metadata requires live hosted Vision model credentials.",
+  "subdomains": [
+    {
+      "slug": "compiler-and-ast",
+      "label": "Compiler & Oracle Standardization",
+      "description": "Server-side Rust custom card compilation, rules diagnostics, and deterministic Oracle text standardization.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/custom_cards",
+        "packages/application-contracts/src/custom-cards.test.ts"
+      ]
+    },
+    {
+      "slug": "studio-and-vault",
+      "label": "Studio & Vault",
+      "description": "Connected Custom Card Studio editing, live preview, vault listing, revision saving, and archiving.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "apps/play/src/routes/custom-cards",
+        "apps/play/src/custom-cards/card-frame.test.ts",
+        "apps/play/scripts/qualify-custom-cards.ts"
+      ]
+    },
+    {
+      "slug": "export-and-import",
+      "label": "Export, Import & Art Cache",
+      "description": "Portable custom card JSON/PNG iTXt codec round-trips and local art caching.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "apps/play/src/custom-cards/codec.test.ts",
+        "apps/play/src/custom-cards/custom-art-cache.test.ts"
+      ]
+    },
+    {
+      "slug": "patron-play-gate",
+      "label": "Patron Play Gate",
+      "description": "Enforcing Open Play Patron access checks for Quick Test and custom card play while keeping studio authoring open.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "apps/play/src/routes/custom-cards/CustomCardsStudioPage.tsx",
+        "apps/play/scripts/qualify-custom-cards.ts"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application custom_cards lib tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "services/application/Cargo.toml",
+          "--lib",
+          "custom_cards"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "custom cards contract, frame, codec, and art cache unit tests",
+        "args": [
+          "bun",
+          "test",
+          "packages/application-contracts/src/custom-cards.test.ts",
+          "apps/play/src/custom-cards/card-frame.test.ts",
+          "apps/play/src/custom-cards/codec.test.ts",
+          "apps/play/src/custom-cards/custom-art-cache.test.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "browserE2e": [
+      {
+        "kind": "playwright",
+        "label": "playwright custom cards studio, compiler, vault save, and Patron gate E2E suite",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-custom-cards.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/src/custom_cards",
+    "packages/application-contracts/src/custom-cards.ts",
+    "apps/play/src/custom-cards",
+    "apps/play/src/routes/custom-cards",
+    "apps/play/scripts/qualify-custom-cards.ts"
+  ]
+}

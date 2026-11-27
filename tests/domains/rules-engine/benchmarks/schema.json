@@ -1,0 +1,521 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://spellwake.dev/schemas/rules-engine-benchmark.v1.json",
+  "title": "Spellwake Rules Engine Interaction Benchmark Specification",
+  "description": "Strict declarative contract for complex MTG rules interaction benchmarks. Supports preemptive authoring before engine capabilities land, while enforcing honest execution status, pinned CR citations, and machine-checkable checkpoints.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "category",
+    "execution_status",
+    "review_status",
+    "rules_edition",
+    "provenance",
+    "required_capabilities",
+    "cards",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+/[a-z0-9-]+$",
+      "description": "Unique benchmark ID matching <category>/<filename-stem>."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4
+    },
+    "category": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Matches parent directory name under tests/domains/rules-engine/benchmarks/."
+    },
+    "execution_status": {
+      "type": "string",
+      "enum": [
+        "pending-engine",
+        "ready",
+        "passing",
+        "failing",
+        "blocked"
+      ]
+    },
+    "execution_receipt": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "verified_at",
+        "engine_target"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verified_at": {
+          "type": "string",
+          "minLength": 1
+        },
+        "engine_target": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "description": "Required when execution_status is passing. Must be null when pending-engine."
+    },
+    "review_status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "pending-independent-review",
+        "reviewed"
+      ]
+    },
+    "rules_edition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edition",
+        "source_url",
+        "cited_rules"
+      ],
+      "properties": {
+        "edition": {
+          "type": "string",
+          "minLength": 4
+        },
+        "source_url": {
+          "type": "string",
+          "minLength": 8
+        },
+        "cited_rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "rule",
+              "summary"
+            ],
+            "properties": {
+              "rule": {
+                "type": "string",
+                "pattern": "^[0-9]{3}(\\.[0-9]+[a-z]?)?$"
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 5
+              }
+            }
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_summary",
+        "scope_notes"
+      ],
+      "properties": {
+        "source_summary": {
+          "type": "string",
+          "minLength": 5
+        },
+        "scope_notes": {
+          "type": "string",
+          "minLength": 5
+        }
+      }
+    },
+    "required_capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9-]+\\.[a-z0-9-]+$"
+      },
+      "description": "Engine capability keys (subsystem.capability) required to execute this benchmark."
+    },
+    "cards": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "oracle_id",
+          "mana_cost",
+          "type_line",
+          "oracle_text"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "oracle_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "mana_cost": {
+            "type": "string"
+          },
+          "type_line": {
+            "type": "string",
+            "minLength": 1
+          },
+          "oracle_text": {
+            "type": "string"
+          },
+          "power": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "toughness": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "summary",
+          "rules",
+          "initial_state",
+          "steps",
+          "invariants"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 4
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 8
+          },
+          "rules": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9]{3}(\\.[0-9]+[a-z]?)?$"
+            }
+          },
+          "initial_state": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "players",
+              "active_player",
+              "turn_number",
+              "phase",
+              "objects"
+            ],
+            "properties": {
+              "players": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "life"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "life": {
+                      "type": "integer"
+                    },
+                    "mana_pool": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              },
+              "active_player": {
+                "type": "string",
+                "minLength": 1
+              },
+              "turn_number": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "phase": {
+                "type": "string",
+                "minLength": 1
+              },
+              "objects": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "alias",
+                    "card",
+                    "owner",
+                    "controller",
+                    "zone"
+                  ],
+                  "properties": {
+                    "alias": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9_-]+$"
+                    },
+                    "card": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "owner": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "controller": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "zone": {
+                      "type": "string",
+                      "enum": [
+                        "LIBRARY",
+                        "HAND",
+                        "BATTLEFIELD",
+                        "GRAVEYARD",
+                        "STACK",
+                        "EXILE",
+                        "COMMAND"
+                      ]
+                    },
+                    "counters": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "tapped": {
+                      "type": "boolean"
+                    },
+                    "face_down": {
+                      "type": "boolean"
+                    },
+                    "timestamp_order": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "resolved_chapter_grants": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "step",
+                "action"
+              ],
+              "properties": {
+                "step": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "action": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "actor",
+                    "description"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "play-land",
+                        "cast-spell",
+                        "attempt-illegal-cast",
+                        "resolve-top",
+                        "resolve-all",
+                        "advance-phase",
+                        "advance-to-next-turn",
+                        "activate-ability",
+                        "attempt-illegal-activation",
+                        "special-action",
+                        "declare-attackers",
+                        "declare-blockers",
+                        "assign-combat-damage",
+                        "choose-replacement-order",
+                        "pass-priority",
+                        "check-sba"
+                      ]
+                    },
+                    "actor": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "target": {
+                      "type": "string"
+                    },
+                    "ability": {
+                      "type": "string"
+                    },
+                    "phase": {
+                      "type": "string"
+                    },
+                    "search_choice": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 4
+                    }
+                  }
+                },
+                "checkpoint": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "assertions"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9-]+$"
+                    },
+                    "assertions": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "kind"
+                        ],
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "object-zone",
+                              "object-types",
+                              "object-subtypes",
+                              "object-stats",
+                              "object-counters",
+                              "object-abilities-present",
+                              "object-abilities-absent",
+                              "object-chapter-abilities",
+                              "stack-contains",
+                              "stack-order",
+                              "stack-empty",
+                              "trigger-count",
+                              "trigger-not-fired",
+                              "action-rejected",
+                              "choice-accepted",
+                              "damage-assigned",
+                              "player-life",
+                              "player-alive",
+                              "token-count",
+                              "token-stats",
+                              "sba-not-sacrificed",
+                              "sba-sacrificed"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "invariants": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "rules",
+                "description"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9-]+$"
+                },
+                "rules": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[0-9]{3}(\\.[0-9]+[a-z]?)?$"
+                  }
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 8
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

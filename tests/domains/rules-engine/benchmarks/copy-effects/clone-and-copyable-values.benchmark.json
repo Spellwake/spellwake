@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "id": "copy-effects/clone-and-copyable-values",
+  "title": "Copyable Values, Clone Chains, and Legend Rule Non-Sacrifice",
+  "category": "copy-effects",
+  "execution_status": "pending-engine",
+  "execution_receipt": null,
+  "review_status": "pending-independent-review",
+  "rules_edition": {
+    "edition": "MTG Comprehensive Rules (2026-09-25)",
+    "source_url": "https://media.wizards.com/2026/downloads/MagicCompRules%2020260925.txt",
+    "cited_rules": [
+      {
+        "rule": "613.1a",
+        "summary": "Layer 1 applies copy effects modifying copiable values before later layers."
+      },
+      {
+        "rule": "704.5j",
+        "summary": "Legend rule SBA: if a player controls two or more legendary permanents with the same name, they choose one and put the rest into their owners' graveyards (not a sacrifice)."
+      },
+      {
+        "rule": "707.2",
+        "summary": "Copying an object acquires its copiable values (printed values as modified by other copy effects), excluding Layer 7c buffs like Giant Growth."
+      },
+      {
+        "rule": "707.3",
+        "summary": "A copy's copiable values become the copied information, so copying a Clone copies what that Clone copied."
+      }
+    ]
+  },
+  "provenance": {
+    "source_summary": "Core Layer 1 copy-effect stress benchmark covering non-copyable Layer 7c buffs, Clone-of-a-Clone chains, and Legend Rule SBA non-sacrifice semantics.",
+    "scope_notes": "Preemptive benchmark authored before full Layer 1 copy replacement and Legend Rule SBA hooks land."
+  },
+  "required_capabilities": [
+    "layers.copiable-values-isolation",
+    "layers.layer1-copy-effects",
+    "sba.legend-rule-non-sacrifice"
+  ],
+  "cards": {
+    "clone": {
+      "name": "Clone",
+      "oracle_id": "42226b87-0746-4ebf-9fd0-108d508462af",
+      "mana_cost": "{3}{U}",
+      "type_line": "Creature — Shapeshifter",
+      "oracle_text": "You may have Clone enter as a copy of any creature on the battlefield.",
+      "power": "0",
+      "toughness": "0"
+    },
+    "grizzly_bears": {
+      "name": "Grizzly Bears",
+      "oracle_id": "14c8f55d-d177-4c25-a931-ebeb9e6062a0",
+      "mana_cost": "{1}{G}",
+      "type_line": "Creature — Bear",
+      "oracle_text": "",
+      "power": "2",
+      "toughness": "2"
+    },
+    "giant_growth": {
+      "name": "Giant Growth",
+      "oracle_id": "5748ebf1-24e3-499d-ab7c-c2cebd462a24",
+      "mana_cost": "{G}",
+      "type_line": "Instant",
+      "oracle_text": "Target creature gets +3/+3 until end of turn."
+    },
+    "ragavan": {
+      "name": "Ragavan, Nimble Pilferer",
+      "oracle_id": "37108cd4-bbab-4ce3-9ed6-f60e8422e703",
+      "mana_cost": "{R}",
+      "type_line": "Legendary Creature — Monkey Pirate",
+      "oracle_text": "Whenever Ragavan, Nimble Pilferer deals combat damage to a player, create a Treasure token and exile the top card of that player's library. Until end of turn, you may cast that card.\nDash {1}{R}",
+      "power": "2",
+      "toughness": "1"
+    },
+    "mayhem_devil": {
+      "name": "Mayhem Devil",
+      "oracle_id": "4709f11c-aef8-45ac-b2bf-e640c568dfac",
+      "mana_cost": "{1}{B}{R}",
+      "type_line": "Creature — Devil",
+      "oracle_text": "Whenever a player sacrifices a permanent, Mayhem Devil deals 1 damage to any target.",
+      "power": "3",
+      "toughness": "3"
+    }
+  },
+  "cases": [
+    {
+      "id": "clone-ignores-giant-growth-buff",
+      "name": "Clone copying a Giant Growth'd Grizzly Bears enters as 2/2",
+      "summary": "Grizzly Bears gets +3/+3 in Layer 7c to become 5/5; Clone enters copying Grizzly Bears and becomes a 2/2 Bear, not a 5/5.",
+      "rules": ["613.1a", "707.2"],
+      "initial_state": {
+        "players": [
+          { "id": "p1", "life": 20, "mana_pool": { "G": 1, "U": 4 } },
+          { "id": "p2", "life": 20 }
+        ],
+        "active_player": "p1",
+        "turn_number": 4,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          { "alias": "bears", "card": "grizzly_bears", "owner": "p1", "controller": "p1", "zone": "BATTLEFIELD" },
+          { "alias": "growth", "card": "giant_growth", "owner": "p1", "controller": "p1", "zone": "HAND" },
+          { "alias": "clone_a", "card": "clone", "owner": "p1", "controller": "p1", "zone": "HAND" }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "p1",
+            "source": "growth",
+            "target": "bears",
+            "description": "P1 casts Giant Growth on Grizzly Bears."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "p1",
+            "description": "Giant Growth resolves; Grizzly Bears is now 5/5."
+          }
+        },
+        {
+          "step": 3,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "p1",
+            "source": "clone_a",
+            "target": "bears",
+            "description": "P1 casts Clone choosing to enter as a copy of Grizzly Bears."
+          }
+        },
+        {
+          "step": 4,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "p1",
+            "description": "Clone enters copying Grizzly Bears' copiable values only."
+          },
+          "checkpoint": {
+            "id": "clone-is-2-2-bear",
+            "assertions": [
+              { "kind": "object-stats", "target": "bears", "power": 5, "toughness": 5 },
+              { "kind": "object-stats", "target": "clone_a", "power": 2, "toughness": 2 },
+              { "kind": "object-subtypes", "target": "clone_a", "expected": ["Bear"] }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "layer-7c-buffs-not-copiable",
+          "rules": ["613.1a", "707.2"],
+          "description": "Continuous P/T modifications from Layer 7c are excluded from copiable values."
+        }
+      ]
+    },
+    {
+      "id": "clone-legend-rule-does-not-trigger-mayhem-devil",
+      "name": "Clone copying own Ragavan triggers Legend Rule without sacrificing",
+      "summary": "Clone enters as a copy of Ragavan, Nimble Pilferer; Legend Rule SBA puts one into the graveyard without sacrificing it, so Mayhem Devil does not trigger.",
+      "rules": ["704.5j", "707.2", "707.3"],
+      "initial_state": {
+        "players": [
+          { "id": "p1", "life": 20, "mana_pool": { "U": 4 } },
+          { "id": "p2", "life": 20 }
+        ],
+        "active_player": "p1",
+        "turn_number": 4,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          { "alias": "ragavan", "card": "ragavan", "owner": "p1", "controller": "p1", "zone": "BATTLEFIELD" },
+          { "alias": "devil", "card": "mayhem_devil", "owner": "p2", "controller": "p2", "zone": "BATTLEFIELD" },
+          { "alias": "clone_b", "card": "clone", "owner": "p1", "controller": "p1", "zone": "HAND" }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "p1",
+            "source": "clone_b",
+            "target": "ragavan",
+            "description": "P1 casts Clone entering as a copy of Ragavan, Nimble Pilferer."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "p1",
+            "description": "Clone resolves and Legend Rule SBA sends the duplicate to graveyard."
+          },
+          "checkpoint": {
+            "id": "legend-rule-non-sacrifice",
+            "assertions": [
+              { "kind": "object-zone", "target": "ragavan", "expected": "BATTLEFIELD" },
+              { "kind": "object-zone", "target": "clone_b", "expected": "GRAVEYARD" },
+              { "kind": "trigger-not-fired", "source": "devil", "event": "sacrifice" }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "legend-rule-is-not-sacrifice",
+          "rules": ["704.5j"],
+          "description": "Putting an extra legendary permanent into its owner's graveyard under the legend rule is not a sacrifice and never triggers sacrifice abilities."
+        }
+      ]
+    }
+  ]
+}

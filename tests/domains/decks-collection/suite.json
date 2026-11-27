@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 1,
+  "slug": "decks-collection",
+  "label": "Decks & Collection",
+  "category": "service-domain",
+  "readinessStage": "active",
+  "description": "Deck shelf and builder revisions, format and appearance settings, deck list import recovery, owned card collection filtering, and booster pack opening.",
+  "localOnly": true,
+  "unqualifiedReason": null,
+  "hostedCredentials": [],
+  "notes": "Fully testable locally against isolated Postgres 17, Bun unit suites, and the standalone Playwright browser E2E suite.",
+  "subdomains": [
+    {
+      "slug": "deck-shelf-and-builder",
+      "label": "Deck Shelf & Builder",
+      "description": "Creating decks, editing revisions with optimistic concurrency conflict handling, and saving deck format/appearance settings.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/decks.rs",
+        "apps/play/src/data/connected-decks.test.ts",
+        "apps/play/src/data/deck-draft.test.ts",
+        "apps/play/src/data/deck-journal.test.ts"
+      ]
+    },
+    {
+      "slug": "deck-import",
+      "label": "Deck Import",
+      "description": "Deck text parsing, card/printing resolution, and dropped-reply disposition recovery on import.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "apps/play/src/data/deck-files.test.ts",
+        "apps/play/src/data/deck-import-flow.test.ts",
+        "apps/play/src/data/deck-resolution.test.ts"
+      ]
+    },
+    {
+      "slug": "card-collection",
+      "label": "Card Collection & Catalogue",
+      "description": "Owned inventory aggregation by printing, rarity/set filtering, and catalogue resolution.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/catalogue.rs",
+        "services/application/src/inventory.rs",
+        "apps/play/src/collection/data/card-sources.test.ts",
+        "apps/play/src/data/catalogue-api.test.ts"
+      ]
+    },
+    {
+      "slug": "pack-opening",
+      "label": "Booster Pack Opening",
+      "description": "Pack opening command journaling, Check opening recovery after dropped replies, card reveal, and inventory decrement.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/packs.rs",
+        "packages/booster-pack/src",
+        "apps/play/src/data/pack-shop-api.test.ts"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application decks lib tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "services/application/Cargo.toml",
+          "--lib",
+          "decks"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      },
+      {
+        "kind": "cargo",
+        "label": "application packs lib tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "services/application/Cargo.toml",
+          "--lib",
+          "packs"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [
+      "catalogue",
+      "catalogue_publication",
+      "deck_face_cards",
+      "deck_settings",
+      "decks",
+      "import_commands",
+      "import_integrity",
+      "inventory",
+      "packs"
+    ],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "play decks, import, collection, and pack unit tests",
+        "args": [
+          "bun",
+          "test",
+          "apps/play/src/collection/data/card-sources.test.ts",
+          "apps/play/src/data/catalogue-api.test.ts",
+          "apps/play/src/data/connected-decks.test.ts",
+          "apps/play/src/data/deck-draft.test.ts",
+          "apps/play/src/data/deck-face.test.ts",
+          "apps/play/src/data/deck-files.test.ts",
+          "apps/play/src/data/deck-import-flow.test.ts",
+          "apps/play/src/data/deck-journal.test.ts",
+          "apps/play/src/data/deck-resolution.test.ts",
+          "apps/play/src/data/set-catalogue-api.test.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "browserE2e": [
+      {
+        "kind": "playwright",
+        "label": "playwright decks, import, cards filter, and pack opening E2E suite",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-collection.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/src/decks.rs",
+    "services/application/src/decks",
+    "services/application/src/packs.rs",
+    "services/application/src/catalogue.rs",
+    "services/application/src/inventory.rs",
+    "apps/play/src/collection",
+    "apps/play/scripts/qualify-collection.ts"
+  ]
+}

@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 1,
+  "slug": "matchmaking",
+  "label": "Matchmaking",
+  "category": "service-domain",
+  "readinessStage": "active",
+  "description": "Qualified match intents, preview format isolation, queue/lobby/room Postgres integrity, room invitations, and browser lobby E2E flows.",
+  "localOnly": false,
+  "unqualifiedReason": null,
+  "hostedCredentials": [
+    "SPELLWAKE_SUPABASE_URL",
+    "SPELLWAKE_SUPABASE_PUBLISHABLE_KEY",
+    "SPELLWAKE_SUPABASE_SECRET_KEY",
+    "SPELLWAKE_APPLICATION_API_URL",
+    "SPELLWAKE_ROOM_INVITATION_KEY"
+  ],
+  "notes": "Qualified intent contracts, preview-format isolation, queue/lobby/room Postgres integrity, frontend room journal/invite contracts, and standalone Playwright lobby E2E checks; hosted live matchmaking queue requires deployed Supabase and Fly API.",
+  "subdomains": [
+    {
+      "slug": "qualified-intents",
+      "label": "Qualified Match Intents",
+      "description": "Queue intent validation, admission contracts, and queue integrity.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/qualified_intents",
+        "services/application/tests/database/queue_intent_integrity.rs"
+      ]
+    },
+    {
+      "slug": "preview-format-isolation",
+      "label": "Preview Format Isolation",
+      "description": "Keeps Future Standard / preview formats strictly isolated from ordinary base-format legality.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/formats.rs"
+      ]
+    },
+    {
+      "slug": "lobbies-and-rooms",
+      "label": "Lobbies, Rooms & Readiness",
+      "description": "Room creation, deck selection, ready/unready countdown, room configuration, and clean closure.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/database/lobbies.rs",
+        "services/application/tests/database/room_start_integrity.rs",
+        "apps/play/src/data/room-journal.test.ts",
+        "apps/play/scripts/qualify-matchmaking.ts"
+      ]
+    },
+    {
+      "slug": "room-invitations",
+      "label": "Room Invitations",
+      "description": "Fragment-only capability tokens, single-issue invite copying, seat admission, and invalid token refusal.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/database/room_invitations.rs",
+        "apps/play/src/data/room-invite.test.ts",
+        "apps/play/scripts/qualify-matchmaking.ts"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application qualified_intent_contracts",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--test",
+          "qualified_intent_contracts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      },
+      {
+        "kind": "cargo",
+        "label": "application preview-format isolation tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--test",
+          "formats"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      },
+      {
+        "kind": "cargo",
+        "label": "application matchmaking/room/format unit tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--lib",
+          "matchmaking"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [
+      "matchmaking_api",
+      "queue_intent_integrity",
+      "lobbies",
+      "lobby_access",
+      "lobby_entry_integrity",
+      "lobby_cleanup_integrity",
+      "room_configuration",
+      "room_start_integrity",
+      "room_invitations"
+    ],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "frontend room journal and invite contracts",
+        "args": [
+          "bun",
+          "test",
+          "src/data/room-journal.test.ts",
+          "src/data/room-invite.test.ts"
+        ],
+        "cwd": "apps/play",
+        "envExtra": {}
+      }
+    ],
+    "browserE2e": [
+      {
+        "kind": "playwright",
+        "label": "playwright matchmaking lobby, invite, and responsive suite",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-matchmaking.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/src/qualified_intents",
+    "apps/play/src/data/room-journal.test.ts",
+    "apps/play/src/data/room-invite.test.ts",
+    "apps/play/scripts/qualify-matchmaking.ts"
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "slug": "rendering",
+  "label": "Rendering",
+  "category": "client-ui",
+  "readinessStage": "active",
+  "description": "Client rendering across 3D tabletop WebGL2/Three.js benchmarks, multi-viewport responsive UI layouts, and the shared component gallery.",
+  "localOnly": true,
+  "unqualifiedReason": null,
+  "hostedCredentials": [],
+  "notes": "Splits into three subdomains: 3d-tabletop (Three.js unit tests and real browser WebGL2 tabletop benchmark), ui-responsive (12 screens across Desktop, Tablet, and Mobile viewports), and component-gallery (live control-gallery smoke test).",
+  "subdomains": [
+    {
+      "slug": "3d-tabletop",
+      "label": "3D Tabletop",
+      "description": "Three.js board scene, camera framing, card facing/inspection, compact fan, pile browser, sleeve rendering, and real browser WebGL2 tabletop rendering benchmark.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "benchmarks/browser-rendering/src",
+        "packages/deck-box/src",
+        "packages/booster-pack/src",
+        "apps/play/scripts/qualify-3d.ts"
+      ]
+    },
+    {
+      "slug": "ui-responsive",
+      "label": "UI & Responsive Layouts",
+      "description": "React UI logic, shared application contracts, and Playwright multi-viewport checks across 12 core screens at Desktop, Tablet, and Mobile breakpoints.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "apps/play/src",
+        "apps/play/scripts/qualify-frame.ts",
+        "apps/play/scripts/qualify-responsive.ts",
+        "packages/application-contracts/src"
+      ]
+    },
+    {
+      "slug": "component-gallery",
+      "label": "Component Gallery",
+      "description": "Live browser smoke test verifying core @spellwake/ui specimens, combat damage walkthrough, and full-review mode render cleanly in apps/control-gallery.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "apps/control-gallery/src",
+        "apps/control-gallery/scripts/qualify-gallery.ts",
+        "packages/ui/src"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [],
+    "postgresDbFilters": [],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "3D tabletop and frontend UI unit suites",
+        "args": [
+          "bun",
+          "run",
+          "play:test"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "browserE2e": [
+      {
+        "kind": "playwright",
+        "label": "playwright multi-viewport responsive UI suite (12 screens x 3 viewports)",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-responsive.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      },
+      {
+        "kind": "playwright",
+        "label": "playwright real browser 3D tabletop WebGL2 rendering benchmark",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-3d.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      },
+      {
+        "kind": "playwright",
+        "label": "playwright component gallery smoke suite",
+        "args": [
+          "node",
+          "apps/control-gallery/scripts/qualify-gallery.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [
+    "benchmarks/browser-rendering"
+  ],
+  "relatedPaths": [
+    "benchmarks/browser-rendering/src",
+    "packages/application-contracts/src",
+    "packages/deck-box/src",
+    "packages/booster-pack/src",
+    "apps/play/src",
+    "apps/play/scripts/qualify-frame.ts",
+    "apps/play/scripts/qualify-responsive.ts",
+    "apps/play/scripts/qualify-3d.ts",
+    "apps/control-gallery/scripts/qualify-gallery.ts"
+  ]
+}

@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """Run real domain health checks and generate honest README SVG/JSON badges.
 
-Covers the eight tracked domains:
-- Oracle Parser
-- Patreon
-- Stripe
-- AI
-- Matchmaking
-- Predictions
-- Market
-- Pet cosmetics (explicitly unknown while end-to-end slot/entitlement checks are absent)
+Domain definitions are loaded from tests/registry.json and
+tests/domains/<slug>/suite.json so the test layout is the single source of truth.
+
+Also validates and summarizes declarative Rules Engine interaction benchmarks
+from tests/domains/rules-engine/benchmarks/ via scripts/rules_benchmarks.py.
 
 Honesty invariants:
 1. A command that executes zero tests is NEVER treated as passing; it degrades to `unknown`.
@@ -17,6 +13,7 @@ Honesty invariants:
    always render visibly `unknown` (grey badge), never green.
 3. Local fixture/Postgres checks are labeled explicitly as local checks (`local verified`),
    distinct from hosted/live provider probes (`live: unknown`).
+4. Preemptive rules benchmarks with execution_status='pending-engine' never render green.
 """
 
 from __future__ import annotations
@@ -25,7 +22,6 @@ import argparse
 import json
 import os
 import re
-import resource
 import subprocess
 import sys
 import time
@@ -34,22 +30,38 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    import resource
+except ImportError:  # Windows does not ship POSIX resource module.
+    resource = None  # type: ignore[assignment]
+
 ROOT = Path(__file__).resolve().parents[1]
 PLAY_DIR = ROOT / "apps" / "play"
 APP_MANIFEST = ROOT / "services" / "application" / "Cargo.toml"
 DB_HARNESS = ROOT / "services" / "application" / "tools" / "test_database.py"
+REGISTRY_PATH = ROOT / "tests" / "registry.json"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import badge_svg  # noqa: E402
+import rules_benchmarks  # noqa: E402
 
 
 @dataclass(frozen=True)
 class CommandSpec:
-    kind: str  # "cargo" | "bun" | "postgres_db"
+    kind: str  # "cargo" | "bun" | "postgres_db" | "python"
     label: str
     args: tuple[str, ...]
     cwd: Path = ROOT
     env_extra: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SubdomainSpec:
+    slug: str
+    label: str
+    description: str
+    unqualified_reason: str | None = None
+    related_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -60,425 +72,108 @@ class DomainSpec:
     db_filters: tuple[str, ...]
     frontend_checks: tuple[CommandSpec, ...]
     hosted_credentials: tuple[str, ...]
+    browser_e2e_checks: tuple[CommandSpec, ...] = ()
+    python_checks: tuple[CommandSpec, ...] = ()
+    subdomains: tuple[SubdomainSpec, ...] = ()
     unqualified_reason: str | None = None
     local_only: bool = False
+    category: str = "service-domain"
+    readiness_stage: str = "active"
     notes: str = ""
 
 
-DOMAINS: tuple[DomainSpec, ...] = (
-    DomainSpec(
-        slug="oracle-parser",
-        label="Oracle Parser",
-        rust_checks=(
-            CommandSpec(
-                kind="cargo",
-                label="oracle compiler real-card semantic suite",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "-p",
-                    "spellwake-oracle-compiler",
-                    "--test",
-                    "real_card_semantic_suite",
+def _resolve_placeholder(value: str) -> str:
+    return (
+        value.replace("{ROOT}", str(ROOT))
+        .replace("{APP_MANIFEST}", str(APP_MANIFEST))
+        .replace("{PYTHON}", sys.executable)
+    )
+
+
+def _command_spec_from_manifest(raw: dict[str, Any]) -> CommandSpec:
+    cwd_raw = raw.get("cwd", ".")
+    cwd = ROOT if cwd_raw in ("", ".") else (ROOT / cwd_raw)
+    args = tuple(_resolve_placeholder(str(a)) for a in raw["args"])
+    env_extra = {
+        str(k): _resolve_placeholder(str(v))
+        for k, v in (raw.get("envExtra") or {}).items()
+    }
+    return CommandSpec(
+        kind=str(raw["kind"]),
+        label=str(raw["label"]),
+        args=args,
+        cwd=cwd,
+        env_extra=env_extra,
+    )
+
+
+def load_domains_from_registry(
+    registry_path: Path = REGISTRY_PATH,
+    repo_root: Path = ROOT,
+) -> tuple[DomainSpec, ...]:
+    """Load all DomainSpec definitions from tests/registry.json and tests/domains/*/suite.json."""
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    specs: list[DomainSpec] = []
+    for entry in registry["domains"]:
+        suite_path = repo_root / entry["suitePath"]
+        suite = json.loads(suite_path.read_text(encoding="utf-8"))
+        checks = suite.get("checks", {})
+        subdomains = tuple(
+            SubdomainSpec(
+                slug=str(sub["slug"]),
+                label=str(sub["label"]),
+                description=str(sub.get("description", "")),
+                unqualified_reason=sub.get("unqualifiedReason"),
+                related_paths=tuple(str(p) for p in sub.get("relatedPaths", [])),
+            )
+            for sub in suite.get("subdomains", [])
+        )
+        specs.append(
+            DomainSpec(
+                slug=str(suite["slug"]),
+                label=str(suite["label"]),
+                category=str(suite.get("category", "service-domain")),
+                readiness_stage=str(suite.get("readinessStage", "active")),
+                rust_checks=tuple(
+                    _command_spec_from_manifest(c) for c in checks.get("rust", [])
                 ),
-                env_extra={
-                    "CARGO_TARGET_DIR": str(ROOT / "target"),
-                    "RUST_MIN_STACK": "67108864",
-                },
-            ),
-            CommandSpec(
-                kind="cargo",
-                label="oracle compiler unit regression tests",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "-p",
-                    "spellwake-oracle-compiler",
-                    "--lib",
+                db_filters=tuple(str(f) for f in checks.get("postgresDbFilters", [])),
+                frontend_checks=tuple(
+                    _command_spec_from_manifest(c) for c in checks.get("frontend", [])
                 ),
-                env_extra={
-                    "CARGO_TARGET_DIR": str(ROOT / "target"),
-                    "RUST_MIN_STACK": "67108864",
-                },
-            ),
-        ),
-        db_filters=(),
-        frontend_checks=(),
-        hosted_credentials=(),
-        local_only=True,
-        notes="Deterministic offline Stage 1 Oracle compiler verified against 103 real Scryfall cards across 15 layouts plus synthetic auditor self-tests.",
-    ),
-    DomainSpec(
-        slug="patreon",
-        label="Patreon",
-        rust_checks=(
-            CommandSpec(
-                kind="cargo",
-                label="application patreon unit tests",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    str(APP_MANIFEST),
-                    "--lib",
-                    "patreon",
+                browser_e2e_checks=tuple(
+                    _command_spec_from_manifest(c) for c in checks.get("browserE2e", [])
                 ),
-            ),
-        ),
-        db_filters=(
-            "patreon_association",
-            "patreon_intake",
-            "patreon_refresh",
-            "patreon_financial_integrity",
-            "patreon_notification_processing_integrity",
-        ),
-        frontend_checks=(
-            CommandSpec(
-                kind="bun",
-                label="frontend patreon contract tests",
-                args=(
-                    "bun",
-                    "test",
-                    "src/data/patreon-association-api.test.ts",
-                    "src/data/patreon-link.test.ts",
+                python_checks=tuple(
+                    _command_spec_from_manifest(c) for c in checks.get("python", [])
                 ),
-                cwd=PLAY_DIR,
-            ),
-        ),
-        hosted_credentials=(
-            "SPELLWAKE_PATREON_CLIENT_ID",
-            "SPELLWAKE_PATREON_CLIENT_SECRET",
-            "SPELLWAKE_PATREON_REDIRECT_URI",
-            "SPELLWAKE_PATREON_WEBHOOK_SECRET",
-            "SPELLWAKE_PATREON_EVIDENCE_BUCKET",
-        ),
-        notes="Retained source/association fixtures, Postgres RLS/financial integrity, and frontend API contracts; live Patreon OAuth/webhooks require hosted credentials.",
-    ),
-    DomainSpec(
-        slug="stripe",
-        label="Stripe",
-        rust_checks=(
-            CommandSpec(
-                kind="cargo",
-                label="application stripe_webhooks official SDK vectors",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    str(APP_MANIFEST),
-                    "--test",
-                    "stripe_webhooks",
+                subdomains=subdomains,
+                hosted_credentials=tuple(
+                    str(c) for c in suite.get("hostedCredentials", [])
                 ),
-            ),
-            CommandSpec(
-                kind="cargo",
-                label="application stripe client/service unit tests",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    str(APP_MANIFEST),
-                    "--lib",
-                    "stripe",
-                ),
-            ),
-        ),
-        db_filters=("stripe",),
-        frontend_checks=(
-            CommandSpec(
-                kind="bun",
-                label="frontend stripe checkout contracts",
-                args=(
-                    "bun",
-                    "test",
-                    "src/data/checkout-intent.test.ts",
-                    "src/data/purchase-rows.test.ts",
-                ),
-                cwd=PLAY_DIR,
-            ),
-        ),
-        hosted_credentials=(
-            "SPELLWAKE_STRIPE_SECRET_KEY",
-            "SPELLWAKE_STRIPE_WEBHOOK_SECRET",
-            "SPELLWAKE_STRIPE_API_VERSION",
-            "SPELLWAKE_STRIPE_EVIDENCE_BUCKET",
-        ),
-        notes="Retained official Stripe SDK webhook vectors, client/service policy tests, Postgres settlement tests, and frontend checkout tests; live merchant checkout/portal require hosted credentials.",
-    ),
-    DomainSpec(
-        slug="ai",
-        label="AI",
-        rust_checks=(
-            CommandSpec(
-                kind="cargo",
-                label="application ai_runtime offline tests",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    str(APP_MANIFEST),
-                    "--lib",
-                    "ai_runtime",
-                ),
-            ),
-        ),
-        db_filters=(
-            "ai_runtime_integrity",
-            "ai_ready_integrity",
-            "ai_budget_integrity",
-            "ai_ante_port_contracts",
-            "manual_ai_slot",
-        ),
-        frontend_checks=(
-            CommandSpec(
-                kind="bun",
-                label="frontend ai-tier-quota contracts",
-                args=("bun", "test", "src/data/ai-tier-quota.test.ts"),
-                cwd=PLAY_DIR,
-            ),
-        ),
-        hosted_credentials=(
-            "SPELLWAKE_AI_PROVIDER",
-            "OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY",
-            "LANGFUSE_PUBLIC_KEY",
-            "LANGFUSE_SECRET_KEY",
-            "LANGFUSE_BASE_URL",
-        ),
-        notes="Offline scripted AI runtime, compact prompt/schema, quota/budget/slot Postgres integrity, and frontend tier-quota tests; live LLM providers and Langfuse tracing require hosted credentials. Revealed-card bot memory is owned separately.",
-    ),
-    DomainSpec(
-        slug="matchmaking",
-        label="Matchmaking",
-        rust_checks=(
-            CommandSpec(
-                kind="cargo",
-                label="application qualified_intent_contracts",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    str(APP_MANIFEST),
-                    "--test",
-                    "qualified_intent_contracts",
-                ),
-            ),
-            CommandSpec(
-                kind="cargo",
-                label="application preview-format isolation tests",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    str(APP_MANIFEST),
-                    "--test",
-                    "formats",
-                ),
-            ),
-            CommandSpec(
-                kind="cargo",
-                label="application matchmaking/room/format unit tests",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    str(APP_MANIFEST),
-                    "--lib",
-                    "matchmaking",
-                ),
-            ),
-        ),
-        db_filters=(
-            "matchmaking_api",
-            "queue_intent_integrity",
-            "lobbies",
-            "lobby_access",
-            "lobby_entry_integrity",
-            "lobby_cleanup_integrity",
-            "room_configuration",
-            "room_start_integrity",
-            "room_invitations",
-        ),
-        frontend_checks=(
-            CommandSpec(
-                kind="bun",
-                label="frontend room-journal contracts",
-                args=("bun", "test", "src/data/room-journal.test.ts"),
-                cwd=PLAY_DIR,
-            ),
-        ),
-        hosted_credentials=(
-            "SPELLWAKE_SUPABASE_URL",
-            "SPELLWAKE_SUPABASE_PUBLISHABLE_KEY",
-            "SPELLWAKE_SUPABASE_SECRET_KEY",
-            "SPELLWAKE_APPLICATION_API_URL",
-            "SPELLWAKE_ROOM_INVITATION_KEY",
-        ),
-        notes="Qualified intent contracts, queue/lobby/room Postgres integrity, and frontend room journal tests; hosted live matchmaking queue requires deployed Supabase and Fly API.",
-    ),
-    DomainSpec(
-        slug="predictions",
-        label="Predictions",
-        rust_checks=(
-            CommandSpec(
-                kind="cargo",
-                label="application price_source tests",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    str(APP_MANIFEST),
-                    "--test",
-                    "price_source",
-                ),
-            ),
-            CommandSpec(
-                kind="cargo",
-                label="application prediction unit tests",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    str(APP_MANIFEST),
-                    "--lib",
-                    "prediction",
-                ),
-            ),
-        ),
-        db_filters=(
-            "predictions",
-            "prediction_commands",
-            "prediction_reads",
-            "prediction_publication",
-            "prediction_resolution",
-            "pricing",
-        ),
-        frontend_checks=(
-            CommandSpec(
-                kind="bun",
-                label="frontend prediction contracts",
-                args=(
-                    "bun",
-                    "test",
-                    "src/data/prediction-api.test.ts",
-                    "src/data/prediction-publication-api.test.ts",
-                    "src/data/prediction-reads-api.test.ts",
-                    "src/data/prediction-rules.test.ts",
-                ),
-                cwd=PLAY_DIR,
-            ),
-        ),
-        hosted_credentials=(
-            "SPELLWAKE_SUPABASE_URL",
-            "SPELLWAKE_SUPABASE_SECRET_KEY",
-            "SPELLWAKE_PRICE_BUCKET",
-        ),
-        notes="Price source ingestion, prediction market/order/settlement Postgres integrity, and frontend prediction rules; live daily Scryfall price capture and Storage retention require hosted credentials.",
-    ),
-    DomainSpec(
-        slug="market",
-        label="Market",
-        rust_checks=(
-            CommandSpec(
-                kind="cargo",
-                label="application pack/shop unit tests",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    str(APP_MANIFEST),
-                    "--lib",
-                    "pack",
-                ),
-            ),
-            CommandSpec(
-                kind="cargo",
-                label="application exchange unit tests",
-                args=(
-                    "cargo",
-                    "test",
-                    "--locked",
-                    "--manifest-path",
-                    str(APP_MANIFEST),
-                    "--lib",
-                    "exchange",
-                ),
-            ),
-        ),
-        db_filters=(
-            "market",
-            "trades",
-            "economy_commands",
-            "exchange_reads",
-            "packs",
-            "pack_shop",
-            "inventory",
-        ),
-        frontend_checks=(
-            CommandSpec(
-                kind="bun",
-                label="frontend market/trade/economy contracts",
-                args=(
-                    "bun",
-                    "test",
-                    "src/data/market-rules.test.ts",
-                    "src/data/trade-rules.test.ts",
-                    "src/data/economy-api.test.ts",
-                    "src/data/economy-journal.test.ts",
-                    "src/data/economy-queries.test.ts",
-                    "src/data/exchange-api.test.ts",
-                ),
-                cwd=PLAY_DIR,
-            ),
-        ),
-        hosted_credentials=(
-            "SPELLWAKE_SUPABASE_URL",
-            "SPELLWAKE_SUPABASE_PUBLISHABLE_KEY",
-            "SPELLWAKE_SUPABASE_SECRET_KEY",
-            "SPELLWAKE_APPLICATION_API_URL",
-        ),
-        notes="Marketplace listings, direct trades, pack shop, inventory Postgres integrity, and frontend economy/market rules; hosted live exchange and real-world supply feeds require hosted configuration.",
-    ),
-    DomainSpec(
-        slug="pet-cosmetics",
-        label="Pet cosmetics",
-        rust_checks=(),
-        db_filters=(),
-        frontend_checks=(),
-        hosted_credentials=(
-            "Approved pet cosmetic assets (Spellwake/spellwake-assets)",
-            "Connected pet appearance slot + entitlement/equip DB & API tests",
-        ),
-        unqualified_reason=(
-            "Unqualified: migration 20261121028300 adds cosmetic kind='pet', profile.default_pet_id, "
-            "deck.pet_id, and GET /v1/cosmetics/catalogue?kind=pet, but AppearanceSelection "
-            "(services/application/src/cosmetics.rs) and connected-cosmetics.ts have no pet slot, "
-            "no pet equip/entitlement DB tests exist, and no approved pet assets are published."
-        ),
-        notes="Kept visibly unknown until connected pet appearance selection, entitlement/equip tests, and approved pet assets exist.",
-    ),
-)
+                unqualified_reason=suite.get("unqualifiedReason"),
+                local_only=bool(suite.get("localOnly", False)),
+                notes=str(suite.get("notes", "")),
+            )
+        )
+    return tuple(specs)
+
+
+DOMAINS: tuple[DomainSpec, ...] = load_domains_from_registry()
 
 CARGO_RESULT_RE = re.compile(
     r"test result: (\w+)\. (\d+) passed; (\d+) failed; (\d+) ignored;"
 )
 BUN_PASS_RE = re.compile(r"^\s*(\d+)\s+pass\b", re.MULTILINE)
 BUN_FAIL_RE = re.compile(r"^\s*(\d+)\s+fail\b", re.MULTILINE)
+PYTHON_RAN_RE = re.compile(r"^Ran (\d+) tests? in ", re.MULTILINE)
+PYTHON_FAIL_RE = re.compile(r"failures=(\d+)")
+PYTHON_ERR_RE = re.compile(r"errors=(\d+)")
+PYTHON_SKIP_RE = re.compile(r"skipped=(\d+)")
 
 
 def parse_test_counts(kind: str, output: str) -> tuple[int, int, int]:
-    """Extract (passed, failed, ignored) counts from cargo test or bun test output."""
+    """Extract (passed, failed, ignored) counts from cargo, bun, or python unittest output."""
     if kind in ("cargo", "postgres_db"):
         passed = 0
         failed = 0
@@ -488,19 +183,31 @@ def parse_test_counts(kind: str, output: str) -> tuple[int, int, int]:
             failed += int(match.group(3))
             ignored += int(match.group(4))
         return passed, failed, ignored
-    if kind == "bun":
-        p_match = BUN_PASS_RE.search(output)
-        f_match = BUN_FAIL_RE.search(output)
-        return (
-            int(p_match.group(1)) if p_match else 0,
-            int(f_match.group(1)) if f_match else 0,
-            0,
+    if kind in ("bun", "playwright"):
+        passed = sum(int(m.group(1)) for m in BUN_PASS_RE.finditer(output))
+        failed = sum(int(m.group(1)) for m in BUN_FAIL_RE.finditer(output))
+        return passed, failed, 0
+    if kind == "python":
+        ran_match = PYTHON_RAN_RE.search(output)
+        if not ran_match:
+            return 0, 0, 0
+        ran = int(ran_match.group(1))
+        fail_match = PYTHON_FAIL_RE.search(output)
+        err_match = PYTHON_ERR_RE.search(output)
+        skip_match = PYTHON_SKIP_RE.search(output)
+        failed = (int(fail_match.group(1)) if fail_match else 0) + (
+            int(err_match.group(1)) if err_match else 0
         )
+        skipped = int(skip_match.group(1)) if skip_match else 0
+        passed = max(0, ran - failed - skipped)
+        return passed, failed, skipped
     return 0, 0, 0
 
 
 def _raise_nofile_limit() -> None:
     """Ensure child processes (notably Bun on macOS) do not hit a 256-FD soft limit."""
+    if resource is None:
+        return
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         target = min(max(soft, 4096), hard if hard != resource.RLIM_INFINITY else 65536)
@@ -574,12 +281,14 @@ def evaluate_domain(
     run_db: bool,
     run_frontend: bool,
     db_available: bool,
+    run_browser_e2e: bool = False,
 ) -> dict[str, Any]:
     """Run all configured real checks for one domain and classify its badge honestly."""
     if spec.unqualified_reason is not None:
         return {
             "slug": spec.slug,
             "label": spec.label,
+            "category": spec.category,
             "localStatus": "unknown",
             "localBadge": {
                 "label": "",
@@ -606,10 +315,13 @@ def evaluate_domain(
     for check in spec.rust_checks:
         results.append(run_command_spec(check))
 
+    for check in spec.python_checks:
+        results.append(run_command_spec(check))
+
     db_skipped_reason: str | None = None
     if spec.db_filters:
         if run_db and db_available:
-            args = ["python3", str(DB_HARNESS)]
+            args = [sys.executable, str(DB_HARNESS)]
             for flt in spec.db_filters:
                 args.extend(["--filter", flt])
             results.append(
@@ -630,10 +342,24 @@ def evaluate_domain(
         for check in spec.frontend_checks:
             results.append(run_command_spec(check))
 
+    if run_browser_e2e:
+        for check in spec.browser_e2e_checks:
+            results.append(run_command_spec(check))
+
     total_passed = sum(r["passed"] for r in results)
     total_failed = sum(r["failed"] for r in results)
     any_failing = any(r["status"] == "failing" for r in results)
     any_unknown = any(r["status"] == "unknown" for r in results)
+
+    unqualified_subdomains = [
+        {
+            "slug": sub.slug,
+            "label": sub.label,
+            "unqualifiedReason": sub.unqualified_reason,
+        }
+        for sub in spec.subdomains
+        if sub.unqualified_reason is not None
+    ]
 
     if any_failing:
         local_status = "failing"
@@ -643,7 +369,7 @@ def evaluate_domain(
         local_status = "unknown"
         badge_msg = "unknown"
         badge_color = "lightgrey"
-    elif db_skipped_reason is not None:
+    elif db_skipped_reason is not None or unqualified_subdomains:
         local_status = "local-partial"
         badge_msg = f"partial · {total_passed}"
         badge_color = "yellow"
@@ -655,6 +381,8 @@ def evaluate_domain(
     return {
         "slug": spec.slug,
         "label": spec.label,
+        "category": spec.category,
+        "readinessStage": spec.readiness_stage,
         "localStatus": local_status,
         "localBadge": {
             "label": "",
@@ -681,6 +409,16 @@ def evaluate_domain(
         "passedTests": total_passed,
         "failedTests": total_failed,
         "dbSkippedReason": db_skipped_reason,
+        "subdomains": [
+            {
+                "slug": sub.slug,
+                "label": sub.label,
+                "status": "unknown" if sub.unqualified_reason is not None else local_status,
+                "unqualifiedReason": sub.unqualified_reason,
+            }
+            for sub in spec.subdomains
+        ],
+        "unqualifiedSubdomains": unqualified_subdomains,
         "checks": results,
         "hostedCredentialsRequired": list(spec.hosted_credentials),
         "notes": spec.notes,
@@ -712,6 +450,13 @@ def write_domain_badges(report: dict[str, Any], badges_dir: Path) -> dict[str, A
             is_error=False,
             aria_label=live_b.get("ariaLabel"),
         )
+
+    bench_report = report.get("rulesBenchmarks")
+    if isinstance(bench_report, dict):
+        endpoints["rules-engine-benchmarks"] = rules_benchmarks.write_benchmark_badge(
+            bench_report, badges_dir
+        )
+
     badge_svg.write_atomic_json(badges_dir / "health-endpoints.json", endpoints)
     return endpoints
 
@@ -722,10 +467,16 @@ def main() -> int:
         "--domain",
         action="append",
         choices=[d.slug for d in DOMAINS],
-        help="Run only selected domain(s); omit to run all eight domains.",
+        help="Run only selected domain(s); omit to run all registered domains.",
     )
     parser.add_argument("--skip-db", action="store_true", help="Skip isolated Postgres DB suites")
     parser.add_argument("--skip-frontend", action="store_true", help="Skip frontend Bun contract tests")
+    parser.add_argument(
+        "--include-browser-e2e",
+        action="store_true",
+        help="Also run Playwright browser E2E checks declared under checks.browserE2e",
+    )
+    parser.add_argument("--skip-benchmarks", action="store_true", help="Skip rules benchmark spec validation")
     parser.add_argument("--output", type=Path, required=True, help="Path to write health-status.json")
     parser.add_argument("--badges-dir", type=Path, default=None, help="Directory to write SVG/JSON badges")
     args = parser.parse_args()
@@ -743,17 +494,25 @@ def main() -> int:
             run_db=not args.skip_db,
             run_frontend=not args.skip_frontend,
             db_available=db_available,
+            run_browser_e2e=args.include_browser_e2e,
         )
         for spec in selected
     ]
+    benchmark_report = (
+        None if args.skip_benchmarks else rules_benchmarks.evaluate_benchmarks()
+    )
 
-    report = {
+    report: dict[str, Any] = {
         "schemaVersion": 1,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "registryPath": "tests/registry.json",
         "postgresContainerDetected": db_available,
         "liveProvidersActivated": False,
         "domains": domain_reports,
     }
+    if benchmark_report is not None:
+        report["rulesBenchmarks"] = benchmark_report
+
     badge_svg.write_atomic_json(args.output, report)
 
     if args.badges_dir is not None:
@@ -761,7 +520,10 @@ def main() -> int:
 
     print(json.dumps(report, indent=2))
     any_failed = any(d["localStatus"] == "failing" for d in domain_reports)
-    return 1 if any_failed else 0
+    benchmarks_failed = (
+        benchmark_report is not None and benchmark_report["status"] == "failing"
+    )
+    return 1 if (any_failed or benchmarks_failed) else 0
 
 
 if __name__ == "__main__":
