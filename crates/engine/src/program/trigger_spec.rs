@@ -48,6 +48,8 @@ pub enum TriggerFromZone {
     Battlefield,
     /// Origin zone is neither a graveyard nor exile.
     NotGraveyardOrExile,
+    /// Origin zone is any zone other than the battlefield.
+    NotBattlefield,
 }
 
 /// Cast-origin requirement on an entering permanent trigger.

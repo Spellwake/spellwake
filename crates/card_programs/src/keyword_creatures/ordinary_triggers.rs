@@ -287,7 +287,7 @@ pub(super) fn compile(
                                 tapped: false,
                                 attacking: false,
                                 transformed: false,
-                                face_down: false,
+                                face_down: None,
                                 entering_counters: Vec::new(),
                                 attach_to: None,
                             },

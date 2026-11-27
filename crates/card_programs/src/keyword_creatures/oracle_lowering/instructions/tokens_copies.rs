@@ -252,7 +252,7 @@ pub(super) fn lower_tokens_copies_instruction(
                 };
                 if let (Some(src_ref), Some(recipients)) = (src_ref, recipients_opt)
                     && let Some(parsed) =
-                        parse_token_copy_exceptions(exception.as_deref(), vocabulary)
+                        parse_token_copy_exceptions_with_ids(exception.as_deref(), vocabulary, ids)
                 {
                     let enters_tapped = *tapped || parsed.extra_tapped;
                     let enters_attacking = *attacking || parsed.extra_attacking;
@@ -308,6 +308,12 @@ pub(super) fn lower_tokens_copies_instruction(
                                         strip_mana_cost: parsed.strip_mana_cost,
                                         defender_scope:
                                             spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                                        extra_activated: parsed.extra_activated,
+                                        extra_triggered: parsed.extra_triggered,
+                                        extra_static: parsed.extra_static,
+                                        extra_mana: parsed.extra_mana,
+                                        extra_counters: parsed.extra_counters,
+                                        keep_name: parsed.keep_name,
                                     }),
                                 ),
                             )));
@@ -323,7 +329,13 @@ pub(super) fn lower_tokens_copies_instruction(
                             || !parsed.add_subtypes.is_empty()
                             || !parsed.grant_keywords.is_empty()
                             || parsed.override_pt.is_some()
-                            || !parsed.parsed_colors.is_empty();
+                            || !parsed.parsed_colors.is_empty()
+                            || !parsed.extra_activated.is_empty()
+                            || !parsed.extra_triggered.is_empty()
+                            || !parsed.extra_static.is_empty()
+                            || !parsed.extra_mana.is_empty()
+                            || !parsed.extra_counters.is_empty()
+                            || parsed.keep_name;
                         if has_ext_fields {
                             let mut extra_keywords = parsed.grant_keywords;
                             let haste =
@@ -351,6 +363,12 @@ pub(super) fn lower_tokens_copies_instruction(
                                             spellwake_engine::token::AttackingDefenderScope::AnyLegal,
                                         override_colors: None,
                                         strip_mana_cost: false,
+                                        extra_activated: parsed.extra_activated,
+                                        extra_triggered: parsed.extra_triggered,
+                                        extra_static: parsed.extra_static,
+                                        extra_mana: parsed.extra_mana,
+                                        extra_counters: parsed.extra_counters,
+                                        keep_name: parsed.keep_name,
                                     }),
                                 ),
                             )));
@@ -378,6 +396,12 @@ pub(super) fn lower_tokens_copies_instruction(
                                         strip_mana_cost: false,
                                         defender_scope:
                                             spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                                        extra_activated: Vec::new(),
+                                        extra_triggered: Vec::new(),
+                                        extra_static: Vec::new(),
+                                        extra_mana: Vec::new(),
+                                        extra_counters: Vec::new(),
+                                        keep_name: false,
                                     }),
                                 ),
                             )));
@@ -896,6 +920,164 @@ pub(super) fn lower_tokens_copies_instruction(
                     ),
                 )));
             Ok(())
+        }
+        InstructionAst::Cloak { count, subject } => {
+            let ctrl_sel =
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller);
+            let dest = spellwake_engine::toolbox::ZoneDest::battlefield_cloaked(
+                spellwake_engine::toolbox::ZoneController::Player(Box::new(ctrl_sel.clone())),
+                false,
+            );
+            let amt = lower_value_expr_in_context(
+                resolve_x(count, bound_x),
+                builder,
+                in_trigger,
+                vocabulary,
+            )?;
+            match subject.as_deref() {
+                None => {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                        ctrl_sel,
+                                    )),
+                                    filter: Box::new(ObjectFilter::any()),
+                                    slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(
+                                        amt,
+                                    )),
+                                },
+                                dest,
+                            ),
+                        ),
+                    );
+                    Ok(())
+                }
+                Some(SubjectRefAst::Group(f))
+                    if f.zone == Some(ZoneFilter::YourHand) && !f.any_spell && !f.is_ability =>
+                {
+                    let mut clean = f.as_ref().clone();
+                    clean.zone = None;
+                    if clean.controller == Some(ControllerRelation::You) {
+                        clean.controller = None;
+                    }
+                    let obj = if is_unrestricted_filter(&clean) {
+                        ObjectFilter::any()
+                    } else {
+                        lower_object_filter_in_context(&clean, builder, in_trigger, vocabulary)?
+                    };
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::simple(
+                                spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                        ctrl_sel.clone(),
+                                    )),
+                                    obj,
+                                ),
+                                spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                    chooser: ctrl_sel,
+                                    min: Box::new(amt.clone()),
+                                    max: Box::new(amt),
+                                    constraint: None,
+                                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                    hidden: true,
+                                },
+                                dest,
+                            ),
+                        ),
+                    );
+                    Ok(())
+                }
+                Some(SubjectRefAst::Anaphora(raw)) => {
+                    if let Some(q) =
+                        parse_ordered_zone_slice_anaphora_query(raw, builder, in_trigger)?
+                    {
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                spellwake_engine::toolbox::ZoneOpSpec::move_all(q, dest),
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    let low = raw.trim().to_ascii_lowercase();
+                    if matches!(
+                        low.as_str(),
+                        "it" | "that card"
+                            | "them"
+                            | "those cards"
+                            | "the exiled card"
+                            | "that exiled card"
+                            | "the revealed card"
+                            | "that revealed card"
+                    ) {
+                        let q = if builder.target != BodyTarget::None
+                            && !matches!(
+                                builder.target,
+                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                            ) {
+                            spellwake_engine::toolbox::ObjectQuery::Targets
+                        } else if last_instruction_moved_object(&builder.instructions)
+                            || has_prior_moved_object(&builder.instructions)
+                        {
+                            spellwake_engine::toolbox::ObjectQuery::LastMoved
+                        } else if in_trigger {
+                            spellwake_engine::toolbox::ObjectQuery::TriggerSubject
+                        } else {
+                            return Err("oracle:unsupported-cloak-subject");
+                        };
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                spellwake_engine::toolbox::ZoneOpSpec::move_all(q, dest),
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    Err("oracle:unsupported-cloak-subject")
+                }
+                Some(
+                    subj @ SubjectRefAst::TargetObject {
+                        count: TargetCountAst::Exact(1),
+                        ..
+                    },
+                ) => {
+                    let bt = lower_target_subject(subj, vocabulary)?;
+                    builder.bind_target(bt)?;
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Targets,
+                                dest,
+                            ),
+                        ),
+                    );
+                    Ok(())
+                }
+                Some(SubjectRefAst::TriggerSubject) if in_trigger => {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                dest,
+                            ),
+                        ),
+                    );
+                    Ok(())
+                }
+                Some(SubjectRefAst::SelfObject) if self_pronoun_valid => {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::Source,
+                                dest,
+                            ),
+                        ),
+                    );
+                    Ok(())
+                }
+                _ => Err("oracle:unsupported-cloak-subject"),
+            }
         }
         InstructionAst::Investigate { player, count } => {
             let amt = lower_value_expr_in_context(
@@ -2748,13 +2930,150 @@ pub(super) struct ParsedTokenCopyExceptions {
     grant_keywords: BTreeSet<KeywordAbility>,
     add_subtypes: BTreeSet<CreatureTypeId>,
     add_card_types: BTreeSet<CardType>,
+    extra_activated: Vec<ActivatedAbility>,
+    extra_triggered: Vec<TriggeredAbility>,
+    extra_static: Vec<StaticContinuousAbility>,
+    extra_mana: Vec<ManaAbility>,
+    extra_counters: Vec<(CounterKind, u8)>,
+    keep_name: bool,
 }
 
+#[cfg(test)]
 pub(super) fn parse_token_copy_exceptions(
     exception: Option<&str>,
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<ParsedTokenCopyExceptions> {
-    let exc_low = exception.unwrap_or("").trim().to_ascii_lowercase();
+    let mut ids = LoweringIds::default();
+    parse_token_copy_exceptions_with_ids(exception, vocabulary, &mut ids)
+}
+
+pub(super) fn parse_token_copy_exceptions_with_ids(
+    exception: Option<&str>,
+    vocabulary: &CreatureTypeVocabulary,
+    ids: &mut LoweringIds,
+) -> Option<ParsedTokenCopyExceptions> {
+    let mut raw_rest = exception.unwrap_or("").trim().to_string();
+    let mut sacrifice_at_end_step = false;
+    let mut exile_at_end_step = false;
+    let mut extra_activated: Vec<ActivatedAbility> = Vec::new();
+    let mut extra_triggered: Vec<TriggeredAbility> = Vec::new();
+    let mut extra_static: Vec<StaticContinuousAbility> = Vec::new();
+    let mut extra_mana: Vec<ManaAbility> = Vec::new();
+    let mut quoted_keywords: BTreeSet<KeywordAbility> = BTreeSet::new();
+
+    // Extract quoted abilities while preserving case; recognize end-step cleanup quotes first.
+    while let Some(q1) = raw_rest.find('"') {
+        let after_open = &raw_rest[q1 + 1..];
+        let q2_rel = after_open.find('"')?;
+        let quoted = after_open[..q2_rel].trim().to_string();
+        let before = raw_rest[..q1].trim().to_string();
+        let after = raw_rest[q1 + 2 + q2_rel..].trim().to_string();
+        let mut cleanup_probe = format!("\"{}\"", quoted.to_ascii_lowercase());
+        let mut probe_sac = false;
+        let mut probe_exile = false;
+        strip_quoted_end_step_token_cleanup(&mut cleanup_probe, &mut probe_sac, &mut probe_exile);
+        if (probe_sac || probe_exile) && cleanup_probe.trim().is_empty() {
+            sacrifice_at_end_step |= probe_sac;
+            exile_at_end_step |= probe_exile;
+        } else {
+            let parsed_q =
+                super::super::replacements::parse_quoted_copy_ability(&quoted, vocabulary, ids)
+                    .ok()?;
+            quoted_keywords.extend(parsed_q.extra_keywords);
+            extra_activated.extend(parsed_q.extra_activated);
+            extra_triggered.extend(parsed_q.extra_triggered);
+            extra_static.extend(parsed_q.extra_static);
+            extra_mana.extend(parsed_q.extra_mana);
+        }
+        raw_rest = format!("{before} {after}").trim().to_string();
+    }
+
+    let mut remainder = raw_rest.to_ascii_lowercase();
+    let mut keep_name = false;
+    for phrase in [
+        "~'s name is still ~",
+        "~'s name is ~",
+        "its name is still ~",
+        "his name is still ~",
+        "her name is still ~",
+        "their names are still ~",
+        "its name remains ~",
+        "his name remains ~",
+        "her name remains ~",
+        "its name is ~",
+        "his name is ~",
+        "her name is ~",
+        "their names are ~",
+        "it's still named ~",
+        "it is still named ~",
+        "it's named ~",
+        "it is named ~",
+        "they're still named ~",
+        "they're named ~",
+        "it keeps its name",
+        "it retains its name",
+    ] {
+        if remainder.contains(phrase) {
+            keep_name = true;
+            remainder = remainder.replace(phrase, " ");
+        }
+    }
+
+    let mut extra_counters: Vec<(CounterKind, u8)> = Vec::new();
+    remainder = remainder
+        .replace("enters the battlefield with ", "enters with ")
+        .replace("enter the battlefield with ", "enter with ");
+    loop {
+        let ew_match = ["enters with ", "enter with "]
+            .into_iter()
+            .filter_map(|p| remainder.find(p).map(|pos| (pos, p.len())))
+            .min_by_key(|(pos, _)| *pos);
+        let Some((ew_pos, ew_len)) = ew_match else {
+            break;
+        };
+        let start = ["it ", "they ", "the token ", "those tokens "]
+            .into_iter()
+            .find_map(|p| {
+                (ew_pos >= p.len() && &remainder[ew_pos - p.len()..ew_pos] == p)
+                    .then_some(ew_pos - p.len())
+            })
+            .unwrap_or(ew_pos);
+        let after_ew = &remainder[ew_pos + ew_len..];
+        let on_ref = [" on it", " on them", " on him", " on her", " on ~"]
+            .into_iter()
+            .filter_map(|m| after_ew.find(m).map(|idx| (idx, m.len())))
+            .min_by_key(|(idx, _)| *idx);
+        let (counter_phrase, end) = match on_ref {
+            Some((idx, len)) => (&after_ew[..idx], ew_pos + ew_len + idx + len),
+            None => {
+                let stop = [",", ".", ";", " and "]
+                    .into_iter()
+                    .filter_map(|m| after_ew.find(m))
+                    .min()
+                    .unwrap_or(after_ew.len());
+                (&after_ew[..stop], ew_pos + ew_len + stop)
+            }
+        };
+        if let Some((kind, count)) =
+            super::super::replacements::parse_counter_spec_phrase(counter_phrase)
+        {
+            extra_counters.push((kind, count));
+        } else if counter_phrase.contains(" and ") {
+            let mut parsed_multi = Vec::new();
+            for seg in counter_phrase.split(" and ") {
+                let pair = super::super::replacements::parse_counter_spec_phrase(seg)?;
+                parsed_multi.push(pair);
+            }
+            if parsed_multi.is_empty() {
+                return None;
+            }
+            extra_counters.extend(parsed_multi);
+        } else {
+            return None;
+        }
+        remainder = format!("{} {}", &remainder[..start], &remainder[end..]);
+    }
+
     for forbidden in [
         "loses all other card types",
         "lose all other card types",
@@ -2773,39 +3092,30 @@ pub(super) fn parse_token_copy_exceptions(
         "enter with",
         "counter",
     ] {
-        if exc_low.contains(forbidden) {
+        if remainder.contains(forbidden) {
             return None;
         }
     }
-    let nonlegendary = exc_low.contains("isn't legendary")
-        || exc_low.contains("aren't legendary")
-        || exc_low.contains("not legendary");
-    let mut sacrifice_at_end_step = exc_low.contains("sacrifice") && exc_low.contains("end step");
-    let mut exile_at_end_step = exc_low.contains("exile") && exc_low.contains("end step");
-    let strip_mana_cost = exc_low.contains("has no mana cost")
-        || exc_low.contains("have no mana cost")
-        || exc_low.contains("no mana cost");
-    let colors_are_additive = exc_low.contains("in addition to its other colors")
-        || exc_low.contains("in addition to their other colors");
+    let nonlegendary = remainder.contains("isn't legendary")
+        || remainder.contains("aren't legendary")
+        || remainder.contains("not legendary");
+    sacrifice_at_end_step |= remainder.contains("sacrifice") && remainder.contains("end step");
+    exile_at_end_step |= remainder.contains("exile") && remainder.contains("end step");
+    let strip_mana_cost = remainder.contains("has no mana cost")
+        || remainder.contains("have no mana cost")
+        || remainder.contains("no mana cost");
+    let colors_are_additive = remainder.contains("in addition to its other colors")
+        || remainder.contains("in addition to their other colors");
     let in_addition = colors_are_additive
-        || exc_low.contains("in addition to its other types")
-        || exc_low.contains("in addition to their other types")
-        || exc_low.contains("in addition to its other creature types")
-        || exc_low.contains("in addition to their other creature types")
-        || exc_low.contains("in addition to its other artifact types")
-        || exc_low.contains("in addition to their other artifact types")
-        || exc_low.contains("in addition to its other land types")
-        || exc_low.contains("in addition to their other land types")
-        || exc_low.contains("is also ");
-    let mut remainder = exc_low;
-    strip_quoted_end_step_token_cleanup(
-        &mut remainder,
-        &mut sacrifice_at_end_step,
-        &mut exile_at_end_step,
-    );
-    if remainder.contains('"') {
-        return None;
-    }
+        || remainder.contains("in addition to its other types")
+        || remainder.contains("in addition to their other types")
+        || remainder.contains("in addition to its other creature types")
+        || remainder.contains("in addition to their other creature types")
+        || remainder.contains("in addition to its other artifact types")
+        || remainder.contains("in addition to their other artifact types")
+        || remainder.contains("in addition to its other land types")
+        || remainder.contains("in addition to their other land types")
+        || remainder.contains("is also ");
     let mut extra_tapped = false;
     let mut extra_attacking = false;
     for pat in [
@@ -2846,7 +3156,7 @@ pub(super) fn parse_token_copy_exceptions(
             remainder = remainder.replace(pat, " ");
         }
     }
-    let mut grant_keywords: BTreeSet<KeywordAbility> = BTreeSet::new();
+    let mut grant_keywords: BTreeSet<KeywordAbility> = quoted_keywords;
     for (phrase, kw) in [
         ("first strike", KeywordAbility::FirstStrike),
         ("double strike", KeywordAbility::DoubleStrike),
@@ -3191,6 +3501,12 @@ pub(super) fn parse_token_copy_exceptions(
         grant_keywords,
         add_subtypes,
         add_card_types,
+        extra_activated,
+        extra_triggered,
+        extra_static,
+        extra_mana,
+        extra_counters,
+        keep_name,
     })
 }
 
@@ -4010,13 +4326,14 @@ mod wave12_token_ability_tests {
             .is_none(),
             "losing other card types must remain fail-closed"
         );
-        assert!(
-            parse_token_copy_exceptions(
-                Some("it enters with an additional +1/+1 counter on it."),
-                &vocab,
-            )
-            .is_none(),
-            "entering with additional counters must remain fail-closed"
+        let with_counter = parse_token_copy_exceptions(
+            Some("it enters with an additional +1/+1 counter on it."),
+            &vocab,
+        )
+        .expect("entering with additional +1/+1 counter lowers to extra_counters");
+        assert_eq!(
+            with_counter.extra_counters,
+            vec![(spellwake_engine::effects::CounterKind::PlusOne, 1)]
         );
 
         let mk = |name: &str,

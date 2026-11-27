@@ -5809,6 +5809,29 @@ pub(super) fn lower_zone_moves_instruction(
                         );
                     }
                     SubjectRefAst::TargetObject {
+                        filter,
+                        count: TargetCountAst::Exact(1),
+                    } if filter.zone == Some(ZoneFilter::Exile)
+                        && !filter.any_spell
+                        && !filter.is_ability =>
+                    {
+                        let mut inner = filter.as_ref().clone();
+                        inner.zone = None;
+                        let obj = if is_unrestricted_filter(&inner) {
+                            ObjectFilter::any()
+                        } else {
+                            lower_object_filter(&inner, vocabulary)?
+                        };
+                        builder.bind_target(BodyTarget::FilteredExiledCard(obj))?;
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TargetObject,
+                                bf_dest,
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    SubjectRefAst::TargetObject {
                         count: TargetCountAst::Exact(1),
                         ..
                     } => {
@@ -7351,6 +7374,31 @@ pub(super) fn lower_zone_moves_instruction(
                         return Ok(());
                     }
                     SubjectRefAst::TargetObject {
+                        filter,
+                        count: TargetCountAst::Exact(1),
+                    } if filter.zone == Some(ZoneFilter::Exile)
+                        && pd != PublicZoneDestination::Exile
+                        && !filter.any_spell
+                        && !filter.is_ability
+                        && let Some(sd) = subj_dest_from_pd(pd) =>
+                    {
+                        let mut inner = filter.as_ref().clone();
+                        inner.zone = None;
+                        let obj = if is_unrestricted_filter(&inner) {
+                            ObjectFilter::any()
+                        } else {
+                            lower_object_filter(&inner, vocabulary)?
+                        };
+                        builder.bind_target(BodyTarget::FilteredExiledCard(obj))?;
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject(
+                                MoveSubjectRef::TargetObject,
+                                sd,
+                            ),
+                        );
+                        return Ok(());
+                    }
+                    SubjectRefAst::TargetObject {
                         count: TargetCountAst::Exact(1),
                         ..
                     } if let Some(sd) = subj_dest_from_pd(pd) => {
@@ -8197,7 +8245,8 @@ pub(super) fn lower_zone_moves_instruction(
                         tapped,
                         attacking: false,
                         transformed,
-                        face_down,
+                        face_down: face_down
+                            .then_some(spellwake_engine::face_down::FaceDownKind::Manifest),
                         entering_counters: Vec::new(),
                         attach_to: None,
                     };
@@ -8495,7 +8544,8 @@ pub(super) fn lower_zone_moves_instruction(
                         tapped: dest.contains("tapped") && !dest.contains("untapped"),
                         attacking: dest.contains("attacking"),
                         transformed: dest.contains("transformed") || dest.contains("converted"),
-                        face_down: dest.contains("face down") || dest.contains("face-down"),
+                        face_down: (dest.contains("face down") || dest.contains("face-down"))
+                            .then_some(spellwake_engine::face_down::FaceDownKind::Manifest),
                         entering_counters,
                         attach_to: None,
                     };
@@ -12453,6 +12503,7 @@ fn is_moved_object_instruction(op: &Instruction) -> bool {
                     | spellwake_engine::toolbox::PlayerMutation::ManifestDread
                     | spellwake_engine::toolbox::PlayerMutation::Incubate { .. }
                     | spellwake_engine::toolbox::PlayerMutation::RevealTopTwoPiles { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
             )
     )
 }
@@ -12811,6 +12862,7 @@ pub(super) fn is_valid_put_target_in_library_target(bt: &BodyTarget) -> bool {
             | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
             | BodyTarget::FilteredOwnGraveyardCard(_)
             | BodyTarget::FilteredAnyGraveyardCard { .. }
+            | BodyTarget::FilteredExiledCard(_)
     )
 }
 
@@ -13817,7 +13869,7 @@ fn lower_target_subject_zone_normalized(
     lower_target_subject(subject, vocabulary)
 }
 
-fn parse_ordered_zone_slice_anaphora_query(
+pub(super) fn parse_ordered_zone_slice_anaphora_query(
     raw: &str,
     builder: &mut BodyBuilder,
     in_trigger: bool,

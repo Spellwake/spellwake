@@ -1238,6 +1238,12 @@ impl EffectWindow {
                 extra_colors,
                 override_colors,
                 strip_mana_cost,
+                extra_activated,
+                extra_triggered,
+                extra_static,
+                extra_mana,
+                extra_counters,
+                keep_name,
                 ..
             } = *copy;
             let resolved_count = self
@@ -1276,18 +1282,24 @@ impl EffectWindow {
                         power: crate::characteristics::PrintedStat::Number(p),
                         toughness: crate::characteristics::PrintedStat::Number(t),
                     });
-                    if matches!(
-                        &program.continuous,
-                        Some(crate::characteristics::StaticContinuousAbility::CharacteristicDefining {
-                            parts,
-                            ..
-                        }) if parts.0.iter().any(|part| matches!(
-                            part,
-                            crate::characteristics::DefiningPart::PowerToughness { .. }
-                        ))
-                    ) {
+                    let is_pt_cda = |ab: &crate::characteristics::StaticContinuousAbility| {
+                        matches!(
+                            ab,
+                            crate::characteristics::StaticContinuousAbility::CharacteristicDefining {
+                                parts,
+                                ..
+                            } if parts.0.iter().any(|part| matches!(
+                                part,
+                                crate::characteristics::DefiningPart::PowerToughness { .. }
+                            ))
+                        )
+                    };
+                    if program.continuous.as_ref().is_some_and(is_pt_cda) {
                         program.continuous = None;
                     }
+                    program
+                        .additional_battlefield_abilities
+                        .retain(|ab| !is_pt_cda(ab));
                 }
                 if let Some(colors) = override_colors {
                     program.color_indicator = Some(colors.clone());
@@ -1304,6 +1316,73 @@ impl EffectWindow {
                     }
                     program.x_mana_symbols = 0;
                     program.hybrid_symbols.clear();
+                }
+                if keep_name {
+                    let source_obj = match entry.kind() {
+                        StackKind::CardSpell(id) => Some(*id),
+                        StackKind::ActivatedAbility { source }
+                        | StackKind::TriggeredAbility { source } => Some(source.id()),
+                        _ => None,
+                    };
+                    if let Some(src_names) = source_obj
+                        .and_then(|src| self.copiable_program(src))
+                        .map(|prog| prog.names.clone())
+                    {
+                        program.names = src_names;
+                    }
+                }
+                for mut ability in extra_activated {
+                    let next = program
+                        .activated
+                        .iter()
+                        .try_fold(0_u64, |candidate, a| {
+                            a.id.0.checked_add(1).map(|n| n.max(candidate))
+                        })
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    ability.id = crate::activated::ActivatedAbilityId(next);
+                    program.activated.push(ability);
+                }
+                for mut mana_ability in extra_mana {
+                    let next = program
+                        .mana
+                        .iter()
+                        .try_fold(0_u64, |candidate, m| {
+                            m.id.0.checked_add(1).map(|n| n.max(candidate))
+                        })
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    mana_ability.id = crate::mana::ManaAbilityId(next);
+                    program.mana.push(mana_ability);
+                }
+                for mut trigger in extra_triggered {
+                    let next = program
+                        .triggered
+                        .iter()
+                        .try_fold(0_u64, |candidate, t| {
+                            t.id.0.checked_add(1).map(|n| n.max(candidate))
+                        })
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    trigger.id = crate::program::TriggeredAbilityId(next);
+                    program.triggered.push(trigger);
+                }
+                for extra_stat in extra_static {
+                    let next = program
+                        .continuous
+                        .iter()
+                        .chain(&program.additional_battlefield_abilities)
+                        .try_fold(0_u64, |candidate, ab| {
+                            ab.id().0.checked_add(1).map(|n| n.max(candidate))
+                        })
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    program.additional_battlefield_abilities.push(
+                        extra_stat.with_component_id(crate::characteristics::StaticAbilityId(next)),
+                    );
+                }
+                for (kind, count) in extra_counters {
+                    if count > 0 {
+                        program
+                            .entry_counter_abilities
+                            .push(super::entry_copy::fixed_entry_counter(kind, count));
+                    }
                 }
                 let controller = entry.controller();
                 let mut groups = Vec::new();
@@ -4394,9 +4473,15 @@ fn substitute_chosen_x_in_static(
     match ability {
         StaticContinuousAbility::Battlefield { parts, .. } => {
             for part in &mut parts.0 {
-                if let StaticPart::SetPT(pair) | StaticPart::ModifyPT(pair) = part {
-                    substitute_chosen_x_in_numeric_expr(&mut pair.power, resolved_x);
-                    substitute_chosen_x_in_numeric_expr(&mut pair.toughness, resolved_x);
+                match part {
+                    StaticPart::SetPT(pair) | StaticPart::ModifyPT(pair) => {
+                        substitute_chosen_x_in_numeric_expr(&mut pair.power, resolved_x);
+                        substitute_chosen_x_in_numeric_expr(&mut pair.toughness, resolved_x);
+                    }
+                    StaticPart::SetPower(expr) | StaticPart::SetToughness(expr) => {
+                        substitute_chosen_x_in_numeric_expr(expr, resolved_x);
+                    }
+                    _ => {}
                 }
             }
         }

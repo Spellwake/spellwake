@@ -689,6 +689,12 @@ pub enum BlockingRestriction {
     CannotBeRegenerated,
     /// Blocker must block each attacking creature this turn if able (CR 509.1c, Blaze of Glory).
     MustBlockAllAttackers,
+    /// Creature cannot attack its owner or planeswalkers/battles controlled by its owner.
+    CannotAttackOwner,
+    /// Attacker must be blocked by two or more creatures if able (CR 509.1c).
+    MustBeBlockedByTwoOrMore,
+    /// Creature cannot be tapped to pay a Vehicle's crew cost.
+    CannotCrewVehicles,
 }
 // Embeds `Copy` `BlockingRestriction` inline to avoid indirection in small resolved part lists.
 #[allow(clippy::large_enum_variant)]
@@ -743,6 +749,7 @@ pub enum ResolvedPart {
     /// Multiple Layer 6 ability parts bundled by characteristic evaluation for a single effect.
     CompoundAbilities(Vec<ResolvedPart>),
     SetPT(PowerToughness),
+    SetPower(RulesInteger),
     SetToughness(RulesInteger),
     ModifyPT(PowerToughness),
     SwitchPT,
@@ -769,7 +776,9 @@ impl ResolvedPart {
             | Self::CannotBeTargetedBySpellsOfColors(_)
             | Self::GrantRestriction(_)
             | Self::CompoundAbilities(_) => CharacteristicBucket::Abilities,
-            Self::SetPT(_) | Self::SetToughness(_) => CharacteristicBucket::SetPT,
+            Self::SetPT(_) | Self::SetPower(_) | Self::SetToughness(_) => {
+                CharacteristicBucket::SetPT
+            }
             Self::ModifyPT(_) => CharacteristicBucket::ModifyPT,
             Self::SwitchPT => CharacteristicBucket::SwitchPT,
         }
@@ -839,6 +848,10 @@ pub enum ResolvedPartSpec {
         power: Box<crate::program::ValueExpr>,
         toughness: Box<crate::program::ValueExpr>,
     },
+    /// Dynamic base power setter evaluated at resolution time, preserving toughness (Layer 7b).
+    SetPower(Box<crate::program::ValueExpr>),
+    /// Dynamic base toughness setter evaluated at resolution time, preserving power (Layer 7b).
+    SetToughness(Box<crate::program::ValueExpr>),
     SwitchPT,
 }
 impl ResolvedPartSpec {
@@ -863,7 +876,9 @@ impl ResolvedPartSpec {
             | Self::CannotBeTargetedByColors(_)
             | Self::CannotBeTargetedBySpellsOfColors(_)
             | Self::MustBlockSubject(_) => CharacteristicBucket::Abilities,
-            Self::SetPT(_) | Self::SetPTExpr { .. } => CharacteristicBucket::SetPT,
+            Self::SetPT(_) | Self::SetPTExpr { .. } | Self::SetPower(_) | Self::SetToughness(_) => {
+                CharacteristicBucket::SetPT
+            }
             Self::ModifyPT(_) | Self::ModifyPTExpr { .. } => CharacteristicBucket::ModifyPT,
             Self::SwitchPT => CharacteristicBucket::SwitchPT,
         }
@@ -1057,6 +1072,10 @@ pub struct PermanentSelector {
     pub solved: bool,
     /// Require the recipient to have been exerted this turn (CR 701.39).
     pub exerted: bool,
+    /// Optional turn-history block predicate (`Some(true)` blocked this turn, `Some(false)` did not).
+    pub blocked_this_turn: Option<bool>,
+    /// Require the recipient to be currently paired with the ability source via soulbond.
+    pub paired_with_source: bool,
 }
 impl Default for PermanentSelector {
     fn default() -> Self {
@@ -1135,6 +1154,8 @@ impl Default for PermanentSelector {
             suspected: false,
             solved: false,
             exerted: false,
+            blocked_this_turn: None,
+            paired_with_source: false,
         }
     }
 }
@@ -1436,6 +1457,10 @@ pub enum StaticPart {
     /// Set each recipient’s base power and toughness to its own mana value.
     SetPTToOwnManaValue,
     SetPT(NumericPair),
+    /// Set each recipient's base power in Layer 7b, preserving toughness.
+    SetPower(NumericExpression),
+    /// Set each recipient's base toughness in Layer 7b, preserving power.
+    SetToughness(NumericExpression),
     ModifyPT(NumericPair),
     /// Modify each recipient's power and toughness by `(power, toughness)` for each of its own colors.
     ModifyPTPerOwnColor {
@@ -1467,7 +1492,10 @@ impl StaticPart {
             | Self::Abilities(_)
             | Self::BlockingRestriction(_)
             | Self::GrantRestriction(_) => CharacteristicBucket::Abilities,
-            Self::SetPT(_) | Self::SetPTToOwnManaValue => CharacteristicBucket::SetPT,
+            Self::SetPT(_)
+            | Self::SetPower(_)
+            | Self::SetToughness(_)
+            | Self::SetPTToOwnManaValue => CharacteristicBucket::SetPT,
             Self::ModifyPT(_) | Self::ModifyPTPerOwnColor { .. } => CharacteristicBucket::ModifyPT,
             Self::SwitchPT => CharacteristicBucket::SwitchPT,
         }
@@ -1861,6 +1889,10 @@ impl ResolvedPartsSpec {
                     }
                 }
             }
+            if let ResolvedPartSpec::SetPower(expr) | ResolvedPartSpec::SetToughness(expr) = part {
+                expr.validate_vocabulary(vocabulary)
+                    .map_err(|_| CharacteristicDefinitionError::ForeignCreatureType)?;
+            }
         }
         Ok(())
     }
@@ -2124,6 +2156,10 @@ impl ResolvedPartsSpec {
                             power: eval(power)?,
                             toughness: eval(toughness)?,
                         })
+                    }
+                    ResolvedPartSpec::SetPower(power) => ResolvedPart::SetPower(eval(power)?),
+                    ResolvedPartSpec::SetToughness(toughness) => {
+                        ResolvedPart::SetToughness(eval(toughness)?)
                     }
                     ResolvedPartSpec::SwitchPT => ResolvedPart::SwitchPT,
                 })
@@ -2536,6 +2572,8 @@ pub struct ObjectCharacteristics {
     pub entry_color: Option<Color>,
     /// True if this permanent attacked during the current turn.
     pub attacked_this_turn: bool,
+    /// True if this permanent blocked during the current turn.
+    pub blocked_this_turn: bool,
     /// True if this permanent was dealt damage during the current turn.
     pub dealt_damage_this_turn: bool,
     /// True if this permanent was kicked (CR 702.33).

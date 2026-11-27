@@ -1669,7 +1669,11 @@ impl EffectWindow {
                                         self.face_down_exile.insert(moved, rep.controller);
                                     }
                                     if *link_to_source && let Some(src) = rep.source {
-                                        self.linked_exiles.entry(src).or_default().push(moved);
+                                        self.characteristics
+                                            .linked_exiles
+                                            .entry(src)
+                                            .or_default()
+                                            .push(moved);
                                     }
                                 }
                             }

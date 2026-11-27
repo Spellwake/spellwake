@@ -529,6 +529,17 @@ fn matches_world_clause(
             c.attacker(id)
                 .is_some_and(|a| a.defending_planeswalker().is_none())
         }),
+        CombatFilter::BlockingAttachedHost => ctx
+            .objects
+            .get(&ctx.source)
+            .and_then(|src| match src.attached_to {
+                Some(TargetRef::Object(host)) => Some(host),
+                _ => None,
+            })
+            .is_some_and(|host| {
+                ctx.combat
+                    .is_some_and(|c| c.blocker(id).is_some_and(|b| b.attackers().contains(&host)))
+            }),
     };
     if !combat_ok {
         return false;
@@ -620,6 +631,17 @@ fn matches_world_clause(
     {
         return false;
     }
+    if clause.flags.contains(ObjectFilterFlags::BLOCKED_THIS_TURN)
+        && !ctx.state.blocked_objects_this_turn.contains(&id)
+    {
+        return false;
+    }
+    if clause.flags.contains(ObjectFilterFlags::PAIRED_WITH_SELF)
+        && !(ctx.state.paired_creatures.get(&ctx.source) == Some(&id)
+            || ctx.state.paired_creatures.get(&id) == Some(&ctx.source))
+    {
+        return false;
+    }
     if clause
         .flags
         .contains(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN)
@@ -655,6 +677,11 @@ fn matches_world_clause(
             || ctx
                 .state
                 .ability_donors_in_exile
+                .get(&ctx.source)
+                .is_some_and(|list| list.contains(&id))
+            || ctx
+                .state
+                .linked_exiles
                 .get(&ctx.source)
                 .is_some_and(|list| list.contains(&id)))
     {
@@ -1195,6 +1222,29 @@ fn count_zone_for_seat(
                     && matches_world_object_filter(ctx, filter, o)
             })
             .count(),
+        ValueZone::LinkedExile => ctx
+            .objects
+            .values()
+            .filter(|o| {
+                o.zone == ObjectZone::Exile
+                    && (ctx
+                        .state
+                        .imprinted_cards
+                        .get(&ctx.source)
+                        .is_some_and(|list| list.contains(&o.object))
+                        || ctx
+                            .state
+                            .ability_donors_in_exile
+                            .get(&ctx.source)
+                            .is_some_and(|list| list.contains(&o.object))
+                        || ctx
+                            .state
+                            .linked_exiles
+                            .get(&ctx.source)
+                            .is_some_and(|list| list.contains(&o.object)))
+                    && matches_world_object_filter(ctx, filter, o)
+            })
+            .count(),
     }
 }
 
@@ -1395,6 +1445,29 @@ pub(crate) fn eval_world_value_expr(ctx: &WorldEvalCtx<'_>, expr: &ValueExpr) ->
                         })
                         .count()
                 }
+                ValueZone::LinkedExile => ctx
+                    .objects
+                    .values()
+                    .filter(|o| {
+                        o.zone == ObjectZone::Exile
+                            && (ctx
+                                .state
+                                .imprinted_cards
+                                .get(&ctx.source)
+                                .is_some_and(|list| list.contains(&o.object))
+                                || ctx
+                                    .state
+                                    .ability_donors_in_exile
+                                    .get(&ctx.source)
+                                    .is_some_and(|list| list.contains(&o.object))
+                                || ctx
+                                    .state
+                                    .linked_exiles
+                                    .get(&ctx.source)
+                                    .is_some_and(|list| list.contains(&o.object)))
+                            && matches_world_object_filter(ctx, bound_filter, o)
+                    })
+                    .count(),
             };
             RulesInteger::from_usize(count)
         }

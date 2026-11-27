@@ -7281,6 +7281,9 @@ fn normalize_trigger_from_zone(raw: &str) -> String {
         "anywhere other than a graveyard or exile" | "not_graveyard_or_exile" => {
             "not_graveyard_or_exile".to_owned()
         }
+        "anywhere other than the battlefield"
+        | "anywhere other than battlefield"
+        | "not_battlefield" => "not_battlefield".to_owned(),
         _ => low,
     }
 }
@@ -7594,6 +7597,15 @@ pub(super) fn lower_trigger_event(
                     },
                     grouping,
                 )),
+                (Some("not_battlefield"), Some("battlefield" | "battlefield_transformed")) => Ok((
+                    TriggerEvent::Enters {
+                        subject: filter,
+                        from_zone: TriggerFromZone::NotBattlefield,
+                        cast_origin: None,
+                        attached_to_creature: false,
+                    },
+                    grouping,
+                )),
                 (_, _)
                     if {
                         let (a, b) = filter.clauses();
@@ -7671,6 +7683,7 @@ pub(super) fn lower_trigger_event(
                         Some("hand" | "your_hand" | "opponent_hand") => TriggerFromZone::Hand,
                         Some("library") => TriggerFromZone::Library,
                         Some("not_graveyard_or_exile") => TriggerFromZone::NotGraveyardOrExile,
+                        Some("not_battlefield") => TriggerFromZone::NotBattlefield,
                         _ => return Err("oracle:unsupported-zone-trigger"),
                     };
                     Ok((

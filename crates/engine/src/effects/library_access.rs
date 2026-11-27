@@ -80,7 +80,8 @@ impl EffectWindow {
     }
 
     pub(super) fn is_linked_exile_of(&self, source: ObjectId, card: ObjectId) -> bool {
-        self.linked_exiles
+        self.characteristics
+            .linked_exiles
             .get(&source)
             .is_some_and(|list| list.contains(&card))
             || self

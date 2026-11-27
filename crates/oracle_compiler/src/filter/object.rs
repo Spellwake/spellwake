@@ -1332,6 +1332,13 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             (" that has a -1/-1 counter on it", F::WITH_ANY_COUNTER),
             (" that has a +1/+1 counter on it", F::WITH_ANY_COUNTER),
             (" with ice counters on them", F::WITH_ANY_COUNTER),
+            (" that blocked this turn", F::BLOCKED_THIS_TURN),
+            (" that blocked", F::BLOCKED_THIS_TURN),
+            (" that's paired with ~", F::PAIRED_WITH_SELF),
+            (" that is paired with ~", F::PAIRED_WITH_SELF),
+            (" paired with ~", F::PAIRED_WITH_SELF),
+            (" it's paired with", F::PAIRED_WITH_SELF),
+            (" ~ is paired with", F::PAIRED_WITH_SELF),
         ];
         const REL_COMBAT_SUFFIXES: &[(&str, CS)] = &[
             (
@@ -1501,7 +1508,6 @@ pub fn parse_object_filter(phrase: &str, vocab: &Vocabulary) -> Result<ObjectFil
             " with mana value 1 or 2",
             " that's one or more colors",
             " created with ~",
-            " that blocked this turn",
             " that had counters put on it this way",
             " without mana value of the chosen quality",
             " it can enchant",

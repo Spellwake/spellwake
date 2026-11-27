@@ -10,6 +10,7 @@ pub enum FaceDownKind {
     Morph,
     Disguise,
     Manifest,
+    Cloak,
     Forest,
 }
 /// A printed special-action permission, evaluated in the prospective face-up state.
@@ -52,7 +53,7 @@ impl FaceDownKind {
         match self {
             Self::Forest => &FOREST,
             Self::Morph | Self::Manifest => &MORPH,
-            Self::Disguise => &DISGUISE,
+            Self::Disguise | Self::Cloak => &DISGUISE,
         }
     }
 }

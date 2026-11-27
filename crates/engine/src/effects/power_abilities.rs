@@ -138,6 +138,10 @@ impl EffectWindow {
                 || view.zone != ObjectZone::Battlefield
                 || view.controller != Some(actor)
                 || !view.is_creature()
+                || (kind == PowerAbility::Crew
+                    && view
+                        .blocking_restrictions
+                        .contains(&crate::characteristics::BlockingRestriction::CannotCrewVehicles))
                 || !self
                     .window
                     .cards()

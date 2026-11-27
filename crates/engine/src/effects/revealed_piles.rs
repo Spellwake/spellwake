@@ -1197,7 +1197,8 @@ impl EffectWindow {
                         self.face_down_exile.insert(movement.after.id(), chooser);
                     }
                     if let Some(src_id) = source_obj {
-                        self.linked_exiles
+                        self.characteristics
+                            .linked_exiles
                             .entry(src_id)
                             .or_default()
                             .push(movement.after.id());

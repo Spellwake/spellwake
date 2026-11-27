@@ -594,6 +594,7 @@ impl ResolvingPlayer {
                 | BodyTarget::AnyGraveyardCard
                 | BodyTarget::AnyGraveyardCreature
                 | BodyTarget::OwnedExiledFlashbackCard
+                | BodyTarget::FilteredExiledCard(_)
                 | BodyTarget::FilteredPermanent(_)
                 | BodyTarget::SingleCreatureOrPlayer
                 | BodyTarget::SinglePlayerOrPlaneswalker
@@ -621,6 +622,7 @@ impl ResolvingPlayer {
                 | BodyTarget::AnyGraveyardCard
                 | BodyTarget::AnyGraveyardCreature
                 | BodyTarget::OwnedExiledFlashbackCard
+                | BodyTarget::FilteredExiledCard(_)
                 | BodyTarget::FilteredPermanent(_)
                 | BodyTarget::SingleCreatureOrPlayer
                 | BodyTarget::SinglePlayerOrPlaneswalker
@@ -659,6 +661,9 @@ impl ResolvingPlayer {
                 | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
                 | BodyTarget::AnyGraveyardCard
                 | BodyTarget::AnyGraveyardCreature => Ok(Some(OperandFamily::GraveyardCard)),
+                BodyTarget::OwnedExiledFlashbackCard | BodyTarget::FilteredExiledCard(_) => {
+                    Ok(Some(OperandFamily::ExiledCard))
+                }
                 BodyTarget::SingleSpell(_) => Ok(Some(OperandFamily::Spell)),
                 BodyTarget::SingleCreatureOrPlayer
                 | BodyTarget::SinglePlayerOrPlaneswalker
@@ -2215,6 +2220,10 @@ pub struct EntryCopySpecExt {
     pub extra_static: Vec<StaticContinuousAbility>,
     pub override_pt: Option<(RulesInteger, RulesInteger)>,
     pub extra_colors: BTreeSet<Color>,
+    pub override_colors: Option<BTreeSet<Color>>,
+    pub extra_artifact_subtypes: BTreeSet<ArtifactSubtype>,
+    pub extra_enchantment_subtypes: BTreeSet<EnchantmentSubtype>,
+    pub extra_supertypes: BTreeSet<Supertype>,
     pub keep_name: bool,
     /// Whether copying is optional ("You may have ... enter as a copy"); defaults to `true`.
     pub optional: bool,
@@ -2242,6 +2251,10 @@ impl EntryCopySpecExt {
             extra_static: Vec::new(),
             override_pt: None,
             extra_colors: BTreeSet::new(),
+            override_colors: None,
+            extra_artifact_subtypes: BTreeSet::new(),
+            extra_enchantment_subtypes: BTreeSet::new(),
+            extra_supertypes: BTreeSet::new(),
             keep_name: false,
             optional: true,
             enters_tapped: false,
@@ -3310,6 +3323,7 @@ pub struct SplitCard {
     pub left: Program,
     pub right: Program,
     pub aftermath: bool,
+    pub fuse: bool,
 }
 impl SplitCard {
     pub fn half(&self, half: SplitHalf) -> &Program {
@@ -3360,6 +3374,21 @@ impl SplitCard {
                 combined
                     .spell_subtypes
                     .extend(self.right.spell_subtypes.iter().copied());
+                combined
+                    .printed_keywords
+                    .extend(self.right.printed_keywords.iter().copied());
+                combined.cannot_be_countered |= self.right.cannot_be_countered;
+                match (&self.left.color_indicator, &self.right.color_indicator) {
+                    (Some(left_colors), Some(right_colors)) => {
+                        let mut colors = left_colors.clone();
+                        colors.extend(right_colors.iter().copied());
+                        combined.color_indicator = Some(colors);
+                    }
+                    (Some(colors), None) | (None, Some(colors)) => {
+                        combined.color_indicator = Some(colors.clone());
+                    }
+                    (None, None) => {}
+                }
                 combined.x_mana_symbols = self
                     .left
                     .x_mana_symbols
@@ -3726,6 +3755,8 @@ pub enum BodyTarget {
     AnyGraveyardCard,
     /// A face-up exiled card owned by this ability or spell's controller that has flashback.
     OwnedExiledFlashbackCard,
+    /// An exiled card matching `ObjectFilter`.
+    FilteredExiledCard(ObjectFilter),
     RecentlyDiscardedOrFromLibrary,
     /// Any creature card in any graveyard.
     AnyGraveyardCreature,
@@ -3826,7 +3857,9 @@ fn toolbox_object_target_family(target: BodyTarget) -> Result<OperandFamily, Def
         | BodyTarget::RecentlyDiscardedOrFromLibrary
         | BodyTarget::AnyGraveyardCard
         | BodyTarget::AnyGraveyardCreature => Ok(OperandFamily::GraveyardCard),
-        BodyTarget::OwnedExiledFlashbackCard => Ok(OperandFamily::ExiledCard),
+        BodyTarget::OwnedExiledFlashbackCard | BodyTarget::FilteredExiledCard(_) => {
+            Ok(OperandFamily::ExiledCard)
+        }
         BodyTarget::SingleSpell(_) => Ok(OperandFamily::Spell),
         BodyTarget::SingleStackEntry
         | BodyTarget::SingleStackObject(_)
@@ -4578,7 +4611,8 @@ impl ExecutableBody {
                 BodyTarget::SingleOwnGraveyardCard
                 | BodyTarget::AnyGraveyardCard
                 | BodyTarget::AnyGraveyardCreature
-                | BodyTarget::FilteredAnyGraveyardCard { .. } => has_multi_gy_move,
+                | BodyTarget::FilteredAnyGraveyardCard { .. }
+                | BodyTarget::FilteredExiledCard(_) => has_multi_gy_move,
                 _ => false,
             };
             if minimum > maximum
@@ -4638,7 +4672,8 @@ impl ExecutableBody {
         }
         if let BodyTarget::FilteredPermanent(filter)
         | BodyTarget::FilteredOwnGraveyardCard(filter)
-        | BodyTarget::FilteredAnyGraveyardCard { filter, .. } = self.target
+        | BodyTarget::FilteredAnyGraveyardCard { filter, .. }
+        | BodyTarget::FilteredExiledCard(filter) = self.target
         {
             filter.validate_vocabulary(vocabulary)?;
         }
@@ -6131,6 +6166,10 @@ impl ExecutableBody {
                                     | BodyTarget::RecentlyDiscardedOrFromLibrary => {
                                         Some(OperandFamily::GraveyardCard)
                                     }
+                                    BodyTarget::OwnedExiledFlashbackCard
+                                    | BodyTarget::FilteredExiledCard(_) => {
+                                        Some(OperandFamily::ExiledCard)
+                                    }
                                     _ => return Err(DefinitionError::OperandFamily),
                                 },
                                 Some(
@@ -6521,6 +6560,20 @@ impl ExecutableBody {
                             parts
                                 .validate(vocabulary, &defined_slots)
                                 .map_err(|_| DefinitionError::ContinuousEffect)?;
+                            for part in &parts.0 {
+                                if let crate::characteristics::ResolvedPartSpec::SetPower(expr)
+                                | crate::characteristics::ResolvedPartSpec::SetToughness(
+                                    expr,
+                                ) = part
+                                {
+                                    expr.validate_amount(
+                                        &defined_slots,
+                                        context,
+                                        &facts,
+                                        vocabulary,
+                                    )?;
+                                }
+                            }
                             Some(OperandFamily::Permanent)
                         }
                         crate::toolbox::ContinuousPayload::ResolvedParts(parts) => {
@@ -6538,6 +6591,20 @@ impl ExecutableBody {
                                     _ => DefinitionError::ContinuousEffect,
                                 },
                             )?;
+                            for part in &parts.0 {
+                                if let crate::characteristics::ResolvedPartSpec::SetPower(expr)
+                                | crate::characteristics::ResolvedPartSpec::SetToughness(
+                                    expr,
+                                ) = part
+                                {
+                                    expr.validate_amount(
+                                        &defined_slots,
+                                        context,
+                                        &facts,
+                                        vocabulary,
+                                    )?;
+                                }
+                            }
                             if matches!(spec.selector, Some(crate::toolbox::ObjectQuery::Targets)) {
                                 Some(OperandFamily::Permanent)
                             } else {
@@ -7256,6 +7323,7 @@ impl ExecutableBody {
                         self.target,
                         BodyTarget::FilteredOwnGraveyardCard(_)
                             | BodyTarget::FilteredAnyGraveyardCard { .. }
+                            | BodyTarget::FilteredExiledCard(_)
                             | BodyTarget::AnyGraveyardCard
                             | BodyTarget::AnyGraveyardCreature
                             | BodyTarget::SinglePermanent
@@ -8037,6 +8105,13 @@ impl ExecutableBody {
                         parts
                             .validate(vocabulary, &defined_slots)
                             .map_err(|_| DefinitionError::ContinuousEffect)?;
+                        for part in &parts.0 {
+                            if let crate::characteristics::ResolvedPartSpec::SetPower(expr)
+                            | crate::characteristics::ResolvedPartSpec::SetToughness(expr) = part
+                            {
+                                expr.validate_amount(&defined_slots, context, &facts, vocabulary)?;
+                            }
+                        }
                     }
                     Some(OperandFamily::Permanent)
                 }
@@ -8614,7 +8689,8 @@ impl ExecutableBody {
                                 | BodyTarget::AnyGraveyardCard,
                             OperandFamily::GraveyardCard
                         ) | (
-                            BodyTarget::OwnedExiledFlashbackCard,
+                            BodyTarget::OwnedExiledFlashbackCard
+                                | BodyTarget::FilteredExiledCard(_),
                             OperandFamily::ExiledCard
                         ) | (
                             BodyTarget::ControlledAbility { .. }
@@ -11147,6 +11223,9 @@ impl Program {
         }
         if let Some(split) = &self.split {
             let is_room = split.is_room();
+            if split.fuse && (split.aftermath || is_room) {
+                return Err(DefinitionError::InvalidInstruction);
+            }
             for half in [&split.left, &split.right] {
                 if half.split.is_some()
                     || half.adventure.is_some()

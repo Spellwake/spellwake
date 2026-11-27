@@ -3538,20 +3538,13 @@ pub fn parse_static_or_replacement(
                 let right_trim = right_owned.trim();
                 if let Ok(StaticOrReplacement::Static(ls)) =
                     parse_static_or_replacement(left_trim, vocab)
+                    && let Some(rs) = parse_static_with_optional_subject(
+                        right_trim,
+                        extract_leading_subject_prefix(left_trim),
+                        vocab,
+                    )
                 {
-                    if let Ok(StaticOrReplacement::Static(rs)) =
-                        parse_static_or_replacement(right_trim, vocab)
-                    {
-                        return Ok(st_s(StaticAbilityAst::Compound(vec![ls, rs])));
-                    }
-                    if let Some(subj_prefix) = extract_leading_subject_prefix(left_trim)
-                        && let Ok(StaticOrReplacement::Static(rs)) = parse_static_or_replacement(
-                            &format!("{subj_prefix} {right_trim}"),
-                            vocab,
-                        )
-                    {
-                        return Ok(st_s(StaticAbilityAst::Compound(vec![ls, rs])));
-                    }
+                    return Ok(st_s(StaticAbilityAst::Compound(vec![ls, rs])));
                 }
             }
         }
@@ -3567,13 +3560,8 @@ pub fn parse_static_or_replacement(
                 for part in &comma_parts[1..] {
                     let p = part.trim();
                     let p_clean = p.strip_prefix("and ").unwrap_or(p).trim();
-                    if let Ok(StaticOrReplacement::Static(st)) =
-                        parse_static_or_replacement(p_clean, vocab)
-                    {
-                        items.push(st);
-                    } else if let Some(sp) = subj_prefix
-                        && let Ok(StaticOrReplacement::Static(st)) =
-                            parse_static_or_replacement(&format!("{sp} {p_clean}"), vocab)
+                    if let Some(st) =
+                        parse_static_with_optional_subject(p_clean, subj_prefix, vocab)
                     {
                         items.push(st);
                     } else {
@@ -3861,6 +3849,35 @@ pub(super) fn st_perm(
         permission: permission.into(),
         condition: None,
     })
+}
+
+fn starts_with_static_predicate_verb(clause: &str) -> bool {
+    let low = clause.trim_start().to_ascii_lowercase();
+    [
+        "has ", "have ", "gets ", "get ", "gains ", "gain ", "loses ", "lose ", "is ", "are ",
+        "isn't ", "aren't ", "can't ", "can ", "doesn't ", "don't ", "must ", "attacks ",
+        "attack ", "blocks ", "block ", "enters ", "enter ", "assigns ", "assign ", "deals ",
+        "deal ", "becomes ", "become ", "costs ", "cost ",
+    ]
+    .iter()
+    .any(|prefix| low.starts_with(prefix))
+}
+
+fn parse_static_with_optional_subject(
+    clause: &str,
+    subj_prefix: Option<&str>,
+    vocab: &Vocabulary,
+) -> Option<StaticAbilityAst> {
+    let parse_one = |text: &str| match parse_static_or_replacement(text, vocab) {
+        Ok(StaticOrReplacement::Static(st)) => Some(st),
+        _ => None,
+    };
+    if starts_with_static_predicate_verb(clause)
+        && let Some(sp) = subj_prefix
+    {
+        return parse_one(&format!("{sp} {clause}")).or_else(|| parse_one(clause));
+    }
+    parse_one(clause).or_else(|| subj_prefix.and_then(|sp| parse_one(&format!("{sp} {clause}"))))
 }
 
 /// Convenience constructor for a `GrantKeywords` static ability.

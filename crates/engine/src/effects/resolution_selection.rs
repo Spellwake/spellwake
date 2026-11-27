@@ -2190,7 +2190,8 @@ impl EffectWindow {
                 }
                 DelayedReturnTiming::UntilSourceLeaves => {
                     if let Some(src) = source_id {
-                        self.linked_exiles
+                        self.characteristics
+                            .linked_exiles
                             .entry(src)
                             .or_default()
                             .extend(new_ids.iter().copied());
@@ -4033,7 +4034,8 @@ impl EffectWindow {
         if let ResolutionSelectionOperation::ExileLinkedTargets { source, .. } = operation {
             for (movement, _) in &ordered {
                 if movement.after.zone() == ObjectZone::Exile {
-                    self.linked_exiles
+                    self.characteristics
+                        .linked_exiles
                         .entry(*source)
                         .or_default()
                         .extend(movement.arrivals());
@@ -4079,7 +4081,8 @@ impl EffectWindow {
                         self.remember_imprinted_card(cursor.entry, movement);
                     }
                     if let Some(source) = source {
-                        self.linked_exiles
+                        self.characteristics
+                            .linked_exiles
                             .entry(*source)
                             .or_default()
                             .extend(movement.arrivals());

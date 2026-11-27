@@ -162,7 +162,7 @@ pub enum ZoneDest {
         tapped: bool,
         attacking: bool,
         transformed: bool,
-        face_down: bool,
+        face_down: Option<crate::face_down::FaceDownKind>,
         entering_counters: Vec<(CounterKind, Box<ValueExpr>)>,
         attach_to: Option<Box<ObjectQuery>>,
     },
@@ -235,7 +235,7 @@ impl ZoneDest {
             tapped: false,
             attacking: false,
             transformed: false,
-            face_down: false,
+            face_down: None,
             entering_counters: Vec::new(),
             attach_to: None,
         }
@@ -249,7 +249,21 @@ impl ZoneDest {
             tapped,
             attacking: false,
             transformed: false,
-            face_down: true,
+            face_down: Some(crate::face_down::FaceDownKind::Manifest),
+            entering_counters: Vec::new(),
+            attach_to: None,
+        }
+    }
+
+    /// Cloaked face-down battlefield entry (2/2 colorless nameless creature with ward {2}, CR 701.58a) under `controller`.
+    #[must_use]
+    pub const fn battlefield_cloaked(controller: ZoneController, tapped: bool) -> Self {
+        Self::Battlefield {
+            controller,
+            tapped,
+            attacking: false,
+            transformed: false,
+            face_down: Some(crate::face_down::FaceDownKind::Cloak),
             entering_counters: Vec::new(),
             attach_to: None,
         }
@@ -431,7 +445,7 @@ impl ZoneOpSpec {
                 tapped: false,
                 attacking: false,
                 transformed,
-                face_down: false,
+                face_down: None,
                 entering_counters: Vec::new(),
                 attach_to: None,
             },
@@ -515,7 +529,7 @@ impl ZoneOpSpec {
                 tapped: false,
                 attacking: false,
                 transformed: false,
-                face_down: false,
+                face_down: None,
                 entering_counters: Vec::new(),
                 attach_to: None,
             },

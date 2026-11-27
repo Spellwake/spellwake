@@ -172,6 +172,9 @@ fn casting_payment_view(
             spellwake_engine::program::SplitHalf::Right => "Right",
         });
     }
+    if payment.fused {
+        value["fused"] = json!(true);
+    }
     if payment.adventure {
         value["adventure"] = json!(true);
     }

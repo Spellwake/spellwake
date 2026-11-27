@@ -245,7 +245,7 @@ fn zone_op_until_match_enters_battlefield_tapped_with_counters() {
                 tapped: true,
                 attacking: false,
                 transformed: false,
-                face_down: false,
+                face_down: None,
                 entering_counters: vec![(CounterKind::PlusOne, Box::new(ValueExpr::literal(2)))],
                 attach_to: None,
             },
@@ -3041,6 +3041,12 @@ fn phase10_mutate_object_create_token_copy_clones_target_creature() {
                             strip_mana_cost: false,
                             defender_scope:
                                 spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                            extra_activated: Vec::new(),
+                            extra_triggered: Vec::new(),
+                            extra_static: Vec::new(),
+                            extra_mana: Vec::new(),
+                            extra_counters: Vec::new(),
+                            keep_name: false,
                         }),
                     ),
                 ))],
@@ -3214,6 +3220,7 @@ fn phase11_room_split_card_unlock_doors_and_cr709_5e_characteristics() {
             left,
             right,
             aftermath: false,
+            fuse: false,
         }
         .into_program()
         .expect("Room split card must combine"),
@@ -3238,6 +3245,7 @@ fn phase11_room_split_card_unlock_doors_and_cr709_5e_characteristics() {
                 modes: Vec::new(),
                 adventure: false,
                 split_half: Some(SplitHalf::Left),
+                fused: false,
                 disturb: false,
                 modal_back: false,
                 prototype: false,
@@ -3713,6 +3721,7 @@ fn phase15_per_extra_target_cost_strive_charges_for_second_target() {
             modes: Vec::new(),
             adventure: false,
             split_half: None,
+            fused: false,
             disturb: false,
             modal_back: false,
             prototype: false,
@@ -3831,5 +3840,269 @@ fn phase15_next_spell_cast_keyword_storm_copies_next_spell() {
         s3.execution().life_total(P0),
         Some(&RulesInteger::from(26)),
         "NextSpellCastKeyword::Storm must copy the next spell once (20 + 3 + 3 = 26)"
+    );
+}
+
+#[test]
+fn phase16_cloak_enters_2_2_with_ward_2_and_turns_face_up_for_mana_cost() {
+    use spellwake_engine::face_down::FaceDownKind;
+
+    let vocab = vocabulary();
+    let titan = validated(
+        Program::creature(Some(ManaCost::free()), 6.into(), 5.into(), BTreeSet::new()),
+        &vocab,
+    );
+    let spell = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                    ObjectQuery::ZoneScan {
+                        zone: QueryZone::Library(Box::new(PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ))),
+                        filter: Box::new(ObjectFilter::any()),
+                        slice: QuerySlice::Top(Box::new(ValueExpr::literal(1))),
+                    },
+                    ZoneDest::battlefield_cloaked(
+                        ZoneController::Player(Box::new(PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ))),
+                        false,
+                    ),
+                )))],
+            ),
+        ),
+        &vocab,
+    );
+
+    let game = init_world(vocab, vec![in_hand(1, P0, spell), in_library(2, P0, titan)]);
+    let after = cast_untargeted(&game, 1).into_state();
+    let card_obj = after
+        .execution()
+        .window()
+        .cards()
+        .get(object(&after, 2))
+        .expect("cloaked card on battlefield");
+    assert_eq!(card_obj.zone(), ObjectZone::Battlefield);
+    assert_eq!(
+        card_obj.face_down(),
+        Some(FaceDownKind::Cloak),
+        "ZoneDest::battlefield_cloaked must enter with FaceDownKind::Cloak"
+    );
+    let eval = after.execution().evaluated_characteristics().unwrap();
+    let view = eval
+        .get(card_obj.id())
+        .expect("evaluated cloaked permanent");
+    let pt = view.power_toughness.as_ref().expect("2/2 P/T");
+    assert_eq!(pt.derived.power, RulesInteger::from(2));
+    assert_eq!(pt.derived.toughness, RulesInteger::from(2));
+    assert!(
+        !view.abilities.triggered.is_empty(),
+        "Cloaked creature must have Ward 2 triggered ability"
+    );
+    assert!(
+        after
+            .execution()
+            .manifest_face_up_cost(card_obj.id())
+            .is_some(),
+        "Cloaked creature card must be turnable face up for its printed mana cost"
+    );
+
+    // Turn the cloaked 6/5 face up by paying its free creature mana cost.
+    let face_up = submit(
+        &after,
+        P0,
+        GameCommand::TurnFaceUp {
+            permanent: card_obj.id(),
+            ability: 0,
+            payment: Some(ManaPayment::default()),
+        },
+    )
+    .into_state();
+    let revealed = face_up
+        .execution()
+        .window()
+        .cards()
+        .get(object(&face_up, 2))
+        .expect("turned face up");
+    assert_eq!(revealed.face_down(), None);
+    let eval_up = face_up.execution().evaluated_characteristics().unwrap();
+    let pt_up = eval_up
+        .get(revealed.id())
+        .unwrap()
+        .power_toughness
+        .as_ref()
+        .unwrap();
+    assert_eq!(pt_up.derived.power, RulesInteger::from(6));
+    assert_eq!(pt_up.derived.toughness, RulesInteger::from(5));
+}
+
+#[test]
+fn phase16_fuse_split_card_casts_both_halves_from_hand_and_rejects_non_hand() {
+    use spellwake_engine::mana::CastingPayment;
+    use spellwake_engine::program::{DamageAmountSpec, SplitCard};
+
+    let vocab = vocabulary();
+    let left = Program::sorcery(
+        ManaCost::free(),
+        ExecutableBody::new(
+            BodyTarget::SinglePlayer,
+            vec![Instruction::DealDamage(Box::new(DealDamageSpec::new(
+                DamageSourceQuery::EntrySource,
+                DamageTargetQuery::Targets,
+                DamageAmountSpec::Expr(ValueExpr::literal(2)),
+            )))],
+        ),
+    );
+    let right = Program::sorcery(
+        ManaCost::free(),
+        ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                ValueExpr::literal(3),
+            )))],
+        ),
+    );
+    let fused_split = validated(
+        SplitCard {
+            left,
+            right,
+            aftermath: false,
+            fuse: true,
+        }
+        .into_program()
+        .expect("Fuse split card must combine"),
+        &vocab,
+    );
+
+    let game = init_world(vocab, vec![in_hand(1, P0, fused_split)]);
+    let cast = submit(
+        &game,
+        P0,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1),
+            target: Some(TargetRef::Player(P1)),
+            payment: CastingPayment {
+                fused: true,
+                ..CastingPayment::default()
+            },
+        },
+    );
+    let after = pass_pair(cast.state()).into_state();
+    assert_eq!(
+        after.execution().life_total(P1),
+        Some(&RulesInteger::from(18)),
+        "Left Fuse half must deal 2 damage to targeted opponent"
+    );
+    assert_eq!(
+        after.execution().life_total(P0),
+        Some(&RulesInteger::from(23)),
+        "Right Fuse half must gain 3 life for controller"
+    );
+}
+
+#[test]
+fn phase16_static_set_power_preserves_toughness() {
+    let vocab = vocabulary();
+    let beast = bear(4, 5, BTreeSet::new(), &vocab);
+    let mut humbler = Program::artifact(Some(ManaCost::free()), Vec::new());
+    humbler.continuous = Some(StaticContinuousAbility::Battlefield {
+        id: StaticAbilityId(1),
+        selector: PermanentSelector {
+            required_types: BTreeSet::from([CardType::Creature]),
+            ..PermanentSelector::default()
+        },
+        parts: StaticParts(vec![StaticPart::SetPower(NumericExpression::Literal(
+            0.into(),
+        ))]),
+    });
+    let humbler = validated(humbler, &vocab);
+
+    let game = init_world(vocab, vec![bf(1, P0, beast), bf(2, P0, humbler)]);
+    let eval = game.execution().evaluated_characteristics().unwrap();
+    let pt = eval
+        .get(object(&game, 1))
+        .unwrap()
+        .power_toughness
+        .as_ref()
+        .unwrap();
+    assert_eq!(pt.derived.power, RulesInteger::from(0));
+    assert_eq!(
+        pt.derived.toughness,
+        RulesInteger::from(5),
+        "StaticPart::SetPower must preserve printed toughness"
+    );
+}
+
+#[test]
+fn phase16_surveil_populates_last_moved_objects_when_milled_to_graveyard() {
+    use spellwake_engine::effects::LibraryTopReply;
+    use spellwake_engine::program::MoveSubjectRef;
+
+    let vocab = vocabulary();
+    let card_a = bear(2, 2, BTreeSet::new(), &vocab);
+    let surveil_and_regrow = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![
+                    Instruction::MutatePlayer(Box::new(MutatePlayerSpec::surveil(
+                        ResolvingPlayer::Controller,
+                        ValueExpr::literal(1),
+                    ))),
+                    Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                        ObjectQuery::from_move_subject(MoveSubjectRef::LastMoved),
+                        ZoneDest::Hand,
+                    ))),
+                ],
+            ),
+        ),
+        &vocab,
+    );
+
+    let game = init_world(
+        vocab,
+        vec![
+            in_hand(1, P0, surveil_and_regrow),
+            in_library(2, P0, card_a),
+        ],
+    );
+    let cast = submit(
+        &game,
+        P0,
+        GameCommand::CastUntargeted {
+            spell: object(&game, 1),
+            payment: Some(ManaPayment::default()),
+        },
+    );
+    let prompt = pass_pair(cast.state()).into_state();
+    let decision = prompt.pending_decision().expect("surveil decision pending");
+    let card_id = object(&prompt, 2);
+    let after = submit(
+        &prompt,
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::LibraryTop(LibraryTopReply::Surveil {
+                top_first: Vec::new(),
+                to_graveyard: vec![card_id],
+            }),
+        },
+    )
+    .into_state();
+    let moved = after
+        .execution()
+        .window()
+        .cards()
+        .get(object(&after, 2))
+        .expect("surveiled card");
+    assert_eq!(
+        moved.zone(),
+        ObjectZone::Hand(P0),
+        "Surveil into graveyard must populate last_moved_objects for follow-up LastMoved move"
     );
 }

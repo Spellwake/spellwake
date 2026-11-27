@@ -25,6 +25,8 @@ pub enum SpellCastZoneFilter {
     Hand,
     /// Not cast from its owner's hand (including copies never cast).
     NotOwnersHand,
+    /// Cast from exile where the card was exiled with the ability source.
+    LinkedExile,
 }
 
 /// Target-shape constraint on a spell on the stack.
@@ -225,6 +227,13 @@ impl SpellFilter {
     #[must_use]
     pub const fn not_from_owners_hand(mut self) -> Self {
         self.cast_zone = SpellCastZoneFilter::NotOwnersHand;
+        self
+    }
+
+    /// Restrict to spells cast from linked exile of the ability source.
+    #[must_use]
+    pub const fn from_linked_exile(mut self) -> Self {
+        self.cast_zone = SpellCastZoneFilter::LinkedExile;
         self
     }
 

@@ -2771,6 +2771,184 @@ pub(super) fn lower_control_misc_instruction(
             builder.instructions.extend(ops);
             Ok(())
         }
+        InstructionAst::CloakByPlayer {
+            player,
+            count,
+            subject,
+        } => {
+            if *player == PlayerRefAst::You {
+                return lower_instruction(
+                    &InstructionAst::Cloak {
+                        count: count.clone(),
+                        subject: subject.clone(),
+                    },
+                    builder,
+                    vocabulary,
+                    ids,
+                    in_trigger,
+                    self_pronoun_valid,
+                    bound_x,
+                );
+            }
+            if *player == PlayerRefAst::ItsOwner && builder.target == BodyTarget::None {
+                return Err("oracle:unsupported-its-owner");
+            }
+            let build_ops = |rp: ResolvingPlayer,
+                             b: &BodyBuilder|
+             -> Result<Vec<Instruction>, &'static str> {
+                let p_sel = spellwake_engine::toolbox::PlayerSelector::Resolving(rp);
+                let dest = spellwake_engine::toolbox::ZoneDest::battlefield_cloaked(
+                    spellwake_engine::toolbox::ZoneController::Player(Box::new(p_sel.clone())),
+                    false,
+                );
+                let amt = lower_value_expr_in_context(
+                    resolve_x(count, bound_x),
+                    b,
+                    in_trigger,
+                    vocabulary,
+                )?;
+                match subject.as_deref() {
+                    None => {
+                        let spec = spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                    p_sel,
+                                )),
+                                filter: Box::new(ObjectFilter::any()),
+                                slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(amt)),
+                            },
+                            dest,
+                        );
+                        Ok(vec![
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec),
+                        ])
+                    }
+                    Some(SubjectRefAst::Group(f))
+                        if matches!(
+                            f.zone,
+                            Some(
+                                ZoneFilter::YourHand
+                                    | ZoneFilter::ThatPlayerHand
+                                    | ZoneFilter::EachPlayerHand
+                            )
+                        ) && !f.any_spell
+                            && !f.is_ability =>
+                    {
+                        let mut clean = f.as_ref().clone();
+                        clean.zone = None;
+                        if matches!(
+                            clean.controller,
+                            Some(ControllerRelation::You | ControllerRelation::ThatPlayer)
+                        ) {
+                            clean.controller = None;
+                        }
+                        let obj = if is_unrestricted_filter(&clean) {
+                            ObjectFilter::any()
+                        } else {
+                            lower_object_filter_in_context(&clean, b, in_trigger, vocabulary)?
+                        };
+                        let spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Hand(Box::new(p_sel.clone())),
+                                obj,
+                            ),
+                            spellwake_engine::toolbox::ZoneSelection::Prompt {
+                                chooser: p_sel,
+                                min: Box::new(amt.clone()),
+                                max: Box::new(amt),
+                                constraint: None,
+                                category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                hidden: true,
+                            },
+                            dest,
+                        );
+                        Ok(vec![
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec),
+                        ])
+                    }
+                    Some(SubjectRefAst::Anaphora(raw)) => {
+                        let low = raw.trim().to_ascii_lowercase();
+                        if matches!(
+                            low.as_str(),
+                            "the top card of their library"
+                                | "top card of their library"
+                                | "the top card of that player's library"
+                                | "top card of that player's library"
+                                | "the top card of your library"
+                                | "top card of your library"
+                        ) {
+                            let spec = spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
+                                        p_sel,
+                                    )),
+                                    filter: Box::new(ObjectFilter::any()),
+                                    slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(
+                                        amt,
+                                    )),
+                                },
+                                dest,
+                            );
+                            return Ok(vec![
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                    spec,
+                                ),
+                            ]);
+                        }
+                        if matches!(
+                            low.as_str(),
+                            "it" | "that card"
+                                | "them"
+                                | "those cards"
+                                | "the exiled card"
+                                | "that exiled card"
+                                | "the revealed card"
+                                | "that revealed card"
+                        ) {
+                            let q = if b.target != BodyTarget::None
+                                && !matches!(
+                                    b.target,
+                                    BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                                ) {
+                                spellwake_engine::toolbox::ObjectQuery::Targets
+                            } else if last_instruction_moved_object(&b.instructions)
+                                || has_prior_moved_object(&b.instructions)
+                            {
+                                spellwake_engine::toolbox::ObjectQuery::LastMoved
+                            } else if in_trigger {
+                                spellwake_engine::toolbox::ObjectQuery::TriggerSubject
+                            } else {
+                                return Err("oracle:unsupported-cloak-subject");
+                            };
+                            return Ok(vec![
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                    spellwake_engine::toolbox::ZoneOpSpec::move_all(q, dest),
+                                ),
+                            ]);
+                        }
+                        Err("oracle:unsupported-cloak-subject")
+                    }
+                    Some(SubjectRefAst::TriggerSubject) if in_trigger => Ok(vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::TriggerSubject,
+                                dest,
+                            ),
+                        ),
+                    ]),
+                    _ => Err("oracle:unsupported-cloak-subject"),
+                }
+            };
+            if let Some(players) = try_group_affected_players(*player) {
+                let ops = build_ops(ResolvingPlayer::LoopPlayer, builder)?;
+                push_for_each_player(players, ops, builder);
+                return Ok(());
+            }
+            let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+            let ops = build_ops(rp, builder)?;
+            builder.instructions.extend(ops);
+            Ok(())
+        }
         InstructionAst::SacrificeAllExcept {
             player,
             filter,
@@ -6339,6 +6517,15 @@ pub(super) fn rewrite_loop_player_ast(
             dread: *dread,
             subject: subject.as_deref().map(|s| Box::new(map_subj(s))),
         },
+        InstructionAst::CloakByPlayer {
+            player,
+            count,
+            subject,
+        } => InstructionAst::CloakByPlayer {
+            player: map_p(*player),
+            count: Box::new(map_ve(count)),
+            subject: subject.as_deref().map(|s| Box::new(map_subj(s))),
+        },
         InstructionAst::SacrificeAllExcept {
             player,
             filter,
@@ -7789,7 +7976,9 @@ fn lower_standalone_choose_and_keep(
             tapped: keep_low.contains("tapped"),
             attacking: keep_low.contains("attacking"),
             transformed: false,
-            face_down: keep_low.contains("face down"),
+            face_down: keep_low
+                .contains("face down")
+                .then_some(spellwake_engine::face_down::FaceDownKind::Manifest),
             entering_counters: Vec::new(),
             attach_to: None,
         }
@@ -8355,7 +8544,8 @@ pub(super) fn lower_shuffle_that_player_fallback(
         BodyTarget::AnyGraveyardCard
         | BodyTarget::AnyGraveyardCreature
         | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
-        | BodyTarget::FilteredAnyGraveyardCard { .. } => Some(ResolvingPlayer::TargetOwner),
+        | BodyTarget::FilteredAnyGraveyardCard { .. }
+        | BodyTarget::FilteredExiledCard(_) => Some(ResolvingPlayer::TargetOwner),
         _ => None,
     };
     if let Some(rp) = target_rp

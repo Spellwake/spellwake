@@ -8721,9 +8721,13 @@ pub(super) fn temp_static_selector_to_clause(
         solved,
         exerted,
         toughness_greater_than_power,
+        blocked_this_turn,
+        paired_with_source,
     } = selector;
     if !required_subtypes.is_empty()
         || *toughness_greater_than_power
+        || blocked_this_turn.is_some()
+        || *paired_with_source
         || !any_subtypes.is_empty()
         || !forbidden_subtypes.is_empty()
         || owner.is_some()
@@ -8995,6 +8999,12 @@ pub(super) fn try_lower_temp_battlefield_static(
                     self_pronoun_valid,
                 )?),
             },
+            StaticPart::SetPower(p) => ResolvedPartSpec::SetPower(Box::new(
+                numeric_expr_to_value_expr_temp(p.clone(), self_pronoun_valid)?,
+            )),
+            StaticPart::SetToughness(t) => ResolvedPartSpec::SetToughness(Box::new(
+                numeric_expr_to_value_expr_temp(t.clone(), self_pronoun_valid)?,
+            )),
             StaticPart::SetPTToOwnManaValue
                 if selector.controller == ControllerSelector::SourceItself
                     && self_pronoun_valid =>
@@ -9113,9 +9123,13 @@ pub(super) fn try_lower_temp_battlefield_static(
             solved,
             exerted,
             toughness_greater_than_power,
+            blocked_this_turn,
+            paired_with_source,
         } = selector;
         if !self_pronoun_valid
             || *toughness_greater_than_power
+            || blocked_this_turn.is_some()
+            || *paired_with_source
             || !required_subtypes.is_empty()
             || !any_subtypes.is_empty()
             || !forbidden_subtypes.is_empty()

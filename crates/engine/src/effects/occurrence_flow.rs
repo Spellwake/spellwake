@@ -3551,7 +3551,7 @@ impl EffectWindow {
         append.append(records);
         let mut linked = Vec::new();
         for source in departing_link_sources {
-            if let Some(objects) = self.linked_exiles.remove(&source) {
+            if let Some(objects) = self.characteristics.linked_exiles.remove(&source) {
                 linked.extend(objects);
             }
         }

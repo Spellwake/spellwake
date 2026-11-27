@@ -650,7 +650,7 @@ fn move_group_to_library_bottom_random_and_move_graveyard_group_owned() {
                             tapped: true,
                             attacking: false,
                             transformed: false,
-                            face_down: false,
+                            face_down: None,
                             entering_counters: (None)
                                 .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
                                     (
@@ -1186,6 +1186,12 @@ fn create_token_copy_ext_applies_nonlegendary_pt_keywords_and_colors() {
                             defender_scope: AttackingDefenderScope::AnyLegal,
                             override_colors: None,
                             strip_mana_cost: false,
+                            extra_activated: Vec::new(),
+                            extra_triggered: Vec::new(),
+                            extra_static: Vec::new(),
+                            extra_mana: Vec::new(),
+                            extra_counters: Vec::new(),
+                            keep_name: false,
                         }),
                     ),
                 ))],
@@ -1600,7 +1606,7 @@ fn zone_replacement_source_self_discard_by_opponent_matching_not_cast_and_exile_
                             tapped: false,
                             attacking: false,
                             transformed: false,
-                            face_down: false,
+                            face_down: None,
                             entering_counters: (None)
                                 .map(|(k, c): (spellwake_engine::effects::CounterKind, u8)| {
                                     (
@@ -1717,6 +1723,10 @@ fn entry_copy_matching_ext_keeps_name_grants_keywords_and_conditional_counters()
             CounterKind::PlusOne,
             2,
         )],
+        override_colors: None,
+        extra_artifact_subtypes: BTreeSet::new(),
+        extra_enchantment_subtypes: BTreeSet::new(),
+        extra_supertypes: BTreeSet::new(),
         extra_activated: vec![],
         extra_triggered: vec![],
         extra_static: vec![],

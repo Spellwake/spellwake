@@ -2618,6 +2618,9 @@ pub(super) fn match_trigger_event(
                             change.before.object.zone(),
                             ObjectZone::Graveyard(_) | ObjectZone::Exile | ObjectZone::Battlefield
                         ),
+                        TriggerFromZone::NotBattlefield => {
+                            change.before.object.zone() != ObjectZone::Battlefield
+                        }
                         TriggerFromZone::Any => true,
                     }
                     && subject.matches_appearance_with_names(
@@ -2709,6 +2712,9 @@ pub(super) fn match_trigger_event(
                         change.before.object.zone(),
                         ObjectZone::Graveyard(_) | ObjectZone::Exile
                     ),
+                    TriggerFromZone::NotBattlefield => {
+                        change.before.object.zone() != ObjectZone::Battlefield
+                    }
                 }
                 && subject.matches_appearance_with_names(source, controller, &change.before, after)
             {
@@ -4937,6 +4943,27 @@ fn matches_cast_spell_filter(
             .spell()
             .cast_origin
             .is_some_and(|(_, from_hand)| from_hand),
+        SpellCastZoneFilter::LinkedExile => {
+            cast.cast_from_exile
+                && cast.cast_original_object.is_some_and(|orig| {
+                    let src = source.object.id();
+                    after
+                        .characteristics
+                        .linked_exiles
+                        .get(&src)
+                        .is_some_and(|list| list.contains(&orig))
+                        || after
+                            .characteristics
+                            .imprinted_cards
+                            .get(&src)
+                            .is_some_and(|list| list.contains(&orig))
+                        || after
+                            .characteristics
+                            .ability_donors_in_exile
+                            .get(&src)
+                            .is_some_and(|list| list.contains(&orig))
+                })
+        }
     };
     if !zone_ok {
         return false;

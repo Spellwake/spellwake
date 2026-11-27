@@ -9,7 +9,7 @@ impl EffectWindow {
         expected: u64,
         actor: SeatId,
         spell: ObjectId,
-        target: Option<TargetRef>,
+        mut target: Option<TargetRef>,
         payment: crate::mana::CastingPayment,
         turn: Option<&TurnScheduler>,
         resolving_cast: Option<ResolvingCast<'_>>,
@@ -25,12 +25,36 @@ impl EffectWindow {
         let printed = source.card_id().and_then(|card| self.programs.get(&card));
         let siege = resolving_cast.is_some_and(|cast| cast.kind == ExileCastAbility::Siege);
         let split = printed.and_then(|card| card.split.as_deref());
-        let selected = match (split, payment.split_half, payment.adventure) {
-            (Some(split), half, false) => {
-                Some((split, half.unwrap_or(crate::program::SplitHalf::Left)))
+        if payment.fused {
+            let Some(split) = split else {
+                return Err(EffectError::InvalidCastResource);
+            };
+            if !split.fuse
+                || split.aftermath
+                || split.is_room()
+                || source.zone() != ObjectZone::Hand(actor)
+                || source.face_down().is_some()
+                || resolving_cast.is_some()
+                || payment.split_half.is_some()
+                || payment.adventure
+                || payment.disturb
+                || payment.modal_back
+                || payment.prototype
+                || payment.prepare
+            {
+                return Err(EffectError::InvalidCastResource);
             }
-            (None, None, _) => None,
-            _ => return Err(EffectError::InvalidCastResource),
+        }
+        let selected = if payment.fused {
+            None
+        } else {
+            match (split, payment.split_half, payment.adventure) {
+                (Some(split), half, false) => {
+                    Some((split, half.unwrap_or(crate::program::SplitHalf::Left)))
+                }
+                (None, None, _) => None,
+                _ => return Err(EffectError::InvalidCastResource),
+            }
         };
         let aftermath = selected.is_some_and(|(split, half)| {
             split.aftermath && half == crate::program::SplitHalf::Right
@@ -1341,7 +1365,21 @@ impl EffectWindow {
                     } else {
                         &spell.cost
                     },
-                    if spell.modes.is_some() {
+                    if payment.fused {
+                        let split = split.ok_or(EffectError::InvalidCastResource)?;
+                        let fused = self.compose_fused_spell(
+                            program,
+                            split,
+                            &mut target,
+                            &payment,
+                            actor,
+                            &current,
+                            current_spell,
+                        )?;
+                        mode_clauses = fused.clauses;
+                        mode_targets = fused.targets;
+                        fused.payload
+                    } else if spell.modes.is_some() {
                         if !payment.fixed_targets.is_empty() {
                             return Err(EffectError::UnexpectedTarget);
                         }
@@ -1429,7 +1467,7 @@ impl EffectWindow {
                 )
             }
             ProgramKind::Permanent(permanent) if !program.has_type(CardType::Land) => {
-                if !payment.modes.is_empty() || !payment.fixed_targets.is_empty() {
+                if payment.fused || !payment.modes.is_empty() || !payment.fixed_targets.is_empty() {
                     return Err(EffectError::InvalidCastResource);
                 }
                 let cost = if let Some(disturb) = disturb {
@@ -1474,7 +1512,12 @@ impl EffectWindow {
                 .map(|body| body.target)
                 .unwrap_or_else(|| enchant.map_or(BodyTarget::None, |value| value.target()))
         };
-        if program.cast_during_own_combat
+        let requires_own_combat = program.cast_during_own_combat
+            || (payment.fused
+                && split.is_some_and(|s| {
+                    s.left.cast_during_own_combat || s.right.cast_during_own_combat
+                }));
+        if requires_own_combat
             && (actor != self.window.active_player()
                 || turn
                     .map(|s| s.position().step)
@@ -1483,7 +1526,23 @@ impl EffectWindow {
         {
             return Err(EffectError::InvalidCastResource);
         }
-        if let Some(timing) = &program.cast_timing
+        if payment.fused
+            && let Some(split) = split
+        {
+            for half in [&split.left, &split.right] {
+                if let Some(timing) = &half.cast_timing
+                    && !self.cast_timing_satisfied_with_x(
+                        timing,
+                        source.id(),
+                        actor,
+                        turn,
+                        payment.chosen_x.as_ref(),
+                    )?
+                {
+                    return Err(EffectError::InvalidCastResource);
+                }
+            }
+        } else if let Some(timing) = &program.cast_timing
             && !self.cast_timing_satisfied_with_x(
                 timing,
                 source.id(),
@@ -3807,6 +3866,25 @@ impl EffectWindow {
             crate::program::SpellCastZoneFilter::NotOwnersHand => {
                 physical.zone() != ObjectZone::Hand(physical.owner())
             }
+            crate::program::SpellCastZoneFilter::LinkedExile => {
+                physical.zone() == ObjectZone::Exile
+                    && source_object.is_some_and(|src| {
+                        self.characteristics
+                            .linked_exiles
+                            .get(&src)
+                            .is_some_and(|v| v.contains(&physical.id()))
+                            || self
+                                .characteristics
+                                .imprinted_cards
+                                .get(&src)
+                                .is_some_and(|v| v.contains(&physical.id()))
+                            || self
+                                .characteristics
+                                .ability_donors_in_exile
+                                .get(&src)
+                                .is_some_and(|v| v.contains(&physical.id()))
+                    })
+            }
         };
         if !zone_ok {
             return false;
@@ -3945,6 +4023,7 @@ impl EffectWindow {
             crate::program::SpellCastZoneFilter::NotOwnersHand => {
                 physical.zone() != ObjectZone::Hand(physical.owner())
             }
+            crate::program::SpellCastZoneFilter::LinkedExile => false,
         };
         if !zone_ok {
             return false;
@@ -4117,6 +4196,7 @@ impl EffectWindow {
             crate::program::SpellCastZoneFilter::OwnLibrary => {
                 !rec.from_hand && !rec.from_graveyard && !rec.from_exile
             }
+            crate::program::SpellCastZoneFilter::LinkedExile => false,
         };
         if !zone_ok {
             return false;
@@ -4239,4 +4319,361 @@ impl EffectWindow {
             crate::program::ObjectFilter::Either(a, b) => match_clause(a) || match_clause(b),
         }
     }
+
+    /// Build the combined executable payload, target clauses, and bound targets for a fused split spell (CR 702.102).
+    #[allow(clippy::too_many_arguments)] // Combines both halves of a fused split spell with full announcement context.
+    fn compose_fused_spell(
+        &self,
+        program: &Program,
+        split: &crate::program::SplitCard,
+        target: &mut Option<TargetRef>,
+        payment: &crate::mana::CastingPayment,
+        actor: SeatId,
+        current: &EvaluatedCharacteristics,
+        current_spell: &ObjectCharacteristics,
+    ) -> Result<FusedSpellPlan, EffectError> {
+        let (ProgramKind::Spell(left_spell), ProgramKind::Spell(right_spell)) =
+            (&split.left.kind, &split.right.kind)
+        else {
+            return Err(EffectError::InconsistentProgram);
+        };
+        if !payment.modes.is_empty()
+            || !payment.permanent_targets.is_empty()
+            || left_spell.modes.is_some()
+            || right_spell.modes.is_some()
+            || left_spell.body.permanent_target_bounds().is_some()
+            || right_spell.body.permanent_target_bounds().is_some()
+            || left_spell.body.dependent_targets().is_some()
+            || right_spell.body.dependent_targets().is_some()
+        {
+            return Err(EffectError::InvalidCastResource);
+        }
+        let half_target_spec = |body: &ExecutableBody| -> (bool, usize) {
+            let fixed = body
+                .instructions
+                .iter()
+                .filter(|op| matches!(op, Instruction::FixedTargetClause(_)))
+                .count();
+            if fixed > 0 {
+                (true, fixed)
+            } else if body.target != BodyTarget::None {
+                (false, 1)
+            } else {
+                (false, 0)
+            }
+        };
+        let (left_has_fixed, left_count) = half_target_spec(&left_spell.body);
+        let (right_has_fixed, right_count) = half_target_spec(&right_spell.body);
+        let total_required = left_count + right_count;
+        let chosen_targets: Vec<TargetRef> = match total_required {
+            0 => {
+                if target.is_some() || !payment.fixed_targets.is_empty() {
+                    return Err(EffectError::UnexpectedTarget);
+                }
+                Vec::new()
+            }
+            1 => match (*target, payment.fixed_targets.as_slice()) {
+                (Some(chosen), []) => vec![chosen],
+                (None, [chosen]) => vec![*chosen],
+                (None, []) => return Err(EffectError::TargetRequired),
+                _ => return Err(EffectError::UnexpectedTarget),
+            },
+            _ => {
+                if target.is_some() {
+                    return Err(EffectError::UnexpectedTarget);
+                }
+                if payment.fixed_targets.len() < total_required {
+                    return Err(EffectError::TargetRequired);
+                }
+                if payment.fixed_targets.len() > total_required {
+                    return Err(EffectError::UnexpectedTarget);
+                }
+                payment.fixed_targets.clone()
+            }
+        };
+        *target = None;
+
+        let mut combined_instructions = Vec::new();
+        let mut segments = Vec::new();
+        let mut clauses = Vec::new();
+        let mut targets = Vec::new();
+        let mut splice_target_bodies = BTreeMap::new();
+        let mut next_target_id: u32 = 0;
+        let mut next_clause_id: u32 = 0;
+        let mut cursor: usize = 0;
+
+        for (half_body, has_fixed, count) in [
+            (&left_spell.body, left_has_fixed, left_count),
+            (&right_spell.body, right_has_fixed, right_count),
+        ] {
+            let half_targets = &chosen_targets[cursor..cursor + count];
+            cursor += count;
+            let base_offset = combined_instructions.len();
+            if has_fixed {
+                let expanded = self.expand_fused_fixed_clauses(
+                    half_body,
+                    half_targets,
+                    base_offset,
+                    next_target_id,
+                    next_clause_id,
+                    actor,
+                    current,
+                    current_spell,
+                )?;
+                let added = u32::try_from(expanded.targets.len())
+                    .map_err(|_| EffectError::InvalidCastResource)?;
+                next_target_id = next_target_id
+                    .checked_add(added)
+                    .ok_or(EffectError::InvalidCastResource)?;
+                next_clause_id = next_clause_id
+                    .checked_add(added)
+                    .ok_or(EffectError::InvalidCastResource)?;
+                for seg in &expanded.segments {
+                    if let Some(clause) = &seg.clause {
+                        clauses.push(clause.clone());
+                    }
+                }
+                combined_instructions.extend(expanded.instructions);
+                segments.extend(expanded.segments);
+                targets.extend(expanded.targets);
+            } else {
+                let shift =
+                    isize::try_from(base_offset).map_err(|_| EffectError::InconsistentProgram)?;
+                for mut op in half_body.instructions.iter().cloned() {
+                    if shift != 0 {
+                        op.shift_jumps(shift, 0);
+                    }
+                    combined_instructions.push(op);
+                }
+                let end = combined_instructions.len();
+                let mut bound_target = None;
+                let mut half_clause = None;
+                if count == 1 {
+                    let chosen = half_targets[0];
+                    if Self::protected_target(
+                        chosen,
+                        &protection::ProtectionSource::from(current_spell).with_controller(actor),
+                        current,
+                    ) || !self.legal_body_target_in(half_body, chosen, actor, current)
+                    {
+                        return Err(EffectError::IllegalTarget);
+                    }
+                    let id = TargetId(next_target_id);
+                    let clause_id = TargetClauseId(next_clause_id);
+                    next_target_id = next_target_id
+                        .checked_add(1)
+                        .ok_or(EffectError::InvalidCastResource)?;
+                    next_clause_id = next_clause_id
+                        .checked_add(1)
+                        .ok_or(EffectError::InvalidCastResource)?;
+                    let clause = TargetClause {
+                        id: clause_id,
+                        minimum: 1,
+                        maximum: 1,
+                    };
+                    clauses.push(clause.clone());
+                    targets.push(TargetChoice {
+                        id,
+                        clause: clause_id,
+                        target: chosen,
+                    });
+                    splice_target_bodies.insert(id, half_body.clone());
+                    bound_target = Some((id, half_body.target));
+                    half_clause = Some(clause);
+                }
+                let mut segment =
+                    modes::SelectedMode::splice(base_offset, end, bound_target.into_iter());
+                segment.clause = half_clause;
+                segments.push(segment);
+            }
+        }
+
+        let mut payload = StackPayload::from_body(
+            ExecutableBody::new(BodyTarget::None, combined_instructions),
+            Some(CopiableSpellTraits::from_program(program)),
+        );
+        if let StackPayload::Instructions(p) = &mut payload {
+            p.modes = segments;
+            p.splice_target_bodies = splice_target_bodies;
+        }
+        Ok(FusedSpellPlan {
+            payload,
+            clauses,
+            targets,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)] // Rebases a fixed-target split half onto the combined instruction stream.
+    fn expand_fused_fixed_clauses(
+        &self,
+        body: &ExecutableBody,
+        choices: &[TargetRef],
+        base_offset: usize,
+        next_target_id: u32,
+        next_clause_id: u32,
+        actor: SeatId,
+        current: &EvaluatedCharacteristics,
+        source: &ObjectCharacteristics,
+    ) -> Result<FusedFixedExpansion, EffectError> {
+        let fights = body.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::Fight { first, second }
+                    if **first == crate::program::MoveSubjectRef::RememberedFirst
+                        && **second == crate::program::MoveSubjectRef::RememberedSecond
+            )
+        });
+        if fights && matches!(choices, [first, second] if first == second) {
+            return Err(EffectError::IllegalTarget);
+        }
+        let shared_action = fights
+            || body.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::DealDamage(spec)
+                        if matches!(
+                            spec.recipients,
+                            crate::toolbox::DamageTargetQuery::CreaturePowerToOther { .. }
+                        )
+                )
+            });
+        let mut choices = choices.iter();
+        let mut instructions = Vec::new();
+        let mut segments = Vec::new();
+        let mut targets = Vec::new();
+        let mut old_to_new = Vec::with_capacity(body.instructions.len() + 1);
+        let mut outer_indices = Vec::new();
+        let mut first_target_controller: Option<SeatId> = None;
+        let protection_source = protection::ProtectionSource::from(source).with_controller(actor);
+        for op in &body.instructions {
+            old_to_new.push(base_offset + instructions.len());
+            if let Instruction::FixedTargetClause(clause) = op {
+                let target = *choices.next().ok_or(EffectError::TargetRequired)?;
+                let mut bound_clause = (**clause).clone();
+                if let BodyTarget::FilteredPermanent(filter) = &mut bound_clause.target
+                    && filter.uses_first_target_controller()
+                {
+                    let seat = first_target_controller.ok_or(EffectError::IllegalTarget)?;
+                    *filter = filter.bind_first_target_controller(seat);
+                }
+                if Self::protected_target(target, &protection_source, current)
+                    || !self.legal_body_target_in(&bound_clause, target, actor, current)
+                {
+                    return Err(EffectError::IllegalTarget);
+                }
+                if first_target_controller.is_none() {
+                    first_target_controller = match target {
+                        TargetRef::Player(seat) => Some(seat),
+                        TargetRef::Object(id) => {
+                            current.get(id).and_then(|p| p.controller).or_else(|| {
+                                self.window.cards().get(id).and_then(GameObject::controller)
+                            })
+                        }
+                        _ => None,
+                    };
+                }
+                let local_ord =
+                    u32::try_from(targets.len()).map_err(|_| EffectError::InvalidCastResource)?;
+                let id = TargetId(
+                    next_target_id
+                        .checked_add(local_ord)
+                        .ok_or(EffectError::InvalidCastResource)?,
+                );
+                let clause_id = TargetClauseId(
+                    next_clause_id
+                        .checked_add(local_ord)
+                        .ok_or(EffectError::InvalidCastResource)?,
+                );
+                targets.push(TargetChoice {
+                    id,
+                    clause: clause_id,
+                    target,
+                });
+                let start = base_offset + instructions.len();
+                if shared_action {
+                    instructions.push(Instruction::Jump {
+                        destination: start + 1,
+                    });
+                } else {
+                    let shift =
+                        isize::try_from(start).map_err(|_| EffectError::InconsistentProgram)?;
+                    for mut cloned in bound_clause.instructions.iter().cloned() {
+                        cloned.shift_jumps(shift, 0);
+                        instructions.push(cloned);
+                    }
+                }
+                let mut segment = modes::SelectedMode::splice(
+                    start,
+                    base_offset + instructions.len(),
+                    std::iter::once((id, bound_clause.target)),
+                );
+                segment.clause = Some(TargetClause {
+                    id: clause_id,
+                    minimum: 1,
+                    maximum: 1,
+                });
+                segments.push(segment);
+            } else {
+                outer_indices.push(instructions.len());
+                instructions.push(op.clone());
+            }
+        }
+        old_to_new.push(base_offset + instructions.len());
+        let remap = |dest: &mut usize| {
+            if let Some(&mapped) = old_to_new.get(*dest) {
+                *dest = mapped;
+            }
+        };
+        for idx in outer_indices {
+            match &mut instructions[idx] {
+                Instruction::MutatePlayer(spec) => match &mut spec.op {
+                    crate::toolbox::PlayerMutation::FlipCoins {
+                        lose_destination: Some(destination),
+                        ..
+                    } => remap(destination),
+                    crate::toolbox::PlayerMutation::OfferSourceCounters {
+                        placed_destination,
+                        declined_destination,
+                        ..
+                    } => {
+                        remap(placed_destination);
+                        remap(declined_destination);
+                    }
+                    _ => {}
+                },
+                Instruction::BranchIfFalse { destination, .. }
+                | Instruction::BranchCondition { destination, .. }
+                | Instruction::Jump { destination } => remap(destination),
+                Instruction::OfferDynamicManaPayment {
+                    paid_destination,
+                    declined_destination,
+                    ..
+                } => {
+                    remap(paid_destination);
+                    remap(declined_destination);
+                }
+                _ => {}
+            }
+        }
+        if choices.next().is_some() {
+            return Err(EffectError::UnexpectedTarget);
+        }
+        Ok(FusedFixedExpansion {
+            instructions,
+            segments,
+            targets,
+        })
+    }
+}
+
+struct FusedSpellPlan {
+    payload: StackPayload,
+    clauses: Vec<TargetClause>,
+    targets: Vec<TargetChoice>,
+}
+
+struct FusedFixedExpansion {
+    instructions: Vec<Instruction>,
+    segments: Vec<modes::SelectedMode>,
+    targets: Vec<TargetChoice>,
 }

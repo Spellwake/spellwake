@@ -21,11 +21,13 @@ impl EffectWindow {
         next.window.set_orientation(object, None)?;
         Ok(next.evaluated_characteristics()?.get(object).cloned())
     }
-    /// Mana cost of the actual creature card represented by this manifested permanent.
+    /// Mana cost of the actual creature card represented by this manifested or cloaked permanent.
     pub fn manifest_face_up_cost(&self, object: ObjectId) -> Option<&ManaCost> {
         let card = self.window.cards().get(object)?;
-        if card.face_down() != Some(FaceDownKind::Manifest)
-            || card.zone() != ObjectZone::Battlefield
+        if !matches!(
+            card.face_down(),
+            Some(FaceDownKind::Manifest | FaceDownKind::Cloak)
+        ) || card.zone() != ObjectZone::Battlefield
         {
             return None;
         }

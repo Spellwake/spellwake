@@ -504,24 +504,12 @@ pub(super) fn lower_static(
                 }
             }
             if let Some((p_raw, t_raw)) = base_pt {
-                if p_raw.trim().eq_ignore_ascii_case("its mana value")
-                    && t_raw.trim().eq_ignore_ascii_case("its mana value")
-                {
-                    parts.push(StaticPart::SetPTToOwnManaValue);
-                } else {
-                    let p: i64 = p_raw
-                        .trim()
-                        .parse()
-                        .map_err(|_| "oracle:unsupported-layer-pt")?;
-                    let t: i64 = t_raw
-                        .trim()
-                        .parse()
-                        .map_err(|_| "oracle:unsupported-layer-pt")?;
-                    parts.push(StaticPart::SetPT(NumericPair {
-                        power: NumericExpression::Literal(p.into()),
-                        toughness: NumericExpression::Literal(t.into()),
-                    }));
-                }
+                parts.push(lower_static_base_pt_part(
+                    p_raw,
+                    t_raw,
+                    vocabulary,
+                    "oracle:unsupported-layer-pt",
+                )?);
             }
             if parts.is_empty() {
                 return Err("oracle:empty-layer-effect");
@@ -2455,11 +2443,18 @@ pub(super) fn lower_static(
                         BlockingRestriction::CannotAttackOrBlock,
                     ));
                 }
-                parts.push(StaticPart::Abilities(AbilityChange {
-                    suppressed_activations: lock.suppressed_activations,
-                    doesnt_untap: lock.doesnt_untap,
-                    ..AbilityChange::default()
-                }));
+                if lock.cannot_crew_vehicles {
+                    parts.push(StaticPart::BlockingRestriction(
+                        BlockingRestriction::CannotCrewVehicles,
+                    ));
+                }
+                if lock.suppressed_activations.is_some() || lock.doesnt_untap {
+                    parts.push(StaticPart::Abilities(AbilityChange {
+                        suppressed_activations: lock.suppressed_activations,
+                        doesnt_untap: lock.doesnt_untap,
+                        ..AbilityChange::default()
+                    }));
+                }
                 for selector in selectors {
                     push_static_ability(
                         program,
@@ -7341,6 +7336,7 @@ fn lower_static_source_condition_ext(
                     None | Some(ControllerRelation::You | ControllerRelation::OwnerYou)
                 ) =>
         {
+            let linked_exile = (filter.flags.0 & AstFilterFlags::EXILED_WITH_SELF.0) != 0;
             let owner = if filter.owner.is_some() {
                 Some(ResolvingPlayer::Controller)
             } else {
@@ -7349,6 +7345,10 @@ fn lower_static_source_condition_ext(
             let mut cleaned = filter.as_ref().clone();
             cleaned.zone = None;
             cleaned.owner = None;
+            if linked_exile {
+                cleaned.flags =
+                    AstFilterFlags(cleaned.flags.0 & !AstFilterFlags::EXILED_WITH_SELF.0);
+            }
             for pred in &mut cleaned.predicates {
                 if let spellwake_oracle_compiler::ast::FilterPredicateAst::StateQualification(q) =
                     pred
@@ -7365,9 +7365,14 @@ fn lower_static_source_condition_ext(
             } else {
                 lower_object_filter(&cleaned, vocabulary).ok()?
             };
+            let zone = if linked_exile {
+                ValueZone::LinkedExile
+            } else {
+                ValueZone::Exile(owner)
+            };
             let rc = ResolutionCondition {
                 left: ValueExpr::Count {
-                    zone: ValueZone::Exile(owner),
+                    zone,
                     filter: Box::new(obj),
                     controller_scope: None,
                 },
@@ -11658,11 +11663,18 @@ fn lower_paired_static(
                         BlockingRestriction::CannotAttackOrBlock,
                     ));
                 }
-                parts.push(StaticPart::Abilities(AbilityChange {
-                    suppressed_activations: lock.suppressed_activations,
-                    doesnt_untap: lock.doesnt_untap,
-                    ..AbilityChange::default()
-                }));
+                if lock.cannot_crew_vehicles {
+                    parts.push(StaticPart::BlockingRestriction(
+                        BlockingRestriction::CannotCrewVehicles,
+                    ));
+                }
+                if lock.suppressed_activations.is_some() || lock.doesnt_untap {
+                    parts.push(StaticPart::Abilities(AbilityChange {
+                        suppressed_activations: lock.suppressed_activations,
+                        doesnt_untap: lock.doesnt_untap,
+                        ..AbilityChange::default()
+                    }));
+                }
                 for sel in outer_selectors {
                     let mut sel = sel.clone();
                     if let Some(sc) = &extra_sc {
@@ -12039,24 +12051,12 @@ fn lower_paired_static(
                 }
             }
             if let Some((p_raw, t_raw)) = base_pt {
-                if p_raw.trim().eq_ignore_ascii_case("its mana value")
-                    && t_raw.trim().eq_ignore_ascii_case("its mana value")
-                {
-                    parts.push(StaticPart::SetPTToOwnManaValue);
-                } else {
-                    let p: i64 = p_raw
-                        .trim()
-                        .parse()
-                        .map_err(|_| "oracle:unsupported-layer-pt")?;
-                    let t: i64 = t_raw
-                        .trim()
-                        .parse()
-                        .map_err(|_| "oracle:unsupported-layer-pt")?;
-                    parts.push(StaticPart::SetPT(NumericPair {
-                        power: NumericExpression::Literal(p.into()),
-                        toughness: NumericExpression::Literal(t.into()),
-                    }));
-                }
+                parts.push(lower_static_base_pt_part(
+                    p_raw,
+                    t_raw,
+                    vocabulary,
+                    "oracle:unsupported-layer-pt",
+                )?);
             }
             if parts.is_empty() {
                 return Err("oracle:empty-layer-effect");
@@ -12878,6 +12878,16 @@ fn static_part_to_resolved_part_spec(part: StaticPart) -> Result<ResolvedPartSpe
                 })
             }
         },
+        StaticPart::SetPower(expr) => {
+            let power =
+                numeric_expr_to_value_expr(expr).ok_or("oracle:unsupported-grant-ability-text")?;
+            Ok(ResolvedPartSpec::SetPower(Box::new(power)))
+        }
+        StaticPart::SetToughness(expr) => {
+            let toughness =
+                numeric_expr_to_value_expr(expr).ok_or("oracle:unsupported-grant-ability-text")?;
+            Ok(ResolvedPartSpec::SetToughness(Box::new(toughness)))
+        }
         StaticPart::SwitchPT => Ok(ResolvedPartSpec::SwitchPT),
         _ => Err("oracle:unsupported-grant-ability-text"),
     }
@@ -13288,24 +13298,12 @@ fn lower_granted_static_parts(
                 }
             }
             if let Some((p_raw, t_raw)) = base_pt {
-                if p_raw.trim().eq_ignore_ascii_case("its mana value")
-                    && t_raw.trim().eq_ignore_ascii_case("its mana value")
-                {
-                    parts.push(StaticPart::SetPTToOwnManaValue);
-                } else {
-                    let p: i64 = p_raw
-                        .trim()
-                        .parse()
-                        .map_err(|_| "oracle:unsupported-grant-ability-text")?;
-                    let t: i64 = t_raw
-                        .trim()
-                        .parse()
-                        .map_err(|_| "oracle:unsupported-grant-ability-text")?;
-                    parts.push(StaticPart::SetPT(NumericPair {
-                        power: NumericExpression::Literal(p.into()),
-                        toughness: NumericExpression::Literal(t.into()),
-                    }));
-                }
+                parts.push(lower_static_base_pt_part(
+                    p_raw,
+                    t_raw,
+                    vocabulary,
+                    "oracle:unsupported-grant-ability-text",
+                )?);
             }
             Ok(())
         }
@@ -13325,14 +13323,22 @@ fn lower_granted_static_parts(
                         BlockingRestriction::CannotAttackOrBlock,
                     ));
                 }
-                return push_granted_ability_change(
-                    parts,
-                    AbilityChange {
-                        suppressed_activations: lock.suppressed_activations,
-                        doesnt_untap: lock.doesnt_untap,
-                        ..AbilityChange::default()
-                    },
-                );
+                if lock.cannot_crew_vehicles {
+                    parts.push(StaticPart::BlockingRestriction(
+                        BlockingRestriction::CannotCrewVehicles,
+                    ));
+                }
+                if lock.suppressed_activations.is_some() || lock.doesnt_untap {
+                    return push_granted_ability_change(
+                        parts,
+                        AbilityChange {
+                            suppressed_activations: lock.suppressed_activations,
+                            doesnt_untap: lock.doesnt_untap,
+                            ..AbilityChange::default()
+                        },
+                    );
+                }
+                return Ok(());
             }
             if let Some(obj) =
                 parse_cant_block_or_be_blocked_by_filter(rule, filter.as_deref(), vocabulary)
@@ -15142,6 +15148,17 @@ pub(super) fn lower_combat_mod_blocking_restrictions(
             BlockingRestriction::CannotBeBlocked,
         ]);
     }
+    if matches!(
+        stripped,
+        "can't attack, block, or crew vehicles"
+            | "can't attack, block or crew vehicles"
+            | "enchanted creature can't attack, block, or crew vehicles"
+    ) {
+        return Some(vec![
+            BlockingRestriction::CannotAttackOrBlock,
+            BlockingRestriction::CannotCrewVehicles,
+        ]);
+    }
     if let Some(obj) = parse_cant_block_or_be_blocked_by_filter(stripped, None, vocabulary) {
         return Some(vec![
             BlockingRestriction::CannotBlockMatching(obj),
@@ -15248,6 +15265,24 @@ pub(super) fn lower_blocking_restriction(rule: &str) -> Option<BlockingRestricti
         | "blockseachcombatifable"
         | "blocks_each_combat_if_able" => Some(BlockingRestriction::MustBlockEachCombatIfAble),
         "minblockers:three or more creatures" => Some(BlockingRestriction::AtLeastThreeBlockers),
+        "must be blocked by two or more creatures if able"
+        | "must be blocked by two or more creatures"
+        | "must_be_blocked_by:two or more creatures if able"
+        | "must_be_blocked_by:two or more creatures"
+        | "minblockers:two or more creatures" => {
+            Some(BlockingRestriction::MustBeBlockedByTwoOrMore)
+        }
+        "can't attack its owner"
+        | "cant_attack_owner"
+        | "cantattackowner"
+        | "can't attack its owner or planeswalkers its owner controls"
+        | "can't attack its owner or a planeswalker its owner controls"
+        | "can't attack its owner or permanents its owner controls" => {
+            Some(BlockingRestriction::CannotAttackOwner)
+        }
+        "can't crew vehicles" | "cant_crew_vehicles" | "cantcrewvehicles" => {
+            Some(BlockingRestriction::CannotCrewVehicles)
+        }
         other => {
             if parse_block_additional_count(other) == Some(1) {
                 return Some(BlockingRestriction::AdditionalBlock);
@@ -18312,7 +18347,8 @@ fn spell_filter_supported_by_matches_characteristics(sf: &SpellFilter) -> bool {
         .union(ObjectFilterFlags::COMMANDER_ONLY)
         .union(ObjectFilterFlags::NOT_COMMANDER)
         .union(ObjectFilterFlags::MATCHES_SOURCE_ENTRY_TYPE);
-    if sf.cast_zone != SpellCastZoneFilter::Any
+    if !matches!(sf.cast_zone, SpellCastZoneFilter::Any)
+        || matches!(sf.cast_zone, SpellCastZoneFilter::LinkedExile)
         || sf.target_shape != SpellTargetShape::Any
         || sf.ordinal_this_turn.is_some()
     {
@@ -18724,11 +18760,60 @@ fn lower_loses_all_other_abilities(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+fn lower_static_base_pt_part(
+    p_raw: &str,
+    t_raw: &str,
+    vocabulary: &CreatureTypeVocabulary,
+    err: &'static str,
+) -> Result<StaticPart, &'static str> {
+    let p_trim = p_raw.trim();
+    let t_trim = t_raw.trim();
+    if p_trim.eq_ignore_ascii_case("its mana value")
+        && t_trim.eq_ignore_ascii_case("its mana value")
+    {
+        return Ok(StaticPart::SetPTToOwnManaValue);
+    }
+    let parse_single = |raw: &str| -> Option<NumericExpression> {
+        if let Ok(n) = raw.parse::<i64>() {
+            return Some(NumericExpression::Literal(n.into()));
+        }
+        let ve = spellwake_oracle_compiler::filter::parse_value_expr(
+            raw,
+            &cached_compiler_vocab(vocabulary),
+        )
+        .ok()?;
+        lower_numeric_expr_with_context(
+            &ve,
+            StaticExprContext {
+                anchor: StaticSelfAnchor::Source,
+                has_chosen_player_entry: false,
+            },
+            vocabulary,
+        )
+        .ok()
+    };
+    if t_trim.eq_ignore_ascii_case("keep") {
+        let expr = parse_single(p_trim).ok_or(err)?;
+        return Ok(StaticPart::SetPower(expr));
+    }
+    if p_trim.eq_ignore_ascii_case("keep") {
+        let expr = parse_single(t_trim).ok_or(err)?;
+        return Ok(StaticPart::SetToughness(expr));
+    }
+    let p: i64 = p_trim.parse().map_err(|_| err)?;
+    let t: i64 = t_trim.parse().map_err(|_| err)?;
+    Ok(StaticPart::SetPT(NumericPair {
+        power: NumericExpression::Literal(p.into()),
+        toughness: NumericExpression::Literal(t.into()),
+    }))
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct StaticAbilityLock {
     doesnt_untap: bool,
     suppressed_activations: Option<ActivationSuppression>,
     cannot_attack_or_block: bool,
+    cannot_crew_vehicles: bool,
     requires_source_controller: bool,
     singular_attached_fallback: bool,
     allow_none_as_self: bool,
@@ -18740,6 +18825,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
             doesnt_untap: true,
             suppressed_activations: None,
             cannot_attack_or_block: false,
+            cannot_crew_vehicles: false,
             requires_source_controller: false,
             singular_attached_fallback: false,
             allow_none_as_self: true,
@@ -18750,6 +18836,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
             doesnt_untap: true,
             suppressed_activations: None,
             cannot_attack_or_block: false,
+            cannot_crew_vehicles: false,
             requires_source_controller: false,
             singular_attached_fallback: false,
             allow_none_as_self: true,
@@ -18768,6 +18855,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: true,
                 suppressed_activations: None,
                 cannot_attack_or_block: false,
+                cannot_crew_vehicles: false,
                 requires_source_controller: false,
                 singular_attached_fallback: false,
                 allow_none_as_self: true,
@@ -18779,6 +18867,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: true,
                 suppressed_activations: None,
                 cannot_attack_or_block: false,
+                cannot_crew_vehicles: false,
                 requires_source_controller: false,
                 singular_attached_fallback: true,
                 allow_none_as_self: false,
@@ -18789,6 +18878,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: true,
                 suppressed_activations: None,
                 cannot_attack_or_block: false,
+                cannot_crew_vehicles: false,
                 requires_source_controller: true,
                 singular_attached_fallback: false,
                 allow_none_as_self: true,
@@ -18801,6 +18891,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: false,
                 suppressed_activations: Some(ActivationSuppression::All),
                 cannot_attack_or_block: false,
+                cannot_crew_vehicles: false,
                 requires_source_controller: false,
                 singular_attached_fallback: false,
                 allow_none_as_self: false,
@@ -18811,6 +18902,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: false,
                 suppressed_activations: Some(ActivationSuppression::NonMana),
                 cannot_attack_or_block: false,
+                cannot_crew_vehicles: false,
                 requires_source_controller: false,
                 singular_attached_fallback: false,
                 allow_none_as_self: false,
@@ -18821,6 +18913,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: false,
                 suppressed_activations: Some(ActivationSuppression::NonMana),
                 cannot_attack_or_block: false,
+                cannot_crew_vehicles: false,
                 requires_source_controller: false,
                 singular_attached_fallback: true,
                 allow_none_as_self: false,
@@ -18834,9 +18927,45 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: false,
                 suppressed_activations: Some(ActivationSuppression::All),
                 cannot_attack_or_block: true,
+                cannot_crew_vehicles: false,
                 requires_source_controller: false,
                 singular_attached_fallback: false,
                 allow_none_as_self: false,
+            });
+        }
+        "enchanted creature can't attack, block, or crew vehicles" => {
+            return Some(StaticAbilityLock {
+                cannot_attack_or_block: true,
+                cannot_crew_vehicles: true,
+                singular_attached_fallback: true,
+                ..StaticAbilityLock::default()
+            });
+        }
+        "can't attack, block, or crew vehicles" => {
+            return Some(StaticAbilityLock {
+                cannot_attack_or_block: true,
+                cannot_crew_vehicles: true,
+                ..StaticAbilityLock::default()
+            });
+        }
+        "can't attack, block, or crew vehicles, and its activated abilities can't be activated"
+        | "can't attack, block, or crew vehicles, and their activated abilities can't be activated" =>
+        {
+            return Some(StaticAbilityLock {
+                suppressed_activations: Some(ActivationSuppression::All),
+                cannot_attack_or_block: true,
+                cannot_crew_vehicles: true,
+                ..StaticAbilityLock::default()
+            });
+        }
+        "can't attack, block, or crew vehicles, and its activated abilities can't be activated unless they're mana abilities"
+        | "can't attack, block, or crew vehicles, and their activated abilities can't be activated unless they're mana abilities" =>
+        {
+            return Some(StaticAbilityLock {
+                suppressed_activations: Some(ActivationSuppression::NonMana),
+                cannot_attack_or_block: true,
+                cannot_crew_vehicles: true,
+                ..StaticAbilityLock::default()
             });
         }
         "can't attack or block, and its activated abilities can't be activated unless they're mana abilities"
@@ -18848,6 +18977,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: false,
                 suppressed_activations: Some(ActivationSuppression::NonMana),
                 cannot_attack_or_block: true,
+                cannot_crew_vehicles: false,
                 requires_source_controller: false,
                 singular_attached_fallback: false,
                 allow_none_as_self: false,
@@ -18862,6 +18992,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: true,
                 suppressed_activations: Some(ActivationSuppression::All),
                 cannot_attack_or_block: false,
+                cannot_crew_vehicles: false,
                 requires_source_controller: false,
                 singular_attached_fallback: false,
                 allow_none_as_self: false,
@@ -18876,6 +19007,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: true,
                 suppressed_activations: Some(ActivationSuppression::NonMana),
                 cannot_attack_or_block: false,
+                cannot_crew_vehicles: false,
                 requires_source_controller: false,
                 singular_attached_fallback: false,
                 allow_none_as_self: false,
@@ -18894,6 +19026,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
             doesnt_untap: false,
             suppressed_activations: Some(ActivationSuppression::All),
             cannot_attack_or_block: false,
+            cannot_crew_vehicles: false,
             requires_source_controller: false,
             singular_attached_fallback: true,
             allow_none_as_self: false,
@@ -18902,6 +19035,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
             doesnt_untap: false,
             suppressed_activations: Some(ActivationSuppression::All),
             cannot_attack_or_block: false,
+            cannot_crew_vehicles: false,
             requires_source_controller: false,
             singular_attached_fallback: false,
             allow_none_as_self: false,
@@ -18911,6 +19045,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: false,
                 suppressed_activations: Some(ActivationSuppression::NonMana),
                 cannot_attack_or_block: false,
+                cannot_crew_vehicles: false,
                 requires_source_controller: false,
                 singular_attached_fallback: true,
                 allow_none_as_self: false,
@@ -18921,6 +19056,7 @@ fn parse_static_ability_lock(rule: &str, has_condition: bool) -> Option<StaticAb
                 doesnt_untap: false,
                 suppressed_activations: Some(ActivationSuppression::NonMana),
                 cannot_attack_or_block: false,
+                cannot_crew_vehicles: false,
                 requires_source_controller: false,
                 singular_attached_fallback: false,
                 allow_none_as_self: false,

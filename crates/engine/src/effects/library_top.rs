@@ -1214,6 +1214,14 @@ impl EffectWindow {
             _ => return Err(EffectError::InconsistentLibraryTopWork),
         }
         if !work.requested.is_positive() {
+            if matches!(
+                work.kind,
+                LibraryActionKind::Mill | LibraryActionKind::Surveil
+            ) {
+                work.cursor.results.last_action_count = Some(0.into());
+                work.cursor.results.last_action_succeeded = false;
+                work.cursor.results.last_moved_objects.clear();
+            }
             return Ok(());
         }
         let batch = self.selection_batch_replaced(
@@ -1293,7 +1301,10 @@ impl EffectWindow {
             })
             .collect::<Result<Vec<_>, EffectError>>()?;
         self.window = window;
-        if work.kind == LibraryActionKind::Mill {
+        if matches!(
+            work.kind,
+            LibraryActionKind::Mill | LibraryActionKind::Surveil
+        ) {
             work.cursor.results.last_action_count =
                 Some(RulesInteger::from_usize(public_zone_moves.len()));
             work.cursor.results.last_action_succeeded = !public_zone_moves.is_empty();
@@ -1301,6 +1312,8 @@ impl EffectWindow {
                 .iter()
                 .map(|movement| movement.after)
                 .collect();
+        }
+        if work.kind == LibraryActionKind::Mill {
             work.cursor.results.milled_mana_values = public_zone_moves
                 .iter()
                 .map(|movement| {

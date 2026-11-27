@@ -1992,6 +1992,7 @@ fn oracle_lowering_corpus_coverage_audit() {
                 let allow_empty_mana_cost =
                     face_idx == 1 && matches!(card.layout.as_str(), "transform" | "flip");
                 let allow_aftermath = face_idx == 1 && card.layout == "split";
+                let allow_fuse = card.layout == "split";
                 let allow_disturb = face_idx == 0 && card.layout == "transform";
                 match lower_face(
                     card,
@@ -2001,6 +2002,7 @@ fn oracle_lowering_corpus_coverage_audit() {
                     FaceLoweringOptions {
                         allow_empty_mana_cost,
                         allow_aftermath,
+                        allow_fuse,
                         allow_disturb,
                         printed_loyalty,
                         printed_defense,

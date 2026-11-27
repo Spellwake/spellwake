@@ -43,6 +43,12 @@ pub struct TokenCopySpec {
     pub override_colors: Option<BTreeSet<Color>>,
     pub strip_mana_cost: bool,
     pub defender_scope: crate::token::AttackingDefenderScope,
+    pub extra_activated: Vec<crate::activated::ActivatedAbility>,
+    pub extra_triggered: Vec<crate::program::TriggeredAbility>,
+    pub extra_static: Vec<crate::characteristics::StaticContinuousAbility>,
+    pub extra_mana: Vec<crate::mana::ManaAbility>,
+    pub extra_counters: Vec<(crate::effects::CounterKind, u8)>,
+    pub keep_name: bool,
 }
 
 /// Universal card-draw specification (`players` each draw `amount` cards).
@@ -374,6 +380,31 @@ impl ObjectMutation {
                     .any(|s| vocabulary.label(*s).is_none())
                 {
                     return Err(DefinitionError::ForeignCreatureType);
+                }
+                for (kind, _) in &copy.extra_counters {
+                    if !kind.is_permanent() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                }
+                for ability in &copy.extra_activated {
+                    if !ability.mana_cost.valid() {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
+                    ability
+                        .body
+                        .validate_in(vocabulary, crate::program::BodyContext::ACTIVATED)?;
+                }
+                for trigger in &copy.extra_triggered {
+                    trigger.validate_body(vocabulary)?;
+                }
+                for stat in &copy.extra_static {
+                    stat.validate(vocabulary)
+                        .map_err(|_| DefinitionError::ContinuousEffect)?;
+                }
+                for mana in &copy.extra_mana {
+                    if !mana.output.valid(vocabulary) {
+                        return Err(DefinitionError::InvalidInstruction);
+                    }
                 }
                 Ok(())
             }

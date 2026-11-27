@@ -3147,7 +3147,8 @@ fn search_count_expr_supported(expr: &ValueExpr) -> bool {
                 | ValueZone::AllGraveyards
                 | ValueZone::AllHands
                 | ValueZone::OpponentsHands
-                | ValueZone::Exile(None) => true,
+                | ValueZone::Exile(None)
+                | ValueZone::LinkedExile => true,
                 ValueZone::Hand(r)
                 | ValueZone::Graveyard(r)
                 | ValueZone::Library(r)

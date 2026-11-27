@@ -51,6 +51,7 @@ fn apply_cast_face(
         Some(PlayerCastFace::SplitRight) => Some(SplitHalf::Right),
         _ => None,
     };
+    payment.fused = face == Some(PlayerCastFace::SplitBoth);
     payment.disturb = face == Some(PlayerCastFace::Disturb);
     payment.modal_back = face == Some(PlayerCastFace::ModalBack);
     payment.prototype = face == Some(PlayerCastFace::Prototype);
@@ -630,7 +631,8 @@ impl NativeScope<'_> {
                         spellwake_engine::face_down::FaceDownKind::Morph
                     }
                     crate::player_wire::PlayerFaceDownKind::Forest
-                    | crate::player_wire::PlayerFaceDownKind::Manifest => {
+                    | crate::player_wire::PlayerFaceDownKind::Manifest
+                    | crate::player_wire::PlayerFaceDownKind::Cloak => {
                         return Err(NativeBridgeError::InvalidIntent);
                     }
                     crate::player_wire::PlayerFaceDownKind::Disguise => {
@@ -1404,6 +1406,7 @@ impl NativeScope<'_> {
             modes: Vec::new(),
             adventure: false,
             split_half: None,
+            fused: false,
             disturb: false,
             modal_back: false,
             prototype: false,
@@ -2801,11 +2804,12 @@ mod face_announcement_tests {
 
     #[test]
     fn player_face_choice_reaches_the_native_cast_announcement() {
-        for (label, split, disturb) in [
-            (None, None, false),
-            (Some("split-left"), Some(SplitHalf::Left), false),
-            (Some("split-right"), Some(SplitHalf::Right), false),
-            (Some("disturb"), None, true),
+        for (label, split, fused, disturb) in [
+            (None, None, false, false),
+            (Some("split-left"), Some(SplitHalf::Left), false, false),
+            (Some("split-right"), Some(SplitHalf::Right), false, false),
+            (Some("split-both"), None, true, false),
+            (Some("disturb"), None, false, true),
         ] {
             let mut json = serde_json::json!({"kind":"cast-with-resources","source":"physical","target":null,"payment":null,"resources":[]});
             if let Some(label) = label {
@@ -2817,7 +2821,10 @@ mod face_announcement_tests {
             };
             let mut payment = CastingPayment::default();
             apply_cast_face(&mut payment, face);
-            assert_eq!((payment.split_half, payment.disturb), (split, disturb));
+            assert_eq!(
+                (payment.split_half, payment.fused, payment.disturb),
+                (split, fused, disturb)
+            );
         }
     }
 }
