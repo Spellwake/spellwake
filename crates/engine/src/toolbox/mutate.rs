@@ -7,7 +7,7 @@
 use crate::{
     characteristics::ResolvedDuration,
     effects::CounterKind,
-    program::{DefinitionError, ValueExpr},
+    program::{DefinitionError, SplitHalf, ValueExpr},
     toolbox::{
         env::BindingId,
         query::{ObjectQuery, PlayerSelector},
@@ -114,6 +114,31 @@ pub enum ObjectMutation {
     TransferCountersFromTriggeringLki,
     /// Grant flashback (equal to mana cost) until end of turn to each selected graveyard instant/sorcery.
     GrantFlashback,
+    /// Mark the resolving Case permanent solved (CR 719.3).
+    SolveCase,
+    /// Mark the resolving permanent prepared.
+    SetPrepared,
+    /// Monstrosity N on the resolving permanent (CR 701.31).
+    BecomeMonstrous { amount: ValueExpr },
+    /// Unlock (or lock when `allow_lock` is true) a Room door on each selected permanent (CR 709.5).
+    UnlockDoor {
+        door: Option<SplitHalf>,
+        allow_lock: bool,
+    },
+    /// Earthbend N on a chosen controlled land.
+    Earthbend { amount: ValueExpr },
+    /// Distribute `total` counters of `kind` among announced targets.
+    DistributeCounters { kind: CounterKind, total: u16 },
+    /// Enlist (CR 702.154): optionally tap an untapped non-attacking creature to pump attacker.
+    Enlist,
+    /// Advance Class enchantment level to `u8` (CR 716.2a).
+    AdvanceClassLevel(u8),
+    /// Reselect the defending player/planeswalker of the resolving attacking permanent.
+    ReselectAttackDefender,
+    /// Soulbond pairing (`entrant_only` distinguishes entrant vs existing trigger).
+    SoulbondPair { entrant_only: bool },
+    /// Explore (CR 701.40) on each selected permanent.
+    Explore,
 }
 
 impl ObjectMutation {
@@ -123,9 +148,11 @@ impl ObjectMutation {
             Self::Goad { by } => by.uses_target(),
             Self::Attach { host } => host.uses_target(),
             Self::AttachToPlayer { player } => player.uses_target(),
-            Self::AddCounters { amount, .. } | Self::RemoveCounters { amount, .. } => {
-                amount.uses_target()
-            }
+            Self::AddCounters { amount, .. }
+            | Self::RemoveCounters { amount, .. }
+            | Self::BecomeMonstrous { amount }
+            | Self::Earthbend { amount } => amount.uses_target(),
+            Self::DistributeCounters { .. } => true,
             Self::MoveCounters { to, amount, .. } => {
                 to.uses_target() || amount.as_ref().is_some_and(ValueExpr::uses_target)
             }
@@ -145,7 +172,15 @@ impl ObjectMutation {
             | Self::DoubleCounters { .. }
             | Self::AddOneOfEachCounterKind
             | Self::TransferCountersFromTriggeringLki
-            | Self::GrantFlashback => false,
+            | Self::GrantFlashback
+            | Self::SolveCase
+            | Self::SetPrepared
+            | Self::UnlockDoor { .. }
+            | Self::Enlist
+            | Self::AdvanceClassLevel(_)
+            | Self::ReselectAttackDefender
+            | Self::SoulbondPair { .. }
+            | Self::Explore => false,
         }
     }
 
@@ -157,7 +192,10 @@ impl ObjectMutation {
             Self::Goad { by } => by.validate_vocabulary(vocabulary),
             Self::Attach { host } => host.validate_vocabulary(vocabulary),
             Self::AttachToPlayer { player } => player.validate_vocabulary(vocabulary),
-            Self::AddCounters { amount, .. } | Self::RemoveCounters { amount, .. } => amount
+            Self::AddCounters { amount, .. }
+            | Self::RemoveCounters { amount, .. }
+            | Self::BecomeMonstrous { amount }
+            | Self::Earthbend { amount } => amount
                 .validate_vocabulary(vocabulary)
                 .map_err(|_| DefinitionError::InvalidInstruction),
             Self::MoveCounters { to, amount, .. } => {
@@ -184,7 +222,16 @@ impl ObjectMutation {
             | Self::DoubleCounters { .. }
             | Self::AddOneOfEachCounterKind
             | Self::TransferCountersFromTriggeringLki
-            | Self::GrantFlashback => Ok(()),
+            | Self::GrantFlashback
+            | Self::SolveCase
+            | Self::SetPrepared
+            | Self::UnlockDoor { .. }
+            | Self::DistributeCounters { .. }
+            | Self::Enlist
+            | Self::AdvanceClassLevel(_)
+            | Self::ReselectAttackDefender
+            | Self::SoulbondPair { .. }
+            | Self::Explore => Ok(()),
         }
     }
 }
@@ -226,6 +273,83 @@ impl MutateObjectSpec {
             bind_mutated: None,
             bind_succeeded: None,
         }
+    }
+
+    #[must_use]
+    pub fn is_pass_c_op(&self) -> bool {
+        matches!(
+            self.op,
+            ObjectMutation::BecomeMonstrous { .. }
+                | ObjectMutation::UnlockDoor { .. }
+                | ObjectMutation::Enlist
+        )
+    }
+
+    #[must_use]
+    pub fn solve_case() -> Self {
+        Self::all(ObjectQuery::Source, ObjectMutation::SolveCase)
+    }
+
+    #[must_use]
+    pub fn set_prepared() -> Self {
+        Self::all(ObjectQuery::Source, ObjectMutation::SetPrepared)
+    }
+
+    #[must_use]
+    pub fn monstrosity(amount: ValueExpr) -> Self {
+        Self::all(
+            ObjectQuery::Source,
+            ObjectMutation::BecomeMonstrous { amount },
+        )
+    }
+
+    #[must_use]
+    pub fn unlock_door(source: ObjectQuery, door: Option<SplitHalf>, allow_lock: bool) -> Self {
+        Self::all(source, ObjectMutation::UnlockDoor { door, allow_lock })
+    }
+
+    #[must_use]
+    pub fn earthbend(amount: ValueExpr) -> Self {
+        Self::all(ObjectQuery::Targets, ObjectMutation::Earthbend { amount })
+    }
+
+    #[must_use]
+    pub fn distribute_counters(kind: CounterKind, total: u16) -> Self {
+        Self::all(
+            ObjectQuery::Targets,
+            ObjectMutation::DistributeCounters { kind, total },
+        )
+    }
+
+    #[must_use]
+    pub fn enlist() -> Self {
+        Self::all(ObjectQuery::Source, ObjectMutation::Enlist)
+    }
+
+    #[must_use]
+    pub fn advance_class_level(level: u8) -> Self {
+        Self::all(
+            ObjectQuery::Source,
+            ObjectMutation::AdvanceClassLevel(level),
+        )
+    }
+
+    #[must_use]
+    pub fn reselect_attack_defender() -> Self {
+        Self::all(ObjectQuery::Targets, ObjectMutation::ReselectAttackDefender)
+    }
+
+    #[must_use]
+    pub fn soulbond_pair(entrant_only: bool) -> Self {
+        Self::all(
+            ObjectQuery::Source,
+            ObjectMutation::SoulbondPair { entrant_only },
+        )
+    }
+
+    #[must_use]
+    pub fn explore(source: ObjectQuery) -> Self {
+        Self::all(source, ObjectMutation::Explore)
     }
 
     #[must_use]

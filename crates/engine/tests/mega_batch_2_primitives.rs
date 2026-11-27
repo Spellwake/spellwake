@@ -5,7 +5,7 @@
 //! - `Instruction::TurnFaceDownSubject` (turns nontoken single-faced permanent face down; skips DFCs per CR 712.16)
 //! - `Instruction::AddOneOfEachCounterKindOnSubject` (adds 1 of each counter kind present; no-op when empty)
 //! - `DamageRecipientsRef::EachSourceToItself` and `EachSourceController`
-//! - `Instruction::DivideDamageExprAmongTargets` (dynamic X shares and `max_targets` cap; atomic invalid-share rejection)
+//! - `DamageTargetQuery::Divided` (dynamic X shares and `max_targets` cap; atomic invalid-share rejection)
 //! - `ExecutableBody::with_up_to_x_target_count` (0..=X targets accepted; >X rejected atomically)
 //! - `SpellDiscount::Dynamic` with `ValueZone::OpponentsHands`
 //! - `PermanentSelector::toughness_greater_than_power`
@@ -111,10 +111,9 @@ fn divide_damage_expr_and_up_to_x_target_count_enforce_bounds() {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SingleCreature,
-            vec![Instruction::DivideDamageExprAmongTargets {
-                total: ValueExpr::chosen_x(),
-                max_targets: Some(2),
-            }],
+            vec![Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec::divided(ValueExpr::chosen_x(), Some(2)),
+            ))],
         ),
     );
     divide_x.x_mana_symbols = 1;

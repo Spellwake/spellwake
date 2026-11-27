@@ -612,7 +612,20 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             rewrite_offer_chosen_to_loop_dg(g);
                         }
                     }
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets => {}
+                    spellwake_engine::toolbox::DamageTargetQuery::Divided { total, .. } => {
+                        rewrite_offer_chosen_to_loop_ve(total);
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets
+                    | spellwake_engine::toolbox::DamageTargetQuery::AnnouncedTargets { .. }
+                    | spellwake_engine::toolbox::DamageTargetQuery::FromPower(_)
+                    | spellwake_engine::toolbox::DamageTargetQuery::CreaturePowerToOther {
+                        ..
+                    }
+                    | spellwake_engine::toolbox::DamageTargetQuery::TargetControllersCreatures {
+                        ..
+                    }
+                    | spellwake_engine::toolbox::DamageTargetQuery::OrderedTargets { .. }
+                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree => {}
                 }
                 if let spellwake_engine::program::DamageAmountSpec::Expr(e) = &mut spec.amount {
                     rewrite_offer_chosen_to_loop_ve(e);
@@ -625,11 +638,26 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     &rewrite_offer_chosen_to_loop_ap,
                     &rewrite_offer_chosen_to_loop_ve,
                 );
-                if let spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-                | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. } =
-                    &mut spec.op
-                {
-                    rewrite_offer_chosen_to_loop_ve(amount);
+                match &mut spec.op {
+                    spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
+                    | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
+                    | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
+                    | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
+                    | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
+                    | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
+                    | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
+                    | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
+                    | spellwake_engine::toolbox::PlayerMutation::CollectEvidence {
+                        minimum: amount,
+                    } => {
+                        rewrite_offer_chosen_to_loop_ve(amount);
+                    }
+                    spellwake_engine::toolbox::PlayerMutation::AddMana(yield_kind) => {
+                        if let Some(amount) = mana_yield_amount_mut(yield_kind) {
+                            rewrite_offer_chosen_to_loop_ve(amount);
+                        }
+                    }
+                    _ => {}
                 }
             }
             Instruction::ExileTopPlay {
@@ -717,18 +745,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     &rewrite_offer_chosen_to_loop_ve,
                 );
             }
-            Instruction::Scry { player, amount }
-            | Instruction::Surveil { player, amount }
-            | Instruction::Mill { player, amount }
-            | Instruction::ManifestTop { player, amount }
-            | Instruction::Blight { player, amount } => {
-                rewrite_offer_chosen_to_loop_rp(player);
-                rewrite_offer_chosen_to_loop_ve(amount);
-            }
-            Instruction::CollectEvidence { player, minimum } => {
-                rewrite_offer_chosen_to_loop_rp(player);
-                rewrite_offer_chosen_to_loop_ve(minimum);
-            }
             Instruction::LookTopChooseExt {
                 library_owner,
                 chooser,
@@ -755,7 +771,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             }
             Instruction::OptionalEffect { chooser }
             | Instruction::OptionalSequence { chooser, .. }
-            | Instruction::Clash { chooser }
             | Instruction::ChooseValue { chooser, .. } => {
                 rewrite_offer_chosen_to_loop_rp(chooser);
             }
@@ -765,15 +780,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_offer_chosen_to_loop_ops(&mut br.body.instructions);
                 }
             }
-            Instruction::AddManaForPlayer { player, yield_kind } => {
-                rewrite_offer_chosen_to_loop_rp(player);
-                if let Some(amount) = mana_yield_amount_mut(yield_kind) {
-                    rewrite_offer_chosen_to_loop_ve(amount);
-                }
-            }
-            Instruction::PutHandPermanentsOntoBattlefield { player: rp, .. }
-            | Instruction::VentureIntoDungeon { player: rp, .. }
-            | Instruction::TakeInitiative { player: rp } => {
+            Instruction::PutHandPermanentsOntoBattlefield { player: rp, .. } => {
                 rewrite_offer_chosen_to_loop_rp(rp);
             }
             Instruction::CreateTokens { creations } => {
@@ -860,7 +867,9 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
                     | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
                         amount, ..
-                    } => {
+                    }
+                    | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+                    | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount } => {
                         rewrite_offer_chosen_to_loop_ve(amount);
                     }
                     spellwake_engine::toolbox::ObjectMutation::MoveCounters {
@@ -945,7 +954,8 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             &rewrite_offer_chosen_to_loop_ve,
                         );
                     }
-                    spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) => {
+                    spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts)
+                    | spellwake_engine::toolbox::ContinuousPayload::ModifyAnyNumber { parts } => {
                         for part in &mut parts.0 {
                             match part {
                                 ResolvedPartSpec::ModifyPTExpr { power, toughness }
@@ -1013,12 +1023,10 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_offer_chosen_to_loop_ops(&mut lb.instructions);
                 }
             }
-            Instruction::DealDamageToAnnouncedTargets { amount, .. }
-            | Instruction::Earthbend { amount }
-            | Instruction::BindResolutionX(amount) => {
+            Instruction::BindResolutionX(amount) => {
                 rewrite_offer_chosen_to_loop_ve(amount);
             }
-            Instruction::ReturnEarthbentCard | Instruction::SelectExtremeLifePlayer { .. } => {}
+            Instruction::ReturnEarthbentCard => {}
             Instruction::SearchLibrary { filter } => {
                 rewrite_offer_chosen_to_loop_rp(&mut filter.searcher);
             }
@@ -1071,7 +1079,14 @@ pub(super) fn lower_offer_loop_player_sub_body(
             Instruction::ChooseValue {
                 domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
                 ..
-            } | Instruction::SelectExtremeLifePlayer { .. }
+            }
+        ) || matches!(
+            op,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::SelectExtremeLife { .. }
+                )
         )
     }) {
         return Err("oracle:loop-body-chooses-player");
@@ -2030,9 +2045,8 @@ pub(in super::super) fn lower_animate_or_set_pt(
                 if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Battlefield { .. })
         ) || matches!(
             op,
-                Instruction::ReturnChosenXGraveyardCreatures
+            Instruction::ReturnChosenXGraveyardCreatures
                 | Instruction::ReturnExiledTargetCohort { .. }
-                | Instruction::ReturnCardsDestroyedThisWay
         )
     });
     match subject {
@@ -2166,10 +2180,9 @@ pub(in super::super) fn lower_animate_or_set_pt(
             builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
             builder
                 .instructions
-                .push(Instruction::ModifyAnyNumberOfPermanents {
-                    parts: spec,
-                    duration: dur,
-                });
+                .push(Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(spec, dur),
+                )));
             Ok(())
         }
         SubjectRefAst::TargetObject {

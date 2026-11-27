@@ -73,8 +73,12 @@ impl EffectWindow {
         reply: DecisionReply,
     ) -> Result<RuleProgress, EffectError> {
         let revision = self.next_revision(expected)?;
-        let Instruction::PairWithCreature { entrant_only } = self.current_instruction()? else {
-            return Err(EffectError::WrongResolutionFrame);
+        let entrant_only = match self.current_instruction()? {
+            Instruction::MutateObject(spec) => match &spec.op {
+                crate::toolbox::ObjectMutation::SoulbondPair { entrant_only } => entrant_only,
+                _ => return Err(EffectError::WrongResolutionFrame),
+            },
+            _ => return Err(EffectError::WrongResolutionFrame),
         };
         if self.soulbond_selection(*entrant_only)?.as_ref() != Some(frame) {
             return Err(EffectError::WrongResolutionFrame);

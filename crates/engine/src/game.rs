@@ -4121,8 +4121,12 @@ mod tests {
                 as_emblem: None,
                 emblem_label: None,
             })),
-            Instruction::CreateDamageMultiplier { factor: 2.into() },
-            Instruction::CreateDamageMultiplier { factor: 3.into() },
+            Instruction::ApplyContinuous(Box::new(
+                crate::toolbox::ApplyContinuousSpec::damage_multiplier(2.into()),
+            )),
+            Instruction::ApplyContinuous(Box::new(
+                crate::toolbox::ApplyContinuousSpec::damage_multiplier(3.into()),
+            )),
             Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
                 source: crate::toolbox::DamageSourceQuery::EntrySource,
                 recipients: crate::toolbox::DamageTargetQuery::Targets,

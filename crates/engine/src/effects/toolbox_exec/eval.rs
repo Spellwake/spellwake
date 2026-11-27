@@ -330,7 +330,7 @@ impl EffectWindow {
         }
     }
 
-    fn object_passes_filter(
+    pub(in crate::effects) fn object_passes_filter(
         &self,
         id: ObjectId,
         filter: ObjectFilter,
@@ -346,7 +346,7 @@ impl EffectWindow {
     }
 
     /// Evaluate a composable [`ObjectQuery`] into an ordered, deduplicated list of `ObjectId`s.
-    pub(super) fn eval_object_query_at(
+    pub(in crate::effects) fn eval_object_query_at(
         &self,
         controller: SeatId,
         entry: Option<&StackEntry>,
@@ -472,6 +472,9 @@ impl EffectWindow {
                         c.results.returned_target_permanent.into_iter().collect()
                     }
                 })
+                .unwrap_or_default(),
+            ObjectQuery::DestroyedThisWay => cursor
+                .map(|c| c.results.destroyed_cards_to_graveyard.clone())
                 .unwrap_or_default(),
             ObjectQuery::CreatedTokens => cursor
                 .map(|c| c.last_created_tokens.clone())

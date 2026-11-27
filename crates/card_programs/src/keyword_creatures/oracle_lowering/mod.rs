@@ -2459,7 +2459,9 @@ fn lower_face(
             source_cost,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::AdvanceClassLevel(section.level)],
+                vec![Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::advance_class_level(section.level),
+                ))],
             ),
         });
         lower_gated_section(

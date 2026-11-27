@@ -22,9 +22,15 @@ fn operation(
 ) -> Instruction {
     let amount = crate::program::ValueExpr::Literal(amount);
     match kind {
-        LibraryActionKind::Scry => Instruction::Scry { player, amount },
-        LibraryActionKind::Surveil => Instruction::Surveil { player, amount },
-        LibraryActionKind::Mill => Instruction::Mill { player, amount },
+        LibraryActionKind::Scry => Instruction::MutatePlayer(Box::new(
+            crate::toolbox::MutatePlayerSpec::scry(player, amount),
+        )),
+        LibraryActionKind::Surveil => Instruction::MutatePlayer(Box::new(
+            crate::toolbox::MutatePlayerSpec::surveil(player, amount),
+        )),
+        LibraryActionKind::Mill => Instruction::MutatePlayer(Box::new(
+            crate::toolbox::MutatePlayerSpec::mill(player, amount),
+        )),
     }
 }
 fn gain(amount: i64) -> Instruction {
@@ -561,15 +567,18 @@ fn admission_rejects_negative_undefined_amount_and_unavailable_recipient_capabil
     ] {
         let mut undefined = operation(kind, ResolvingPlayer::Controller, 1.into());
         match &mut undefined {
-            Instruction::Scry { amount, .. }
-            | Instruction::Surveil { amount, .. }
-            | Instruction::Mill { amount, .. } => {
-                *amount = crate::program::ValueExpr::count_battlefield(
-                    crate::program::ObjectFilter::any()
-                        .controlled()
-                        .of_chosen_slot(CreatureTypeSlot::new(9)),
-                )
-            }
+            Instruction::MutatePlayer(spec) => match &mut spec.op {
+                crate::toolbox::PlayerMutation::Scry(amount)
+                | crate::toolbox::PlayerMutation::Surveil(amount)
+                | crate::toolbox::PlayerMutation::Mill(amount) => {
+                    *amount = crate::program::ValueExpr::count_battlefield(
+                        crate::program::ObjectFilter::any()
+                            .controlled()
+                            .of_chosen_slot(CreatureTypeSlot::new(9)),
+                    )
+                }
+                _ => unreachable!("test constructs only library instructions"),
+            },
             _ => unreachable!("test constructs only library instructions"),
         }
         assert!(

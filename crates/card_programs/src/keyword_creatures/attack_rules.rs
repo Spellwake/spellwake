@@ -466,18 +466,19 @@ pub(super) fn compile(
                 ),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::AdditionalCombat {
-                        untap:
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::additional_combat(
                             spellwake_engine::program::CombatUntapGroup::SourceAndControlledSubtype(
                                 vocabulary.resolve_label(subtype)?,
                             ),
-                    }],
+                        ),
+                    ))],
                 ),
             ))
         } else if line
             == "Whenever this creature attacks for the first time each turn, if it's attacking the player with the most life or tied for most life, untap all attacking creatures. After this phase, there is an additional combat phase."
         {
-            Some((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::AttackTriggerMode::FirstThisTurn { highest_life: true }),ExecutableBody::new(BodyTarget::None,vec![Instruction::AdditionalCombat {untap:spellwake_engine::program::CombatUntapGroup::AttackersIfSourceAttacksHighestLife}])))
+            Some((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::AttackTriggerMode::FirstThisTurn { highest_life: true }),ExecutableBody::new(BodyTarget::None,vec![Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::additional_combat(spellwake_engine::program::CombatUntapGroup::AttackersIfSourceAttacksHighestLife)))])))
         } else if line
             == format!(
                 "Whenever {short} attacks, each opponent can't block with more than one creature this combat."
@@ -487,9 +488,11 @@ pub(super) fn compile(
                 spellwake_engine::program::TriggerSpec::self_attacks(),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::SetBlockDeclarations(
-                        BlockDeclarationRule::EachOpponentOneBlocker,
-                    )],
+                    vec![Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::block_declarations(
+                            BlockDeclarationRule::EachOpponentOneBlocker,
+                        ),
+                    ))],
                 ),
             ))
         } else if line
@@ -504,9 +507,11 @@ pub(super) fn compile(
                 ),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::SetBlockDeclarations(
-                        BlockDeclarationRule::ControllerChooses,
-                    )],
+                    vec![Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::block_declarations(
+                            BlockDeclarationRule::ControllerChooses,
+                        ),
+                    ))],
                 ),
             ))
         } else if line
@@ -520,7 +525,9 @@ pub(super) fn compile(
                 ),
                 ExecutableBody::new(
                     BodyTarget::FilteredPermanent(ObjectFilter::creature().attacking()),
-                    vec![Instruction::ReselectAttackDefender],
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::reselect_attack_defender(),
+                    ))],
                 ),
             ))
         } else {

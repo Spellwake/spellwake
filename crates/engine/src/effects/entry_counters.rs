@@ -593,10 +593,15 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
             | crate::toolbox::LifeOp::Drain { amount: v, .. } => value_expr_uses_damage_dealt_by(v),
             crate::toolbox::LifeOp::LoseHalf { .. } => false,
         },
-        Instruction::DealDamage(spec) => matches!(
-            &spec.amount,
-            crate::program::DamageAmountSpec::Expr(v) if value_expr_uses_damage_dealt_by(v)
-        ),
+        Instruction::DealDamage(spec) => {
+            matches!(
+                &spec.amount,
+                crate::program::DamageAmountSpec::Expr(v) if value_expr_uses_damage_dealt_by(v)
+            ) || matches!(
+                &spec.recipients,
+                crate::toolbox::DamageTargetQuery::Divided { total, .. } if value_expr_uses_damage_dealt_by(total)
+            )
+        }
         Instruction::MutatePlayer(spec) => match &spec.op {
             crate::toolbox::PlayerMutation::AddCounter { amount, .. }
             | crate::toolbox::PlayerMutation::PayCounter { amount, .. } => {
@@ -621,8 +626,7 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
             }
             _ => false,
         },
-        Instruction::DealDamageToAnnouncedTargets { amount, .. }
-        | Instruction::BindResolutionX(amount) => value_expr_uses_damage_dealt_by(amount),
+        Instruction::BindResolutionX(amount) => value_expr_uses_damage_dealt_by(amount),
         Instruction::CreateTokens { creations } => creations
             .iter()
             .any(|c| value_expr_uses_damage_dealt_by(&c.amount)),

@@ -53,7 +53,9 @@ pub(super) fn compile(
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::SingleAnyTarget,
-                vec![Instruction::DivideThreeDamageAmongTargets],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::divide_three(),
+                ))],
             ),
         });
         return Some(program);
@@ -75,10 +77,9 @@ pub(super) fn compile(
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::SingleAnyTarget,
-            vec![Instruction::DamageOrderedTargets {
-                first: 4.into(),
-                others: 3.into(),
-            }],
+            vec![Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec::ordered_targets(4.into(), 3.into()),
+            ))],
         ),
     });
     Some(program)

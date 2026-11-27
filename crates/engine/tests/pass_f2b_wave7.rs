@@ -460,11 +460,13 @@ fn deal_damage_to_announced_targets_and_permanent_target_action_damage() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleAnyTarget,
-                vec![Instruction::DealDamageToAnnouncedTargets {
-                    amount: ValueExpr::literal(2),
-                    min_targets: 1,
-                    max_targets: 2,
-                }],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::announced_targets(
+                        ValueExpr::literal(2),
+                        1,
+                        2,
+                    ),
+                ))],
             ),
         ),
         &vocab,

@@ -159,19 +159,22 @@ pub(super) fn lower_search_library_group(
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::Scry {
-                        player: ResolvingPlayer::LoopPlayer,
-                        amount: amt,
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                            ResolvingPlayer::LoopPlayer,
+                            amt,
+                        ),
+                    ))],
                     builder,
                 );
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::Scry {
-                player: rp,
-                amount: amt,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::scry(rp, amt),
+                )));
             Ok(())
         }
         InstructionAst::Surveil { player, count } => {
@@ -184,19 +187,22 @@ pub(super) fn lower_search_library_group(
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::Surveil {
-                        player: ResolvingPlayer::LoopPlayer,
-                        amount: amt,
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::surveil(
+                            ResolvingPlayer::LoopPlayer,
+                            amt,
+                        ),
+                    ))],
                     builder,
                 );
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::Surveil {
-                player: rp,
-                amount: amt,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::surveil(rp, amt),
+                )));
             Ok(())
         }
         InstructionAst::SearchLibrary {
@@ -1681,10 +1687,12 @@ pub(super) fn lower_search_library_group(
                 )?)
             };
             let make_add = |yield_kind: EffectManaYield| -> Instruction {
-                Instruction::AddManaForPlayer {
-                    player: target_player.unwrap_or(ResolvingPlayer::Controller),
-                    yield_kind,
-                }
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                        target_player.unwrap_or(ResolvingPlayer::Controller),
+                        yield_kind,
+                    ),
+                ))
             };
             let wubrg = || -> BTreeSet<ManaType> {
                 [
@@ -4142,13 +4150,17 @@ pub(super) fn lower_search_library_group(
                     if let Some(colors) = all_colored_single
                         && !colors.is_empty()
                     {
-                        builder.instructions.push(Instruction::AddManaForPlayer {
-                            player: ResolvingPlayer::Controller,
-                            yield_kind: EffectManaYield::Choice {
-                                colors,
-                                amount: ValueExpr::literal(1),
-                            },
-                        });
+                        builder
+                            .instructions
+                            .push(Instruction::MutatePlayer(Box::new(
+                                spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                                    ResolvingPlayer::Controller,
+                                    EffectManaYield::Choice {
+                                        colors,
+                                        amount: ValueExpr::literal(1),
+                                    },
+                                ),
+                            )));
                         return Ok(());
                     }
                     let mut options: Vec<BTreeMap<ManaType, RulesInteger>> = Vec::new();
@@ -4160,17 +4172,25 @@ pub(super) fn lower_search_library_group(
                         }
                     }
                     if options.len() >= 2 {
-                        builder.instructions.push(Instruction::AddManaForPlayer {
-                            player: ResolvingPlayer::Controller,
-                            yield_kind: EffectManaYield::ChoiceBundle { options },
-                        });
+                        builder
+                            .instructions
+                            .push(Instruction::MutatePlayer(Box::new(
+                                spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                                    ResolvingPlayer::Controller,
+                                    EffectManaYield::ChoiceBundle { options },
+                                ),
+                            )));
                         return Ok(());
                     }
                     if let [only] = options.as_slice() {
-                        builder.instructions.push(Instruction::AddManaForPlayer {
-                            player: ResolvingPlayer::Controller,
-                            yield_kind: EffectManaYield::Fixed(only.clone()),
-                        });
+                        builder
+                            .instructions
+                            .push(Instruction::MutatePlayer(Box::new(
+                                spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                                    ResolvingPlayer::Controller,
+                                    EffectManaYield::Fixed(only.clone()),
+                                ),
+                            )));
                         return Ok(());
                     }
                     return Err("oracle:unsupported-qualified-mana");
@@ -4191,10 +4211,12 @@ pub(super) fn lower_search_library_group(
                                     label: format!("Add {raw}"),
                                     body: ExecutableBody::new(
                                         BodyTarget::None,
-                                        vec![Instruction::AddManaForPlayer {
-                                            player: ResolvingPlayer::Controller,
-                                            yield_kind: EffectManaYield::Fixed(bundle),
-                                        }],
+                                        vec![Instruction::MutatePlayer(Box::new(
+                                            spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                                                ResolvingPlayer::Controller,
+                                                EffectManaYield::Fixed(bundle),
+                                            ),
+                                        ))],
                                     ),
                                 });
                             }
@@ -4203,12 +4225,14 @@ pub(super) fn lower_search_library_group(
                                     label: "Add one mana of the chosen color".to_owned(),
                                     body: ExecutableBody::new(
                                         BodyTarget::None,
-                                        vec![Instruction::AddManaForPlayer {
-                                            player: ResolvingPlayer::Controller,
-                                            yield_kind: EffectManaYield::SourceChosenColor {
-                                                amount: ValueExpr::literal(1),
-                                            },
-                                        }],
+                                        vec![Instruction::MutatePlayer(Box::new(
+                                            spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                                                ResolvingPlayer::Controller,
+                                                EffectManaYield::SourceChosenColor {
+                                                    amount: ValueExpr::literal(1),
+                                                },
+                                            ),
+                                        ))],
                                     ),
                                 });
                             }
@@ -4254,10 +4278,14 @@ pub(super) fn lower_search_library_group(
                         )?,
                         None => ValueExpr::literal(1),
                     };
-                    builder.instructions.push(Instruction::AddManaForPlayer {
-                        player: ResolvingPlayer::Controller,
-                        yield_kind: EffectManaYield::LandProducible { controller, amount },
-                    });
+                    builder
+                        .instructions
+                        .push(Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                                ResolvingPlayer::Controller,
+                                EffectManaYield::LandProducible { controller, amount },
+                            ),
+                        )));
                     return Ok(());
                 }
             }
@@ -4758,7 +4786,12 @@ fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool
             .iter()
             .rev()
             .any(|inner| is_grant_play_last_moved_producer(inner, expected_exile_only)),
-        Instruction::Mill { .. } | Instruction::Discard { .. } => !expected_exile_only,
+        Instruction::Discard { .. } => !expected_exile_only,
+        Instruction::MutatePlayer(spec)
+            if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_)) =>
+        {
+            !expected_exile_only
+        }
         _ => false,
     }
 }
@@ -4848,15 +4881,22 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
         }
         match op {
             Instruction::DrawCards(_)
-            | Instruction::Scry { .. }
-            | Instruction::Surveil { .. }
             | Instruction::OptionalEffect { .. }
             | Instruction::OptionalSequence { .. }
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::BindResolutionX(_)
-            | Instruction::AdjustLife(_)
-            | Instruction::AddManaForPlayer { .. } => continue,
+            | Instruction::AdjustLife(_) => continue,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::Scry(_)
+                        | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
+                        | spellwake_engine::toolbox::PlayerMutation::AddMana(_)
+                ) =>
+            {
+                continue;
+            }
             Instruction::ApplyContinuous(spec)
                 if matches!(
                     spec.payload,
@@ -4936,10 +4976,16 @@ fn last_moved_producer_is_single_or_bulk_play(ops: &[Instruction]) -> bool {
                 }
                 return true;
             }
-            Instruction::DrawCards(_)
-            | Instruction::Scry { .. }
-            | Instruction::Surveil { .. }
-            | Instruction::BindResolutionX(_) => continue,
+            Instruction::DrawCards(_) | Instruction::BindResolutionX(_) => continue,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::Scry(_)
+                        | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
+                ) =>
+            {
+                continue;
+            }
             Instruction::ApplyContinuous(spec)
                 if matches!(
                     spec.payload,

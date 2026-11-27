@@ -10437,23 +10437,21 @@ impl EffectWindow {
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
             | Instruction::ReturnDelayedGraveyardToHand(_)
             | Instruction::DamageFromGrantingPermanent { .. }
-            | Instruction::Populate
-            | Instruction::Bolster(_)
-            | Instruction::Amass { .. }
             | Instruction::Sacrifice { .. }
             | Instruction::SacrificeRandomUntilLand
             | Instruction::Discard { .. } => {
                 return Err(EffectError::InconsistentProgram);
             }
-            Instruction::DamageTargetControllersCreatures { .. } => match target {
-                TargetRef::Player(player) => self.window.participants().contains(&player),
-                TargetRef::Object(id) => self
-                    .window
-                    .cards()
-                    .get(id)
-                    .is_some_and(|o| o.zone() == ObjectZone::Battlefield),
-                TargetRef::Stack(_) => false,
-            },
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::Populate
+                        | crate::toolbox::PlayerMutation::Bolster(_)
+                        | crate::toolbox::PlayerMutation::Amass { .. }
+                ) =>
+            {
+                return Err(EffectError::InconsistentProgram);
+            }
             Instruction::StackOp(spec) => {
                 if !spec.requires_stack_target() {
                     true
@@ -10497,25 +10495,59 @@ impl EffectWindow {
                     }
                 }
             }
-            Instruction::DamageFromPower(_) => match target {
-                TargetRef::Player(player) => self.window.participants().contains(&player),
-                TargetRef::Object(card) => evaluated
-                    .get(card)
-                    .and_then(ObjectCharacteristics::damage_recipient)
-                    .is_some(),
-                TargetRef::Stack(_) => false,
+            Instruction::ApplyContinuous(spec) => match &spec.payload {
+                crate::toolbox::ContinuousPayload::DamageMultiplier { .. } => match target {
+                    TargetRef::Object(card) => self
+                        .window
+                        .cards()
+                        .get(card)
+                        .is_some_and(|value| value.zone() == ObjectZone::Battlefield),
+                    TargetRef::Player(_) | TargetRef::Stack(_) => false,
+                },
+                _ => false,
+            },
+            Instruction::MutateObject(spec) => match &spec.op {
+                crate::toolbox::ObjectMutation::Earthbend { .. } => match target {
+                    TargetRef::Object(card) => self
+                        .window
+                        .cards()
+                        .get(card)
+                        .is_some_and(|value| value.zone() == ObjectZone::Battlefield),
+                    TargetRef::Player(_) | TargetRef::Stack(_) => false,
+                },
+                _ => false,
+            },
+            Instruction::DealDamage(spec) => match &spec.recipients {
+                crate::toolbox::DamageTargetQuery::TargetControllersCreatures { .. } => {
+                    match target {
+                        TargetRef::Player(player) => self.window.participants().contains(&player),
+                        TargetRef::Object(id) => self
+                            .window
+                            .cards()
+                            .get(id)
+                            .is_some_and(|o| o.zone() == ObjectZone::Battlefield),
+                        TargetRef::Stack(_) => false,
+                    }
+                }
+                crate::toolbox::DamageTargetQuery::FromPower(_) => match target {
+                    TargetRef::Player(player) => self.window.participants().contains(&player),
+                    TargetRef::Object(card) => evaluated
+                        .get(card)
+                        .and_then(ObjectCharacteristics::damage_recipient)
+                        .is_some(),
+                    TargetRef::Stack(_) => false,
+                },
+                crate::toolbox::DamageTargetQuery::CreaturePowerToOther { .. } => match target {
+                    TargetRef::Object(card) => self
+                        .window
+                        .cards()
+                        .get(card)
+                        .is_some_and(|value| value.zone() == ObjectZone::Battlefield),
+                    TargetRef::Player(_) | TargetRef::Stack(_) => false,
+                },
+                _ => false,
             },
             Instruction::Attach(_) => true,
-            Instruction::CreateDamageMultiplier { .. }
-            | Instruction::Earthbend { .. }
-            | Instruction::CreatureDealsPowerDamageToOther { .. } => match target {
-                TargetRef::Object(card) => self
-                    .window
-                    .cards()
-                    .get(card)
-                    .is_some_and(|value| value.zone() == ObjectZone::Battlefield),
-                TargetRef::Player(_) | TargetRef::Stack(_) => false,
-            },
             // The iterative driver owns these paths before target availability.
             Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
@@ -10524,36 +10556,18 @@ impl EffectWindow {
             | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Vote { .. }
-            | Instruction::Incubate { .. }
             | Instruction::Connive { .. }
             | Instruction::ConniveFinalize { .. }
             | Instruction::Discover { .. }
-            | Instruction::Clash { .. }
-            | Instruction::RingTemptsYou
-            | Instruction::VentureIntoDungeon { .. }
-            | Instruction::TakeInitiative { .. }
-            | Instruction::UnlockDoor { .. }
-            | Instruction::Behold { .. }
-            | Instruction::ManifestDread
-            | Instruction::Monstrosity { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
-            | Instruction::Ripple(_)
-            | Instruction::Demonstrate
-            | Instruction::Enlist
-            | Instruction::ChooseOneLastMoved { .. }
             | Instruction::ZoneOp(_)
             | Instruction::AdjustLife(_)
-            | Instruction::DealDamage(_)
             | Instruction::MutatePlayer(_)
-            | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
             | Instruction::BranchCondition { .. }
             | Instruction::ForEach { .. }
@@ -10564,29 +10578,17 @@ impl EffectWindow {
             | Instruction::SideDeckOp(_)
             | Instruction::BindResolutionX(_)
             | Instruction::CreateAuraTokenAttached { .. }
-            | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::Scry { .. }
-            | Instruction::Surveil { .. }
-            | Instruction::Mill { .. }
             | Instruction::OfferSourceCounters { .. }
             | Instruction::RequireCondition(_)
             | Instruction::Encore
-            | Instruction::ReselectAttackDefender
-            | Instruction::SetBlockDeclarations(_)
-            | Instruction::AdditionalLoyaltyActivation
             | Instruction::ReturnExiledTargetCohort { .. }
-            | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::ExileDelayedObjects(_)
             | Instruction::ReturnEarthbentCard
-            | Instruction::AddManaForPlayer { .. }
-            | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::PairWithCreature { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::Ninjutsu
@@ -10594,8 +10596,6 @@ impl EffectWindow {
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::Myriad
-            | Instruction::WatchNextSpellOrLoyaltyTwice
-            | Instruction::WatchNextLoyaltyCopy
             | Instruction::CopyCapturedAbility
             | Instruction::CopyOnCast(_)
             | Instruction::MadnessCast
@@ -10618,37 +10618,24 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::DivideThreeDamageAmongTargets
-            | Instruction::DamageOrderedTargets { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::ReturnGraveyardCreatureWithCorpse(_)
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::MayRevealLibraryTop
-            | Instruction::ManifestTop { .. }
             | Instruction::ChooseFoundSpell
             | Instruction::CastFoundSpell(_)
             | Instruction::SearchLibrary { .. }
             | Instruction::ChooseCreatureType { .. }
             | Instruction::RememberPermanentTarget
-            | Instruction::AdditionalCombat { .. }
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ExileDefeatedSiege
-            | Instruction::AdvanceClassLevel(_)
-            | Instruction::SolveSourceCase
-            | Instruction::BecomePreparedSource
-            | Instruction::Proliferate
-            | Instruction::CollectEvidence { .. }
-            | Instruction::Blight { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::OfferAnyPlayer { .. }
-            | Instruction::DealDamageToAnnouncedTargets { .. }
-            | Instruction::GrantChosenProtection { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
-            | Instruction::DrawCards(_)
-            | Instruction::MutateObject(_) => false,
+            | Instruction::DrawCards(_) => false,
         })
     }
 

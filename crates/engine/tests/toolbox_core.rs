@@ -2804,3 +2804,167 @@ fn schedule_delayed_step_trigger_with_created_tokens() {
         );
     }
 }
+
+#[test]
+fn phase9_mutate_player_mill_and_add_mana_compose() {
+    let vocab = vocabulary();
+    let mut green_bundle = std::collections::BTreeMap::new();
+    green_bundle.insert(spellwake_engine::mana::ManaType::Green, 2.into());
+    let spell = sorcery(
+        vec![
+            Instruction::MutatePlayer(Box::new(MutatePlayerSpec::mill(
+                ResolvingPlayer::Controller,
+                ValueExpr::literal(1),
+            ))),
+            Instruction::MutatePlayer(Box::new(MutatePlayerSpec::add_mana(
+                ResolvingPlayer::Controller,
+                spellwake_engine::program::EffectManaYield::Fixed(green_bundle),
+            ))),
+        ],
+        &vocab,
+    );
+    let filler = bear(1, 1, BTreeSet::new(), &vocab);
+    let game = init_world(
+        vocab,
+        vec![
+            in_hand(1, P0, spell),
+            in_library(2, P0, filler.clone()),
+            in_library(3, P0, filler.clone()),
+            in_library(4, P0, filler),
+        ],
+    );
+    let after = cast_untargeted(&game, 1).into_state();
+    let gy_count = after
+        .execution()
+        .window()
+        .cards()
+        .iter()
+        .filter(|c| c.zone() == ObjectZone::Graveyard(P0))
+        .count();
+    assert_eq!(gy_count, 2, "spell plus 1 milled card must be in graveyard");
+    assert_eq!(
+        after
+            .execution()
+            .mana(P0, spellwake_engine::mana::ManaType::Green),
+        RulesInteger::from(2),
+        "controller must have 2 green mana from MutatePlayer::AddMana"
+    );
+}
+
+#[test]
+fn phase9_apply_continuous_damage_multiplier_doubles_from_power_damage() {
+    let vocab = vocabulary();
+    let doubler = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleCreature,
+                vec![Instruction::ApplyContinuous(Box::new(
+                    ApplyContinuousSpec::damage_multiplier(2.into()),
+                ))],
+            ),
+        ),
+        &vocab,
+    );
+    let mut hitter = bear(2, 2, BTreeSet::new(), &vocab);
+    hitter.activated.push(ActivatedAbility {
+        id: ActivatedAbilityId(1),
+        mana_cost: ManaCost::free(),
+        source_cost: SourceCost::None,
+        body: ExecutableBody::new(
+            BodyTarget::SingleCreature,
+            vec![Instruction::DealDamage(Box::new(
+                DealDamageSpec::from_power(
+                    spellwake_engine::program::PowerDamageSource::AbilitySource,
+                ),
+            ))],
+        ),
+    });
+    let hitter = validated(hitter, &vocab);
+    let big = bear(4, 4, BTreeSet::new(), &vocab);
+    let game = init_world(
+        vocab,
+        vec![in_hand(1, P0, doubler), bf(2, P0, hitter), bf(3, P1, big)],
+    );
+    let target = TargetRef::Object(object(&game, 3));
+    let after_doubler = pass_pair(
+        submit(
+            &game,
+            P0,
+            GameCommand::Cast {
+                spell: object(&game, 1),
+                target,
+            },
+        )
+        .state(),
+    )
+    .into_state();
+    let after_hit = pass_pair(
+        submit(
+            &after_doubler,
+            P0,
+            GameCommand::ActivateAbility {
+                source: object(&after_doubler, 2),
+                ability: ActivatedAbilityId(1),
+                target,
+                payment: Some(ManaPayment::default()),
+            },
+        )
+        .state(),
+    )
+    .into_state();
+    assert_eq!(
+        after_hit
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_hit, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Graveyard(P1),
+        "2 power damage doubled by ApplyContinuous(DamageMultiplier(2)) must be lethal to a 4/4"
+    );
+}
+
+#[test]
+fn phase9_mutate_object_solve_case_and_advance_class_level() {
+    let vocab = vocabulary();
+    let ability = ActivatedAbility {
+        id: ActivatedAbilityId(1),
+        mana_cost: ManaCost::free(),
+        source_cost: SourceCost::None,
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![
+                Instruction::MutateObject(Box::new(MutateObjectSpec::solve_case())),
+                Instruction::MutateObject(Box::new(MutateObjectSpec::advance_class_level(2))),
+            ],
+        ),
+    };
+    let perm = validated(Program::artifact(None, vec![ability]), &vocab);
+    let game = init_world(vocab, vec![bf(1, P0, perm)]);
+    let source = object(&game, 1);
+    let activated = submit(
+        &game,
+        P0,
+        GameCommand::ActivateUntargetedAbility {
+            source,
+            ability: ActivatedAbilityId(1),
+            payment: Some(ManaPayment::default()),
+        },
+    );
+    let resolved = pass_pair(activated.state());
+    let occs = all_occurrences(&resolved);
+    assert!(
+        occs.iter()
+            .any(|occ| matches!(occ, RulesOccurrence::CaseSolved { object } if *object == source)),
+        "MutateObject::SolveCase must emit CaseSolved"
+    );
+    assert!(
+        occs.iter().any(|occ| matches!(
+            occ,
+            RulesOccurrence::ClassLevelReached { object, level: 2 } if *object == source
+        )),
+        "MutateObject::AdvanceClassLevel(2) must emit ClassLevelReached(2)"
+    );
+}

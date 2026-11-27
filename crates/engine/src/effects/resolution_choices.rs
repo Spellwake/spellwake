@@ -1126,14 +1126,10 @@ impl EffectWindow {
             return Err(EffectError::InconsistentProgram);
         }
         match instruction {
-            Instruction::AffectPermanentTargets { .. }
-            | Instruction::ModifyAnyNumberOfPermanents { .. } => {
+            Instruction::AffectPermanentTargets { .. } => {
                 Ok(self.window.target_assessment().is_some()
                     && !self.legal_permanent_targets()?.is_empty())
             }
-            Instruction::AdvanceClassLevel(_)
-            | Instruction::SolveSourceCase
-            | Instruction::BecomePreparedSource => Ok(true),
             Instruction::ReturnDelayedGraveyardToHand(_)
             | Instruction::DamageFromGrantingPermanent { .. } => {
                 Err(EffectError::InconsistentProgram)
@@ -1198,8 +1194,8 @@ impl EffectWindow {
                     Ok(true)
                 }
             }
-            Instruction::MutatePlayer(spec) => {
-                if let crate::toolbox::PlayerMutation::PayCounter { kind, amount } = &spec.op {
+            Instruction::MutatePlayer(spec) => match &spec.op {
+                crate::toolbox::PlayerMutation::PayCounter { kind, amount } => {
                     let entry = self
                         .window
                         .resolving()
@@ -1219,42 +1215,65 @@ impl EffectWindow {
                         && seats
                             .iter()
                             .all(|s| self.player_counters_of_kind(*s, *kind) >= cost))
-                } else {
-                    Ok(true)
                 }
-            }
-            Instruction::CollectEvidence { player, minimum } => {
-                let controller = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                let actor = self.resolving_player_identity_at(*player, None)?;
-                let needed = self.resolve_value_expr(controller, minimum)?.max(0.into());
-                let total_mv = self
-                    .window
-                    .cards()
-                    .iter()
-                    .filter(|c| c.zone() == ObjectZone::Graveyard(actor) && c.card_id().is_some())
-                    .fold(RulesInteger::from(0), |acc, c| {
-                        acc.plus(
-                            &self
-                                .permanent_mana_value(c.id())
-                                .unwrap_or_else(|| 0.into()),
-                        )
-                    });
-                Ok(total_mv >= needed)
-            }
-            Instruction::Blight { player, .. } => {
-                let actor = self.resolving_player_identity_at(*player, None)?;
-                let evaluated = self.evaluated_characteristics()?;
-                Ok(evaluated.objects.values().any(|v| {
-                    v.zone == ObjectZone::Battlefield
-                        && v.controller == Some(actor)
-                        && v.is_creature()
-                        && self.window.cards().phased_out_under(v.object).is_none()
-                }))
-            }
+                crate::toolbox::PlayerMutation::CollectEvidence { minimum } => {
+                    let controller = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .controller();
+                    let player = spec
+                        .resolving_player()
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let actor = self.resolving_player_identity_at(player, None)?;
+                    let needed = self.resolve_value_expr(controller, minimum)?.max(0.into());
+                    let total_mv = self
+                        .window
+                        .cards()
+                        .iter()
+                        .filter(|c| {
+                            c.zone() == ObjectZone::Graveyard(actor) && c.card_id().is_some()
+                        })
+                        .fold(RulesInteger::from(0), |acc, c| {
+                            acc.plus(
+                                &self
+                                    .permanent_mana_value(c.id())
+                                    .unwrap_or_else(|| 0.into()),
+                            )
+                        });
+                    Ok(total_mv >= needed)
+                }
+                crate::toolbox::PlayerMutation::Blight { .. } => {
+                    let player = spec
+                        .resolving_player()
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let actor = self.resolving_player_identity_at(player, None)?;
+                    let evaluated = self.evaluated_characteristics()?;
+                    Ok(evaluated.objects.values().any(|v| {
+                        v.zone == ObjectZone::Battlefield
+                            && v.controller == Some(actor)
+                            && v.is_creature()
+                            && self.window.cards().phased_out_under(v.object).is_none()
+                    }))
+                }
+                crate::toolbox::PlayerMutation::Mill(amount) => {
+                    let controller = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .controller();
+                    let requested = self.resolve_value_expr(controller, amount)?;
+                    let player = spec
+                        .resolving_player()
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let player = self.resolving_player_identity_at(player, None)?;
+                    Ok(self.window.participants().contains(&player)
+                        && (!requested.is_positive()
+                            || !self.window.cards().library(player).is_empty()))
+                }
+                crate::toolbox::PlayerMutation::Populate => Err(EffectError::InconsistentProgram),
+                _ => Ok(true),
+            },
             Instruction::Discard {
                 players: crate::program::AffectedPlayers::One(role),
                 amount,
@@ -1308,41 +1327,18 @@ impl EffectWindow {
                 Ok(!requested.is_positive()
                     || RulesInteger::from_usize(matching_count) >= requested)
             }
-            Instruction::Scry { .. }
-            | Instruction::Surveil { .. }
-            | Instruction::Proliferate
-            | Instruction::Bolster(_)
-            | Instruction::Amass { .. }
-            | Instruction::ManifestTop { .. }
-            | Instruction::ExileTopPlay { .. }
+            Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::DivideDamageExprAmongTargets { .. }
-            | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Vote { .. }
-            | Instruction::Incubate { .. }
             | Instruction::Connive { .. }
             | Instruction::ConniveFinalize { .. }
             | Instruction::Discover { .. }
-            | Instruction::Clash { .. }
-            | Instruction::RingTemptsYou
-            | Instruction::VentureIntoDungeon { .. }
-            | Instruction::TakeInitiative { .. }
-            | Instruction::UnlockDoor { .. }
-            | Instruction::Behold { .. }
-            | Instruction::ManifestDread
-            | Instruction::Monstrosity { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
-            | Instruction::Ripple(_)
-            | Instruction::Demonstrate
-            | Instruction::Enlist
-            | Instruction::ChooseOneLastMoved { .. }
             | Instruction::DrawCards(_)
-            | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
             | Instruction::BranchCondition { .. }
             | Instruction::ForEach { .. }
@@ -1353,9 +1349,23 @@ impl EffectWindow {
             | Instruction::SideDeckOp(_)
             | Instruction::BindResolutionX(_)
             | Instruction::CreateAuraTokenAttached { .. }
-            | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. } => Ok(true),
+            Instruction::ApplyContinuous(spec) => match &spec.payload {
+                crate::toolbox::ContinuousPayload::DamageMultiplier { .. } => {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let bound = self.instruction_target(entry)?;
+                    self.operation_available(instruction, bound.choice().target)
+                }
+                crate::toolbox::ContinuousPayload::ModifyAnyNumber { .. } => {
+                    Ok(self.window.target_assessment().is_some()
+                        && !self.legal_permanent_targets()?.is_empty())
+                }
+                _ => Ok(true),
+            },
             Instruction::BecomeCopy {
                 receiver, donor, ..
             } => {
@@ -1410,6 +1420,9 @@ impl EffectWindow {
                 }
             }
             Instruction::ZoneOp(spec) => {
+                if matches!(spec.source, crate::toolbox::ObjectQuery::DestroyedThisWay) {
+                    return Err(EffectError::InconsistentProgram);
+                }
                 if matches!(
                     spec.destination,
                     crate::toolbox::ZoneDest::Graveyard {
@@ -1497,10 +1510,46 @@ impl EffectWindow {
                     }
                     _ => Ok(true),
                 },
+                crate::toolbox::DamageTargetQuery::TargetControllersCreatures { .. }
+                | crate::toolbox::DamageTargetQuery::FromPower(_)
+                | crate::toolbox::DamageTargetQuery::CreaturePowerToOther { .. }
+                | crate::toolbox::DamageTargetQuery::DivideThree
+                | crate::toolbox::DamageTargetQuery::OrderedTargets { .. } => {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let bound = self.instruction_target(entry)?;
+                    self.operation_available(instruction, bound.choice().target)
+                }
                 _ => Ok(true),
             },
             Instruction::MutateObject(spec) => {
-                if matches!(spec.source, crate::toolbox::ObjectQuery::Targets) {
+                if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::Earthbend { .. }
+                        | crate::toolbox::ObjectMutation::SoulbondPair { .. }
+                ) {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let bound = self.instruction_target(entry)?;
+                    self.operation_available(instruction, bound.choice().target)
+                } else if matches!(
+                    spec.op,
+                    crate::toolbox::ObjectMutation::AdvanceClassLevel(_)
+                        | crate::toolbox::ObjectMutation::SolveCase
+                        | crate::toolbox::ObjectMutation::SetPrepared
+                        | crate::toolbox::ObjectMutation::DistributeCounters { .. }
+                        | crate::toolbox::ObjectMutation::Enlist
+                        | crate::toolbox::ObjectMutation::ReselectAttackDefender
+                        | crate::toolbox::ObjectMutation::Explore
+                        | crate::toolbox::ObjectMutation::BecomeMonstrous { .. }
+                        | crate::toolbox::ObjectMutation::UnlockDoor { .. }
+                ) {
+                    Ok(true)
+                } else if matches!(spec.source, crate::toolbox::ObjectQuery::Targets) {
                     let entry = self
                         .window
                         .resolving()
@@ -1540,26 +1589,9 @@ impl EffectWindow {
                     Ok(true)
                 }
             }
-            Instruction::Mill { player, amount } => {
-                let controller = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                let requested = self.resolve_value_expr(controller, amount)?;
-                let player = self.resolving_player_identity_at(*player, None)?;
-                Ok(self.window.participants().contains(&player)
-                    && (!requested.is_positive()
-                        || !self.window.cards().library(player).is_empty()))
-            }
-            Instruction::AddManaForPlayer { .. }
-            | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::ResolveKeywordTrigger(_)
+            Instruction::ResolveKeywordTrigger(_)
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::RequireCondition(_)
-            | Instruction::ReselectAttackDefender
-            | Instruction::SetBlockDeclarations(_)
-            | Instruction::AdditionalLoyaltyActivation
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::Ninjutsu
@@ -1567,8 +1599,6 @@ impl EffectWindow {
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::Myriad
-            | Instruction::WatchNextSpellOrLoyaltyTwice
-            | Instruction::WatchNextLoyaltyCopy
             | Instruction::CopyCapturedAbility
             | Instruction::CopyOnCast(_)
             | Instruction::MadnessCast
@@ -1583,9 +1613,7 @@ impl EffectWindow {
             | Instruction::ReturnDelayedExile(_)
             | Instruction::ExileUnearthed(_)
             | Instruction::SacrificeStateTriggerSource => Ok(true),
-            Instruction::AdditionalCombat { .. } => Ok(true),
             Instruction::ExileOnePerPlayerUntilSourceLeaves
-            | Instruction::Populate
             | Instruction::Sacrifice { .. }
             | Instruction::SacrificeRandomUntilLand
             | Instruction::Discard { .. } => Err(EffectError::InconsistentProgram),
@@ -1604,8 +1632,6 @@ impl EffectWindow {
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::OfferAnyPlayer { .. }
-            | Instruction::DealDamageToAnnouncedTargets { .. }
-            | Instruction::GrantChosenProtection { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
@@ -1613,27 +1639,19 @@ impl EffectWindow {
             Instruction::ChooseCreatureType { excluding, .. } => {
                 Ok(excluding.len() < self.creature_vocabulary.len())
             }
-            Instruction::DamageTargetControllersCreatures { .. }
-            | Instruction::DamageFromPower(_)
-            | Instruction::CreatureDealsPowerDamageToOther { .. }
-            | Instruction::RememberPermanentTarget
+            Instruction::RememberPermanentTarget
             | Instruction::ExileDefeatedSiege
-            | Instruction::CreateDamageMultiplier { .. }
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::DivideThreeDamageAmongTargets
-            | Instruction::DamageOrderedTargets { .. }
             | Instruction::MayRevealLibraryTop
             | Instruction::ChooseFoundSpell
             | Instruction::Encore
-            | Instruction::PairWithCreature { .. }
             | Instruction::CastFoundSpell(_)
             | Instruction::ExtortDrain
             | Instruction::ResolveGrowth(_)
             | Instruction::ResolveCounterKeyword(_)
             | Instruction::SacrificeEvoked
             | Instruction::Attach(_)
-            | Instruction::ChooseRevealedHandCard { .. }
-            | Instruction::Earthbend { .. } => {
+            | Instruction::ChooseRevealedHandCard { .. } => {
                 let entry = self
                     .window
                     .resolving()
@@ -1641,8 +1659,7 @@ impl EffectWindow {
                 let bound = self.instruction_target(entry)?;
                 self.operation_available(instruction, bound.choice().target)
             }
-            Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::ReturnEarthbentCard
+            Instruction::ReturnEarthbentCard
             | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
@@ -1865,51 +1882,29 @@ impl EffectWindow {
                 )?;
             }
             Instruction::Myriad
-            | Instruction::WatchNextSpellOrLoyaltyTwice
-            | Instruction::WatchNextLoyaltyCopy
             | Instruction::CopyCapturedAbility
             | Instruction::CopyOnCast(_)
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
-            | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::AffectPermanentTargets { .. }
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
             | Instruction::ReturnDelayedGraveyardToHand(_)
             | Instruction::DamageFromGrantingPermanent { .. }
-            | Instruction::Populate
-            | Instruction::Bolster(_)
-            | Instruction::Amass { .. }
             | Instruction::Sacrifice { .. }
             | Instruction::SacrificeRandomUntilLand
             | Instruction::Discard { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Vote { .. }
-            | Instruction::Incubate { .. }
             | Instruction::Connive { .. }
             | Instruction::ConniveFinalize { .. }
             | Instruction::Discover { .. }
-            | Instruction::Clash { .. }
-            | Instruction::RingTemptsYou
-            | Instruction::VentureIntoDungeon { .. }
-            | Instruction::TakeInitiative { .. }
-            | Instruction::UnlockDoor { .. }
-            | Instruction::Behold { .. }
-            | Instruction::ManifestDread
-            | Instruction::Monstrosity { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
-            | Instruction::Ripple(_)
-            | Instruction::Demonstrate
-            | Instruction::Enlist
-            | Instruction::ChooseOneLastMoved { .. }
             | Instruction::ZoneOp(_)
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
@@ -1928,45 +1923,25 @@ impl EffectWindow {
             | Instruction::StackOp(_)
             | Instruction::BindResolutionX(_)
             | Instruction::CreateAuraTokenAttached { .. }
-            | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
-            | Instruction::CollectEvidence { .. }
-            | Instruction::Blight { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::ChooseCreatureType { .. }
-            | Instruction::DamageFromPower(_)
-            | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::RememberPermanentTarget
-            | Instruction::AdditionalCombat { .. }
             | Instruction::ExileDefeatedSiege
-            | Instruction::AdvanceClassLevel(_)
-            | Instruction::SolveSourceCase
-            | Instruction::BecomePreparedSource
-            | Instruction::Proliferate
-            | Instruction::DamageTargetControllersCreatures { .. }
-            | Instruction::CreateDamageMultiplier { .. }
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::DivideThreeDamageAmongTargets
-            | Instruction::DamageOrderedTargets { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::MayRevealLibraryTop
-            | Instruction::ManifestTop { .. }
             | Instruction::ChooseFoundSpell
             | Instruction::RequireCondition(_)
             | Instruction::Encore
-            | Instruction::ReselectAttackDefender
-            | Instruction::SetBlockDeclarations(_)
-            | Instruction::AdditionalLoyaltyActivation
             | Instruction::ReturnExiledTargetCohort { .. }
-            | Instruction::ReturnCardsDestroyedThisWay
             | Instruction::ExileDelayedObjects(_)
             | Instruction::ReturnEarthbentCard
-            | Instruction::PairWithCreature { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::Ninjutsu
@@ -1988,20 +1963,12 @@ impl EffectWindow {
             | Instruction::Attach(_)
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ReturnGraveyardCreatureWithCorpse(_)
-            | Instruction::Earthbend { .. }
             | Instruction::SearchLibrary { .. }
-            | Instruction::Scry { .. }
-            | Instruction::Surveil { .. }
-            | Instruction::Mill { .. }
             | Instruction::OfferAnyPlayer { .. }
-            | Instruction::DealDamageToAnnouncedTargets { .. }
-            | Instruction::GrantChosenProtection { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::CreateTokenCopyExt { .. }
-            | Instruction::AddManaForPlayer { .. }
-            | Instruction::SelectExtremeLifePlayer { .. } => return Ok(false),
+            | Instruction::CreateTokenCopyExt { .. } => return Ok(false),
         }
         Ok(true)
     }

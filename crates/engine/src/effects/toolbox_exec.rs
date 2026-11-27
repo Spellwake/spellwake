@@ -434,6 +434,250 @@ impl EffectWindow {
                     |_, _, _| Ok(vec![RulesOccurrence::DamageEffectCreated(created)]),
                 )?;
             }
+            ContinuousPayload::DamageMultiplier { factor } => {
+                let target = self.instruction_target(entry)?.choice().target;
+                let TargetRef::Object(obj) = target else {
+                    return Err(EffectError::InconsistentProgram);
+                };
+                if !self
+                    .window
+                    .cards()
+                    .get(obj)
+                    .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
+                {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let before = self.rules_snapshot(None)?;
+                let multiplier = self.damage_state.add_multiplier(
+                    entry.id(),
+                    DamageEffectTarget::Permanent(obj),
+                    factor.clone(),
+                    DamageSourceFilter::Any,
+                )?;
+                let created = DamageEffectCreation::Multiplier {
+                    multiplier,
+                    instruction: index,
+                };
+                ctx.journal.created.push(created.clone());
+                self.emit_from(
+                    EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before,
+                    None,
+                    ctx.append,
+                    |_, _, _| Ok(vec![RulesOccurrence::DamageEffectCreated(created.clone())]),
+                )?;
+            }
+            ContinuousPayload::BlockDeclarations(rule) => {
+                let opponents = self
+                    .combat_rules
+                    .opponents(self.window.participants(), controller)?;
+                if let Some(combat) = &mut self.combat {
+                    match rule {
+                        crate::program::BlockDeclarationRule::EachOpponentOneBlocker => {
+                            combat.one_blocker_for.extend(opponents)
+                        }
+                        crate::program::BlockDeclarationRule::ControllerChooses => {
+                            combat.blocking_chooser = Some(controller)
+                        }
+                    }
+                }
+            }
+            ContinuousPayload::ChosenColorProtection { recipients } => {
+                let Some(color) = self
+                    .resolution_cursor_mut()
+                    .and_then(|cursor| cursor.chosen_effect_color.take())
+                else {
+                    let frame = EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
+                        revision: self.revision,
+                        entry: entry.id(),
+                        instruction: index,
+                        chooser: controller,
+                        colors: mana_domains::colored_mana(),
+                        split: None,
+                    });
+                    return Ok(StepOutcome::Pending(frame));
+                };
+                let Some(resolved_dur) = self.resolve_duration(entry, spec.duration)? else {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                };
+                use crate::characteristics::Color;
+                let color = Color::from_mana(color).ok_or(EffectError::InconsistentProgram)?;
+                let keyword = match color {
+                    Color::White => KeywordAbility::ProtectionFromWhite,
+                    Color::Blue => KeywordAbility::ProtectionFromBlue,
+                    Color::Black => KeywordAbility::ProtectionFromBlack,
+                    Color::Red => KeywordAbility::ProtectionFromRed,
+                    Color::Green => KeywordAbility::ProtectionFromGreen,
+                };
+                let parts = crate::characteristics::ResolvedParts(vec![
+                    crate::characteristics::ResolvedPart::Abilities(
+                        crate::characteristics::AbilityChange::grant_keywords([keyword]),
+                    ),
+                ]);
+                let affected: BTreeSet<ObjectId> = match recipients {
+                    crate::program::ProtectionRecipients::TargetPermanent => {
+                        match self.instruction_target(entry)?.choice().target {
+                            TargetRef::Object(id)
+                                if self
+                                    .window
+                                    .cards()
+                                    .get(id)
+                                    .is_some_and(|c| c.zone() == ObjectZone::Battlefield) =>
+                            {
+                                BTreeSet::from([id])
+                            }
+                            _ => BTreeSet::new(),
+                        }
+                    }
+                    crate::program::ProtectionRecipients::AbilitySource => match source_object {
+                        Some(id)
+                            if self
+                                .window
+                                .cards()
+                                .get(id)
+                                .is_some_and(|c| c.zone() == ObjectZone::Battlefield) =>
+                        {
+                            BTreeSet::from([id])
+                        }
+                        _ => BTreeSet::new(),
+                    },
+                    crate::program::ProtectionRecipients::ControllerAndPermanents => {
+                        let before = self.rules_snapshot(None)?;
+                        let affected = self.effect_group(
+                            entry,
+                            crate::program::EffectSubject::Matching(
+                                crate::program::ObjectFilter::any().controlled(),
+                            ),
+                        )?;
+                        let effect = if affected.is_empty() {
+                            None
+                        } else {
+                            Some(self.characteristics.add_effect_for_objects(
+                                entry.id(),
+                                affected,
+                                parts,
+                                resolved_dur,
+                            )?)
+                        };
+                        self.characteristics
+                            .player_color_protection
+                            .entry(controller)
+                            .or_default()
+                            .insert(color);
+                        self.emit_from(
+                            EventCause::Instruction {
+                                entry: entry.id(),
+                                instruction: index,
+                            },
+                            &before,
+                            None,
+                            ctx.append,
+                            |old, current, _| {
+                                let mut rows = Vec::new();
+                                if let Some(effect) = effect {
+                                    let appearances = characteristic_appearance_changes(
+                                        old,
+                                        current,
+                                        effect.affected.iter().copied(),
+                                    )?;
+                                    rows.push(RulesOccurrence::ContinuousEffectCreated {
+                                        effect,
+                                        appearances,
+                                    });
+                                }
+                                rows.push(RulesOccurrence::PlayerProtectionGranted {
+                                    player: controller,
+                                    color,
+                                });
+                                Ok(rows)
+                            },
+                        )?;
+                        self.advance_instruction()?;
+                        return Ok(StepOutcome::Continue);
+                    }
+                    crate::program::ProtectionRecipients::Matching(filter) => {
+                        let evaluated = self.evaluated_characteristics()?;
+                        evaluated
+                            .objects
+                            .values()
+                            .filter(|p| {
+                                p.zone == ObjectZone::Battlefield
+                                    && self.object_passes_filter(
+                                        p.object,
+                                        **filter,
+                                        controller,
+                                        source_object,
+                                        &evaluated,
+                                    )
+                            })
+                            .map(|p| p.object)
+                            .collect()
+                    }
+                };
+                if !affected.is_empty() {
+                    self.modify_objects_for_duration(
+                        entry,
+                        index,
+                        affected,
+                        parts,
+                        resolved_dur,
+                        ctx.append,
+                    )?;
+                }
+            }
+            ContinuousPayload::ModifyAnyNumber { parts } => {
+                let selected = if entry.targets().targets().is_empty() {
+                    BTreeSet::new()
+                } else {
+                    self.legal_permanent_targets()?
+                };
+                if !selected.is_empty() {
+                    let locals = self
+                        .resolution_state()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .locals()
+                        .clone();
+                    let materialized = self.materialize_resolved_parts(
+                        entry,
+                        parts,
+                        &locals,
+                        controller,
+                        source_object,
+                    )?;
+                    let before = self.rules_snapshot(None)?;
+                    let effect = self.characteristics.add_effect_for_objects(
+                        entry.id(),
+                        selected,
+                        materialized,
+                        spec.duration,
+                    )?;
+                    self.emit_from(
+                        EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before,
+                        None,
+                        ctx.append,
+                        |old, new, _| {
+                            let appearances = characteristic_appearance_changes(
+                                old,
+                                new,
+                                effect.affected.iter().copied(),
+                            )?;
+                            Ok(vec![RulesOccurrence::ContinuousEffectCreated {
+                                effect,
+                                appearances,
+                            }])
+                        },
+                    )?;
+                }
+            }
         }
 
         self.advance_instruction()?;
@@ -727,9 +971,15 @@ impl EffectWindow {
                 self.execute_apply_continuous(ctx, entry, index, &spec)
             }
             Instruction::DrawCards(spec) => self.execute_draw_cards(ctx, entry, index, &spec),
+            Instruction::MutateObject(spec) if spec.is_pass_c_op() => {
+                Ok(StepOutcome::Next(Instruction::MutateObject(spec)))
+            }
             Instruction::MutateObject(spec) => self.execute_mutate_object(ctx, entry, index, &spec),
             Instruction::AdjustLife(spec) => self.execute_adjust_life(ctx, entry, index, &spec),
             Instruction::DealDamage(spec) => self.execute_deal_damage(ctx, entry, index, &spec),
+            Instruction::MutatePlayer(spec) if spec.is_pass_c_or_selection_op() => {
+                Ok(StepOutcome::Next(Instruction::MutatePlayer(spec)))
+            }
             Instruction::MutatePlayer(spec) => self.execute_mutate_player(ctx, entry, index, &spec),
             Instruction::StackOp(spec) if !spec.requires_stack_target() => {
                 self.execute_non_targeted_stack_op(ctx, entry, index, &spec)

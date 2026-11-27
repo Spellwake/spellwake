@@ -344,6 +344,26 @@ impl ZoneOpSpec {
     ///
     /// # Errors
     /// Returns [`DefinitionError::InvalidInstruction`] if any nested query or expression is invalid.
+    /// Return all cards destroyed by the immediately preceding destroy instruction onto the
+    /// battlefield under the resolving controller's control.
+    #[must_use]
+    pub fn return_destroyed_this_way() -> Self {
+        Self::move_all(
+            ObjectQuery::DestroyedThisWay,
+            ZoneDest::Battlefield {
+                controller: ZoneController::Player(Box::new(PlayerSelector::Resolving(
+                    crate::program::ResolvingPlayer::Controller,
+                ))),
+                tapped: false,
+                attacking: false,
+                transformed: false,
+                face_down: false,
+                entering_counters: Vec::new(),
+                attach_to: None,
+            },
+        )
+    }
+
     pub(crate) fn validate_vocabulary(
         &self,
         vocabulary: &CreatureTypeVocabulary,

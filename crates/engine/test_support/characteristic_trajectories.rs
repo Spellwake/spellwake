@@ -1647,7 +1647,9 @@ pub(crate) fn latent_damage(shield: bool, multiplier: bool, shield_first: bool) 
         )));
     }
     if multiplier {
-        body.push(Instruction::CreateDamageMultiplier { factor: 2.into() });
+        body.push(Instruction::ApplyContinuous(Box::new(
+            spellwake_engine::toolbox::ApplyContinuousSpec::damage_multiplier(2.into()),
+        )));
     }
     let inactive_index = if shield && multiplier { 4 } else { 3 };
     assert_eq!(body.len(), inactive_index);

@@ -3317,7 +3317,11 @@ pub(super) fn lower_restrictions_statics_instruction(
             restriction,
             condition: None,
         } if restriction.eq_ignore_ascii_case("proliferate again") => {
-            builder.instructions.push(Instruction::Proliferate);
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::proliferate(),
+                )));
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -4245,21 +4249,28 @@ pub(super) fn lower_restrictions_statics_instruction(
                     return Ok(());
                 }
                 let has_whole_body_target_op = builder.instructions.iter().any(|op| {
-                    matches!(
-                        op,
-                        Instruction::AffectPermanentTargets { .. }
-                            | Instruction::ModifyAnyNumberOfPermanents { .. }
-                    ) || matches!(
-                        op,
-                        Instruction::MutateObject(spec)
-                            if matches!(
-                                spec.source,
-                                spellwake_engine::toolbox::ObjectQuery::Targets
-                            ) && matches!(
-                                spec.op,
-                                spellwake_engine::toolbox::ObjectMutation::DoubleCounters { .. }
-                            )
-                    )
+                    matches!(op, Instruction::AffectPermanentTargets { .. })
+                        || matches!(
+                            op,
+                            Instruction::ApplyContinuous(spec)
+                                if matches!(
+                                    spec.payload,
+                                    spellwake_engine::toolbox::ContinuousPayload::ModifyAnyNumber {
+                                        ..
+                                    }
+                                )
+                        )
+                        || matches!(
+                            op,
+                            Instruction::MutateObject(spec)
+                                if matches!(
+                                    spec.source,
+                                    spellwake_engine::toolbox::ObjectQuery::Targets
+                                ) && matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::ObjectMutation::DoubleCounters { .. }
+                                )
+                        )
                 });
                 if !builder.instructions.is_empty() && !has_whole_body_target_op {
                     let end_dest = builder.instructions.len() + 1;
@@ -5675,10 +5686,12 @@ pub(super) fn lower_restrictions_statics_instruction(
                     builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
                     builder
                         .instructions
-                        .push(Instruction::ModifyAnyNumberOfPermanents {
-                            parts: ResolvedPartsSpec(parts),
-                            duration: dur,
-                        });
+                        .push(Instruction::ApplyContinuous(Box::new(
+                            spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(
+                                ResolvedPartsSpec(parts),
+                                dur,
+                            ),
+                        )));
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(raw)
@@ -5968,17 +5981,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                         matches!(
                             op,
                             Instruction::DealDamage(_)
-                                | Instruction::DamageOrderedTargets { .. }
-                                | Instruction::DamageFromPower(_)
                                 | Instruction::DamageFromGrantingPermanent { .. }
-                                | Instruction::DamageTargetControllersCreatures { .. }
-                                | Instruction::DealDamageToAnnouncedTargets { .. }
                                 | Instruction::AffectPermanentTargets {
                                     action: PermanentTargetAction::Damage(_),
                                     ..
                                 }
-                                | Instruction::DivideDamageExprAmongTargets { .. }
-                                | Instruction::CreatureDealsPowerDamageToOther { .. }
                                 | Instruction::Fight { .. }
                         )
                     });
@@ -6991,7 +6998,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                 {
                     builder
                         .instructions
-                        .push(Instruction::WatchNextSpellOrLoyaltyTwice);
+                        .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::watch_next_spell_or_loyalty(
+                            false,
+                        ),
+                    )));
                     return Ok(());
                 }
                 return Err("oracle:unsupported-when-you-next");
@@ -7008,7 +7019,13 @@ pub(super) fn lower_restrictions_statics_instruction(
                     && in_trigger
                     && is_copy_body(1, true)
                 {
-                    builder.instructions.push(Instruction::WatchNextLoyaltyCopy);
+                    builder
+                        .instructions
+                        .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::watch_next_spell_or_loyalty(
+                            true,
+                        ),
+                    )));
                     return Ok(());
                 }
                 return Err("oracle:unsupported-when-you-next");
@@ -7775,17 +7792,11 @@ fn try_lower_temp_exile_replacement(
                 matches!(
                     op,
                     Instruction::DealDamage(_)
-                        | Instruction::DamageOrderedTargets { .. }
-                        | Instruction::DamageFromPower(_)
                         | Instruction::DamageFromGrantingPermanent { .. }
-                        | Instruction::DamageTargetControllersCreatures { .. }
-                        | Instruction::DealDamageToAnnouncedTargets { .. }
                         | Instruction::AffectPermanentTargets {
                             action: PermanentTargetAction::Damage(_),
                             ..
                         }
-                        | Instruction::DivideDamageExprAmongTargets { .. }
-                        | Instruction::CreatureDealsPowerDamageToOther { .. }
                         | Instruction::Fight { .. }
                 )
             });
@@ -7926,8 +7937,13 @@ pub(super) fn has_unconditional_mill_one(ops: &[Instruction]) -> bool {
             | Instruction::OptionalSequence { .. } => {
                 in_conditional = true;
             }
-            Instruction::Mill { amount, .. }
-                if !in_conditional && *amount == ValueExpr::literal(1) =>
+            Instruction::MutatePlayer(spec)
+                if !in_conditional
+                    && matches!(
+                        &spec.op,
+                        spellwake_engine::toolbox::PlayerMutation::Mill(amount)
+                            if *amount == ValueExpr::literal(1)
+                    ) =>
             {
                 return true;
             }
@@ -10512,15 +10528,15 @@ mod wave10_static_tests {
             duration: DurationAst::UntilEndOfTurn,
             body: vec![InstructionAst::RetainManaUntilEndOfTurn],
         };
-        let expected = vec![Instruction::AddManaForPlayer {
-            player: ResolvingPlayer::Controller,
-            yield_kind: EffectManaYield::RetainedUntilCleanup(Box::new(
-                EffectManaYield::RestrictedFixed {
+        let expected = vec![Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                ResolvingPlayer::Controller,
+                EffectManaYield::RetainedUntilCleanup(Box::new(EffectManaYield::RestrictedFixed {
                     bundle: BTreeMap::from([(ManaType::White, 3.into())]),
                     restriction: ManaRestriction::CreatureSpell,
-                },
-            )),
-        }];
+                })),
+            ),
+        ))];
         for clauses in [
             [restriction.clone(), retention.clone()],
             [retention, restriction],
@@ -10563,10 +10579,14 @@ mod wave10_static_tests {
             body: vec![InstructionAst::RetainManaUntilEndOfTurn],
         };
         let mut builder = BodyBuilder::new();
-        builder.instructions.push(Instruction::AddManaForPlayer {
-            player: ResolvingPlayer::Controller,
-            yield_kind: EffectManaYield::Fixed(BTreeMap::from([(ManaType::White, 3.into())])),
-        });
+        builder
+            .instructions
+            .push(Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                    ResolvingPlayer::Controller,
+                    EffectManaYield::Fixed(BTreeMap::from([(ManaType::White, 3.into())])),
+                ),
+            )));
         lower_restrictions_statics_instruction(
             &instruction,
             &mut builder,
@@ -10578,12 +10598,18 @@ mod wave10_static_tests {
         )
         .expect("scoped producer retention");
         assert!(matches!(builder.instructions.as_slice(),
-            [Instruction::AddManaForPlayer {
-                player: ResolvingPlayer::Controller,
-                yield_kind: EffectManaYield::RetainedUntilCleanup(inner),
-            }]
-                if matches!(inner.as_ref(), EffectManaYield::Fixed(amount)
-                    if amount == &BTreeMap::from([(ManaType::White, 3.into())]))
+            [Instruction::MutatePlayer(spec)]
+                if spec.players
+                    == spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    )
+                    && matches!(
+                        &spec.op,
+                        spellwake_engine::toolbox::PlayerMutation::AddMana(
+                            EffectManaYield::RetainedUntilCleanup(inner),
+                        ) if matches!(inner.as_ref(), EffectManaYield::Fixed(amount)
+                            if amount == &BTreeMap::from([(ManaType::White, 3.into())]))
+                    )
         ));
         let mut no_producer = BodyBuilder::new();
         assert!(
@@ -10646,10 +10672,13 @@ mod wave10_static_tests {
                 .iter()
                 .any(|instruction| matches!(
                     instruction,
-                    Instruction::AddManaForPlayer {
-                        yield_kind: EffectManaYield::RetainedUntilCleanup(_),
-                        ..
-                    }
+                    Instruction::MutatePlayer(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::PlayerMutation::AddMana(
+                                EffectManaYield::RetainedUntilCleanup(_),
+                            )
+                        )
                 ))
         );
     }

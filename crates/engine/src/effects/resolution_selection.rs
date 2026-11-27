@@ -1419,65 +1419,119 @@ impl EffectWindow {
                     ResolutionSelectionOperation::ExileLinkedTargets { objects, source },
                 )
             }
-            Instruction::Populate => {
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
-                    &all,
-                    ResolutionSelectionOperation::Populate,
-                )
-            }
-            Instruction::Amass {
-                army,
-                subtype,
-                amount,
-            } => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let eligible = self.controlled_armies(entry.controller(), *army)?;
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
-                    &all,
-                    ResolutionSelectionOperation::Amass {
-                        amount: *amount,
-                        army: *army,
-                        subtype: *subtype,
-                        eligible,
-                    },
-                )
-            }
-            Instruction::Bolster(amount) => {
-                let current = self.evaluated_characteristics()?;
-                let controller = self.resolving_player(ResolvingPlayer::Controller)?;
-                let controlled = current.objects.values().filter(|p| {
-                    p.zone == ObjectZone::Battlefield
-                        && p.controller == Some(controller)
-                        && p.is_creature()
-                });
-                let min = controlled
-                    .clone()
-                    .filter_map(|p| p.power_toughness.as_ref().map(|pt| &pt.derived.toughness))
-                    .min();
-                let eligible = controlled
-                    .filter(|p| {
-                        p.power_toughness
-                            .as_ref()
-                            .is_some_and(|pt| Some(&pt.derived.toughness) == min)
-                    })
-                    .map(|p| p.object)
-                    .collect();
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
-                    &all,
-                    ResolutionSelectionOperation::Bolster {
-                        amount: *amount,
-                        eligible,
-                    },
-                )
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    crate::toolbox::PlayerMutation::Populate
+                        | crate::toolbox::PlayerMutation::Amass { .. }
+                        | crate::toolbox::PlayerMutation::Bolster(_)
+                        | crate::toolbox::PlayerMutation::Blight { .. }
+                        | crate::toolbox::PlayerMutation::CollectEvidence { .. }
+                ) =>
+            {
+                match &spec.op {
+                    crate::toolbox::PlayerMutation::Populate => {
+                        all = ValueExpr::Literal(1.into());
+                        (
+                            AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
+                            &all,
+                            ResolutionSelectionOperation::Populate,
+                        )
+                    }
+                    crate::toolbox::PlayerMutation::Amass {
+                        army,
+                        subtype,
+                        amount,
+                    } => {
+                        let entry = self
+                            .window
+                            .resolving()
+                            .ok_or(EffectError::WrongResolutionFrame)?;
+                        let eligible = self.controlled_armies(entry.controller(), *army)?;
+                        all = ValueExpr::Literal(1.into());
+                        (
+                            AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
+                            &all,
+                            ResolutionSelectionOperation::Amass {
+                                amount: *amount,
+                                army: *army,
+                                subtype: *subtype,
+                                eligible,
+                            },
+                        )
+                    }
+                    crate::toolbox::PlayerMutation::Bolster(amount) => {
+                        let current = self.evaluated_characteristics()?;
+                        let controller = self.resolving_player(ResolvingPlayer::Controller)?;
+                        let controlled = current.objects.values().filter(|p| {
+                            p.zone == ObjectZone::Battlefield
+                                && p.controller == Some(controller)
+                                && p.is_creature()
+                        });
+                        let min = controlled
+                            .clone()
+                            .filter_map(|p| {
+                                p.power_toughness.as_ref().map(|pt| &pt.derived.toughness)
+                            })
+                            .min();
+                        let eligible = controlled
+                            .filter(|p| {
+                                p.power_toughness
+                                    .as_ref()
+                                    .is_some_and(|pt| Some(&pt.derived.toughness) == min)
+                            })
+                            .map(|p| p.object)
+                            .collect();
+                        all = ValueExpr::Literal(1.into());
+                        (
+                            AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
+                            &all,
+                            ResolutionSelectionOperation::Bolster {
+                                amount: *amount,
+                                eligible,
+                            },
+                        )
+                    }
+                    crate::toolbox::PlayerMutation::Blight { amount } => {
+                        let entry = self
+                            .window
+                            .resolving()
+                            .ok_or(EffectError::WrongResolutionFrame)?;
+                        let player = spec
+                            .resolving_player()
+                            .ok_or(EffectError::InconsistentProgram)?;
+                        let count = self
+                            .resolve_value_expr(entry.controller(), amount)?
+                            .max(0.into());
+                        all = ValueExpr::Literal(1.into());
+                        (
+                            AffectedPlayers::One(player),
+                            &all,
+                            ResolutionSelectionOperation::Blight { amount: count },
+                        )
+                    }
+                    crate::toolbox::PlayerMutation::CollectEvidence { minimum } => {
+                        let entry = self
+                            .window
+                            .resolving()
+                            .ok_or(EffectError::WrongResolutionFrame)?;
+                        let player = spec
+                            .resolving_player()
+                            .ok_or(EffectError::InconsistentProgram)?;
+                        let needed = self
+                            .resolve_value_expr(entry.controller(), minimum)?
+                            .max(0.into());
+                        all = ValueExpr::Literal(RulesInteger::from_usize(
+                            self.window.cards().iter().count(),
+                        ));
+                        (
+                            AffectedPlayers::One(player),
+                            &all,
+                            ResolutionSelectionOperation::CollectEvidence { minimum: needed },
+                        )
+                    }
+                    _ => unreachable!(),
+                }
             }
             Instruction::Sacrifice {
                 players,
@@ -1504,38 +1558,6 @@ impl EffectWindow {
             }
             Instruction::Discard { players, amount } => {
                 (*players, amount, ResolutionSelectionOperation::Discard)
-            }
-            Instruction::Blight { player, amount } => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let count = self
-                    .resolve_value_expr(entry.controller(), amount)?
-                    .max(0.into());
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::One(*player),
-                    &all,
-                    ResolutionSelectionOperation::Blight { amount: count },
-                )
-            }
-            Instruction::CollectEvidence { player, minimum } => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let needed = self
-                    .resolve_value_expr(entry.controller(), minimum)?
-                    .max(0.into());
-                all = ValueExpr::Literal(RulesInteger::from_usize(
-                    self.window.cards().iter().count(),
-                ));
-                (
-                    AffectedPlayers::One(*player),
-                    &all,
-                    ResolutionSelectionOperation::CollectEvidence { minimum: needed },
-                )
             }
             Instruction::ChooseObjects {
                 players,
@@ -1588,31 +1610,15 @@ impl EffectWindow {
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::ExileTopPlay { .. }
-            | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Vote { .. }
-            | Instruction::Incubate { .. }
             | Instruction::Connive { .. }
             | Instruction::ConniveFinalize { .. }
             | Instruction::Discover { .. }
-            | Instruction::Clash { .. }
-            | Instruction::RingTemptsYou
-            | Instruction::VentureIntoDungeon { .. }
-            | Instruction::TakeInitiative { .. }
-            | Instruction::UnlockDoor { .. }
-            | Instruction::Behold { .. }
-            | Instruction::ManifestDread
-            | Instruction::Monstrosity { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
-            | Instruction::Ripple(_)
-            | Instruction::Demonstrate
-            | Instruction::Enlist
-            | Instruction::ChooseOneLastMoved { .. }
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -1626,42 +1632,26 @@ impl EffectWindow {
             | Instruction::StackOp(_)
             | Instruction::BindResolutionX(_)
             | Instruction::CreateAuraTokenAttached { .. }
-            | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::ChooseCreatureType { .. }
-            | Instruction::DamageFromPower(_)
-            | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::RememberPermanentTarget
-            | Instruction::AdditionalCombat { .. }
-            | Instruction::Proliferate
-            | Instruction::DamageTargetControllersCreatures { .. }
-            | Instruction::CreateDamageMultiplier { .. }
             | Instruction::OfferSourceCounters { .. }
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::DivideThreeDamageAmongTargets
-            | Instruction::DamageOrderedTargets { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::ReturnGraveyardCreatureWithCorpse(_)
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::MayRevealLibraryTop
-            | Instruction::ManifestTop { .. }
             | Instruction::ChooseFoundSpell
             | Instruction::CastFoundSpell(_)
             | Instruction::SearchLibrary { .. }
             | Instruction::RequireCondition(_)
             | Instruction::Encore
-            | Instruction::ReselectAttackDefender
-            | Instruction::SetBlockDeclarations(_)
-            | Instruction::AdditionalLoyaltyActivation
             | Instruction::ReturnExiledTargetCohort { .. }
-            | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::ModifyAnyNumberOfPermanents { .. }
-            | Instruction::PairWithCreature { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::Ninjutsu
@@ -1669,8 +1659,6 @@ impl EffectWindow {
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::Myriad
-            | Instruction::WatchNextSpellOrLoyaltyTwice
-            | Instruction::WatchNextLoyaltyCopy
             | Instruction::CopyCapturedAbility
             | Instruction::CopyOnCast(_)
             | Instruction::MadnessCast
@@ -1691,25 +1679,14 @@ impl EffectWindow {
             | Instruction::SacrificeEvoked
             | Instruction::SacrificeStateTriggerSource
             | Instruction::Attach(_)
-            | Instruction::AdvanceClassLevel(_)
-            | Instruction::SolveSourceCase
-            | Instruction::BecomePreparedSource
             | Instruction::ReturnDelayedGraveyardToHand(_)
             | Instruction::DamageFromGrantingPermanent { .. }
-            | Instruction::Scry { .. }
-            | Instruction::Surveil { .. }
-            | Instruction::Mill { .. }
             | Instruction::OfferAnyPlayer { .. }
-            | Instruction::DealDamageToAnnouncedTargets { .. }
-            | Instruction::GrantChosenProtection { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
-            | Instruction::Earthbend { .. }
             | Instruction::ReturnEarthbentCard
-            | Instruction::AddManaForPlayer { .. }
-            | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
             | Instruction::AdjustLife(_)
@@ -3889,7 +3866,13 @@ impl EffectWindow {
             .get(&cursor.entry)
             .and_then(StackPayload::instructions)
             .and_then(|ops| ops.get(cursor.instruction + 1))
-            == Some(&Instruction::ReturnCardsDestroyedThisWay)
+            .is_some_and(|next_op| {
+                matches!(
+                    next_op,
+                    Instruction::ZoneOp(spec)
+                        if matches!(spec.source, crate::toolbox::ObjectQuery::DestroyedThisWay)
+                )
+            })
         {
             cursor.results.destroyed_cards_to_graveyard = ordered
                 .iter()

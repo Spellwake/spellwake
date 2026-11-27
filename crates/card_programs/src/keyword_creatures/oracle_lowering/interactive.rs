@@ -827,15 +827,19 @@ fn split_disjunctive_items(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// Apply `restriction` onto the most recent `AddManaForPlayer` instruction in `op`
+/// Apply `restriction` onto the most recent `PlayerMutation::AddMana` instruction in `op`
 /// (mirroring `retain_mana_in_instruction`).
 pub(super) fn restrict_mana_in_instruction(
     op: &mut Instruction,
     restriction: &ManaRestriction,
 ) -> bool {
     match op {
-        Instruction::AddManaForPlayer { yield_kind, .. } => {
-            wrap_restricted_mana_yield(yield_kind, restriction)
+        Instruction::MutatePlayer(spec) => {
+            if let spellwake_engine::toolbox::PlayerMutation::AddMana(yield_kind) = &mut spec.op {
+                wrap_restricted_mana_yield(yield_kind, restriction)
+            } else {
+                false
+            }
         }
         _ => false,
     }
@@ -916,7 +920,7 @@ pub(super) fn patch_any_color_cast_permission(op: &mut Instruction) -> bool {
     }
 }
 
-/// Lower CR 701.30a Populate into dedicated [`Instruction::Populate`] (or a loop for dynamic counts).
+/// Lower CR 701.30a Populate into `MutatePlayerSpec::populate()` (or a loop for dynamic counts).
 pub(super) fn lower_populate(
     count: &ValueExprAst,
     builder: &mut BodyBuilder,
@@ -931,7 +935,11 @@ pub(super) fn lower_populate(
         }
         if *n <= 8 {
             for _ in 0..*n {
-                builder.instructions.push(Instruction::Populate);
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::populate(),
+                    )));
             }
             return Ok(());
         }
@@ -941,7 +949,9 @@ pub(super) fn lower_populate(
         count: cnt,
         body: Box::new(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::Populate],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::populate(),
+            ))],
         )),
     });
     Ok(())
@@ -2080,12 +2090,20 @@ fn has_live_interactive_last_moved(
 ) -> bool {
     for op in ops.iter().rev() {
         match op {
-            Instruction::Mill { .. } => {
-                return matches!(
-                    expected,
-                    InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Mill
-                );
-            }
+            Instruction::MutatePlayer(spec) => match &spec.op {
+                spellwake_engine::toolbox::PlayerMutation::Mill(_) => {
+                    return matches!(
+                        expected,
+                        InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Mill
+                    );
+                }
+                spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
+                | spellwake_engine::toolbox::PlayerMutation::ManifestDread => {
+                    return matches!(expected, InteractiveLastMovedKind::Any);
+                }
+                spellwake_engine::toolbox::PlayerMutation::AddMana(_) => continue,
+                _ => return false,
+            },
             Instruction::ExileTopPlay { .. } => {
                 return matches!(
                     expected,
@@ -2154,10 +2172,7 @@ fn has_live_interactive_last_moved(
                 };
             }
 
-            Instruction::ChooseObjects { .. }
-            | Instruction::SearchLibrary { .. }
-            | Instruction::ManifestTop { .. }
-            | Instruction::ManifestDread => {
+            Instruction::ChooseObjects { .. } | Instruction::SearchLibrary { .. } => {
                 return matches!(expected, InteractiveLastMovedKind::Any);
             }
             Instruction::OptionalEffect { .. }
@@ -2166,8 +2181,7 @@ fn has_live_interactive_last_moved(
             | Instruction::Jump { .. }
             | Instruction::BindResolutionX(_)
             | Instruction::ApplyContinuous(_)
-            | Instruction::AdjustLife(_)
-            | Instruction::AddManaForPlayer { .. } => continue,
+            | Instruction::AdjustLife(_) => continue,
             _ => return false,
         }
     }
@@ -2360,9 +2374,11 @@ pub(super) fn try_lower_choose_option_ext(
             )
             && let Ok(chooser_rp) = lower_resolving_player_in_context(chooser, builder, in_trigger)
         {
-            builder.instructions.push(Instruction::ChooseOneLastMoved {
-                chooser: chooser_rp,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::choose_one_last_moved(chooser_rp),
+                )));
             return Ok(());
         }
         let chooser_rp_opt = match chooser {

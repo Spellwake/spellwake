@@ -1054,11 +1054,13 @@ fn avacyn_rules_divine_deflection_shares_capacity_across_controller_and_creature
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SinglePlayer,
-                    Instruction::DamageTargetControllersCreatures {
-                        amount: spellwake_engine::program::ValueExpr::Literal(3.into()),
-                        include_target: true,
-                        require_damaged_creatures_to_attack: false,
-                    },
+                    Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec::target_controllers_creatures(
+                            spellwake_engine::program::ValueExpr::Literal(3.into()),
+                            true,
+                            false,
+                        ),
+                    )),
                 ),
             ),
         ],

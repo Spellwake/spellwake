@@ -456,9 +456,9 @@ pub(super) fn spell(
                         },
                         destination: 3,
                     },
-                    Instruction::GrantChosenProtection { recipients: ProtectionRecipients::ControllerAndPermanents, duration: ResolvedDuration::UntilEndOfTurn },
+                    Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::chosen_color_protection(ProtectionRecipients::ControllerAndPermanents, ResolvedDuration::UntilEndOfTurn))),
                     Jump { destination: 4 },
-                    Instruction::GrantChosenProtection { recipients: ProtectionRecipients::TargetPermanent, duration: ResolvedDuration::UntilEndOfTurn },
+                    Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::chosen_color_protection(ProtectionRecipients::TargetPermanent, ResolvedDuration::UntilEndOfTurn))),
                 ],
             )
         }
@@ -730,14 +730,19 @@ pub(super) fn spell(
                 spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::CastFromGraveyard),
                 Comparison::Equal,
                 1,
-                Mill {
-                    player: ResolvingPlayer::TargetPlayer,
-                    amount: spellwake_engine::program::ValueExpr::chosen_x().scaled(i64::from((std::num::NonZeroU16::new(2)?).get())),
-                },
-                Mill {
-                    player: ResolvingPlayer::TargetPlayer,
-                    amount: spellwake_engine::program::ValueExpr::chosen_x(),
-                },
+                MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                        ResolvingPlayer::TargetPlayer,
+                        spellwake_engine::program::ValueExpr::chosen_x()
+                            .scaled(i64::from((std::num::NonZeroU16::new(2)?).get())),
+                    ),
+                )),
+                MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                        ResolvingPlayer::TargetPlayer,
+                        spellwake_engine::program::ValueExpr::chosen_x(),
+                    ),
+                )),
             ),
         ),
         "Devil's Play deals X damage to any target." if name == "Devil's Play" => (
@@ -752,7 +757,7 @@ pub(super) fn spell(
         ),
         "Target creature deals damage to itself equal to its power." => (
             SingleCreature,
-            vec![DamageFromPower(spellwake_engine::program::PowerDamageSource::TargetCreature)],
+            vec![DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec::from_power(spellwake_engine::program::PowerDamageSource::TargetCreature)))],
         ),
         "Destroy target noncreature permanent." => (
             FilteredPermanent(ObjectFilter::noncreature()),
@@ -912,10 +917,12 @@ pub(super) fn spell(
         "Target player mills two cards. Draw a card." => (
             SinglePlayer,
             vec![
-                Mill {
-                    player: ResolvingPlayer::TargetPlayer,
-                    amount: amount(2),
-                },
+                MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                        ResolvingPlayer::TargetPlayer,
+                        amount(2),
+                    ),
+                )),
                 draw(1),
             ],
         ),
@@ -1140,9 +1147,11 @@ pub(super) fn compile(
             false,
         )
     };
-    let mill = |player, n| Mill {
-        player,
-        amount: amount(n),
+    let mill = |player, n| {
+        MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::mill(
+            player,
+            amount(n),
+        )))
     };
     let etb = spellwake_engine::program::TriggerSpec::enters(ObjectFilter::self_object());
     let morbid = |instruction| {
@@ -1418,7 +1427,7 @@ pub(super) fn compile(
             vec![(
                 spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Enters { subject: spellwake_engine::program::ObjectFilter::creature(), from_zone: spellwake_engine::program::TriggerFromZone::ControllerGraveyard, cast_origin: None, attached_to_creature: false }),
                 SingleAnyTarget,
-                vec![DamageFromPower(spellwake_engine::program::PowerDamageSource::GraveyardEntrant)],
+                vec![DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec::from_power(spellwake_engine::program::PowerDamageSource::GraveyardEntrant)))],
             )],
         ),
         "If equipped creature would deal combat damage, it deals double that damage instead.\nIf another creature would deal combat damage to equipped creature, it deals double that damage to equipped creature instead.\nEquip {2}"

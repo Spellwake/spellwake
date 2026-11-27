@@ -85,7 +85,7 @@ pub enum ValueObjectRef {
     TriggerSubject,
     /// Permanent to which the ability source Aura or Equipment is attached.
     AttachedHost,
-    /// Army token most recently created or grown by `Instruction::Amass` in this resolution.
+    /// Army token most recently created or grown by `PlayerMutation::Amass` in this resolution.
     LastAmassedArmy,
 }
 
@@ -485,9 +485,9 @@ pub enum EventValueKind {
     ChosenNumber,
     /// 0-based option index chosen by `Instruction::ChooseValue(LabeledOption)`.
     ChosenOptionIndex,
-    /// Vote count received by option `u8` in the most recent `Instruction::Vote`.
+    /// Vote count received by option `u8` in the most recent `PlayerMutation::Vote`.
     VoteCount(u8),
-    /// Winning option index from the most recent `Instruction::Vote`.
+    /// Winning option index from the most recent `PlayerMutation::Vote`.
     WinningVoteOption,
     /// Count of nonland cards discarded during the most recent `Instruction::Connive`.
     LastNonlandDiscarded,

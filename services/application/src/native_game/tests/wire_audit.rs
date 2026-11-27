@@ -681,11 +681,17 @@ fn gate3_headless_four_player_corpus_execution_smoke() {
             ProgramKind::Permanent(def) => {
                 matches!(def.entry_tap, Some(EntryTap::UnlessPayLife(_)))
             }
-            ProgramKind::Spell(sp) => sp
-                .body
-                .instructions
-                .iter()
-                .any(|op| matches!(op, Instruction::Scry { .. } | Instruction::Surveil { .. })),
+            ProgramKind::Spell(sp) => sp.body.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::MutatePlayer(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::PlayerMutation::Scry(_)
+                                | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
+                        )
+                )
+            }),
         };
         if has_scry_or_shock && scry_surveil_shock.len() < 80 {
             scry_surveil_shock.push((entry.name.clone(), p));

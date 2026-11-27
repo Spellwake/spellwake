@@ -600,10 +600,12 @@ fn triggered(
                 source_cost: SourceCost::Sacrifice,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Scry {
-                        player: ResolvingPlayer::Controller,
-                        amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                            ResolvingPlayer::Controller,
+                            spellwake_engine::program::ValueExpr::Literal(2.into()),
+                        ),
+                    ))],
                 ),
             });
             Some(program)

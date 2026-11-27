@@ -86,6 +86,277 @@ impl EffectWindow {
     ) -> Result<StepOutcome, EffectError> {
         let controller = entry.controller();
         let source_id = self.entry_source_object(Some(entry));
+        match &spec.op {
+            ObjectMutation::SolveCase => {
+                let src = match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    _ => None,
+                };
+                if let Some(id) = src
+                    && self
+                        .window
+                        .cards()
+                        .get(id)
+                        .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                    && !self.characteristics.solved_cases.contains(&id)
+                {
+                    let before = self.rules_snapshot(None)?;
+                    self.characteristics.solved_cases.insert(id);
+                    self.emit_from(
+                        EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before,
+                        None,
+                        ctx.append,
+                        |_, _, _| Ok(vec![RulesOccurrence::CaseSolved { object: id }]),
+                    )?;
+                }
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            ObjectMutation::SetPrepared => {
+                let src = match entry.kind() {
+                    StackKind::ActivatedAbility { source }
+                    | StackKind::TriggeredAbility { source } => Some(source.id()),
+                    _ => None,
+                };
+                if let Some(id) = src
+                    && self
+                        .window
+                        .cards()
+                        .get(id)
+                        .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                {
+                    self.characteristics.prepared.insert(id);
+                }
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            ObjectMutation::AdvanceClassLevel(level) => {
+                if let StackKind::ActivatedAbility { source } = entry.kind() {
+                    let id = source.id();
+                    if self
+                        .window
+                        .cards()
+                        .get(id)
+                        .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                    {
+                        let before = self.rules_snapshot(None)?;
+                        self.characteristics.class_levels.insert(id, *level);
+                        self.emit_from(
+                            EventCause::Instruction {
+                                entry: entry.id(),
+                                instruction: index,
+                            },
+                            &before,
+                            None,
+                            ctx.append,
+                            |_, _, _| {
+                                Ok(vec![RulesOccurrence::ClassLevelReached {
+                                    object: id,
+                                    level: *level,
+                                }])
+                            },
+                        )?;
+                    }
+                }
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            ObjectMutation::ReselectAttackDefender => {
+                if let Some(domain) = self.attack_defender_frame()? {
+                    return Ok(StepOutcome::Pending(
+                        EffectDecision::ReselectAttackDefender(domain),
+                    ));
+                }
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            ObjectMutation::SoulbondPair { entrant_only } => {
+                if let Some(frame) = self.soulbond_selection(*entrant_only)? {
+                    return Ok(StepOutcome::Pending(EffectDecision::ResolutionSelect(
+                        frame,
+                    )));
+                }
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            ObjectMutation::DistributeCounters { kind, total } => {
+                let assessment = self
+                    .window
+                    .target_assessment()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let division = match self.payloads.get(&entry.id()) {
+                    Some(StackPayload::Instructions(bound)) => bound.target_division.clone(),
+                    _ => std::collections::BTreeMap::new(),
+                };
+                let total_targets = entry.targets().targets().len();
+                let mut amounts = Vec::new();
+                for row in assessment.results() {
+                    if row.legality != crate::targets::TargetLegality::Legal {
+                        continue;
+                    }
+                    let TargetRef::Object(object) = row.choice.target else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let share = division.get(&row.choice.id).copied().unwrap_or_else(|| {
+                        if total_targets <= 1 {
+                            *total
+                        } else {
+                            let base = *total / u16::try_from(total_targets).unwrap_or(1);
+                            let rem = *total % u16::try_from(total_targets).unwrap_or(1);
+                            if row.choice.id == TargetId(0) {
+                                base.saturating_add(rem)
+                            } else {
+                                base
+                            }
+                        }
+                    });
+                    if share > 0 {
+                        amounts.push((object, i64::from(share).into()));
+                    }
+                }
+                if !amounts.is_empty() {
+                    self.place_divided_counters(
+                        *kind,
+                        amounts,
+                        EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        ctx.append,
+                    )?;
+                }
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            ObjectMutation::Earthbend { amount } => {
+                let target = match self.instruction_target(entry)?.choice().target {
+                    TargetRef::Object(id) => id,
+                    _ => return Err(EffectError::InconsistentProgram),
+                };
+                let n = self.resolve_value_expr(controller, amount)?;
+                if self
+                    .window
+                    .cards()
+                    .get(target)
+                    .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
+                {
+                    let before = self.rules_snapshot(None)?;
+                    let parts = ResolvedParts(vec![
+                        ResolvedPart::Type(crate::characteristics::TypeChange {
+                            land_subtypes: crate::characteristics::SubtypeOperation::Keep,
+                            supertypes: crate::characteristics::TypeOperation::Keep,
+                            types: crate::characteristics::TypeOperation::Add(BTreeSet::from([
+                                CardType::Creature,
+                            ])),
+                            subtypes: crate::characteristics::SubtypeOperation::Keep,
+                        }),
+                        ResolvedPart::Abilities(
+                            crate::characteristics::AbilityChange::grant_keywords([
+                                KeywordAbility::Haste,
+                            ]),
+                        ),
+                        ResolvedPart::SetPT(crate::characteristics::PowerToughness {
+                            power: 0.into(),
+                            toughness: 0.into(),
+                        }),
+                    ]);
+                    let effect = self.characteristics.add_effect(
+                        entry.id(),
+                        target,
+                        parts,
+                        crate::characteristics::ResolvedDuration::NoStatedDuration,
+                    )?;
+                    self.emit_from(
+                        EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before,
+                        None,
+                        ctx.append,
+                        |old, new, _| {
+                            let appearances = occurrence_flow::characteristic_appearance_changes(
+                                old,
+                                new,
+                                effect.affected.iter().copied(),
+                            )?;
+                            Ok(vec![RulesOccurrence::ContinuousEffectCreated {
+                                effect,
+                                appearances,
+                            }])
+                        },
+                    )?;
+                    if n.is_positive() {
+                        let before_counters = self.rules_snapshot(None)?;
+                        let raw = crate::characteristics::PowerToughnessCounters {
+                            plus_one: n.clone(),
+                            minus_one: 0.into(),
+                        };
+                        let counters = self.adjusted_pt_counters(
+                            &before_counters.view().evaluated,
+                            target,
+                            raw,
+                            None,
+                        )?;
+                        if counters.valid_placement() {
+                            let previous = self.characteristics.counters(target);
+                            self.characteristics.place_counters(target, &counters)?;
+                            let after_pt = self.characteristics.counters(target);
+                            self.emit_from(
+                                EventCause::Instruction {
+                                    entry: entry.id(),
+                                    instruction: index,
+                                },
+                                &before_counters,
+                                None,
+                                ctx.append,
+                                |_, _, _| {
+                                    Ok(vec![RulesOccurrence::PermanentCounterChanged {
+                                        object: target,
+                                        kind: CounterKind::PlusOne,
+                                        before: previous.plus_one,
+                                        after: after_pt.plus_one,
+                                    }])
+                                },
+                            )?;
+                        }
+                    }
+                    let snapshot = self.rules_snapshot(None)?;
+                    let source_appearance = match entry.kind() {
+                        StackKind::ActivatedAbility { source }
+                        | StackKind::TriggeredAbility { source } => snapshot
+                            .view()
+                            .appearance(source.id())
+                            .or_else(|| self.departed_reflexive_sources.get(&source.id()).cloned())
+                            .or_else(|| {
+                                self.execution_bindings(entry.id())
+                                    .and_then(|b| b.trigger.as_ref())
+                                    .map(|t| t.source.clone())
+                            }),
+                        StackKind::CardSpell(id) => snapshot.view().appearance(*id),
+                        _ => None,
+                    }
+                    .or_else(|| snapshot.view().appearance(target))
+                    .ok_or(EffectError::InconsistentProgram)?;
+                    self.triggers
+                        .delay_earthbend_return(target, source_appearance, controller);
+                }
+                self.advance_instruction()?;
+                return Ok(StepOutcome::Continue);
+            }
+            ObjectMutation::BecomeMonstrous { .. }
+            | ObjectMutation::UnlockDoor { .. }
+            | ObjectMutation::Enlist
+            | ObjectMutation::Explore => {
+                return Err(EffectError::InconsistentProgram);
+            }
+            _ => {}
+        }
         let candidates = self.eval_object_query_at(
             controller,
             Some(entry),
@@ -706,6 +977,17 @@ impl EffectWindow {
                     succeeded = true;
                 }
             }
+            ObjectMutation::SolveCase
+            | ObjectMutation::SetPrepared
+            | ObjectMutation::BecomeMonstrous { .. }
+            | ObjectMutation::UnlockDoor { .. }
+            | ObjectMutation::Earthbend { .. }
+            | ObjectMutation::DistributeCounters { .. }
+            | ObjectMutation::Enlist
+            | ObjectMutation::AdvanceClassLevel(_)
+            | ObjectMutation::ReselectAttackDefender
+            | ObjectMutation::SoulbondPair { .. }
+            | ObjectMutation::Explore => unreachable!("handled before candidate selection"),
         }
 
         if let Some(cur) = self.resolution_cursor_mut() {

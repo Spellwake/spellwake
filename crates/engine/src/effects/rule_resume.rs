@@ -128,7 +128,7 @@ impl EffectWindow {
                                 opponents_only: true,
                             },
                             ..
-                        } | Instruction::Clash { .. }
+                        } | Instruction::MutatePlayer(_)
                     )
                     || self
                         .combat_rules
@@ -233,8 +233,14 @@ impl EffectWindow {
                     .ok_or(EffectError::WrongResolutionFrame)?;
                 let current = self.current_instruction()?;
                 let expected_chooser = match current {
-                    Instruction::AddManaForPlayer { player, .. } => {
-                        self.resolving_player_identity_at(*player, Some(cursor))?
+                    Instruction::MutatePlayer(spec)
+                        if matches!(spec.op, crate::toolbox::PlayerMutation::AddMana(_)) =>
+                    {
+                        if let Some(player) = spec.resolving_player() {
+                            self.resolving_player_identity_at(player, Some(cursor))?
+                        } else {
+                            actual.controller()
+                        }
                     }
                     _ => actual.controller(),
                 };
@@ -254,13 +260,15 @@ impl EffectWindow {
                     .resolution_cursor_mut()
                     .ok_or(EffectError::WrongResolutionFrame)?;
                 let effective_mana_yield = match current {
-                    Instruction::AddManaForPlayer {
-                        yield_kind: crate::program::EffectManaYield::RetainedUntilCleanup(inner),
-                        ..
-                    } => Some(inner.as_ref()),
-                    Instruction::AddManaForPlayer {
-                        yield_kind: inner, ..
-                    } => Some(inner),
+                    Instruction::MutatePlayer(spec) => match &spec.op {
+                        crate::toolbox::PlayerMutation::AddMana(yield_kind) => match yield_kind {
+                            crate::program::EffectManaYield::RetainedUntilCleanup(inner) => {
+                                Some(inner.as_ref())
+                            }
+                            inner => Some(inner),
+                        },
+                        _ => None,
+                    },
                     _ => None,
                 };
                 match (current, effective_mana_yield, reply) {
@@ -307,7 +315,12 @@ impl EffectWindow {
                                         | crate::program::EffectManaYield::DistinctColors { .. },
                                     ),
                                 ) => !bound.colors.is_empty(),
-                                (Instruction::GrantChosenProtection { .. }, _) => {
+                                (Instruction::ApplyContinuous(spec), _)
+                                    if matches!(
+                                        &spec.payload,
+                                        crate::toolbox::ContinuousPayload::ChosenColorProtection { .. }
+                                    ) =>
+                                {
                                     bound.colors == mana_domains::colored_mana()
                                 }
                                 (Instruction::ApplyContinuous(spec), _)

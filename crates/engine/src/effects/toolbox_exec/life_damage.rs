@@ -228,6 +228,349 @@ impl EffectWindow {
     ) -> Result<StepOutcome, EffectError> {
         let controller = entry.controller();
         let cursor_snap = self.resolution_cursor().cloned();
+        match &spec.recipients {
+            DamageTargetQuery::AnnouncedTargets { .. } => {
+                let amount_expr = match &spec.amount {
+                    DamageAmountSpec::Expr(e) => e,
+                    _ => return Err(EffectError::InconsistentProgram),
+                };
+                let resolved = self.resolve_value_expr(controller, amount_expr)?;
+                if !resolved.is_positive() {
+                    if let Some(cursor) = self.resolution_cursor_mut() {
+                        cursor.results.last_action_succeeded = false;
+                        cursor.results.last_action_count = Some(0.into());
+                    }
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let assessment = self
+                    .window
+                    .target_assessment()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let source = self.resolution_damage_source(entry)?;
+                let current = self.evaluated_characteristics()?;
+                let mut inputs = Vec::new();
+                for result in assessment.results() {
+                    if result.legality != crate::targets::TargetLegality::Legal {
+                        continue;
+                    }
+                    let recipient = match result.choice.target {
+                        TargetRef::Player(player)
+                            if self.window.participants().contains(&player) =>
+                        {
+                            Some(DamageRecipient::Player(player))
+                        }
+                        TargetRef::Object(object) => current
+                            .get(object)
+                            .filter(|view| view.zone == ObjectZone::Battlefield)
+                            .and_then(|view| view.damage_recipient()),
+                        TargetRef::Player(_) | TargetRef::Stack(_) => None,
+                    };
+                    if let Some(target) = recipient {
+                        inputs.push(DamageInput {
+                            source: source.clone(),
+                            target,
+                            amount: resolved.clone(),
+                        });
+                    }
+                }
+                if inputs.is_empty() {
+                    if let Some(cursor) = self.resolution_cursor_mut() {
+                        cursor.results.last_action_succeeded = false;
+                        cursor.results.last_action_count = Some(0.into());
+                    }
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                let count = RulesInteger::from_usize(inputs.len());
+                if let Some(cursor) = self.resolution_cursor_mut() {
+                    cursor.results.last_action_succeeded = true;
+                    cursor.results.last_action_count = Some(count);
+                    cursor.results.dealt_damage_this_resolution = true;
+                }
+                if let Some(crate::effects::StackPayload::Instructions(payload)) =
+                    self.payloads.get_mut(&entry.id())
+                    && let Some(slot) = payload.body.instructions.get_mut(index)
+                {
+                    *slot = crate::program::Instruction::DealDamage(Box::new(
+                        DealDamageSpec::ordered_targets(resolved.clone(), resolved),
+                    ));
+                }
+                self.install_damage_batch(
+                    DamageOrigin::Resolution {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    DamageKind::Noncombat,
+                    inputs,
+                    ctx.journal,
+                )?;
+                return Ok(StepOutcome::Continue);
+            }
+            DamageTargetQuery::FromPower(source_kind) => {
+                let Some((dealer, power)) = self.damage_dealer_power(entry, *source_kind)? else {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                };
+                if *source_kind == crate::program::PowerDamageSource::TargetCreatureToAbilitySource
+                {
+                    if let Some(target) = self.ability_source_damage_recipient(entry)? {
+                        self.install_damage_batch(
+                            DamageOrigin::Resolution {
+                                entry: entry.id(),
+                                instruction: index,
+                            },
+                            DamageKind::Noncombat,
+                            vec![DamageInput {
+                                source: dealer,
+                                target,
+                                amount: power,
+                            }],
+                            ctx.journal,
+                        )?;
+                    } else {
+                        self.advance_instruction()?;
+                    }
+                    return Ok(StepOutcome::Continue);
+                }
+                let target = match self.instruction_target(entry)?.choice().target {
+                    TargetRef::Object(target) => self
+                        .current_characteristics(target)?
+                        .and_then(|view| view.damage_recipient())
+                        .ok_or(EffectError::IllegalTarget)?,
+                    TargetRef::Player(player) => DamageRecipient::Player(player),
+                    TargetRef::Stack(_) => return Err(EffectError::InconsistentProgram),
+                };
+                self.install_damage_batch(
+                    DamageOrigin::Resolution {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    DamageKind::Noncombat,
+                    vec![DamageInput {
+                        source: dealer,
+                        target,
+                        amount: power,
+                    }],
+                    ctx.journal,
+                )?;
+                return Ok(StepOutcome::Continue);
+            }
+            DamageTargetQuery::CreaturePowerToOther { trample_overflow } => {
+                let inputs = self.linked_creature_power_damage(*trample_overflow)?;
+                if inputs.is_empty() {
+                    self.advance_instruction()?;
+                } else {
+                    self.install_damage_batch(
+                        DamageOrigin::Resolution {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        DamageKind::Noncombat,
+                        inputs,
+                        ctx.journal,
+                    )?;
+                }
+                return Ok(StepOutcome::Continue);
+            }
+            DamageTargetQuery::TargetControllersCreatures { include_target, .. } => {
+                let amount_expr = match &spec.amount {
+                    DamageAmountSpec::Expr(e) => e,
+                    _ => return Err(EffectError::InconsistentProgram),
+                };
+                let quantity = self.resolve_value_expr(controller, amount_expr)?;
+                let mut inputs = Vec::new();
+                if quantity.is_positive() {
+                    let source = self.resolution_damage_source(entry)?;
+                    let target = self.instruction_target(entry)?.choice().target;
+                    inputs = self
+                        .target_controller_damage_recipients(target, *include_target)?
+                        .into_iter()
+                        .map(|target| DamageInput {
+                            source: source.clone(),
+                            target,
+                            amount: quantity.clone(),
+                        })
+                        .collect();
+                }
+                if inputs.is_empty() {
+                    self.advance_instruction()?;
+                } else {
+                    self.install_damage_batch(
+                        DamageOrigin::Resolution {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        DamageKind::Noncombat,
+                        inputs,
+                        ctx.journal,
+                    )?;
+                }
+                return Ok(StepOutcome::Continue);
+            }
+            DamageTargetQuery::OrderedTargets { first, others } => {
+                let assessment = self
+                    .window
+                    .target_assessment()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let source = self.resolution_damage_source(entry)?;
+                let mut inputs = Vec::new();
+                for result in assessment.results() {
+                    if result.legality != crate::targets::TargetLegality::Legal {
+                        continue;
+                    }
+                    let target = match result.choice.target {
+                        TargetRef::Player(player) => DamageRecipient::Player(player),
+                        TargetRef::Object(object) => self
+                            .current_characteristics(object)?
+                            .and_then(|view| view.damage_recipient())
+                            .ok_or(EffectError::IllegalTarget)?,
+                        TargetRef::Stack(_) => return Err(EffectError::InconsistentProgram),
+                    };
+                    inputs.push(DamageInput {
+                        source: source.clone(),
+                        target,
+                        amount: if result.choice.id == crate::TargetId(0) {
+                            first.clone()
+                        } else {
+                            others.clone()
+                        },
+                    });
+                }
+                if inputs.is_empty() {
+                    self.advance_instruction()?;
+                } else {
+                    self.install_damage_batch(
+                        DamageOrigin::Resolution {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        DamageKind::Noncombat,
+                        inputs,
+                        ctx.journal,
+                    )?;
+                }
+                return Ok(StepOutcome::Continue);
+            }
+            DamageTargetQuery::DivideThree => {
+                let assessment = self
+                    .window
+                    .target_assessment()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let source = self.resolution_damage_source(entry)?;
+                let allocated_to_first = match entry.targets().targets().len() {
+                    1 => 3,
+                    2 => 2,
+                    3 => 1,
+                    _ => return Err(EffectError::InconsistentProgram),
+                };
+                let (first, others): (RulesInteger, RulesInteger) =
+                    (allocated_to_first.into(), 1.into());
+                let mut inputs = Vec::new();
+                for result in assessment.results() {
+                    if result.legality != crate::targets::TargetLegality::Legal {
+                        continue;
+                    }
+                    let target = match result.choice.target {
+                        TargetRef::Player(player) => DamageRecipient::Player(player),
+                        TargetRef::Object(object) => self
+                            .current_characteristics(object)?
+                            .and_then(|view| view.damage_recipient())
+                            .ok_or(EffectError::IllegalTarget)?,
+                        TargetRef::Stack(_) => return Err(EffectError::InconsistentProgram),
+                    };
+                    inputs.push(DamageInput {
+                        source: source.clone(),
+                        target,
+                        amount: if result.choice.id == crate::TargetId(0) {
+                            first.clone()
+                        } else {
+                            others.clone()
+                        },
+                    });
+                }
+                if inputs.is_empty() {
+                    self.advance_instruction()?;
+                } else {
+                    self.install_damage_batch(
+                        DamageOrigin::Resolution {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        DamageKind::Noncombat,
+                        inputs,
+                        ctx.journal,
+                    )?;
+                }
+                return Ok(StepOutcome::Continue);
+            }
+            DamageTargetQuery::Divided { total, .. } => {
+                let resolved = self.resolve_value_expr(controller, total)?.max(0.into());
+                let total_u16 = u16::try_from(resolved.to_usize().unwrap_or(0)).unwrap_or(u16::MAX);
+                let assessment = self
+                    .window
+                    .target_assessment()
+                    .ok_or(EffectError::WrongResolutionFrame)?;
+                let source = self.resolution_damage_source(entry)?;
+                let division = match self.payloads.get(&entry.id()) {
+                    Some(crate::effects::StackPayload::Instructions(bound)) => {
+                        bound.target_division.clone()
+                    }
+                    _ => BTreeMap::new(),
+                };
+                let total_targets = entry.targets().targets().len();
+                let mut inputs = Vec::new();
+                for result in assessment.results() {
+                    if result.legality != crate::targets::TargetLegality::Legal {
+                        continue;
+                    }
+                    let share = division.get(&result.choice.id).copied().unwrap_or_else(|| {
+                        if total_targets <= 1 {
+                            total_u16
+                        } else {
+                            let base = total_u16 / u16::try_from(total_targets).unwrap_or(1);
+                            let rem = total_u16 % u16::try_from(total_targets).unwrap_or(1);
+                            if result.choice.id == crate::TargetId(0) {
+                                base.saturating_add(rem)
+                            } else {
+                                base
+                            }
+                        }
+                    });
+                    if share == 0 {
+                        continue;
+                    }
+                    let target = match result.choice.target {
+                        TargetRef::Player(player) => DamageRecipient::Player(player),
+                        TargetRef::Object(object) => self
+                            .current_characteristics(object)?
+                            .and_then(|view| view.damage_recipient())
+                            .ok_or(EffectError::IllegalTarget)?,
+                        TargetRef::Stack(_) => return Err(EffectError::InconsistentProgram),
+                    };
+                    inputs.push(DamageInput {
+                        source: source.clone(),
+                        target,
+                        amount: i64::from(share).into(),
+                    });
+                }
+                if inputs.is_empty() {
+                    self.advance_instruction()?;
+                } else {
+                    self.install_damage_batch(
+                        DamageOrigin::Resolution {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        DamageKind::Noncombat,
+                        inputs,
+                        ctx.journal,
+                    )?;
+                }
+                return Ok(StepOutcome::Continue);
+            }
+            _ => {}
+        }
         let current = self.evaluated_characteristics()?;
         let legal_target = |t: &&crate::targets::BoundTarget| {
             self.window.target_assessment().is_none_or(|assessment| {
@@ -394,6 +737,13 @@ impl EffectWindow {
                 | DamageRecipientsRef::EachSourceToItself
                 | DamageRecipientsRef::EachSourceController => None,
             },
+            DamageTargetQuery::AnnouncedTargets { .. }
+            | DamageTargetQuery::FromPower(_)
+            | DamageTargetQuery::CreaturePowerToOther { .. }
+            | DamageTargetQuery::TargetControllersCreatures { .. }
+            | DamageTargetQuery::OrderedTargets { .. }
+            | DamageTargetQuery::DivideThree
+            | DamageTargetQuery::Divided { .. } => unreachable!("handled above"),
         };
 
         let fixed_amount = match &spec.amount {
@@ -884,6 +1234,254 @@ impl EffectWindow {
             }
             PlayerMutation::DisallowDamagePreventionThisTurn => {
                 self.damage_state.prevention_disallowed_this_turn = true;
+            }
+            PlayerMutation::AdditionalLoyaltyActivation => {
+                let value = self
+                    .characteristics
+                    .extra_loyalty_activations
+                    .entry(controller)
+                    .or_insert_with(|| 0.into());
+                *value = value.plus(&1.into());
+            }
+            PlayerMutation::AdditionalCombat { untap } => {
+                let can_schedule_combat = self.current_step.is_some_and(|step| {
+                    matches!(
+                        step.phase(),
+                        crate::turn::Phase::Beginning
+                            | crate::turn::Phase::PrecombatMain
+                            | crate::turn::Phase::Combat
+                            | crate::turn::Phase::PostcombatMain
+                    )
+                });
+                let mut attackers = match untap {
+                    crate::program::CombatUntapGroup::None => Vec::new(),
+                    crate::program::CombatUntapGroup::ControlledCreatures => self
+                        .evaluated_characteristics()?
+                        .objects
+                        .values()
+                        .filter(|p| {
+                            p.zone == ObjectZone::Battlefield
+                                && p.controller == Some(controller)
+                                && p.is_creature()
+                        })
+                        .map(|p| p.object)
+                        .collect::<Vec<_>>(),
+                    crate::program::CombatUntapGroup::SourceAndControlledSubtype(subtype) => {
+                        let StackKind::TriggeredAbility { source } = entry.kind() else {
+                            return Err(EffectError::InconsistentProgram);
+                        };
+                        self.evaluated_characteristics()?
+                            .objects
+                            .values()
+                            .filter(|p| {
+                                p.zone == ObjectZone::Battlefield
+                                    && (p.object == source.id()
+                                        || (p.controller == Some(controller)
+                                            && p.current_creature_subtypes.contains(subtype)))
+                            })
+                            .map(|p| p.object)
+                            .collect()
+                    }
+                    crate::program::CombatUntapGroup::AttackersIfSourceAttacksHighestLife => {
+                        let StackKind::TriggeredAbility { source } = entry.kind() else {
+                            return Err(EffectError::InconsistentProgram);
+                        };
+                        let defending = self
+                            .combat
+                            .as_ref()
+                            .and_then(|combat| combat.attacker(source.id()))
+                            .map(|member| (member.defender(), member.defending_planeswalker()))
+                            .or_else(|| {
+                                self.departed_attack_defenders
+                                    .as_ref()
+                                    .and_then(|old| old.get(&source.id()).copied())
+                            });
+                        let qualifies = defending
+                            .filter(|(_, walker)| walker.is_none())
+                            .and_then(|(seat, _)| self.life.get(seat))
+                            .is_some_and(|defending| {
+                                self.window.participants().iter().all(|&p| {
+                                    self.life.get(p).is_some_and(|total| total <= defending)
+                                })
+                            });
+                        if !qualifies {
+                            self.advance_instruction()?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                        self.combat
+                            .as_ref()
+                            .into_iter()
+                            .flat_map(|combat| combat.attackers())
+                            .map(|member| member.combatant().object())
+                            .collect()
+                    }
+                };
+                attackers.retain(|id| {
+                    self.window.cards().get(*id).and_then(GameObject::tapped) == Some(true)
+                });
+                let before = self.rules_snapshot(None)?;
+                let mut values = self.untap_for_effect_with_stun(entry.id(), &attackers)?;
+                if can_schedule_combat {
+                    self.additional_combats = self
+                        .additional_combats
+                        .checked_add(1)
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    values.push(RulesOccurrence::AdditionalCombatCreated);
+                }
+                if !values.is_empty() {
+                    self.emit_from(
+                        EventCause::Instruction {
+                            entry: entry.id(),
+                            instruction: index,
+                        },
+                        &before,
+                        None,
+                        ctx.append,
+                        |_, _, _| Ok(values),
+                    )?;
+                }
+            }
+            PlayerMutation::WatchNextSpellOrLoyalty { loyalty_only } => {
+                if *loyalty_only {
+                    self.watch_ability_copy(
+                        entry,
+                        crate::occurrence::AbilityCopyWatch::NextLoyalty,
+                    )?;
+                } else {
+                    let colors =
+                        self.targeting_entry_colors(entry, &self.evaluated_characteristics()?);
+                    self.triggers
+                        .watch_next_spell_or_loyalty(controller, entry.id(), colors);
+                }
+            }
+            PlayerMutation::SelectExtremeLife { highest, tie_mode } => {
+                let apnap: Vec<SeatId> = self.window.apnap_players()?.collect();
+                let mut extreme: Option<RulesInteger> = None;
+                let mut tied: Vec<SeatId> = Vec::new();
+                for seat in apnap {
+                    let Some(life) = self.life.get(seat) else {
+                        continue;
+                    };
+                    match &extreme {
+                        None => {
+                            extreme = Some(life.clone());
+                            tied.push(seat);
+                        }
+                        Some(best) => {
+                            let better = if *highest { life > best } else { life < best };
+                            if better {
+                                extreme = Some(life.clone());
+                                tied.clear();
+                                tied.push(seat);
+                            } else if life == best {
+                                tied.push(seat);
+                            }
+                        }
+                    }
+                }
+                match tied.as_slice() {
+                    [] => {
+                        if let Some(cursor) = self.resolution_cursor_mut() {
+                            cursor.chosen_opponent = None;
+                            cursor.results.last_action_succeeded = false;
+                        }
+                    }
+                    [winner] => {
+                        if let Some(cursor) = self.resolution_cursor_mut() {
+                            cursor.chosen_opponent = Some(*winner);
+                            cursor.results.last_action_succeeded = true;
+                        }
+                    }
+                    _ => match tie_mode {
+                        crate::program::ExtremeLifeTieMode::ControllerChooses => {
+                            let chosen = self
+                                .resolution_cursor_mut()
+                                .and_then(|cursor| cursor.chosen_option_index.take());
+                            let Some(idx) = chosen else {
+                                let count = u8::try_from(tied.len())
+                                    .map_err(|_| EffectError::InconsistentProgram)?;
+                                let labels = (0..tied.len())
+                                    .map(|i| format!("Player {}", i + 1))
+                                    .collect();
+                                let frame = crate::effects::EffectDecision::OptionIndex(
+                                    crate::effects::OptionIndexFrame {
+                                        revision: self.revision,
+                                        entry: entry.id(),
+                                        instruction: index,
+                                        chooser: controller,
+                                        count,
+                                        labels,
+                                    },
+                                );
+                                return Ok(StepOutcome::Pending(frame));
+                            };
+                            let seat = tied
+                                .get(usize::from(idx))
+                                .copied()
+                                .ok_or(EffectError::InconsistentProgram)?;
+                            if let Some(cursor) = self.resolution_cursor_mut() {
+                                cursor.chosen_opponent = Some(seat);
+                                cursor.results.last_action_succeeded = true;
+                            }
+                        }
+                        crate::program::ExtremeLifeTieMode::DrawGame => {
+                            let participants = self.window.participants().to_vec();
+                            for seat in participants {
+                                self.state_based_losses.insert(seat);
+                            }
+                            return Ok(StepOutcome::Complete(RuleCompletion::GameEnded));
+                        }
+                        crate::program::ExtremeLifeTieMode::Skip => {
+                            if let Some(cursor) = self.resolution_cursor_mut() {
+                                cursor.chosen_opponent = None;
+                                cursor.results.last_action_succeeded = false;
+                            }
+                        }
+                    },
+                }
+            }
+            PlayerMutation::Proliferate => {
+                let choice = self.proliferate_choice()?;
+                if choice.domain().is_empty() {
+                    self.proliferate(&choice, vec![], ctx.append)?;
+                    return Ok(StepOutcome::Continue);
+                }
+                return Ok(StepOutcome::Pending(
+                    crate::effects::EffectDecision::Proliferate(choice),
+                ));
+            }
+            PlayerMutation::AddMana(yield_kind) => {
+                let Some(&recipient) = seats.first() else {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                };
+                if !self.window.participants().contains(&recipient) {
+                    self.advance_instruction()?;
+                    return Ok(StepOutcome::Continue);
+                }
+                return self.execute_add_mana(ctx, entry, index, recipient, yield_kind);
+            }
+            PlayerMutation::ManifestTop { .. }
+            | PlayerMutation::TakeInitiative
+            | PlayerMutation::VentureIntoDungeon { .. }
+            | PlayerMutation::RingTemptsYou
+            | PlayerMutation::ChooseOneLastMoved
+            | PlayerMutation::Behold { .. }
+            | PlayerMutation::ManifestDread
+            | PlayerMutation::Incubate { .. }
+            | PlayerMutation::Demonstrate
+            | PlayerMutation::Ripple(_)
+            | PlayerMutation::Vote { .. }
+            | PlayerMutation::Clash
+            | PlayerMutation::Bolster(_)
+            | PlayerMutation::Populate
+            | PlayerMutation::Amass { .. }
+            | PlayerMutation::Blight { .. }
+            | PlayerMutation::CollectEvidence { .. }
+            | PlayerMutation::Scry(_)
+            | PlayerMutation::Surveil(_)
+            | PlayerMutation::Mill(_) => {
+                return Err(EffectError::InconsistentProgram);
             }
         }
         self.advance_instruction()?;

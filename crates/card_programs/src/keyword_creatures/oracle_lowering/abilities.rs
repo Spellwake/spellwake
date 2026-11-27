@@ -1480,7 +1480,18 @@ fn rewrite_instructions_unique_related_player(
                             rewrite_affected_players_if_unique(ap, replacement);
                         }
                     }
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets => {}
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets
+                    | spellwake_engine::toolbox::DamageTargetQuery::AnnouncedTargets { .. }
+                    | spellwake_engine::toolbox::DamageTargetQuery::FromPower(_)
+                    | spellwake_engine::toolbox::DamageTargetQuery::CreaturePowerToOther {
+                        ..
+                    }
+                    | spellwake_engine::toolbox::DamageTargetQuery::TargetControllersCreatures {
+                        ..
+                    }
+                    | spellwake_engine::toolbox::DamageTargetQuery::OrderedTargets { .. }
+                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree
+                    | spellwake_engine::toolbox::DamageTargetQuery::Divided { .. } => {}
                 }
             }
             Instruction::MutatePlayer(spec) => {
@@ -1642,14 +1653,6 @@ fn rewrite_instructions_unique_related_player(
                     &|ap| rewrite_affected_players_if_unique(ap, replacement),
                     &|_| {},
                 );
-            }
-            Instruction::Mill { player, .. }
-            | Instruction::Scry { player, .. }
-            | Instruction::Surveil { player, .. }
-            | Instruction::AddManaForPlayer { player, .. }
-            | Instruction::Blight { player, .. }
-            | Instruction::CollectEvidence { player, .. } => {
-                rewrite_resolving_player_if_unique(player, replacement);
             }
             Instruction::LookTopChooseExt {
                 library_owner,

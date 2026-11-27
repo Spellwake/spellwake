@@ -8,7 +8,7 @@ impl EffectWindow {
         entry: crate::stack_window::StackEntry,
         instruction: Instruction,
         copy_choice: Option<(SeatId, Vec<TargetChoice>)>,
-        journal: &mut DamageJournal,
+        _journal: &mut DamageJournal,
         append: &mut RulesJournal,
     ) -> Result<(), EffectError> {
         use crate::occurrence::{EventCause, RulesOccurrence, ZoneReason};
@@ -53,9 +53,6 @@ impl EffectWindow {
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
             | Instruction::ReturnDelayedGraveyardToHand(_)
             | Instruction::DamageFromGrantingPermanent { .. }
-            | Instruction::Populate
-            | Instruction::Bolster(_)
-            | Instruction::Amass { .. }
             | Instruction::Sacrifice { .. }
             | Instruction::SacrificeRandomUntilLand
             | Instruction::Discard { .. } => {
@@ -65,45 +62,21 @@ impl EffectWindow {
             | Instruction::OptionalEffect { .. }
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
-            | Instruction::DamageFromPower(_)
-            | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::RememberPermanentTarget
-            | Instruction::AdditionalCombat { .. }
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ExileDefeatedSiege
-            | Instruction::AdvanceClassLevel(_)
-            | Instruction::SolveSourceCase
-            | Instruction::BecomePreparedSource
-            | Instruction::Proliferate
-            | Instruction::DamageTargetControllersCreatures { .. }
             | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::Vote { .. }
-            | Instruction::Incubate { .. }
             | Instruction::Connive { .. }
             | Instruction::ConniveFinalize { .. }
             | Instruction::Discover { .. }
-            | Instruction::Clash { .. }
-            | Instruction::RingTemptsYou
-            | Instruction::VentureIntoDungeon { .. }
-            | Instruction::TakeInitiative { .. }
-            | Instruction::UnlockDoor { .. }
-            | Instruction::Behold { .. }
-            | Instruction::ManifestDread
-            | Instruction::Monstrosity { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
-            | Instruction::Ripple(_)
-            | Instruction::Demonstrate
-            | Instruction::Enlist
-            | Instruction::ChooseOneLastMoved { .. }
             | Instruction::ZoneOp(_)
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
@@ -121,15 +94,10 @@ impl EffectWindow {
             | Instruction::SideDeckOp(_)
             | Instruction::BindResolutionX(_)
             | Instruction::CreateAuraTokenAttached { .. }
-            | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
             | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::CollectEvidence { .. }
-            | Instruction::Blight { .. }
             | Instruction::OfferAnyPlayer { .. }
-            | Instruction::DealDamageToAnnouncedTargets { .. }
-            | Instruction::GrantChosenProtection { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
@@ -137,24 +105,12 @@ impl EffectWindow {
             | Instruction::ResolvePowerAbility(_)
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::Scry { .. }
-            | Instruction::Surveil { .. }
-            | Instruction::Mill { .. }
             | Instruction::OfferSourceCounters { .. }
             | Instruction::RequireCondition(_)
             | Instruction::Encore
-            | Instruction::ReselectAttackDefender
-            | Instruction::SetBlockDeclarations(_)
-            | Instruction::AdditionalLoyaltyActivation
             | Instruction::ReturnExiledTargetCohort { .. }
-            | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::ExileDelayedObjects(_)
-            | Instruction::Earthbend { .. }
             | Instruction::ReturnEarthbentCard
-            | Instruction::AddManaForPlayer { .. }
-            | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::PairWithCreature { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::Ninjutsu
@@ -162,8 +118,6 @@ impl EffectWindow {
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::Myriad
-            | Instruction::WatchNextSpellOrLoyaltyTwice
-            | Instruction::WatchNextLoyaltyCopy
             | Instruction::CopyCapturedAbility
             | Instruction::CopyOnCast(_)
             | Instruction::MadnessCast
@@ -186,35 +140,15 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::DivideThreeDamageAmongTargets
-            | Instruction::DamageOrderedTargets { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::ReturnGraveyardCreatureWithCorpse(_)
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::MayRevealLibraryTop
-            | Instruction::ManifestTop { .. }
             | Instruction::ChooseFoundSpell
             | Instruction::CastFoundSpell(_)
             | Instruction::SearchLibrary { .. }
             | Instruction::ChooseCreatureType { .. } => {
                 return Err(EffectError::InconsistentProgram);
-            }
-            Instruction::CreateDamageMultiplier { factor } => {
-                let TargetRef::Object(target) = target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let multiplier = self.damage_state.add_multiplier(
-                    entry.id(),
-                    DamageEffectTarget::Permanent(target),
-                    factor,
-                    DamageSourceFilter::Any,
-                )?;
-                let created = DamageEffectCreation::Multiplier {
-                    multiplier,
-                    instruction: index,
-                };
-                journal.created.push(created.clone());
-                InstructionCut::Ready(RulesOccurrence::DamageEffectCreated(created))
             }
             Instruction::StackOp(spec) if !spec.requires_stack_target() => {
                 return Err(EffectError::InconsistentProgram);

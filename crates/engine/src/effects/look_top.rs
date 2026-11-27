@@ -229,7 +229,10 @@ impl EffectWindow {
             bool,
             bool,
         ) = match instruction {
-            Instruction::MayRevealLibraryTop | Instruction::ExploreSubject(_) => {
+            Instruction::MayRevealLibraryTop => (1, None, false, true, false, false),
+            Instruction::MutateObject(spec)
+                if matches!(spec.op, crate::toolbox::ObjectMutation::Explore) =>
+            {
                 (1, None, false, true, false, false)
             }
             _ => return Ok(false),
@@ -245,55 +248,27 @@ impl EffectWindow {
             results.revealed_top_card = None;
         }
         let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
-        let exploring = if let Instruction::ExploreSubject(subj) = instruction {
-            let resolved_id = match subj {
-                crate::program::MoveSubjectRef::AbilitySource => match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => Some(source.id()),
-                    _ => None,
-                },
-                crate::program::MoveSubjectRef::TargetObject => self
-                    .instruction_target(entry)
-                    .ok()
-                    .and_then(|t| match t.choice().target {
-                        TargetRef::Object(id) => Some(id),
-                        _ => None,
-                    }),
-                crate::program::MoveSubjectRef::TriggeringObject => self
-                    .execution_bindings(entry.id())
-                    .and_then(|b| b.trigger.as_ref())
-                    .and_then(|t| t.causes.members().first())
-                    .and_then(|m| m.subject_object_id()),
-                crate::program::MoveSubjectRef::AttachedHost => match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => match self.attached_to(source.id())
-                    {
-                        Some(TargetRef::Object(host)) => Some(host),
-                        _ => None,
-                    },
-                    _ => None,
-                },
-                crate::program::MoveSubjectRef::RevealedCard => None,
-                crate::program::MoveSubjectRef::CreatedTokens => self
-                    .resolution_cursor()
-                    .and_then(|c| c.last_created_tokens.first().copied()),
-                crate::program::MoveSubjectRef::LastMoved => {
-                    self.resolution_cursor().and_then(|c| {
-                        c.results
-                            .last_moved_objects
-                            .first()
-                            .copied()
-                            .or(c.results.returned_target_permanent)
-                    })
-                }
-                crate::program::MoveSubjectRef::RememberedFirst => {
-                    self.legal_linked_targets()?.map(|(a, _)| a)
-                }
-                crate::program::MoveSubjectRef::RememberedSecond => {
-                    self.legal_linked_targets()?.map(|(_, b)| b)
-                }
-            };
-            resolved_id.and_then(|id| self.window.cards().get(id).cloned())
+        let exploring = if let Instruction::MutateObject(spec) = instruction
+            && matches!(spec.op, crate::toolbox::ObjectMutation::Explore)
+        {
+            let resolved_id = self
+                .eval_object_query_at(
+                    entry.controller(),
+                    Some(entry),
+                    &spec.source,
+                    self.resolution_cursor(),
+                )?
+                .into_iter()
+                .next();
+            if let Some(card) = resolved_id
+                .and_then(|id| self.window.cards().get(id))
+                .filter(|c| c.zone() == ObjectZone::Battlefield)
+            {
+                Some(card.clone())
+            } else {
+                self.advance_instruction()?;
+                return Ok(true);
+            }
         } else {
             None
         };

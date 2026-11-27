@@ -10,7 +10,10 @@ use crate::{
         KeywordAbility, ResolvedDuration, ResolvedPartsSpec, StaticContinuousAbility,
     },
     damage::TurnPreventionSpec,
-    program::{CombatActionKind, DefinitionError, TemporaryRuleKind, ValueExpr},
+    program::{
+        BlockDeclarationRule, CombatActionKind, DefinitionError, ProtectionRecipients,
+        TemporaryRuleKind, ValueExpr,
+    },
     toolbox::{
         expr::ConditionExpr,
         query::{ObjectQuery, PlayerSelector},
@@ -62,6 +65,16 @@ pub enum ContinuousPayload {
     SkipStep { player: PlayerSelector, step: Step },
     /// Create a command-zone emblem for each player selected by `as_emblem` (or controller).
     Emblem(Box<crate::emblem::EmblemDefinition>),
+    /// Multiply damage dealt by sources controlled by resolving controller this turn.
+    DamageMultiplier {
+        factor: spellwake_contracts::RulesInteger,
+    },
+    /// Set block declaration constraints (e.g. only one blocker, menace, must block).
+    BlockDeclarations(BlockDeclarationRule),
+    /// Choose a color and grant protection from it to `recipients` for `spec.duration`.
+    ChosenColorProtection { recipients: ProtectionRecipients },
+    /// Prompt to modify any number of permanents matching target/filter with `parts` for `spec.duration`.
+    ModifyAnyNumber { parts: Box<ResolvedPartsSpec> },
 }
 
 impl ContinuousPayload {
@@ -90,7 +103,16 @@ impl ContinuousPayload {
             Self::PlayPermission { player, .. } => player.uses_target(),
             Self::SkipTurns { player, count } => player.uses_target() || count.uses_target(),
             Self::SkipStep { player, .. } => player.uses_target(),
-            Self::TargetPreventionShield { .. } => true,
+            Self::TargetPreventionShield { .. } | Self::ModifyAnyNumber { .. } => true,
+            Self::DamageMultiplier { .. } | Self::BlockDeclarations(_) => false,
+            Self::ChosenColorProtection { recipients } => match recipients {
+                ProtectionRecipients::TargetPermanent => true,
+                ProtectionRecipients::Matching(f) => {
+                    f.uses_target_permanent() || f.has_target_player()
+                }
+                ProtectionRecipients::AbilitySource
+                | ProtectionRecipients::ControllerAndPermanents => false,
+            },
         }
     }
 
@@ -124,7 +146,18 @@ impl ContinuousPayload {
             | Self::CombatAction(_)
             | Self::PreventDamage(_)
             | Self::TargetPreventionShield { .. }
-            | Self::Emblem(_) => Ok(()),
+            | Self::Emblem(_)
+            | Self::DamageMultiplier { .. }
+            | Self::BlockDeclarations(_)
+            | Self::ModifyAnyNumber { .. } => Ok(()),
+            Self::ChosenColorProtection { recipients } => {
+                if let ProtectionRecipients::Matching(filter) = recipients {
+                    filter
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -342,6 +375,63 @@ impl ApplyContinuousSpec {
     }
 
     /// Whether this spec depends on an announced target.
+    #[must_use]
+    pub fn damage_multiplier(factor: spellwake_contracts::RulesInteger) -> Self {
+        Self {
+            selector: None,
+            payload: ContinuousPayload::DamageMultiplier { factor },
+            duration: ResolvedDuration::UntilEndOfTurn,
+            condition: None,
+            one_shot: false,
+            as_emblem: None,
+            emblem_label: None,
+        }
+    }
+
+    #[must_use]
+    pub fn block_declarations(rule: BlockDeclarationRule) -> Self {
+        Self {
+            selector: None,
+            payload: ContinuousPayload::BlockDeclarations(rule),
+            duration: ResolvedDuration::UntilEndOfTurn,
+            condition: None,
+            one_shot: false,
+            as_emblem: None,
+            emblem_label: None,
+        }
+    }
+
+    #[must_use]
+    pub fn chosen_color_protection(
+        recipients: ProtectionRecipients,
+        duration: ResolvedDuration,
+    ) -> Self {
+        Self {
+            selector: None,
+            payload: ContinuousPayload::ChosenColorProtection { recipients },
+            duration,
+            condition: None,
+            one_shot: false,
+            as_emblem: None,
+            emblem_label: None,
+        }
+    }
+
+    #[must_use]
+    pub fn modify_any_number(parts: ResolvedPartsSpec, duration: ResolvedDuration) -> Self {
+        Self {
+            selector: None,
+            payload: ContinuousPayload::ModifyAnyNumber {
+                parts: Box::new(parts),
+            },
+            duration,
+            condition: None,
+            one_shot: false,
+            as_emblem: None,
+            emblem_label: None,
+        }
+    }
+
     #[must_use]
     pub fn uses_target(&self) -> bool {
         self.selector.as_ref().is_some_and(ObjectQuery::uses_target)

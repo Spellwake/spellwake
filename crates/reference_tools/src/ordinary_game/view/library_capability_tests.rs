@@ -24,9 +24,15 @@ fn library(kind: LibraryActionKind, amount: i64) -> Instruction {
     let player = ResolvingPlayer::Controller;
     let amount = spellwake_engine::program::ValueExpr::Literal(amount.into());
     match kind {
-        LibraryActionKind::Scry => Instruction::Scry { player, amount },
-        LibraryActionKind::Surveil => Instruction::Surveil { player, amount },
-        LibraryActionKind::Mill => Instruction::Mill { player, amount },
+        LibraryActionKind::Scry => Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::scry(player, amount),
+        )),
+        LibraryActionKind::Surveil => Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::surveil(player, amount),
+        )),
+        LibraryActionKind::Mill => Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::mill(player, amount),
+        )),
     }
 }
 fn spell(body: Vec<Instruction>) -> Program {

@@ -713,7 +713,11 @@ fn resolve_source(
 fn is_multiplier(source: &Source) -> bool {
     matches!(
         source.instructions.as_slice(),
-        [Instruction::CreateDamageMultiplier { .. }]
+        [Instruction::ApplyContinuous(spec)]
+            if matches!(
+                spec.payload,
+                spellwake_engine::toolbox::ContinuousPayload::DamageMultiplier { .. }
+            )
     )
 }
 
@@ -998,7 +1002,9 @@ fn multiplier(card: u64, alias: &'static str) -> Source {
         card: CardId(card),
         alias,
         checkpoint: "prepared-multiplier",
-        instructions: vec![Instruction::CreateDamageMultiplier { factor: 2.into() }],
+        instructions: vec![Instruction::ApplyContinuous(Box::new(
+            spellwake_engine::toolbox::ApplyContinuousSpec::damage_multiplier(2.into()),
+        ))],
         creation_aliases: vec![(0, alias)],
         prepared: true,
         choices: &[],
@@ -1469,7 +1475,9 @@ mod tests {
 
     #[test]
     fn application_projection_orders_ten_real_attempts_numerically() {
-        let mut instructions = vec![Instruction::CreateDamageMultiplier { factor: 1.into() }];
+        let mut instructions = vec![Instruction::ApplyContinuous(Box::new(
+            spellwake_engine::toolbox::ApplyContinuousSpec::damage_multiplier(1.into()),
+        ))];
         instructions.extend((0..10).map(|_| {
             Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
                 source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,

@@ -373,7 +373,7 @@ pub(super) fn compile(
             if (subject!=card.name && Some(subject)!=card.name.split(',').next() && subject!="this creature") || damage!="any target." {return None;}
             triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::any().ordinal_this_turn(std::num::NonZeroU32::from(std::num::NonZeroU16::new(ordinal)?))),
                 ExecutableBody::new(BodyTarget::SingleAnyTarget,vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne,spellwake_engine::program::ValueExpr::literal(1)),
-                    Instruction::DamageFromPower(spellwake_engine::program::PowerDamageSource::AbilitySource)])));
+                    Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec::from_power(spellwake_engine::program::PowerDamageSource::AbilitySource)))])));
         } else if let Some((kind,effect)) = line.strip_prefix("Whenever one or more +1/+1 counters are put on another non-").and_then(|s|s.split_once(" creature you control, ")) {
             triggers.push((spellwake_engine::program::TriggerSpec::counters_changed(spellwake_engine::program::ObjectFilter::creature().controlled().other_than_ability_source().without_subtype(vocabulary.resolve_label(kind)?), spellwake_engine::program::CounterTriggerKind::PlusOnePlaced { by_controller_only: false }),body(effect,&card.name,vocabulary)?));
         } else if line=="Whenever a commander you control attacks, put a +1/+1 counter on it." {
@@ -487,7 +487,7 @@ pub(super) fn compile(
         } else if let Some(reference)=line.strip_prefix("Whenever you put one or more +1/+1 counters on another colorless creature, you may put a +1/+1 counter on ").and_then(|s|s.strip_suffix('.')) && (reference==face.name || Some(reference)==face.name.split_once(", ").map(|(name,_)|name)) {
             triggers.push((spellwake_engine::program::TriggerSpec::counters_changed(spellwake_engine::program::ObjectFilter::creature().with_color(spellwake_engine::program::ObjectColorFilter::Colorless).other_than_ability_source(), spellwake_engine::program::CounterTriggerKind::PlusOnePlaced { by_controller_only: true }), ExecutableBody::new(BodyTarget::None,vec![Instruction::OptionalEffect {chooser:ResolvingPlayer::Controller},crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne,spellwake_engine::program::ValueExpr::literal(1))])));
         } else if line=="Whenever you cast a colorless creature spell, manifest the top card of your library." {
-            triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::creature().with_colorless()), ExecutableBody::new(BodyTarget::None,vec![Instruction::ManifestTop {player:ResolvingPlayer::Controller,amount:spellwake_engine::program::ValueExpr::Literal(1.into())}])));
+            triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::creature().with_colorless()), ExecutableBody::new(BodyTarget::None,vec![Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::manifest_top(ResolvingPlayer::Controller, spellwake_engine::program::ValueExpr::Literal(1.into()))))])));
         } else if let Some(minimum)=line.strip_prefix("Whenever you attack with creatures with total power ").and_then(|s|s.strip_suffix(" or greater, you may turn a face-down creature you control face up.")) {
             triggers.push((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::any(), spellwake_engine::program::AttackTriggerMode::GroupTotalPowerAtLeast(minimum.parse().ok()?)),ExecutableBody::new(BodyTarget::None,vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec {
                 source: spellwake_engine::toolbox::ObjectQuery::zone(
@@ -515,7 +515,7 @@ pub(super) fn compile(
             triggers.push((spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::any().controlled().with_subtype(kind), mode: spellwake_engine::program::DiesTriggerMode::Permanent }),body(effect,&card.name,vocabulary)?));
         } else if let Some((condition, effect)) = trigger(line, &card.name, types) {
             let body = if condition==spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::DamageTriggerRecipient::PlayerOrPlaneswalker, true) && effect=="copy the next loyalty ability you activate this turn when you activate it. You may choose new targets for the copy." {
-                ExecutableBody::new(BodyTarget::None,vec![Instruction::WatchNextLoyaltyCopy])
+                ExecutableBody::new(BodyTarget::None,vec![Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::watch_next_spell_or_loyalty(true)))])
             } else if condition == (spellwake_engine::program::TriggerSpec::status_changed(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::StatusTriggerKind::Phased { out: false })) && effect == "put a +1/+1 counter on it." {
                 ExecutableBody::new(BodyTarget::None, vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(spellwake_engine::effects::CounterKind::PlusOne, spellwake_engine::program::ValueExpr::literal(1))])
             } else if let Some(token) = effect.strip_prefix("create that many ") {
@@ -1365,10 +1365,12 @@ pub(super) fn body(
                     ),
                     spellwake_engine::program::ValueExpr::controlled_subtype(zombie),
                 ),
-                Instruction::Scry {
-                    player: ResolvingPlayer::Controller,
-                    amount: spellwake_engine::program::ValueExpr::controlled_subtype(zombie),
-                },
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::program::ValueExpr::controlled_subtype(zombie),
+                    ),
+                )),
             ],
         ));
     }
@@ -1576,10 +1578,12 @@ pub(super) fn body(
         ]);
         return Some(ExecutableBody::new(
             BodyTarget::FilteredPermanent(ObjectFilter::planeswalker().controlled()),
-            vec![Instruction::ModifyAnyNumberOfPermanents {
-                parts,
-                duration: ResolvedDuration::UntilEndOfTurn,
-            }],
+            vec![Instruction::ApplyContinuous(Box::new(
+                spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(
+                    parts,
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            ))],
         ));
     }
     if let Some((source, rest)) = text
@@ -1785,9 +1789,11 @@ pub(super) fn body(
                     ObjectFilter::creature().attacking(),
                     false,
                 ),
-                Instruction::AdditionalCombat {
-                    untap: spellwake_engine::program::CombatUntapGroup::None,
-                },
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::additional_combat(
+                        spellwake_engine::program::CombatUntapGroup::None,
+                    ),
+                )),
             ],
         ));
     }
@@ -1799,7 +1805,9 @@ pub(super) fn body(
     {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::Bolster(amount)],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::bolster(amount),
+            ))],
         ));
     }
     if text.strip_prefix("gain control of that artifact ")
@@ -1945,12 +1953,12 @@ pub(super) fn body(
         let (kind, _) = price.required.into_iter().next()?;
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AddManaForPlayer {
-                player: ResolvingPlayer::Controller,
-                yield_kind: spellwake_engine::program::EffectManaYield::CombatDamageUntilCleanup(
-                    kind,
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                    ResolvingPlayer::Controller,
+                    spellwake_engine::program::EffectManaYield::CombatDamageUntilCleanup(kind),
                 ),
-            }],
+            ))],
         ));
     }
     if let Some(description) = text.strip_prefix("create ").and_then(|s| {
@@ -2014,15 +2022,17 @@ pub(super) fn body(
     if text == "add {R} for each 1 life your opponents have lost this turn." {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AddManaForPlayer {
-                player: ResolvingPlayer::Controller,
-                yield_kind: spellwake_engine::program::EffectManaYield::Counted {
-                    kind: spellwake_engine::mana::ManaType::Red,
-                    amount: spellwake_engine::program::ValueExpr::PlayerStat(
-                        spellwake_engine::program::PlayerStatExpr::OpponentsLifeLostThisTurn,
-                    ),
-                },
-            }],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                    ResolvingPlayer::Controller,
+                    spellwake_engine::program::EffectManaYield::Counted {
+                        kind: spellwake_engine::mana::ManaType::Red,
+                        amount: spellwake_engine::program::ValueExpr::PlayerStat(
+                            spellwake_engine::program::PlayerStatExpr::OpponentsLifeLostThisTurn,
+                        ),
+                    },
+                ),
+            ))],
         ));
     }
     if let Some((source, damage)) = text
@@ -2153,13 +2163,15 @@ pub(super) fn body(
     {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::ManifestTop {
-                player: ResolvingPlayer::Controller,
-                amount: spellwake_engine::program::ValueExpr::counters(
-                    spellwake_engine::program::CounterSubjectRef::DyingSource,
-                    None,
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::manifest_top(
+                    ResolvingPlayer::Controller,
+                    spellwake_engine::program::ValueExpr::counters(
+                        spellwake_engine::program::CounterSubjectRef::DyingSource,
+                        None,
+                    ),
                 ),
-            }],
+            ))],
         ));
     }
     if let Some(kind) = text
@@ -2396,13 +2408,14 @@ pub(super) fn body(
         let first = if let Some(template) = action.strip_prefix("create ") {
             Some(create_tokens(template, vocabulary)?)
         } else {
-            action
-                .strip_prefix("mill ")
-                .and_then(cards)
-                .map(|amount| Instruction::Mill {
-                    player: ResolvingPlayer::Controller,
-                    amount,
-                })
+            action.strip_prefix("mill ").and_then(cards).map(|amount| {
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                        ResolvingPlayer::Controller,
+                        amount,
+                    ),
+                ))
+            })
         };
         if let Some(first) = first {
             return Some(ExecutableBody::new(
@@ -2459,12 +2472,12 @@ pub(super) fn body(
     if text == "scry X, where X is the number of planeswalkers you control." {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::Scry {
-                player: ResolvingPlayer::Controller,
-                amount: spellwake_engine::program::ValueExpr::controlled_type(
-                    CardType::Planeswalker,
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                    ResolvingPlayer::Controller,
+                    spellwake_engine::program::ValueExpr::controlled_type(CardType::Planeswalker),
                 ),
-            }],
+            ))],
         ));
     }
     if let Some(limit) = text
@@ -2657,10 +2670,12 @@ pub(super) fn body(
                 Instruction::OptionalEffect {
                     chooser: ResolvingPlayer::Controller,
                 },
-                Instruction::Mill {
-                    player: ResolvingPlayer::Controller,
-                    amount,
-                },
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                        ResolvingPlayer::Controller,
+                        amount,
+                    ),
+                )),
             ],
         ));
     }
@@ -2860,18 +2875,16 @@ pub(super) fn body(
     } else if let Some(n) = raw.strip_prefix("mill ") {
         (
             BodyTarget::None,
-            vec![Instruction::Mill {
-                player,
-                amount: cards(n)?,
-            }],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::mill(player, cards(n)?),
+            ))],
         )
     } else if let Some(n) = raw.strip_prefix("surveil ") {
         (
             BodyTarget::None,
-            vec![Instruction::Surveil {
-                player,
-                amount: count(n)?,
-            }],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::surveil(player, count(n)?),
+            ))],
         )
     } else if let Some(n) = raw.strip_prefix("discard ") {
         (

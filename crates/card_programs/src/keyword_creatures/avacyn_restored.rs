@@ -253,21 +253,25 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         "Bonfire of the Damned deals X damage to target player or planeswalker and each creature that player or that planeswalker's controller controls." => {
             (
                 BodyTarget::SinglePlayerOrPlaneswalker,
-                vec![DamageTargetControllersCreatures {
-                    amount: spellwake_engine::program::ValueExpr::chosen_x(),
-                    include_target: true,
-                    require_damaged_creatures_to_attack: false,
-                }],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::target_controllers_creatures(
+                        spellwake_engine::program::ValueExpr::chosen_x(),
+                        true,
+                        false,
+                    ),
+                ))],
             )
         }
         "Aggravate deals 1 damage to each creature target player controls. Each creature dealt damage this way attacks this turn if able." => {
             (
                 SinglePlayer,
-                vec![DamageTargetControllersCreatures {
-                    amount: literal(1),
-                    include_target: false,
-                    require_damaged_creatures_to_attack: true,
-                }],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::target_controllers_creatures(
+                        literal(1),
+                        false,
+                        true,
+                    ),
+                ))],
             )
         }
 
@@ -1907,7 +1911,9 @@ fn creature(
                 vec![(
                     spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::self_object(), mode: spellwake_engine::program::DiesTriggerMode::Permanent }),
                     BodyTarget::SingleAnyTarget,
-                    vec![DivideThreeDamageAmongTargets],
+                    vec![Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec::divide_three(),
+                    ))],
                 )],
             )
         }
@@ -1934,10 +1940,12 @@ fn creature(
             vec![(
                 spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::self_object(), mode: spellwake_engine::program::DiesTriggerMode::Permanent }),
                 SinglePlayer,
-                vec![Mill {
-                    player: ResolvingPlayer::TargetPlayer,
-                    amount: literal(5),
-                }],
+                vec![Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                        ResolvingPlayer::TargetPlayer,
+                        literal(5),
+                    ),
+                ))],
             )],
         ),
         "When this creature dies, each player loses 3 life." => (

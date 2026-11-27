@@ -188,7 +188,11 @@ fn rewrite_body_after_amass(body: &mut ExecutableBody) {
         if saw_amass {
             rewrite_instruction_anaphora(op, ValueObjectRef::LastAmassedArmy);
         }
-        if matches!(op, Instruction::Amass { .. }) {
+        if matches!(
+            op,
+            Instruction::MutatePlayer(spec)
+                if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Amass { .. })
+        ) {
             saw_amass = true;
         }
     }

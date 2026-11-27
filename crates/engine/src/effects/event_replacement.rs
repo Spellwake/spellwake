@@ -26,7 +26,6 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
         | Instruction::DrawCards(_)
         | Instruction::AdjustLife(_)
         | Instruction::MutatePlayer(_)
-        | Instruction::Mill { .. }
         | Instruction::ExileTopPlay { .. } => true,
         Instruction::ZoneOp(spec) => {
             matches!(spec.selection, crate::toolbox::ZoneSelection::All)
@@ -1305,6 +1304,16 @@ impl EffectWindow {
                         _ => Vec::new(),
                     };
                     match &spec.op {
+                        crate::toolbox::PlayerMutation::Mill(amount) => {
+                            let player = spec
+                                .resolving_player()
+                                .unwrap_or(crate::program::ResolvingPlayer::Controller);
+                            let seat = self.resolve_replacement_player(player, rep)?;
+                            let val = self
+                                .resolve_inline_value_expr(rep, amount, event_amount)?
+                                .max(0.into());
+                            self.inline_mill_player(seat, &val, cause.clone(), append)?;
+                        }
                         crate::toolbox::PlayerMutation::AddCounter { kind, amount } => {
                             let val = self
                                 .resolve_inline_value_expr(rep, amount, event_amount)?
@@ -1585,13 +1594,6 @@ impl EffectWindow {
                             .no_max_hand_size_players
                             .insert(rep.controller);
                     }
-                }
-                Instruction::Mill { player, amount } => {
-                    let seat = self.resolve_replacement_player(player, rep)?;
-                    let val = self
-                        .resolve_inline_value_expr(rep, &amount, event_amount)?
-                        .max(0.into());
-                    self.inline_mill_player(seat, &val, cause.clone(), append)?;
                 }
                 Instruction::CreateTokens { creations } => {
                     self.inline_create_tokens(

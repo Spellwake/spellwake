@@ -9,10 +9,12 @@ pub(super) fn body(
     let (target, instructions) = match text {
         "Target player mills three cards." => (
             BodyTarget::SinglePlayer,
-            vec![Instruction::Mill {
-                player: ResolvingPlayer::TargetPlayer,
-                amount: spellwake_engine::program::ValueExpr::Literal(3.into()),
-            }],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                    ResolvingPlayer::TargetPlayer,
+                    spellwake_engine::program::ValueExpr::Literal(3.into()),
+                ),
+            ))],
         ),
         "You gain 3 life." => (
             BodyTarget::None,

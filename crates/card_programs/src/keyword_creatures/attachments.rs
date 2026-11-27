@@ -369,9 +369,11 @@ pub(super) fn compile_rules(
                         },
                     ),
                     BodyTarget::SinglePlayerOrPlaneswalker,
-                    vec![Instruction::DamageFromPower(
-                        spellwake_engine::program::PowerDamageSource::CreatureDealtDamage,
-                    )],
+                    vec![Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec::from_power(
+                            spellwake_engine::program::PowerDamageSource::CreatureDealtDamage,
+                        ),
+                    ))],
                 )
             }
             "Whenever equipped creature dies, attach this Equipment to target creature you control." => {

@@ -130,10 +130,12 @@ fn effect_body(text: &str, vocab: &CreatureTypeVocabulary) -> Option<ExecutableB
         ),
         "surveil 2." => (
             BodyTarget::None,
-            Instruction::Surveil {
-                player: ResolvingPlayer::Controller,
-                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-            },
+            Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::surveil(
+                    ResolvingPlayer::Controller,
+                    spellwake_engine::program::ValueExpr::Literal(2.into()),
+                ),
+            )),
         ),
         "put two +1/+1 counters on target creature." => (
             BodyTarget::SingleCreature,

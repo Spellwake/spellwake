@@ -1506,12 +1506,13 @@ impl EffectWindow {
             .is_some_and(crate::activated::ActivationRestriction::has_power_up)
         {
             Some(crate::mana::AbilitySpendKind::PowerUp)
-        } else if selected
-            .body
-            .instructions
-            .iter()
-            .any(|ins| matches!(ins, Instruction::AdvanceClassLevel(_)))
-        {
+        } else if selected.body.instructions.iter().any(|ins| {
+            matches!(
+                ins,
+                Instruction::MutateObject(spec)
+                    if matches!(spec.op, crate::toolbox::ObjectMutation::AdvanceClassLevel(_))
+            )
+        }) {
             Some(crate::mana::AbilitySpendKind::GainClassLevel)
         } else if selected.body.instructions.iter().any(|ins| {
             matches!(
