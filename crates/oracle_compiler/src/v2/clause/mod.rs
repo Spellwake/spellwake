@@ -10,6 +10,7 @@
 mod player_verbs;
 mod subject_verbs;
 pub(crate) mod tokens;
+mod zone_verbs;
 
 use crate::v2::clause::player_verbs::parse_player_verb_frame;
 use crate::v2::clause::subject_verbs::parse_subject_verb_frame;
@@ -18,8 +19,9 @@ use crate::v2::cost::parse_cost_atom;
 use crate::v2::filter::{parse_object_filter, parse_player_ref, parse_subject_ref, parse_zone_ref};
 use crate::v2::ir::{
     ActivationRestriction, ChoiceKind, Cost, DelayedTriggerKind, Duration, Effect, ForEachDomain,
-    ManaSpendRule, ObjectFilter, ObjectMutation, ParseError, ParseStage, PlayerMutation, PlayerRef,
-    RuleRestrictionKind, StaticAbility, SubjectRef, VarName,
+    LevelMarker, ManaRuleKind, ManaSpendRule, ObjectFilter, ObjectMutation, ParseError, ParseStage,
+    PlayerActionKind, PlayerMutation, PlayerRef, RuleRestrictionKind, StaticAbility, SubjectRef,
+    SubjectStaticRule, VarName,
 };
 use crate::v2::lexer::{Token, TokenKind, tokenize};
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
@@ -137,7 +139,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             if ts.next_number(false) == Some(0) {
                 return Ok(vec![Effect::MutatePlayer {
                     player: PlayerRef::You,
-                    mutation: PlayerMutation::XCantBeZero,
+                    mutation: PlayerMutation::Action(PlayerActionKind::XCantBeZero),
                     duration: Duration::Instant,
                 }]);
             }
@@ -205,7 +207,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
     ]) {
         return Ok(vec![Effect::MutatePlayer {
             player: PlayerRef::You,
-            mutation: PlayerMutation::ChooseSameModeMultiple,
+            mutation: PlayerMutation::Action(PlayerActionKind::ChooseSameModeMultiple),
             duration: Duration::Instant,
         }]);
     }
@@ -219,7 +221,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             if ts.eat_phrase(&["mana", "on", "x"]) {
                 return Ok(vec![Effect::MutatePlayer {
                     player: PlayerRef::You,
-                    mutation: PlayerMutation::SpendOnlyColorOnX(color),
+                    mutation: PlayerMutation::ManaRule(ManaRuleKind::SpendOnlyColorOnX(color)),
                     duration: Duration::Instant,
                 }]);
             }
@@ -244,7 +246,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
     ]) {
         return Ok(vec![Effect::MutatePlayer {
             player: PlayerRef::You,
-            mutation: PlayerMutation::FlashbackCostEqualsManaCost,
+            mutation: PlayerMutation::Action(PlayerActionKind::FlashbackCostEqualsManaCost),
             duration: Duration::UntilEndOfTurn,
         }]);
     }
@@ -306,7 +308,16 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
     }
     {
         let icp = ts.checkpoint();
-        if ts.eat_phrase(&["if", "no", "one", "does"]) && ts.eat_comma() {
+        if (ts.eat_phrase(&["if", "no", "one", "does"])
+            || ts.eat_phrase(&["if", "no", "player", "does"])
+            || ts.eat_phrase(&["if", "you", "don't", "cast", "it"])
+            || ts.eat_phrase(&["if", "you", "don't", "play", "it"])
+            || ts.eat_phrase(&["if", "you", "didn't", "cast", "it"])
+            || ts.eat_phrase(&["if", "you", "didn't", "play", "it"])
+            || ts.eat_phrase(&["if", "you", "didn't", "create", "a", "token", "this", "way"])
+            || ts.eat_phrase(&["if", "you", "don't", "draw", "a", "card", "this", "way"]))
+            && ts.eat_comma()
+        {
             let body = parse_sentence_top(ts)?;
             return Ok(vec![Effect::IfPrevious {
                 succeeded: false,
@@ -532,6 +543,20 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         let body = parse_sentence_top(ts)?;
         return Ok(vec![Effect::ScopedDuration {
             duration: Duration::UntilEndOfNextTurn,
+            body,
+        }]);
+    }
+    if ts.eat_phrase(&["until", "your", "next", "end", "step"]) && ts.eat_comma() {
+        let body = parse_sentence_top(ts)?;
+        return Ok(vec![Effect::ScopedDuration {
+            duration: Duration::UntilYourNextEndStep,
+            body,
+        }]);
+    }
+    if ts.eat_phrase(&["until", "your", "next", "upkeep"]) && ts.eat_comma() {
+        let body = parse_sentence_top(ts)?;
+        return Ok(vec![Effect::ScopedDuration {
+            duration: Duration::UntilYourNextUpkeep,
             body,
         }]);
     }
@@ -767,20 +792,153 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         ts.restore(cp);
     }
 
-    // 7b. `It's [still] a <type>` (`It's still a land`, `It's an enchantment`, `They're still lands`)
-    if (ts.eat_phrase(&["it's", "still", "a"])
-        || ts.eat_phrase(&["it's", "still", "an"])
-        || ts.eat_phrase(&["it's", "a"])
-        || ts.eat_phrase(&["it's", "an"])
-        || ts.eat_phrase(&["they're", "still"]))
-        && let Some(w) = ts.peek_word()
-        && let Some(ct) = lookup_card_type(&w.to_ascii_lowercase())
+    // 7b. `It's [still] a[n] [color] <subtypes/types> [in addition to its/his/her other [creature] types] [and has no abilities | and gains <kws>]`
     {
-        ts.next_word();
-        return Ok(vec![Effect::MutateObject {
-            subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It),
-            mutation: ObjectMutation::RetainTypes(ct),
-            duration: Duration::Permanent,
+        let itcp = ts.checkpoint();
+        if ts.eat_phrase(&["it's", "still", "a"])
+            || ts.eat_phrase(&["it's", "still", "an"])
+            || ts.eat_phrase(&["it's", "a"])
+            || ts.eat_phrase(&["it's", "an"])
+            || ts.eat_phrase(&["they're", "still"])
+            || ts.eat_word("they're")
+        {
+            let mut add_types = crate::ast::CardTypeMask::EMPTY;
+            let mut colors = crate::ast::ColorMask::EMPTY;
+            let mut subtypes = Vec::new();
+            while let Some(w) = ts.peek_word() {
+                let low = w.to_ascii_lowercase();
+                if let Some(ct) = lookup_card_type(&low) {
+                    ts.next_word();
+                    add_types = add_types.union(ct);
+                } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+                    ts.next_word();
+                    subtypes.push(sub.to_string());
+                } else if let Some(c) = crate::vocab::lookup_color(&low) {
+                    ts.next_word();
+                    colors = colors.union(c);
+                } else {
+                    break;
+                }
+            }
+            if !add_types.is_empty() || !subtypes.is_empty() || !colors.is_empty() {
+                let keep_existing = ts
+                    .eat_phrase(&["in", "addition", "to", "its", "other", "creature", "types"])
+                    || ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"])
+                    || ts.eat_phrase(&["in", "addition", "to", "his", "other", "types"])
+                    || ts.eat_phrase(&["in", "addition", "to", "her", "other", "types"])
+                    || ts.eat_phrase(&[
+                        "in", "addition", "to", "their", "other", "creature", "types",
+                    ])
+                    || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"]);
+                let mut out = Vec::new();
+                if !colors.is_empty() {
+                    out.push(Effect::MutateObject {
+                        subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It),
+                        mutation: ObjectMutation::BecomeColors {
+                            colors,
+                            keep_existing_colors: keep_existing,
+                        },
+                        duration: Duration::Permanent,
+                    });
+                }
+                if !subtypes.is_empty() || !add_types.is_empty() {
+                    out.push(Effect::MutateObject {
+                        subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It),
+                        mutation: ObjectMutation::BecomeCreatureTypes {
+                            subtypes,
+                            add_types,
+                            keep_existing_types: keep_existing,
+                            base_pt: None,
+                            keywords: Vec::new(),
+                        },
+                        duration: Duration::Permanent,
+                    });
+                }
+                if ts.eat_phrase(&["and", "has", "no", "abilities"])
+                    || ts.eat_phrase(&["and", "loses", "all", "abilities"])
+                {
+                    out.push(Effect::MutateObject {
+                        subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It),
+                        mutation: ObjectMutation::RemoveAllAbilities,
+                        duration: Duration::Permanent,
+                    });
+                } else {
+                    let gcp = ts.checkpoint();
+                    if (ts.eat_phrase(&["and", "gains"]) || ts.eat_phrase(&["and", "gain"]))
+                        && let Ok((kws, _)) = try_parse(ts, crate::v2::keywords::parse_keyword_list)
+                    {
+                        out.push(Effect::MutateObject {
+                            subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It),
+                            mutation: ObjectMutation::GrantKeywords(kws),
+                            duration: Duration::Permanent,
+                        });
+                    } else {
+                        ts.restore(gcp);
+                    }
+                }
+                if ts.is_eof() {
+                    return Ok(out);
+                }
+            }
+        }
+        ts.restore(itcp);
+    }
+    if ts.eat_phrase(&["your", "life", "total", "can't", "change"]) {
+        let mut out = vec![Effect::MutatePlayer {
+            player: PlayerRef::You,
+            mutation: PlayerMutation::Action(PlayerActionKind::LifeTotalCantChange),
+            duration: Duration::UntilYourNextTurn,
+        }];
+        let pcp = ts.checkpoint();
+        if ts.eat_word("and")
+            && let Ok(more) = try_parse(ts, parse_sentence_top)
+        {
+            out.extend(more);
+        } else {
+            ts.restore(pcp);
+        }
+        return Ok(out);
+    }
+    // 7b1. `<player>'s life total becomes <val>` (`Repay in Kind`, `Biorhythm`, `Beacon of Immortality`)
+    {
+        let lcp = ts.checkpoint();
+        let life_player = if ts.eat_phrase(&["each", "player's", "life", "total", "becomes"]) {
+            Some(PlayerRef::EachPlayer)
+        } else if ts.eat_phrase(&["each", "opponent's", "life", "total", "becomes"]) {
+            Some(PlayerRef::EachOpponent)
+        } else if ts.eat_phrase(&["target", "player's", "life", "total", "becomes"]) {
+            Some(PlayerRef::TargetPlayer)
+        } else if ts.eat_phrase(&["target", "opponent's", "life", "total", "becomes"]) {
+            Some(PlayerRef::TargetOpponent)
+        } else if ts.eat_phrase(&["that", "player's", "life", "total", "becomes"])
+            || ts.eat_phrase(&["their", "life", "total", "becomes"])
+        {
+            Some(PlayerRef::ThatPlayer)
+        } else if ts.eat_phrase(&["your", "life", "total", "becomes"]) {
+            Some(PlayerRef::You)
+        } else {
+            None
+        };
+        if let Some(player) = life_player
+            && let Ok(amount) = try_parse(ts, parse_value_expr)
+        {
+            return Ok(vec![Effect::AdjustLife {
+                player,
+                amount,
+                op: crate::v2::ir::LifeOp::Set,
+            }]);
+        }
+        ts.restore(lcp);
+    }
+    // 7b1b. `the damage can't be prevented` (`Demonfire`, `Urza's Rage`, `Skullcrack`)
+    if ts.eat_phrase(&["the", "damage", "can't", "be", "prevented"]) {
+        return Ok(vec![Effect::ApplyContinuous {
+            effect: Box::new(StaticAbility::RuleRestriction {
+                subject: None,
+                rule: RuleRestrictionKind::DamageCantBePrevented,
+                condition: None,
+            }),
+            duration: Duration::UntilEndOfTurn,
         }]);
     }
     // 7b2. `All creatures able to block <tgt> this turn do so`
@@ -791,7 +949,11 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             && (ts.eat_phrase(&["this", "turn", "do", "so"]) || ts.eat_phrase(&["do", "so"]))
         {
             return Ok(vec![Effect::ApplyContinuous {
-                effect: Box::new(StaticAbility::AllMustBlock { subject }),
+                effect: Box::new(StaticAbility::SubjectRule {
+                    subject,
+                    rule: SubjectStaticRule::AllMustBlock,
+                    condition: None,
+                }),
                 duration: Duration::UntilEndOfTurn,
             }]);
         }
@@ -803,7 +965,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         && let Some(lvl) = ts.next_number(false).and_then(|n| u8::try_from(n).ok())
     {
         return Ok(vec![Effect::ApplyContinuous {
-            effect: Box::new(StaticAbility::ClassLevelHeader(lvl)),
+            effect: Box::new(StaticAbility::LevelStructure(LevelMarker::ClassLevel(lvl))),
             duration: Duration::Permanent,
         }]);
     }
@@ -1123,7 +1285,7 @@ fn parse_single_clause(
                 return Ok((
                     vec![Effect::MutatePlayer {
                         player: PlayerRef::You,
-                        mutation: PlayerMutation::SpendManaAsAnyType,
+                        mutation: PlayerMutation::Action(PlayerActionKind::SpendManaAsAnyType),
                         duration: Duration::UntilEndOfTurn,
                     }],
                     Some(PlayerRef::You),
@@ -1141,9 +1303,9 @@ fn parse_single_clause(
             return Ok((
                 vec![Effect::MutatePlayer {
                     player: PlayerRef::You,
-                    mutation: PlayerMutation::ManaSpendForbidden(
+                    mutation: PlayerMutation::ManaRule(ManaRuleKind::SpendForbidden(
                         crate::v2::ir::ManaSpendPurpose::CastSpells(Some(flt)),
-                    ),
+                    )),
                     duration: Duration::Instant,
                 }],
                 Some(PlayerRef::You),
@@ -1153,16 +1315,18 @@ fn parse_single_clause(
             || ts.eat_phrase(&["activate", "an", "ability"])
         {
             let flt = if ts.eat_word("of") {
-                opt(ts, parse_object_filter)
+                let f = opt(ts, parse_object_filter);
+                let _ = ts.eat_word("source") || ts.eat_word("sources");
+                f
             } else {
                 None
             };
             return Ok((
                 vec![Effect::MutatePlayer {
                     player: PlayerRef::You,
-                    mutation: PlayerMutation::ManaSpendForbidden(
+                    mutation: PlayerMutation::ManaRule(ManaRuleKind::SpendForbidden(
                         crate::v2::ir::ManaSpendPurpose::ActivateAbilities(flt),
-                    ),
+                    )),
                     duration: Duration::Instant,
                 }],
                 Some(PlayerRef::You),
@@ -1176,11 +1340,13 @@ fn parse_single_clause(
             return Ok((
                 vec![Effect::MutatePlayer {
                     player: PlayerRef::You,
-                    mutation: PlayerMutation::AddManaSpendRestriction(ManaSpendRule {
-                        only_for: true,
-                        cast_from_zone: Some(zref.zone),
-                        spell_filter: None,
-                    }),
+                    mutation: PlayerMutation::ManaRule(ManaRuleKind::SpendRestriction(
+                        ManaSpendRule {
+                            only_for: true,
+                            cast_from_zone: Some(zref.zone),
+                            spell_filter: None,
+                        },
+                    )),
                     duration: Duration::Instant,
                 }],
                 Some(PlayerRef::You),
@@ -1195,7 +1361,9 @@ fn parse_single_clause(
                 || ts.eat_phrase(&["activate", "an", "ability"])
             {
                 let flt = if ts.eat_word("of") {
-                    opt(ts, parse_object_filter)
+                    let f = opt(ts, parse_object_filter);
+                    let _ = ts.eat_word("source") || ts.eat_word("sources");
+                    f
                 } else {
                     None
                 };
@@ -1228,11 +1396,13 @@ fn parse_single_clause(
             return Ok((
                 vec![Effect::MutatePlayer {
                     player: PlayerRef::You,
-                    mutation: PlayerMutation::AddManaSpendRestriction(ManaSpendRule {
-                        only_for: true,
-                        cast_from_zone: None,
-                        spell_filter: Some(flt.clone()),
-                    }),
+                    mutation: PlayerMutation::ManaRule(ManaRuleKind::SpendRestriction(
+                        ManaSpendRule {
+                            only_for: true,
+                            cast_from_zone: None,
+                            spell_filter: Some(flt.clone()),
+                        },
+                    )),
                     duration: Duration::Instant,
                 }],
                 Some(PlayerRef::You),
@@ -1247,7 +1417,7 @@ fn parse_single_clause(
             return Ok((
                 vec![Effect::MutatePlayer {
                     player: PlayerRef::You,
-                    mutation: PlayerMutation::AddManaSpendPurpose(purpose),
+                    mutation: PlayerMutation::ManaRule(ManaRuleKind::SpendPurpose(purpose)),
                     duration: Duration::Instant,
                 }],
                 Some(PlayerRef::You),
@@ -1483,6 +1653,8 @@ fn parse_activation_restrictions(ts: &mut TokenStream<'_>) -> PResult<Vec<Activa
             out.push(ActivationRestriction::DuringCombatStep(
                 crate::v2::ir::CombatStepKind::CombatDamage,
             ));
+        } else if ts.eat_phrase(&["during", "the", "end", "of", "combat", "step"]) {
+            out.push(ActivationRestriction::DuringEndOfCombat);
         } else if ts.eat_phrase(&["during", "combat"]) {
             out.push(ActivationRestriction::DuringCombat);
         } else if ts.eat_phrase(&["before", "attackers", "are", "declared"]) {

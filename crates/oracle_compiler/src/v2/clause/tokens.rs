@@ -15,6 +15,38 @@ use crate::vocab::{lookup_card_type, lookup_color};
 pub(crate) fn parse_token_creation(
     ts: &mut TokenStream<'_>,
 ) -> PResult<(ValueExpr, TokenSpec, EntryModifiers)> {
+    // Named legendary token: `Create <Name>, a[n] [legendary] P/T <colors> <subtypes> creature token [with ...]`
+    // (`Battle at the Helvault`, `Nissa`, `Jiang Yanggu`, `Darkstar`, `Voja`, etc.)
+    {
+        let ncp = ts.checkpoint();
+        let mut name_words = 0usize;
+        while name_words < 6 {
+            if ts.peek_word().is_some_and(|w| {
+                w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                    || matches!(w.to_ascii_lowercase().as_str(), "the" | "of" | "and")
+            }) {
+                ts.next_word();
+                name_words += 1;
+                if ts.eat_comma() {
+                    if ts.peek_phrase(&["a", "legendary"]) || ts.peek_phrase(&["an", "legendary"]) {
+                        break;
+                    }
+                    // Could be multi-part title like `Ashaya, the Awoken World, a legendary ...`
+                    continue;
+                }
+            } else {
+                break;
+            }
+        }
+        if name_words > 0
+            && (ts.peek_phrase(&["a", "legendary"]) || ts.peek_phrase(&["an", "legendary"]))
+            && let Ok(res) = crate::v2::parser::try_parse(ts, parse_token_creation)
+        {
+            return Ok(res);
+        }
+        ts.restore(ncp);
+    }
+
     let mut deferred_equal_to = false;
     let count = if ts.eat_phrase(&["a", "number", "of"]) {
         deferred_equal_to = true;
@@ -171,7 +203,13 @@ pub(crate) fn parse_token_creation(
     let mut card_types = CardTypeMask::EMPTY;
     let mut subtypes = Vec::new();
     let mut saw_token_word = false;
-    while let Some(w) = ts.peek_word() {
+    loop {
+        if ts.eat_comma() {
+            continue;
+        }
+        let Some(w) = ts.peek_word() else {
+            break;
+        };
         let low = w.to_ascii_lowercase();
         if low == "token" || low == "tokens" {
             ts.next_word();
@@ -373,7 +411,9 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
             || ts.eat_word("has")
             || ts.eat_word("have")
         {
-            if let Some(quoted) = ts.next_quoted() {
+            if ts.eat_tilde() && ts.eat_phrase(&["'s", "other", "abilities"]) {
+                exceptions.push(CopyException::KeepOwnOtherAbilities);
+            } else if let Some(quoted) = ts.next_quoted() {
                 let compiled = compile_face_v2(
                     FaceInput {
                         name: "~",
@@ -418,6 +458,8 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
             || ts.eat_phrase(&["it's", "a"])
             || ts.eat_word("it's")
             || ts.eat_word("they're")
+            || ts.eat_phrase(&["is", "an"])
+            || ts.eat_phrase(&["is", "a"])
             || ts.eat_phrase(&["the", "token", "is", "an"])
             || ts.eat_phrase(&["the", "token", "is", "a"])
             || ts.eat_phrase(&["the", "token", "is"])

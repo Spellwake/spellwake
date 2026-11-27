@@ -253,6 +253,7 @@ pub fn parse_keyword_kind(ts: &mut TokenStream<'_>) -> PResult<KeywordKind> {
         "splice" => KeywordKind::Splice,
         "soulshift" => KeywordKind::Soulshift,
         "firebending" => KeywordKind::Firebending,
+        "epic" => KeywordKind::Epic,
         "replicate" => KeywordKind::Replicate,
         "sneak" => KeywordKind::Sneak,
         "teamwork" => KeywordKind::Teamwork,
@@ -554,6 +555,14 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
         || ts.eat_phrase(&["the", "chosen", "color"])
     {
         return Some(KeywordParam::ChosenColor);
+    }
+    if ts.eat_phrase(&["the", "chosen", "player"]) {
+        return Some(KeywordParam::ChosenPlayer);
+    }
+    if ts.eat_phrase(&["the", "chosen", "card", "name"])
+        || ts.eat_phrase(&["the", "chosen", "name"])
+    {
+        return Some(KeywordParam::ChosenCardName);
     }
     let mut colors = ColorMask::EMPTY;
     let cp = ts.checkpoint();
