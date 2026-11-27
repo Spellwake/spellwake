@@ -174,7 +174,7 @@ pub fn parse_effect_sentence(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
     let mut ts_inner = ts.sub_stream(&ts.tokens[ts.pos..end_trim], ParseStage::Effect);
     let effects = parse_sentence_top(&mut ts_inner)?;
     ts_inner.expect_eof()?;
-    ts.pos = ts.tokens.len();
+    ts.commit_substream_eof(ts.tokens.len(), &ts_inner);
     Ok(effects)
 }
 
@@ -378,7 +378,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                 let mut body_ts = ts.sub_stream(body_slice, ParseStage::Effect);
                 let body = parse_sentence_top(&mut body_ts)?;
                 body_ts.expect_eof()?;
-                ts.pos = ts.tokens.len();
+                ts.commit_substream_eof(ts.tokens.len(), &body_ts);
                 return Ok(vec![Effect::BindVariable {
                     var: VarName::X,
                     expr: x_expr,
@@ -394,7 +394,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                 if let Ok(body) = parse_sentence_top(&mut body_ts)
                     && body_ts.is_eof()
                 {
-                    ts.pos = ts.tokens.len();
+                    ts.commit_substream_eof(ts.tokens.len(), &body_ts);
                     return Ok(vec![Effect::BindVariable {
                         var: VarName::X,
                         expr: x_expr,
@@ -405,7 +405,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         }
     }
 
-    // 1. Villainous choice frame: `<player> face(s) a villainous choice — <opt1>, or <opt2>`
+    // 1. Villainous choice frame: `<player> face(s) a villainous choice -- <opt1>, or <opt2>`
     //    Handled BEFORE any `, then` or `and` splitting so `, then ...` stays strictly inside Option 2!
     if let Some(vc) = opt(ts, parse_villainous_choice) {
         return Ok(vec![vc]);
@@ -593,7 +593,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                 if let Ok(inner) = parse_sentence_top(&mut sub)
                     && sub.is_eof()
                 {
-                    ts.pos = ts.tokens.len();
+                    ts.commit_substream_eof(ts.tokens.len(), &sub);
                     vec![Effect::ReplacePrevious(inner)]
                 } else {
                     parse_sentence_top(ts)?
@@ -896,9 +896,17 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                     Some(ForEachDomain::EachPlayerWhoDoes(PlayerRef::EachOpponent))
                 } else if ts.eat_phrase(&["player", "who", "does"]) {
                     Some(ForEachDomain::EachPlayerWhoDoes(PlayerRef::EachPlayer))
-                } else if ts.eat_phrase(&["opponent", "who", "can't"]) {
+                } else if ts.eat_any_phrase(&[
+                    &["opponent", "who", "can't"],
+                    &["opponent", "who", "doesn't"],
+                    &["opponent", "who", "didn't"],
+                ]) {
                     Some(ForEachDomain::EachPlayerWhoCant(PlayerRef::EachOpponent))
-                } else if ts.eat_phrase(&["player", "who", "can't"]) {
+                } else if ts.eat_any_phrase(&[
+                    &["player", "who", "can't"],
+                    &["player", "who", "doesn't"],
+                    &["player", "who", "didn't"],
+                ]) {
                     Some(ForEachDomain::EachPlayerWhoCant(PlayerRef::EachPlayer))
                 } else if ts.eat_any_phrase(&[
                     &["other", "player"],
@@ -1152,13 +1160,8 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
     }
 
     // 8. Activation / trigger / cast restrictions
-    if ts.eat_any_phrase(&[
-        &[
-            "this", "ability", "triggers", "only", "once", "each", "turn",
-        ],
-        &[
-            "this", "ability", "triggers", "only", "twice", "each", "turn",
-        ],
+    if ts.eat_phrase(&[
+        "this", "ability", "triggers", "only", "once", "each", "turn",
     ]) {
         return Ok(vec![Effect::Restriction(vec![
             ActivationRestriction::OnceEachTurn,
@@ -1245,7 +1248,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             if let Ok(inner) = parse_clause_seq(&mut inner_ts, None)
                 && inner_ts.is_eof()
             {
-                ts.pos = ts.tokens.len();
+                ts.commit_substream_eof(ts.tokens.len(), &inner_ts);
                 return Ok(vec![Effect::ReplacePrevious(inner)]);
             }
         }
@@ -1270,19 +1273,13 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         let mut cond_ts = ts.sub_stream(cond_slice, ParseStage::Effect);
         let parsed_cond = parse_condition(&mut cond_ts)
             .ok()
-            .filter(|_| cond_ts.is_eof())
-            .or_else(|| {
-                let mut e_ts = ts.sub_stream(cond_slice, ParseStage::Effect);
-                sentence_ext::parse_extra_clause_condition(&mut e_ts)
-                    .ok()
-                    .filter(|_| e_ts.is_eof())
-            });
+            .filter(|_| cond_ts.is_eof());
         if let Some(cond) = parsed_cond {
             let mut body_ts = ts.sub_stream(body_slice, ParseStage::Effect);
             if let Ok(body) = parse_sentence_top(&mut body_ts)
                 && body_ts.is_eof()
             {
-                ts.pos = ts.tokens.len();
+                ts.commit_substream_eof(ts.tokens.len(), &body_ts);
                 return Ok(vec![Effect::BranchCondition {
                     condition: cond,
                     then_body: body,
@@ -1358,7 +1355,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                 if let Ok(body) = parse_sentence_top(&mut body_ts)
                     && body_ts.is_eof()
                 {
-                    ts.pos = ts.tokens.len();
+                    ts.commit_substream_eof(ts.tokens.len(), &body_ts);
                     return Ok(vec![Effect::Unless {
                         body,
                         payer: Some(payer),
@@ -1371,19 +1368,13 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         let mut cond_ts = ts.sub_stream(tail_slice, ParseStage::Effect);
         let parsed_cond = parse_condition(&mut cond_ts)
             .ok()
-            .filter(|_| cond_ts.is_eof())
-            .or_else(|| {
-                let mut e_ts = ts.sub_stream(tail_slice, ParseStage::Effect);
-                sentence_ext::parse_extra_clause_condition(&mut e_ts)
-                    .ok()
-                    .filter(|_| e_ts.is_eof())
-            });
+            .filter(|_| cond_ts.is_eof());
         if let Some(cond) = parsed_cond {
             let mut body_ts = ts.sub_stream(body_slice, ParseStage::Effect);
             if let Ok(body) = parse_clause_seq(&mut body_ts, None)
                 && body_ts.is_eof()
             {
-                ts.pos = ts.tokens.len();
+                ts.commit_substream_eof(ts.tokens.len(), &body_ts);
                 return Ok(vec![Effect::Unless {
                     body,
                     payer: None,
@@ -1401,7 +1392,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             if let Ok(body) = parse_clause_seq(&mut body_ts, None)
                 && body_ts.is_eof()
             {
-                ts.pos = ts.tokens.len();
+                ts.commit_substream_eof(ts.tokens.len(), &body_ts);
                 return Ok(vec![Effect::UnlessEffect { body, unless }]);
             }
         }
@@ -1421,7 +1412,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         if let Ok(body) = parse_clause_seq(&mut body_ts, None)
             && body_ts.is_eof()
         {
-            ts.pos = ts.tokens.len();
+            ts.commit_substream_eof(ts.tokens.len(), &body_ts);
             return Ok(vec![Effect::DelayedTrigger {
                 trigger: DelayedTriggerKind::Event(crate::v2::ir::TriggerSpec {
                     events: vec![crate::v2::ir::TriggerEvent::ZoneChange {
@@ -1444,7 +1435,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         if let Ok(body) = parse_clause_seq(&mut body_ts, None)
             && body_ts.is_eof()
         {
-            ts.pos = ts.tokens.len();
+            ts.commit_substream_eof(ts.tokens.len(), &body_ts);
             return Ok(vec![Effect::ScopedDuration {
                 duration: Duration::UntilEndOfCombat,
                 body,
@@ -1510,7 +1501,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                 if let Ok(body) = parse_clause_seq(&mut body_ts, None)
                     && body_ts.is_eof()
                 {
-                    ts.pos = ts.tokens.len();
+                    ts.commit_substream_eof(ts.tokens.len(), &body_ts);
                     let delayed = Effect::DelayedTrigger {
                         trigger: DelayedTriggerKind::Step { step, owner },
                         body: if let Some(cond) = trailing_cond {
@@ -1546,7 +1537,7 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             && let Ok(right_effs) = parse_clause_seq(&mut r_ts, None)
             && r_ts.is_eof()
         {
-            ts.pos = ts.tokens.len();
+            ts.commit_substream_eof(ts.tokens.len(), &r_ts);
             return Ok(vec![Effect::PromptChoice {
                 chooser: PlayerRef::You,
                 kind: ChoiceKind::ChooseBranch(vec![left_effs, right_effs]),
@@ -1602,7 +1593,7 @@ fn parse_villainous_options(ts: &mut TokenStream<'_>, chooser: PlayerRef) -> PRe
     let mut ts2 = ts.sub_stream(&ts.tokens[or_idx + 2..], ParseStage::Effect);
     let b2 = parse_sentence_top(&mut ts2)?;
     ts2.expect_eof()?;
-    ts.pos = ts.tokens.len();
+    ts.commit_substream_eof(ts.tokens.len(), &ts2);
     Ok(prompt_choice(
         chooser,
         ChoiceKind::VillainousChoice {
@@ -1936,28 +1927,7 @@ fn parse_single_clause(
         ts.restore(cp);
     }
 
-    // `Each opponent attacking <player> does the same` (`Curse of Disturbance`, `Curse of Vitality`, `Curse of Opulence`)
-    {
-        let ccp = ts.checkpoint();
-        if ts.eat_phrase(&["each", "opponent", "attacking"])
-            && let Ok(p) = try_parse(ts, parse_player_ref)
-            && ts.eat_phrase(&["does", "the", "same"])
-        {
-            return Ok((
-                vec![Effect::ForEach {
-                    over: ForEachDomain::Player(p),
-                    body: vec![Effect::IfPrevious {
-                        succeeded: true,
-                        body: Vec::new(),
-                    }],
-                }],
-                Some(PlayerRef::EachOpponent),
-            ));
-        }
-        ts.restore(ccp);
-    }
-
-    // `the damage can't be prevented` as a clause (`Demonfire`, `Urza's Rage`, `Skullcrack`)
+    // `the damage can't be prevented` as a clause
     if ts.eat_phrase(&["the", "damage", "can't", "be", "prevented"]) {
         return Ok((
             vec![apply_continuous(
@@ -1970,22 +1940,6 @@ fn parse_single_clause(
             )],
             inherited_actor,
         ));
-    }
-    // `The same is true for <kw_list>` (`Bleeding Effect`, `Thunderous Orator`)
-    {
-        let scp = ts.checkpoint();
-        if ts.eat_phrase(&["the", "same", "is", "true", "for"])
-            && try_parse(ts, crate::v2::filter::parse_keyword_list).is_ok()
-        {
-            return Ok((
-                vec![apply_continuous(
-                    StaticAbility::GlobalFlag(crate::v2::ir::StaticFlagKind::AppliesInAllZones),
-                    Duration::UntilEndOfTurn,
-                )],
-                inherited_actor,
-            ));
-        }
-        ts.restore(scp);
     }
 
     // `<player>'s life total becomes [equal to] <val>` as a clause (e.g. `exile ~ and your life total becomes 1`)
@@ -2056,7 +2010,7 @@ fn parse_single_clause(
                         if parse_player_verb_frame(&mut prior_ts, player).is_ok()
                             && prior_ts.is_eof()
                         {
-                            ts.pos = tw_idx + 2;
+                            ts.commit_substream_eof(tw_idx + 2, &prior_ts);
                             if let Ok((body, _)) =
                                 try_parse(ts, |s| parse_player_verb_frame(s, player))
                             {

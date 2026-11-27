@@ -9,11 +9,10 @@ use crate::v2::filter::{
     parse_counter_kind, parse_object_filter, parse_player_ref, parse_subject_ref, parse_zone_ref,
 };
 use crate::v2::ir::{
-    CastPermissionMode, CharacteristicKind, ChoiceKind, ConditionFlag, Cost, CounterKind, Duration,
-    Effect, EntryModifiers, ForEachDomain, LifeOp, ManaSpec, ManaSymbol, ObjectFilter,
-    ObjectMutation, ObjectStateAction, PlayerActionKind, PlayerMutation, PlayerRef,
-    PlayerRestrictionKind, StaticAbility, SubjectRef, ValueExpr, ZoneKind, ZoneOpKind, ZoneOwner,
-    ZoneRef,
+    CastPermissionMode, CharacteristicKind, ChoiceKind, Cost, CounterKind, Duration, Effect,
+    EntryModifiers, ForEachDomain, LifeOp, ManaSpec, ManaSymbol, ObjectFilter, ObjectMutation,
+    ObjectStateAction, PlayerActionKind, PlayerMutation, PlayerRef, PlayerRestrictionKind,
+    StaticAbility, SubjectRef, ValueExpr, ZoneKind, ZoneOpKind, ZoneOwner, ZoneRef,
 };
 use crate::v2::lexer::TokenKind;
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
@@ -24,6 +23,67 @@ use super::{
     exact_count, mutate_obj, mutate_player, player_action, prompt_choice, simple_zone_dest,
     simple_zone_op,
 };
+
+fn attach_zones_to_subject(subj: &mut SubjectRef, zones: &[ZoneRef]) -> bool {
+    let flt = match subj {
+        SubjectRef::Group(f)
+        | SubjectRef::All(f)
+        | SubjectRef::Each(f)
+        | SubjectRef::TargetObject { filter: f, .. }
+        | SubjectRef::Counted { filter: f, .. } => f,
+        _ => return false,
+    };
+    for &z in zones {
+        if !flt.zones.contains(&z) {
+            flt.zones.push(z);
+        }
+    }
+    true
+}
+
+fn build_play_permission_effect(
+    actor: PlayerRef,
+    mut subj: SubjectRef,
+    cast_only: bool,
+    free: bool,
+    from_zones: &[ZoneRef],
+    top_only: bool,
+    dur: Duration,
+) -> Effect {
+    if !top_only && (from_zones.is_empty() || attach_zones_to_subject(&mut subj, from_zones)) {
+        return mutate_player(
+            actor,
+            PlayerMutation::GrantPlayPermission {
+                cast_only,
+                subject: Box::new(subj),
+                free,
+            },
+            dur,
+        );
+    }
+    let mode = if free {
+        CastPermissionMode::WithoutPaying
+    } else if cast_only {
+        CastPermissionMode::CastFromZone
+    } else {
+        CastPermissionMode::PlayFromZone {
+            top_only,
+            lands: true,
+            spells: true,
+        }
+    };
+    apply_continuous(
+        StaticAbility::ZoneCastPermission {
+            player: actor,
+            filter: None,
+            subject: Some(subj),
+            zone: from_zones.first().copied(),
+            mode,
+            condition: None,
+        },
+        dur,
+    )
+}
 
 /// Verb frames with a known player actor (`actor`).
 pub(super) fn parse_player_verb_frame(
@@ -269,15 +329,25 @@ pub(super) fn parse_player_verb_frame(
             ));
         }
         let subj = parse_subject_ref(ts)?;
-        if ts.eat_word("from") {
-            let fcp = ts.checkpoint();
-            if super::player_verbs_ext::eat_extended_cast_source(ts)
-                || (ts.eat_word("among") && try_parse(ts, parse_subject_ref).is_ok())
-            {
-                // consumed extended or `from among <cards>` source
-            } else {
-                ts.restore(fcp);
-                let _ = opt(ts, parse_zone_ref);
+        let mut from_zones = Vec::new();
+        let mut top_only = false;
+        {
+            let f_outer = ts.checkpoint();
+            if ts.eat_word("from") {
+                if let Some((z_opt, ext_top)) =
+                    super::player_verbs_ext::eat_extended_cast_source(ts)
+                {
+                    top_only |= ext_top;
+                    if let Some(z) = z_opt {
+                        from_zones.push(z);
+                    }
+                } else if ts.eat_word("among") && try_parse(ts, parse_subject_ref).is_ok() {
+                    // `from among <cards>`
+                } else if let Ok(z) = try_parse(ts, parse_zone_ref) {
+                    from_zones.push(z);
+                } else {
+                    ts.restore(f_outer);
+                }
             }
         }
         let eat_free = |s: &mut TokenStream<'_>| {
@@ -291,13 +361,13 @@ pub(super) fn parse_player_verb_frame(
         if !free {
             free = eat_free(ts);
         }
-        let mut out = vec![mutate_player(
+        let mut out = vec![build_play_permission_effect(
             actor,
-            PlayerMutation::GrantPlayPermission {
-                cast_only: false,
-                subject: Box::new(subj),
-                free,
-            },
+            subj,
+            false,
+            free,
+            &from_zones,
+            top_only,
             dur.clone(),
         )];
         let m_cp = ts.checkpoint();
@@ -441,39 +511,66 @@ pub(super) fn parse_player_verb_frame(
                 try_parse(ts, parse_subject_ref).ok()
             };
         if let Some(subj) = subj_opt {
-            if ts.eat_word("from") {
-                loop {
-                    let f1_cp = ts.checkpoint();
-                    if super::player_verbs_ext::eat_extended_cast_source(ts) {
-                        // extended cast source
-                    } else if ts.eat_word("among") {
-                        let acp = ts.checkpoint();
-                        if ts.eat_any_phrase(&[&["cards", "you", "own", "in"], &["cards", "in"]])
-                            && opt(ts, parse_zone_ref).is_some()
+            let mut from_zones = Vec::new();
+            let mut top_only = false;
+            {
+                let f_outer = ts.checkpoint();
+                if ts.eat_word("from") {
+                    let mut matched_any = false;
+                    loop {
+                        let f1_cp = ts.checkpoint();
+                        if let Some((z_opt, ext_top)) =
+                            super::player_verbs_ext::eat_extended_cast_source(ts)
                         {
-                            // `from among cards [you own] in <zone>`
-                        } else {
-                            ts.restore(acp);
-                            if try_parse(ts, parse_subject_ref).is_ok() {
-                                if ts.eat_word("from") {
-                                    let _ = opt(ts, parse_zone_ref);
-                                }
-                            } else {
-                                ts.restore(f1_cp);
-                                let _ = opt(ts, parse_zone_ref);
+                            matched_any = true;
+                            top_only |= ext_top;
+                            if let Some(z) = z_opt {
+                                from_zones.push(z);
                             }
+                        } else if ts.eat_word("among") {
+                            let acp = ts.checkpoint();
+                            if ts
+                                .eat_any_phrase(&[&["cards", "you", "own", "in"], &["cards", "in"]])
+                                && let Ok(z) = try_parse(ts, parse_zone_ref)
+                            {
+                                matched_any = true;
+                                from_zones.push(z);
+                            } else {
+                                ts.restore(acp);
+                                if try_parse(ts, parse_subject_ref).is_ok() {
+                                    matched_any = true;
+                                    let fz_cp = ts.checkpoint();
+                                    if ts.eat_word("from") {
+                                        if let Ok(z) = try_parse(ts, parse_zone_ref) {
+                                            from_zones.push(z);
+                                        } else {
+                                            ts.restore(fz_cp);
+                                        }
+                                    }
+                                } else {
+                                    ts.restore(f1_cp);
+                                    break;
+                                }
+                            }
+                        } else if let Ok(z) = try_parse(ts, parse_zone_ref) {
+                            matched_any = true;
+                            from_zones.push(z);
+                        } else {
+                            ts.restore(f1_cp);
+                            break;
                         }
-                    } else {
-                        let _ = opt(ts, parse_zone_ref);
+                        let fcp = ts.checkpoint();
+                        let _ = ts.eat_comma();
+                        let _ = ts.eat_any_word(&["or", "and"]);
+                        if ts.eat_word("from") {
+                            continue;
+                        }
+                        ts.restore(fcp);
+                        break;
                     }
-                    let fcp = ts.checkpoint();
-                    let _ = ts.eat_comma();
-                    let _ = ts.eat_any_word(&["or", "and"]);
-                    if ts.eat_word("from") {
-                        continue;
+                    if !matched_any {
+                        ts.restore(f_outer);
                     }
-                    ts.restore(fcp);
-                    break;
                 }
             }
             let _ = ts.eat_phrase(&["if", "able"]);
@@ -498,13 +595,13 @@ pub(super) fn parse_player_verb_frame(
             if !free {
                 free = eat_free(ts);
             }
-            let mut out = vec![mutate_player(
+            let mut out = vec![build_play_permission_effect(
                 actor,
-                PlayerMutation::GrantPlayPermission {
-                    cast_only: true,
-                    subject: Box::new(subj),
-                    free,
-                },
+                subj,
+                true,
+                free,
+                &from_zones,
+                top_only,
                 dur.clone(),
             )];
             if !alt_costs.is_empty() {
@@ -1879,19 +1976,12 @@ pub(super) fn parse_player_verb_frame(
                 }
                 if let Ok(payer) = try_parse(ts, parse_player_ref)
                     && let Ok((alt_body, _)) = try_parse(ts, |t| parse_player_verb_frame(t, payer))
+                    && !alt_body.is_empty()
                 {
                     return Ok((
-                        vec![Effect::Unless {
+                        vec![Effect::UnlessEffect {
                             body: vec![counter_op(subject, None)],
-                            payer: Some(payer),
-                            cost: None,
-                            condition: if alt_body.is_empty() {
-                                None
-                            } else {
-                                Some(crate::v2::ir::ConditionExpr::Flag(
-                                    ConditionFlag::AdditionalCostPaid,
-                                ))
-                            },
+                            unless: alt_body,
                         }],
                         (),
                     ));

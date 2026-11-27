@@ -92,32 +92,33 @@ pub fn tokenize(input: &str) -> Result<Vec<Token<'_>>, ParseError> {
             continue;
         }
 
-        // 2. Quoted ability / text `"..."` (or nested single-quoted `'...'` at token start,
-        //    excluding possessives/contractions like `~'s` or `'t`).
-        let is_open_single_quote = ch == '\''
+        // 2. Quoted ability / text `"..."` or typographic curly quotes (or nested single-quoted
+        //    `'...'` at token start, excluding possessives/contractions like `~'s` or `'t`).
+        let is_open_double_quote = ch == '"' || ch == '\u{201C}';
+        let is_open_single_quote = (ch == '\'' || ch == '\u{2018}')
             && (start == 0 || bytes[start - 1].is_ascii_whitespace())
             && !input[start..].starts_with("'s ")
             && !input[start..].starts_with("'s.");
-        if ch == '"' || is_open_single_quote {
-            let quote = ch;
-            let mut close_idx = None;
-            let mut scan = i + 1;
-            while scan < bytes.len() {
-                if bytes[scan] == quote as u8 {
-                    let next_byte = bytes.get(scan + 1).copied();
-                    let is_boundary = quote == '"'
-                        || next_byte.is_none()
-                        || next_byte.is_some_and(|b| {
-                            b.is_ascii_whitespace() || matches!(b, b'.' | b',' | b';' | b')')
-                        });
-                    if is_boundary {
-                        close_idx = Some(scan);
-                        break;
-                    }
+        if is_open_double_quote || is_open_single_quote {
+            let inner_start = i + ch.len_utf8();
+            let mut close_span: Option<(usize, usize)> = None;
+            for (rel_idx, c) in input[inner_start..].char_indices() {
+                let abs_idx = inner_start + rel_idx;
+                let after_idx = abs_idx + c.len_utf8();
+                let is_close = if is_open_double_quote {
+                    c == '"' || c == '\u{201D}'
+                } else {
+                    (c == '\'' || c == '\u{2019}')
+                        && input[after_idx..].chars().next().is_none_or(|nc| {
+                            nc.is_whitespace() || matches!(nc, '.' | ',' | ';' | ')')
+                        })
+                };
+                if is_close {
+                    close_span = Some((abs_idx, after_idx));
+                    break;
                 }
-                scan += 1;
             }
-            let Some(abs_close) = close_idx else {
+            let Some((abs_close, end)) = close_span else {
                 return Err(ParseError {
                     span: Span {
                         start,
@@ -128,8 +129,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token<'_>>, ParseError> {
                     text: input[start..].to_string(),
                 });
             };
-            let inner = &input[i + 1..abs_close];
-            let end = abs_close + 1;
+            let inner = &input[inner_start..abs_close];
             tokens.push(Token {
                 kind: TokenKind::Quoted(inner),
                 span: Span { start, end },
@@ -319,7 +319,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token<'_>>, ParseError> {
 
         // 6. Word (including apostrophes like `owner's`, `can't`, `you've`, `owners'`,
         //    internal hyphens like `face-down`, `non-human`, and `and/or`).
-        if ch.is_alphabetic() || ch == '\'' {
+        if ch.is_alphabetic() || ch == '\'' || ch == '\u{2019}' {
             let mut end = i;
             while end < bytes.len() {
                 let c = input[end..].chars().next().expect("utf8");

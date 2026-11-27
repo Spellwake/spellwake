@@ -1138,25 +1138,6 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                 }
             }
             ts.restore(dcp);
-            // 5b3. `<subj> adapts this turn, it adapts as though it had no +1/+1 counters on it`
-            if let Ok(subject) = try_parse(ts, parse_subject_ref)
-                && ts.eat_phrase(&["adapts", "this", "turn"])
-                && ts.eat_comma()
-                && ts.eat_phrase(&["it", "adapts", "as", "though", "it", "had", "no"])
-                && try_parse(ts, crate::v2::filter::parse_counter_kind).is_ok()
-                && ts.eat_phrase(&["counters", "on", "it"])
-            {
-                return Ok(vec![apply_replacement(
-                    crate::v2::ir::Replacement::EntersWithCounters {
-                        subject: Some(subject),
-                        kind: crate::v2::ir::CounterKind::PlusOnePlusOne,
-                        count: ValueExpr::Const(1),
-                        additional: true,
-                    },
-                    Duration::UntilEndOfTurn,
-                )]);
-            }
-            ts.restore(dcp);
             // 5b4. `one or more <flt> enter this turn, each enters with <val> additional <kind> counter(s) on it`
             if ts.eat_phrase(&["one", "or", "more"])
                 && let Ok(flt) = try_parse(ts, parse_object_filter)
@@ -1175,21 +1156,6 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
                         kind,
                         count,
                         additional: true,
-                    },
-                    Duration::UntilEndOfTurn,
-                )]);
-            }
-            ts.restore(dcp);
-            // 5b5. `<subj> would be destroyed this turn, remove all damage marked on it instead`
-            if let Ok(subject) = try_parse(ts, parse_subject_ref)
-                && ts.eat_phrase(&["would", "be", "destroyed", "this", "turn"])
-                && ts.eat_comma()
-                && ts.eat_phrase(&["remove", "all", "damage", "marked", "on", "it", "instead"])
-            {
-                return Ok(vec![apply_replacement(
-                    crate::v2::ir::Replacement::EventInstead {
-                        event: crate::v2::ir::TriggerEvent::Dies { subject },
-                        instead: Vec::new(),
                     },
                     Duration::UntilEndOfTurn,
                 )]);

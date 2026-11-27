@@ -17,7 +17,7 @@ use crate::v2::ir::{
     Ability, ChoiceCount, ChoiceKind, CompiledCardV2, CompiledFaceV2, Cost, Duration, Effect,
     EntryModifiers, LoyaltyDelta, ManaCost, ManaSymbol, ModalMode, ObjectMutation, ParseError,
     ParseStage, PlayerRef, Span, SpreeMode, StickerPayload, SubjectRef, TableRowPayload, TokenSpec,
-    TriggerEvent, TriggerSpec, ValueExpr,
+    ValueExpr,
 };
 use crate::v2::lexer::{TokenKind, tokenize};
 use crate::v2::parser::{TokenStream, try_parse};
@@ -61,7 +61,11 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             || face.type_line.contains("Planeswalker"));
     let is_saga = face.type_line.contains("Saga");
 
-    let stripped_full = strip_reminder_multiline(face.oracle_text);
+    let normalized_quotes = face
+        .oracle_text
+        .replace(['\u{201C}', '\u{201D}'], "\"")
+        .replace(['\u{2018}', '\u{2019}'], "'");
+    let stripped_full = strip_reminder_multiline(&normalized_quotes);
     let lines: Vec<String> = stripped_full
         .split('\n')
         .map(strip_reminder)
@@ -72,29 +76,6 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
     let mut i = 0;
     while i < lines.len() {
         let raw_line = &lines[i];
-
-        // 00. Attraction `Visit` / `Prize` triggered effect lines
-        if let Some(visit_body) = raw_line
-            .strip_prefix("Visit \u{2014} ")
-            .or_else(|| raw_line.strip_prefix("Prize \u{2014} "))
-        {
-            match parse_effect_body_str(visit_body.trim(), vocab) {
-                Ok(body) => out.abilities.push(Ability::Triggered {
-                    trigger: TriggerSpec {
-                        events: vec![TriggerEvent::RolledDie {
-                            player: PlayerRef::You,
-                            value: 0,
-                        }],
-                        intervening_if: None,
-                    },
-                    body,
-                }),
-                Err(errs) => out.errors.extend(errs),
-            }
-            i += 1;
-            continue;
-        }
-
         let line_owned = strip_ability_word_prefix(raw_line);
         let line = line_owned.as_str();
 
@@ -127,7 +108,7 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 0b. Die-roll table / Station threshold row (`1—9 | ...`, `20 | ...`, `9+ | Flying`)
+        // 0b. Die-roll table / Station threshold row (`1-9 | ...`, `20 | ...`, `9+ | Flying`)
         if let Some((min, max, open_ended, rhs_raw)) = split_pipe_table_row(line) {
             let rhs_owned = strip_ability_word_prefix(rhs_raw);
             let rhs = rhs_owned.as_str();
@@ -172,7 +153,7 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 0c. Case enchantment rows (`To solve — <cond>` / `Solved — <ability>`)
+        // 0c. Case enchantment rows (`To solve - <cond>` / `Solved - <ability>`)
         if let Some(cond_str) = line.strip_prefix("To solve \u{2014} ") {
             let cond_trimmed = cond_str.trim().trim_end_matches('.');
             match tokenize(cond_trimmed).and_then(|toks| {
@@ -517,7 +498,7 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 7. Standalone keyword line (`Flying, vigilance`, `Kicker—Sacrifice an artifact.`, `Equip {3}. This ability costs {1} less to activate ...`)
+        // 7. Standalone keyword line (`Flying, vigilance`, `Kicker - Sacrifice an artifact.`, `Equip {3}. This ability costs {1} less to activate ...`)
         if let Ok(toks) = tokenize(line) {
             let mut ts = TokenStream::new(line, &toks, vocab, ParseStage::Face);
             if let Ok((kws, _)) = parse_keyword_list(&mut ts) {
@@ -667,19 +648,24 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
 struct ModalHeaderInfo {
     chooser: PlayerRef,
     count: ChoiceCount,
+    optional: bool,
     extra_effects: Option<String>,
 }
 
-const MODAL_CHOOSER_PREFIXES: &[(&str, PlayerRef)] = &[
-    ("an opponent chooses ", PlayerRef::AnyOpponent),
-    ("target opponent chooses ", PlayerRef::TargetOpponent),
-    ("target player chooses ", PlayerRef::TargetPlayer),
-    ("defending player chooses ", PlayerRef::DefendingPlayer),
-    ("each player chooses ", PlayerRef::EachPlayer),
-    ("each opponent chooses ", PlayerRef::EachOpponent),
-    ("that player chooses ", PlayerRef::ThatPlayer),
-    ("you may choose ", PlayerRef::You),
-    ("choose ", PlayerRef::You),
+const MODAL_CHOOSER_PREFIXES: &[(&str, PlayerRef, bool)] = &[
+    ("an opponent chooses ", PlayerRef::AnyOpponent, false),
+    ("target opponent chooses ", PlayerRef::TargetOpponent, false),
+    ("target player chooses ", PlayerRef::TargetPlayer, false),
+    (
+        "defending player chooses ",
+        PlayerRef::DefendingPlayer,
+        false,
+    ),
+    ("each player chooses ", PlayerRef::EachPlayer, false),
+    ("each opponent chooses ", PlayerRef::EachOpponent, false),
+    ("that player chooses ", PlayerRef::ThatPlayer, false),
+    ("you may choose ", PlayerRef::You, true),
+    ("choose ", PlayerRef::You, false),
 ];
 
 const MODAL_COUNT_TABLE: &[(&str, ChoiceCount)] = &[
@@ -711,36 +697,29 @@ fn parse_modal_header(line: &str, allow_no_dash: bool) -> Option<ModalHeaderInfo
     } else {
         return None;
     };
-    let first_raw = head.split_once('.').map_or(head, |(first, _)| first.trim());
-    let first_low = first_raw.to_ascii_lowercase();
-    let (chooser, prefix_len) = MODAL_CHOOSER_PREFIXES
-        .iter()
-        .find_map(|(pfx, p)| first_low.starts_with(pfx).then_some((*p, pfx.len())))?;
-    let mut rest_raw = first_raw[prefix_len..].trim();
-    let rest_low = rest_raw.to_ascii_lowercase();
-    if let Some(w_idx) = rest_low.find(", where x is ") {
-        rest_raw = rest_raw[..w_idx].trim();
+    if head.contains('.') {
+        return None;
     }
+    let first_low = head.to_ascii_lowercase();
+    let (chooser, optional, prefix_len) = MODAL_CHOOSER_PREFIXES
+        .iter()
+        .find_map(|&(pfx, p, opt)| first_low.starts_with(pfx).then_some((p, opt, pfx.len())))?;
+    let rest_raw = head[prefix_len..].trim();
     let rest_low = rest_raw.to_ascii_lowercase();
-    let (core_low, extra_effects) = if let Some(and_idx) = rest_low.find(" and ") {
+    let (core, extra_effects) = if let Some(and_idx) = rest_low.find(" and ") {
         let after = rest_raw[and_idx + 5..].trim();
         let extra = (!after.is_empty()).then(|| after.to_string());
         (rest_low[..and_idx].trim(), extra)
     } else {
         (rest_low.as_str(), None)
     };
-    let core = core_low
-        .trim_end_matches(" that hasn't been chosen this turn")
-        .trim_end_matches(" that hasn't been chosen this game")
-        .trim_end_matches(" that hasn't been chosen")
-        .trim_end_matches(" at random")
-        .trim();
     let count = MODAL_COUNT_TABLE
         .iter()
         .find_map(|(k, c)| (*k == core).then_some(*c))?;
     Some(ModalHeaderInfo {
         chooser,
         count,
+        optional,
         extra_effects,
     })
 }
@@ -850,12 +829,20 @@ fn build_modal_effects(
     vocab: &Vocabulary,
     errors: &mut Vec<ParseError>,
 ) -> Vec<Effect> {
-    let mut body = vec![Effect::PromptChoice {
+    let prompt = Effect::PromptChoice {
         chooser: hdr.chooser,
         kind: ChoiceKind::Modal {
             count: hdr.count,
             modes,
         },
+    };
+    let mut body = vec![if hdr.optional {
+        Effect::Optional {
+            actor: hdr.chooser,
+            body: vec![prompt],
+        }
+    } else {
+        prompt
     }];
     if let Some(extra) = hdr.extra_effects {
         match parse_effect_body_str(&extra, vocab) {
@@ -1057,11 +1044,8 @@ fn parse_characteristic_bullet(mode: &str, vocab: &Vocabulary) -> Option<Vec<Eff
 }
 
 /// Strip CR 207.2c flavor-only ability word prefix (`Landfall`, `Threshold`, `Channel`,
-/// `Heroic`, and infinity-ability markers) while preserving modal, saga, spree, case, and sticker lines.
+/// `Heroic`) while preserving modal, saga, spree, case, attraction, and sticker lines.
 fn strip_ability_word_prefix(line: &str) -> String {
-    if let Some(rest) = line.strip_prefix("\u{221e} \u{2014} ") {
-        return rest.trim().to_string();
-    }
     let Some((prefix, rest)) = line.split_once(" \u{2014} ") else {
         return line.to_string();
     };
@@ -1070,12 +1054,12 @@ fn strip_ability_word_prefix(line: &str) -> String {
         return line.to_string();
     }
     let low = p.to_ascii_lowercase();
-    // Preserve structural em-dash headers (modal, saga, case, villainous choice)
+    // Preserve structural em-dash headers (modal, saga, case, attraction, villainous choice)
     if low.starts_with("choose ")
         || low.contains("villainous choice")
         || matches!(
             low.as_str(),
-            "i" | "ii" | "iii" | "iv" | "v" | "vi" | "to solve" | "solved"
+            "i" | "ii" | "iii" | "iv" | "v" | "vi" | "to solve" | "solved" | "visit" | "prize"
         )
         || low.contains("i, ")
     {

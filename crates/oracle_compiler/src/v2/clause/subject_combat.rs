@@ -5,8 +5,8 @@ use crate::ast::{CardTypeMask, Rounding};
 use crate::v2::condition::parse_condition;
 use crate::v2::filter::parse_subject_ref;
 use crate::v2::ir::{
-    Duration, Effect, ObjectMutation, ObjectStateAction, PlayerActionKind, PlayerMutation,
-    PlayerRef, PlayerRestrictionKind, RuleRestrictionKind, StaticAbility, SubjectRef, ValueExpr,
+    Duration, Effect, ObjectMutation, ObjectStateAction, PlayerActionKind, PlayerRef,
+    PlayerRestrictionKind, RuleRestrictionKind, StaticAbility, SubjectRef, ValueExpr,
 };
 use crate::v2::lexer::TokenKind;
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
@@ -14,8 +14,8 @@ use crate::v2::value::{parse_for_each_expr, parse_value_expr};
 
 use super::subject_verbs::parse_subject_verb_frame;
 use super::{
-    apply_continuous, apply_replacement, compile_quoted_face, eat_rounding,
-    eat_type_color_subtype_run, mutate_obj, mutate_player, player_action, simple_zone_op,
+    apply_continuous, compile_quoted_face, eat_rounding, eat_type_color_subtype_run, mutate_obj,
+    player_action, simple_zone_op,
 };
 
 /// Parse `<subj> can't ... [duration]` (handles both player-level and object-level restrictions).
@@ -110,19 +110,6 @@ pub(super) fn parse_subject_cant(
                 duration,
             )]);
         }
-        if ts.eat_word("sacrifice")
-            && let Ok(sac_subj) = try_parse(ts, parse_subject_ref)
-        {
-            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-            return Ok(vec![apply_continuous(
-                StaticAbility::RuleRestriction {
-                    subject: Some(sac_subj),
-                    rule: RuleRestrictionKind::CantPhaseOut,
-                    condition: None,
-                },
-                duration,
-            )]);
-        }
         if ts.eat_word("attack")
             && let Ok(atk_tgt) = try_parse(ts, parse_subject_ref)
         {
@@ -137,11 +124,6 @@ pub(super) fn parse_subject_cant(
             )]);
         }
         const PLAYER_CANT_TABLE: &[(&[&str], PlayerRestrictionKind)] = &[
-            (&["get", "counters"], PlayerRestrictionKind::CantGainLife),
-            (
-                &["become", "the", "monarch"],
-                PlayerRestrictionKind::CantWinGame,
-            ),
             (
                 &["cast", "additional", "spells"],
                 PlayerRestrictionKind::CantCastMoreThanOnePerTurn,
@@ -341,16 +323,10 @@ pub(super) fn parse_subject_cant(
             let _ = try_parse(ts, crate::v2::filter::parse_object_filter);
         }
         ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeCountered)
-    } else if ts.eat_phrase(&["phase", "out"]) || ts.eat_phrase(&["phase", "in"]) {
+    } else if ts.eat_phrase(&["phase", "out"]) {
         ObjectMutation::ApplyRule(RuleRestrictionKind::CantPhaseOut)
-    } else if ts.eat_phrase(&["be", "copied"]) {
-        ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeCountered)
     } else if ts.eat_phrase(&["be", "cast"]) || ts.eat_phrase(&["be", "played"]) {
         ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeCast)
-    } else if ts.eat_phrase(&["have", "counters", "put", "on", "it"])
-        || ts.eat_phrase(&["have", "counters", "put", "on", "them"])
-    {
-        ObjectMutation::ApplyRule(RuleRestrictionKind::CantBecomeUntapped)
     } else {
         return Err(ts.err("expected combat restriction after `can't`"));
     };
@@ -811,47 +787,10 @@ pub(super) fn parse_extra_subject_predicates(
         ts.restore(cp);
     }
 
-    // 7. `<subj> becomes/become (saddled | unprepared | snow | all colors | unblocked | no longer suspected | legendary ...)`
+    // 7. `<subj> becomes/become (all colors | legendary ...)`
     {
         let cp = ts.checkpoint();
         if ts.eat_any_word(&["becomes", "become"]) {
-            if ts.eat_word("saddled") {
-                let duration = if ts.eat_phrase(&[
-                    "if", "it's", "a", "mount", "and", "becomes", "an", "artifact", "creature",
-                    "if", "it's", "a", "vehicle",
-                ]) {
-                    Duration::UntilEndOfTurn
-                } else {
-                    parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn)
-                };
-                return Ok(vec![mutate_obj(
-                    subject,
-                    ObjectMutation::StateAction(ObjectStateAction::Prepare),
-                    duration,
-                )]);
-            }
-            if ts.eat_any_word(&["unprepared", "unblocked", "blocked"]) {
-                let duration = parse_trailing_duration(ts).unwrap_or(Duration::Instant);
-                return Ok(vec![mutate_obj(
-                    subject,
-                    ObjectMutation::StateAction(ObjectStateAction::Prepare),
-                    duration,
-                )]);
-            }
-            if ts.eat_word("snow") {
-                let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
-                return Ok(vec![mutate_obj(
-                    subject,
-                    ObjectMutation::BecomeCreatureTypes {
-                        subtypes: Vec::new(),
-                        add_types: CardTypeMask::EMPTY,
-                        keep_existing_types: true,
-                        base_pt: None,
-                        keywords: Vec::new(),
-                    },
-                    duration,
-                )]);
-            }
             if ts.eat_phrase(&["all", "colors"]) {
                 let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
                 return Ok(vec![mutate_obj(
@@ -867,17 +806,11 @@ pub(super) fn parse_extra_subject_predicates(
                     duration,
                 )]);
             }
-            if ts.eat_any_phrase(&[&["no", "longer", "suspected"], &["no", "longer", "goaded"]]) {
-                return Ok(vec![mutate_obj(
-                    subject,
-                    ObjectMutation::StateAction(ObjectStateAction::Suspect),
-                    Duration::Instant,
-                )]);
-            }
             let _ = ts.eat_any_word(&["a", "an"]);
             if ts.eat_word("legendary") {
                 let base_pt = ts.next_base_pt();
-                let (add_types, _, subtypes) = eat_type_color_subtype_run(ts, false, false, false);
+                let (add_types, colors, subtypes) =
+                    eat_type_color_subtype_run(ts, true, false, false);
                 if ts.eat_word("named") {
                     super::player_verbs_ext::eat_proper_name_words(ts);
                 }
@@ -889,7 +822,18 @@ pub(super) fn parse_extra_subject_predicates(
                 }
                 if base_pt.is_some() || !add_types.is_empty() || !subtypes.is_empty() {
                     let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
-                    return Ok(vec![mutate_obj(
+                    let mut out = Vec::new();
+                    if !colors.is_empty() {
+                        out.push(mutate_obj(
+                            subject.clone(),
+                            ObjectMutation::BecomeColors {
+                                colors,
+                                keep_existing_colors: false,
+                            },
+                            duration.clone(),
+                        ));
+                    }
+                    out.push(mutate_obj(
                         subject,
                         ObjectMutation::BecomeCreatureTypes {
                             subtypes,
@@ -899,37 +843,15 @@ pub(super) fn parse_extra_subject_predicates(
                             keywords,
                         },
                         duration,
-                    )]);
+                    ));
+                    return Ok(out);
                 }
             }
         }
         ts.restore(cp);
     }
 
-    // 8. `<subj> is/are no longer (goaded | suspected | snow)` / `<subj> is/are blocked`
-    if ts.eat_any_phrase(&[
-        &["is", "no", "longer", "goaded"],
-        &["are", "no", "longer", "goaded"],
-        &["is", "no", "longer", "suspected"],
-        &["are", "no", "longer", "suspected"],
-        &["is", "no", "longer", "snow"],
-        &["are", "no", "longer", "snow"],
-    ]) {
-        return Ok(vec![mutate_obj(
-            subject,
-            ObjectMutation::StateAction(ObjectStateAction::Goad),
-            Duration::Instant,
-        )]);
-    }
-    if ts.eat_any_phrase(&[&["is", "blocked"], &["are", "blocked"]]) {
-        return Ok(vec![mutate_obj(
-            subject,
-            ObjectMutation::MustBlockThisTurn(None),
-            Duration::UntilEndOfCombat,
-        )]);
-    }
-
-    // 9. `<subj> loses this ability and becomes an Aura enchantment with enchant <flt>` (all 12 Licids!)
+    // 9. `<subj> loses this ability and becomes an Aura enchantment with enchant <flt>`
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&[
@@ -1096,48 +1018,6 @@ pub(super) fn parse_extra_subject_predicates(
                 }
                 return Ok(out);
             }
-            if ts.eat_phrase(&["all", "landwalk", "abilities"])
-                || ((ts.eat_phrase(&["banding", "and", "all"]) || ts.eat_word("all"))
-                    && ts
-                        .next_quoted()
-                        .is_some_and(|q| q.eq_ignore_ascii_case("bands with other"))
-                    && ts.eat_word("abilities"))
-            {
-                let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-                return Ok(vec![mutate_obj(
-                    subject,
-                    ObjectMutation::RemoveKeywords(Vec::new()),
-                    duration,
-                )]);
-            }
-            if ts.next_quoted().is_some() {
-                let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-                return Ok(vec![mutate_obj(
-                    subject,
-                    ObjectMutation::RemoveAllAbilities,
-                    duration,
-                )]);
-            }
-            if ts.eat_phrase(&["all", "unspent", "mana"]) {
-                let mut out = vec![player_action(
-                    player,
-                    PlayerActionKind::RepeatProcessOnce,
-                    Duration::Instant,
-                )];
-                if ts.eat_phrase(&["and", "you", "add", "the", "mana", "lost", "this", "way"]) {
-                    out.push(mutate_player(
-                        PlayerRef::You,
-                        PlayerMutation::AddMana(crate::v2::ir::ManaSpec::AnyColor {
-                            amount: ValueExpr::PriorActionCount(
-                                crate::v2::ir::PriorActionKind::ThatMany,
-                            ),
-                            single_color: false,
-                        }),
-                        Duration::Instant,
-                    ));
-                }
-                return Ok(out);
-            }
             if ts.eat_word("all") {
                 if ts.eat_word("but")
                     && let Ok(keep) = try_parse(ts, parse_value_expr)
@@ -1185,14 +1065,7 @@ pub(super) fn parse_extra_subject_predicates(
         ts.restore(cp);
     }
 
-    // 16. `phases in`, `is colorless`, `is sacrificed by its controller`, `can cast only one more spell`, `can be the target ... shroud`
-    if ts.eat_any_phrase(&[&["phases", "in"], &["phase", "in"]]) {
-        return Ok(vec![mutate_obj(
-            subject,
-            ObjectMutation::StateAction(ObjectStateAction::PhaseOut),
-            Duration::Instant,
-        )]);
-    }
+    // 16. `is colorless`, `is sacrificed by its controller`, `can cast only one more spell`, `can be the target ... shroud`
     if ts.eat_any_phrase(&[&["is", "colorless"], &["are", "colorless"]]) {
         let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
         return Ok(vec![mutate_obj(
@@ -1306,55 +1179,6 @@ pub(super) fn parse_extra_subject_predicates(
                         duration,
                     )]);
                 }
-            }
-        }
-        ts.restore(cp);
-    }
-    if ts.eat_phrase(&[
-        "that",
-        "would",
-        "be",
-        "created",
-        "under",
-        "an",
-        "opponent's",
-        "control",
-        "this",
-        "turn",
-        "is",
-        "created",
-        "under",
-        "your",
-        "control",
-        "instead",
-    ]) {
-        return Ok(vec![apply_replacement(
-            crate::v2::ir::Replacement::TokenRule {
-                controller: PlayerRef::You,
-                filter: None,
-                rule: crate::v2::ir::TokenReplacementKind::Multiply(1),
-            },
-            Duration::UntilEndOfTurn,
-        )]);
-    }
-    {
-        let cp = ts.checkpoint();
-        if ts.eat_phrase(&[
-            "that", "would", "add", "colored", "mana", "instead", "add", "that", "much",
-        ]) && ts
-            .peek_word()
-            .is_some_and(|w| crate::vocab::lookup_color(&w.to_ascii_lowercase()).is_some())
-        {
-            ts.next_word();
-            if ts.eat_word("mana") {
-                return Ok(vec![apply_replacement(
-                    crate::v2::ir::Replacement::Rule(
-                        crate::v2::ir::ReplacementRuleKind::ManaOverride(
-                            crate::v2::ir::ManaCost::default(),
-                        ),
-                    ),
-                    Duration::UntilEndOfTurn,
-                )]);
             }
         }
         ts.restore(cp);

@@ -464,12 +464,7 @@ fn parse_zone_verb_frame_inner(
             if ts.eat_phrase(&["any", "number", "of"])
                 && let Ok(subject) = try_parse(ts, parse_subject_ref)
             {
-                let mut from = Vec::new();
-                if ts.eat_word("from")
-                    && let Ok(z1) = try_parse(ts, parse_zone_ref)
-                {
-                    from.push(z1);
-                }
+                let from = parse_from_zone_list(ts)?;
                 let face_down =
                     ts.eat_phrase(&["face", "down"]) || super::zone_ext::eat_exile_pile_suffix(ts);
                 let counters = parse_exile_with_counters(ts);
@@ -502,15 +497,35 @@ fn parse_zone_verb_frame_inner(
             if let Ok(zref) = try_parse(ts, parse_zone_ref)
                 && zref.zone == ZoneKind::Graveyard
             {
+                let mut zones = vec![zref];
+                loop {
+                    let lcp = ts.checkpoint();
+                    let had_comma = ts.eat_comma();
+                    let had_conj = ts.eat_any_word(&["and/or", "and", "or"]);
+                    if (had_comma || had_conj)
+                        && let Ok(mut z2) = try_parse(ts, parse_zone_ref)
+                    {
+                        if z2.owner == ZoneOwner::Default
+                            && matches!(
+                                z2.zone,
+                                ZoneKind::Graveyard | ZoneKind::Hand | ZoneKind::Library
+                            )
+                        {
+                            z2.owner = zref.owner;
+                        }
+                        zones.push(z2);
+                        continue;
+                    }
+                    ts.restore(lcp);
+                    break;
+                }
+                let subject = SubjectRef::All(Box::new(ObjectFilter {
+                    any_card: true,
+                    zones: zones.clone(),
+                    ..Default::default()
+                }));
                 return Ok((
-                    vec![exile_zone_op(
-                        actor,
-                        all_zone_cards_subject(zref),
-                        vec![zref],
-                        false,
-                        None,
-                        None,
-                    )],
+                    vec![exile_zone_op(actor, subject, zones, false, None, None)],
                     (),
                 ));
             }
@@ -1479,29 +1494,25 @@ fn parse_zone_verb_frame_inner(
 
     // 18. `search <zone> [, <zone>, and/or <zone>] for [all | any number of | up to | exactly] <N|X> <flt>`
     if ts.eat_any_word(&["search", "searches"]) {
-        let mut libs = vec![parse_zone_ref(ts)?];
+        let first_zone = parse_zone_ref(ts)?;
+        let first_owner = first_zone.owner;
+        let mut libs = vec![first_zone];
         loop {
             let zcp = ts.checkpoint();
             let had_comma = ts.eat_comma();
             let had_conj = ts.eat_any_word(&["and/or", "and", "or"]);
             if (had_comma || had_conj)
-                && let Ok(z2) = try_parse(ts, parse_zone_ref)
+                && let Ok(mut z2) = try_parse(ts, parse_zone_ref)
             {
+                if z2.owner == ZoneOwner::Default
+                    && matches!(
+                        z2.zone,
+                        ZoneKind::Graveyard | ZoneKind::Hand | ZoneKind::Library
+                    )
+                {
+                    z2.owner = first_owner;
+                }
                 libs.push(z2);
-                continue;
-            }
-            if (had_comma || had_conj)
-                && let Some(wk) = ts.peek_word().map(|w| w.to_ascii_lowercase())
-                && matches!(wk.as_str(), "hand" | "graveyard" | "library")
-            {
-                ts.next_word();
-                let zone = match wk.as_str() {
-                    "hand" => ZoneKind::Hand,
-                    "graveyard" => ZoneKind::Graveyard,
-                    _ => ZoneKind::Library,
-                };
-                let owner = libs.first().map_or(ZoneOwner::Default, |z| z.owner);
-                libs.push(ZoneRef { zone, owner });
                 continue;
             }
             ts.restore(zcp);

@@ -370,6 +370,16 @@ impl<'a> TokenStream<'a> {
         }
     }
 
+    /// Commit cursor advancement to `end_pos` after a sub-stream covering `self.pos..end_pos`
+    /// has been strictly parsed to EOF (`sub.is_eof()`).
+    pub fn commit_substream_eof(&mut self, end_pos: usize, sub: &TokenStream<'_>) {
+        assert!(
+            sub.is_eof(),
+            "commit_substream_eof called with unconsumed tokens in sub-stream"
+        );
+        self.pos = end_pos;
+    }
+
     /// Consume the first matching phrase from a structured slice of word slices.
     pub fn eat_any_phrase(&mut self, phrases: &[&[&str]]) -> bool {
         phrases.iter().any(|p| self.eat_phrase(p))

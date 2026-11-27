@@ -647,21 +647,7 @@ pub(super) fn try_parse_put_ext(
             parse_trailing_under_control(ts, &mut dest);
             let _ = ts.eat_phrase(&["any", "number", "of"]);
             if let Ok(subject) = try_parse(ts, parse_subject_ref) {
-                let mut from = Vec::new();
-                if ts.eat_word("from")
-                    && let Ok(z1) = try_parse(ts, parse_zone_ref)
-                {
-                    from.push(z1);
-                    let zcp = ts.checkpoint();
-                    if ts.eat_any_word(&["and/or", "or", "and"])
-                        && let Some(wk) = ts.peek_word().map(|w| w.to_ascii_lowercase())
-                        && matches!(wk.as_str(), "hand" | "graveyard" | "library")
-                    {
-                        ts.next_word();
-                    } else {
-                        ts.restore(zcp);
-                    }
-                }
+                let from = super::parse_from_zone_list(ts).unwrap_or_default();
                 return Some(Ok((
                     vec![move_zone_op(actor, subject, from, dest, modifiers, None)],
                     (),
@@ -1468,32 +1454,13 @@ pub(super) fn try_parse_return_ext(
         ts.restore(cp);
     }
 
-    // 4. `return(s) (each <special_flt> | one of those <flt>) <dest>`
+    // 4. `return(s) (each chosen <flt> | one of those <flt>) <dest>`
     {
         let cp = ts.checkpoint();
         let subj_opt = if ts.eat_phrase(&["each", "chosen"])
             && let Ok(flt) = try_parse(ts, parse_object_filter)
         {
             Some(SubjectRef::Each(Box::new(flt)))
-        } else if ts.eat_phrase(&[
-            "each", "card", "with", "the", "most", "votes", "or", "tied", "for", "most", "votes",
-        ]) {
-            Some(SubjectRef::Each(Box::new(ObjectFilter {
-                any_card: true,
-                ..Default::default()
-            })))
-        } else if ts.eat_phrase(&[
-            "each", "creature", "with", "power", "of", "the", "chosen", "quality",
-        ]) {
-            Some(SubjectRef::Each(Box::new(ObjectFilter {
-                any_types: crate::ast::CardTypeMask::CREATURE,
-                ..Default::default()
-            })))
-        } else if ts.eat_phrase(&["each", "nonland", "permanent", "that's", "not", "historic"]) {
-            Some(SubjectRef::Each(Box::new(ObjectFilter {
-                any_permanent: true,
-                ..Default::default()
-            })))
         } else if ts.eat_phrase(&["one", "of", "those"])
             && let Ok(flt) = try_parse(ts, parse_object_filter)
         {
@@ -1691,11 +1658,6 @@ pub(super) fn try_parse_draw_ext(
             ValueExpr::PriorActionCount(PriorActionKind::DiscardedThisWay),
             false,
         )
-    } else if ts.eat_phrase(&["cards", "equal", "to", "its", "total", "toxic", "value"]) {
-        (
-            ValueExpr::PriorActionCount(PriorActionKind::ThatMany),
-            false,
-        )
     } else {
         ts.restore(cp);
         return None;
@@ -1783,12 +1745,7 @@ pub(super) fn try_parse_search_for_ext(
         let up_to = ts.eat_phrase(&["less", "than", "or", "equal", "to"]);
         let eq = !up_to && ts.eat_phrase(&["equal", "to"]);
         if up_to || eq {
-            let count = if ts.eat_any_phrase(&[&["the", "difference"], &["the", "other", "result"]])
-            {
-                ValueExpr::PriorActionCount(PriorActionKind::ThatMany)
-            } else if let Ok(v) = try_parse(ts, parse_value_expr) {
-                v
-            } else {
+            let Ok(count) = try_parse(ts, parse_value_expr) else {
                 ts.restore(cp);
                 return None;
             };

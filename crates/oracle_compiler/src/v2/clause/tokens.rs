@@ -255,65 +255,6 @@ fn parse_token_creation_named(
         ts.restore(cp);
     }
 
-    // Named predefined card-copy token: `Create a <Capitalized Name> token` (e.g. `Create a <Card Name> token`)
-    {
-        let ncp = ts.checkpoint();
-        let mut words = 0usize;
-        let mut saw_non_descriptor = false;
-        while words < 5 {
-            if let Some(w) = ts.peek_word() {
-                let low = w.to_ascii_lowercase();
-                if low == "token" || low == "tokens" {
-                    break;
-                }
-                let is_cap = w.chars().next().is_some_and(|c| c.is_ascii_uppercase());
-                let is_conn =
-                    words > 0 && matches!(low.as_str(), "of" | "the" | "in" | "on" | "and" | "to");
-                if is_cap || is_conn {
-                    if !is_conn
-                        && lookup_color(&low).is_none()
-                        && lookup_card_type(&low).is_none()
-                        && ts.vocab.lookup_subtype(&low).is_none()
-                    {
-                        saw_non_descriptor = true;
-                    }
-                    ts.next_word();
-                    words += 1;
-                    continue;
-                }
-            }
-            break;
-        }
-        if words >= 1 && saw_non_descriptor && (ts.eat_word("token") || ts.eat_word("tokens")) {
-            let mut mods = EntryModifiers {
-                tapped: leading_tapped,
-                attacking: leading_tapped_and_attacking,
-                ..EntryModifiers::default()
-            };
-            if ts.eat_word("tapped") {
-                mods.tapped = true;
-            }
-            if ts.eat_phrase(&["attached", "to"]) {
-                mods.attached_to = Some(Box::new(parse_subject_ref(ts)?));
-            }
-            let final_count = finalize_token_count(ts, count, deferred_equal_to)?;
-            return Ok((
-                final_count,
-                TokenSpec::Creature {
-                    power: None,
-                    toughness: None,
-                    colors: ColorMask::EMPTY,
-                    card_types: CardTypeMask::CREATURE,
-                    subtypes: Vec::new(),
-                    keywords: Vec::new(),
-                    abilities: Vec::new(),
-                },
-                mods,
-            ));
-        }
-        ts.restore(ncp);
-    }
-
     // Creature/artifact token: `[legendary] [<P>/<T>] [colors] [subtypes...] [card_types...] token(s) [named <Name>] [with <kws|"...">] [that are <colors>]`
     // Also supports `X/X`, `X/1`, `1/X` dynamic P/T tokens and non-P/T tokens (`black Vampire creature token`, `colorless artifact token named Lotus`)!
     let _ = ts.eat_word("legendary");
@@ -476,7 +417,7 @@ fn parse_token_creation_named(
         }
     }
 
-    // Trailing `named <Proper Name>` (`Fire Navy Trebuchet`: `... with flying named Ballistic Boulder that's tapped and attacking`)
+    // Trailing `named <Proper Name>`
     if ts.eat_word("named") {
         while let Some(w) = ts.peek_word() {
             if w.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
@@ -581,12 +522,6 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
         &["the", "tokens", "aren't", "legendary"],
         &["the", "copies", "aren't", "legendary"],
     ];
-    const STAT_IS: &[&[&str]] = &[
-        &["its", "power", "is"],
-        &["their", "power", "is"],
-        &["its", "toughness", "is"],
-        &["their", "toughness", "is"],
-    ];
     const IS_TYPE_PREFIXES: &[&[&str]] = &[
         &["it's", "an"],
         &["it's", "a"],
@@ -674,17 +609,6 @@ pub(crate) fn parse_copy_exceptions(ts: &mut TokenStream<'_>) -> Vec<CopyExcepti
             }
         } else if ts.eat_any_phrase(NOT_LEGENDARY) {
             exceptions.push(CopyException::NotLegendary);
-        } else if ts.eat_any_phrase(STAT_IS) && {
-            let _ = ts.eat_phrase(&["equal", "to"]);
-            crate::v2::parser::try_parse(ts, parse_value_expr).is_ok()
-        } {
-            exceptions.push(CopyException::SetBasePTAndTypes {
-                power: None,
-                toughness: None,
-                subtypes: Vec::new(),
-                types: CardTypeMask::EMPTY,
-                keep_existing_types: true,
-            });
         } else if ts.eat_any_phrase(IS_TYPE_PREFIXES) {
             let pt = ts.next_base_pt();
             let mut colors = ColorMask::EMPTY;

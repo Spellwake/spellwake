@@ -583,14 +583,6 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
                 })
                 .collect());
         }
-        if ts.eat_phrase(&["that", "ability"]) {
-            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-            return Ok(vec![mutate_obj(
-                subject,
-                ObjectMutation::GrantKeywords(Vec::new()),
-                duration,
-            )]);
-        }
         if ts.eat_any_phrase(&[
             &["all", "basic", "land", "types"],
             &["all", "creature", "types"],
@@ -820,27 +812,6 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
                         continue;
                     }
                     ts.restore(tcp);
-                    let _ = ts.eat_comma();
-                    let _ = ts.eat_word("and");
-                    if ts.eat_any_phrase(&[&["isn't", "a"], &["isn't", "an"], &["aren't"]])
-                        && let Some(w) = ts.peek_word()
-                        && ts.vocab.lookup_subtype(&w.to_ascii_lowercase()).is_some()
-                    {
-                        ts.next_word();
-                        out.push(mutate_obj(
-                            subject.clone(),
-                            ObjectMutation::BecomeCreatureTypes {
-                                subtypes: Vec::new(),
-                                add_types: CardTypeMask::EMPTY,
-                                keep_existing_types: false,
-                                base_pt: None,
-                                keywords: Vec::new(),
-                            },
-                            duration.clone(),
-                        ));
-                        continue;
-                    }
-                    ts.restore(tcp);
                     break;
                 }
                 if let Some(fdur) = parse_trailing_duration(ts) {
@@ -926,26 +897,38 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
             } else {
                 ts.restore(qcp);
             }
-            // Support `has flying and is an Angel in addition to its other types` (`Valkyrie's Call`)
+            // Support `has flying and is a [color] <subtype/type> in addition to its other types`
             {
                 let tcp = ts.checkpoint();
                 if ts.eat_any_phrase(&[&["and", "is"], &["and", "are"]]) {
                     let _ = ts.eat_any_word(&["a", "an"]);
-                    let (add_types, _, subtypes) =
-                        eat_type_color_subtype_run(ts, false, false, false);
-                    if !subtypes.is_empty() || !add_types.is_empty() {
+                    let (add_types, colors, subtypes) =
+                        eat_type_color_subtype_run(ts, true, false, false);
+                    if !subtypes.is_empty() || !add_types.is_empty() || !colors.is_empty() {
                         let keep_existing_types = ts.eat_in_addition_to_other_types();
-                        out.push(mutate_obj(
-                            subject.clone(),
-                            ObjectMutation::BecomeCreatureTypes {
-                                subtypes,
-                                add_types,
-                                keep_existing_types,
-                                base_pt: None,
-                                keywords: Vec::new(),
-                            },
-                            Duration::Permanent,
-                        ));
+                        if !colors.is_empty() {
+                            out.push(mutate_obj(
+                                subject.clone(),
+                                ObjectMutation::BecomeColors {
+                                    colors,
+                                    keep_existing_colors: keep_existing_types,
+                                },
+                                Duration::Permanent,
+                            ));
+                        }
+                        if !subtypes.is_empty() || !add_types.is_empty() {
+                            out.push(mutate_obj(
+                                subject.clone(),
+                                ObjectMutation::BecomeCreatureTypes {
+                                    subtypes,
+                                    add_types,
+                                    keep_existing_types,
+                                    base_pt: None,
+                                    keywords: Vec::new(),
+                                },
+                                Duration::Permanent,
+                            ));
+                        }
                     } else {
                         ts.restore(tcp);
                     }
@@ -1089,7 +1072,18 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
                     keep_existing_types = true;
                 }
                 let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-                let mut out = vec![mutate_obj(
+                let mut out = Vec::new();
+                if !colors.is_empty() {
+                    out.push(mutate_obj(
+                        subject.clone(),
+                        ObjectMutation::BecomeColors {
+                            colors,
+                            keep_existing_colors: keep_existing_types,
+                        },
+                        duration.clone(),
+                    ));
+                }
+                out.push(mutate_obj(
                     subject.clone(),
                     ObjectMutation::SetDynamicBasePT {
                         power: ValueExpr::Var(crate::v2::ir::VarName::X),
@@ -1098,7 +1092,7 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
                         keep_existing_types,
                     },
                     duration.clone(),
-                )];
+                ));
                 if !subtypes.is_empty() || !kws.is_empty() {
                     out.push(mutate_obj(
                         subject,
@@ -1179,16 +1173,41 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
             ]) {
                 let val = parse_value_expr(ts)?;
                 let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
-                return Ok(vec![mutate_obj(
-                    subject,
+                let mut out = Vec::new();
+                if !colors.is_empty() {
+                    out.push(mutate_obj(
+                        subject.clone(),
+                        ObjectMutation::BecomeColors {
+                            colors,
+                            keep_existing_colors: keep_existing_colors || keep_existing_types,
+                        },
+                        duration.clone(),
+                    ));
+                }
+                out.push(mutate_obj(
+                    subject.clone(),
                     ObjectMutation::SetDynamicBasePT {
                         power: val.clone(),
                         toughness: val,
                         add_types,
                         keep_existing_types,
                     },
-                    duration,
-                )]);
+                    duration.clone(),
+                ));
+                if !subtypes.is_empty() {
+                    out.push(mutate_obj(
+                        subject,
+                        ObjectMutation::BecomeCreatureTypes {
+                            subtypes,
+                            add_types,
+                            keep_existing_types,
+                            base_pt: None,
+                            keywords: Vec::new(),
+                        },
+                        duration,
+                    ));
+                }
+                return Ok(out);
             }
             let mut keywords = Vec::new();
             if ts.eat_phrase(&["with", "base", "power", "and", "toughness"])
@@ -1258,7 +1277,18 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
                         ts.restore(lcp);
                     }
                 }
-                let mut out = vec![mutate_obj(
+                let mut out = Vec::new();
+                if !colors.is_empty() {
+                    out.push(mutate_obj(
+                        subject.clone(),
+                        ObjectMutation::BecomeColors {
+                            colors,
+                            keep_existing_colors: keep_existing_colors || keep_existing_types,
+                        },
+                        duration.clone(),
+                    ));
+                }
+                out.push(mutate_obj(
                     subject.clone(),
                     ObjectMutation::BecomeCreatureTypes {
                         subtypes,
@@ -1268,7 +1298,7 @@ fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PRe
                         keywords,
                     },
                     duration.clone(),
-                )];
+                ));
                 if loses_abilities {
                     out.push(mutate_obj(
                         subject.clone(),

@@ -13,7 +13,7 @@ use crate::v2::ir::{
     PlayerConditionKind, PlayerRef, PriorActionKind, SharedProperty, SubjectConditionKind,
     SubjectRef, TurnEventKind, ValueExpr, ZoneKind, ZoneMetricKind, ZoneOwner, ZoneRef,
 };
-use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
+use crate::v2::parser::{PResult, TokenStream, try_parse};
 use crate::v2::value::parse_value_expr;
 
 /// Parse a strictly-typed boolean [`ConditionExpr`].
@@ -133,8 +133,8 @@ pub(super) fn eat_suffix_cmp_op(
 }
 
 pub fn parse_condition(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
-    // Compound reveal-or-control/choose additional-cost condition (`Silumgar's Scorn`, `Dragonlord's Prerogative`, `Dragon's Fire`)
-    // Checked BEFORE top-level `or` splitting so `or controlled a Dragon` isn't split apart!
+    // Compound reveal-or-control/choose additional-cost condition.
+    // Checked BEFORE top-level `or` splitting so `or controlled a <subtype>` isn't split apart.
     // Note: `parse_object_filter`'s post-modifier loop may already consume `as you cast ~` on the second filter.
     {
         let dcp = ts.checkpoint();
@@ -148,33 +148,6 @@ pub fn parse_condition(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
         }
         ts.restore(dcp);
-    }
-    // Compound graveyard/library entry-or-cast condition
-    {
-        let ecp = ts.checkpoint();
-        if (ts.eat_word("it")
-            || ts.eat_tilde()
-            || ts.eat_phrase(&["that", "creature"])
-            || ts.eat_phrase(&["that", "permanent"])
-            || ts.eat_phrase(&["that", "card"]))
-            && ts.eat_phrase(&["entered", "from"])
-            && let Ok(z1) = try_parse(ts, parse_zone_ref)
-            && (ts.eat_phrase(&["or", "you", "cast", "it", "from"])
-                || ts.eat_phrase(&["or", "was", "cast", "from"]))
-            && let Ok(z2) = try_parse(ts, parse_zone_ref)
-        {
-            return Ok(ConditionExpr::Or(
-                Box::new(ConditionExpr::InZone {
-                    subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
-                    zone: z1,
-                }),
-                Box::new(ConditionExpr::CastFromZone {
-                    subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
-                    zone: z2,
-                }),
-            ));
-        }
-        ts.restore(ecp);
     }
     let mut cond = parse_condition_atom(ts)?;
     loop {
@@ -258,11 +231,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             ConditionFlag::IsYourTurn,
             true,
         ),
-        (
-            &["it's", "not", "their", "turn"],
-            ConditionFlag::IsYourTurn,
-            true,
-        ),
     ];
     for &(phrase, flag, neg) in TURN_FLAGS {
         if ts.eat_phrase(phrase) {
@@ -289,33 +257,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             ));
         }
         ts.restore(hcp);
-    }
-    // `this ability has been activated <N> or more times this turn`
-    {
-        let acp = ts.checkpoint();
-        if ts.eat_phrase(&["this", "ability", "has", "been", "activated"])
-            && let Some(n) = ts.next_number(false)
-            && ts.eat_phrase(&["or", "more", "times", "this", "turn"])
-        {
-            return Ok(ConditionExpr::EventCheck(
-                EventCheckKind::ResolutionCountThisTurn(u8::try_from(n).unwrap_or(1)),
-            ));
-        }
-        ts.restore(acp);
-    }
-    // `~ / it didn't attack [or come under your control] this turn`
-    {
-        let mcp = ts.checkpoint();
-        if (ts.eat_tilde() || ts.eat_word("it")) && ts.eat_phrase(&["didn't", "attack"]) {
-            let _ = ts.eat_phrase(&["or", "come", "under", "your", "control"]);
-            if ts.eat_phrase(&["this", "turn"]) {
-                return Ok(not_cond(ConditionExpr::SubjectState {
-                    subject: Box::new(SubjectRef::SelfObject),
-                    state: ObjectStateKind::AttackedOrBlockedThisTurn,
-                }));
-            }
-        }
-        ts.restore(mcp);
     }
     // `a/an <flt> is on the battlefield`
     {
@@ -361,13 +302,8 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             PlayerConditionKind::IsMonarch,
         ));
     }
-    if ts.eat_phrase(&["excess", "damage", "was", "dealt"]) {
-        if ts.eat_word("to") {
-            let _ = try_parse(ts, parse_subject_ref);
-        }
-        if ts.eat_phrase(&["this", "way"]) {
-            return Ok(prior_event(PriorActionKind::ExcessDamageThisWay));
-        }
+    if ts.eat_phrase(&["excess", "damage", "was", "dealt", "this", "way"]) {
+        return Ok(prior_event(PriorActionKind::ExcessDamageThisWay));
     }
     {
         let fcp = ts.checkpoint();
@@ -390,25 +326,13 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(fcp);
     }
-    {
-        let lcp = ts.checkpoint();
-        if ts.eat_phrase(&["your", "life", "total", "is"]) {
-            if ts.eat_phrase(&["greater", "than", "your", "starting", "life", "total"]) {
-                return Ok(player_check(
-                    PlayerRef::You,
-                    PlayerConditionKind::LifeAboveStarting { margin: 1 },
-                ));
-            }
-            if ts.eat_phrase(&[
-                "less", "than", "or", "equal", "to", "half", "your", "starting", "life", "total",
-            ]) {
-                return Ok(not_cond(player_check(
-                    PlayerRef::You,
-                    PlayerConditionKind::LifeAboveStarting { margin: 0 },
-                )));
-            }
-        }
-        ts.restore(lcp);
+    if ts.eat_phrase(&[
+        "your", "life", "total", "is", "greater", "than", "your", "starting", "life", "total",
+    ]) {
+        return Ok(player_check(
+            PlayerRef::You,
+            PlayerConditionKind::LifeAboveStarting { margin: 1 },
+        ));
     }
     {
         let hcp = ts.checkpoint();
@@ -440,21 +364,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                 }),
             )));
         }
-        if let Some(n) = ts.next_number(false)
-            && ts.eat_phrase(&["or", "more", "creatures", "are", "blocking"])
-            && try_parse(ts, parse_subject_ref).is_ok()
-        {
-            return Ok(cmp_cond(
-                ValueExpr::Count(Box::new(ObjectFilter {
-                    any_types: CardTypeMask::CREATURE,
-                    combat: Some(CombatState::Blocking),
-                    ..Default::default()
-                })),
-                CompareOp::Ge,
-                ValueExpr::Const(n),
-            ));
-        }
-        ts.restore(icp);
         if let Ok(subj) = try_parse(ts, parse_subject_ref) {
             if ts.eat_word("is")
                 && let Some((p, t)) = ts.next_base_pt()
@@ -503,13 +412,8 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     }
     {
         let hcp = ts.checkpoint();
-        if ts.eat_any_phrase(&[
-            &[
-                "you", "have", "more", "cards", "in", "hand", "than", "each", "opponent",
-            ],
-            &[
-                "you", "have", "more", "cards", "in", "hand", "than", "an", "opponent",
-            ],
+        if ts.eat_phrase(&[
+            "you", "have", "more", "cards", "in", "hand", "than", "each", "opponent",
         ]) {
             return Ok(cmp_cond(
                 player_stat_val(PlayerRef::You, PlayerStatKind::CardsInHand),
@@ -556,20 +460,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     }
     {
         let pcp = ts.checkpoint();
-        if ts.eat_phrase(&["you", "put"])
-            && let Ok(flt) = try_parse(ts, parse_object_filter)
-            && ts.eat_any_phrase(&[
-                &["onto", "the", "battlefield", "this", "way"],
-                &["into", "your", "hand", "this", "way"],
-                &["into", "your", "graveyard", "this", "way"],
-            ])
-        {
-            return Ok(ConditionExpr::PriorActionMatched {
-                action: PriorActionKind::ReturnedThisWay,
-                filter: Box::new(flt),
-            });
-        }
-        ts.restore(pcp);
         if ts.eat_any_phrase(&[
             &["you", "haven't", "cast", "it"],
             &["you", "haven't", "cast", "the", "card"],
@@ -580,16 +470,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                 subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
                 kind: SubjectConditionKind::WasCast,
             }));
-        }
-        ts.restore(pcp);
-        if ts.eat_phrase(&["any", "of", "that", "mana", "is", "spent", "on"])
-            && let Ok(flt) = try_parse(ts, parse_object_filter)
-        {
-            return Ok(ConditionExpr::FilterCheck {
-                filter: Box::new(flt),
-                kind: FilterConditionKind::ManaSpentFrom,
-                value: 1,
-            });
         }
         ts.restore(pcp);
         if ts.eat_phrase(&["that", "creature's", "power", "is"]) {
@@ -618,30 +498,12 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(pcp);
         if ts.eat_phrase(&[
-            "that", "creature", "was", "dealt", "excess", "damage", "this", "turn",
-        ]) {
-            return Ok(ConditionExpr::SubjectCheck {
-                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThatCreature)),
-                kind: SubjectConditionKind::DealtDamageThisTurn { combat_only: false },
-            });
-        }
-        ts.restore(pcp);
-        if ts.eat_phrase(&[
             "that", "creature", "wasn't", "dealt", "damage", "this", "turn",
         ]) {
             return Ok(not_cond(ConditionExpr::SubjectCheck {
                 subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThatCreature)),
                 kind: SubjectConditionKind::DealtDamageThisTurn { combat_only: false },
             }));
-        }
-        ts.restore(pcp);
-        if ts.eat_phrase(&["that", "creature", "entered", "from"])
-            && let Ok(z) = try_parse(ts, parse_zone_ref)
-        {
-            return Ok(ConditionExpr::CastFromZone {
-                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::ThatCreature)),
-                zone: z,
-            });
         }
         ts.restore(pcp);
         if let Ok(flt) = try_parse(ts, parse_object_filter) {
@@ -658,11 +520,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                     &["is", "put", "into", "exile", "this", "way"],
                     PriorActionKind::ExiledThisWay,
                 ),
-                (&["enters", "this", "way"], PriorActionKind::ReturnedThisWay),
-                (
-                    &["entered", "this", "way"],
-                    PriorActionKind::ReturnedThisWay,
-                ),
             ];
             if let Some(action) = eat_table(ts, FLT_THIS_WAY) {
                 return Ok(ConditionExpr::PriorActionMatched {
@@ -672,13 +529,8 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             }
         }
         ts.restore(pcp);
-        if ts.eat_any_phrase(&[
-            &[
-                "you", "cast", "it", "from", "anywhere", "other", "than", "your", "hand",
-            ],
-            &[
-                "you", "cast", "it", "from", "anywhere", "other", "than", "exile",
-            ],
+        if ts.eat_phrase(&[
+            "you", "cast", "it", "from", "anywhere", "other", "than", "your", "hand",
         ]) {
             return Ok(not_cond(ConditionExpr::CastFromZone {
                 subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
@@ -734,24 +586,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                     filter: Box::new(src_flt.unwrap_or_default()),
                 });
             }
-        }
-        ts.restore(pcp);
-        if ts.eat_phrase(&[
-            "a",
-            "permanent's",
-            "ability",
-            "is",
-            "countered",
-            "this",
-            "way",
-        ]) {
-            return Ok(ConditionExpr::PriorActionMatched {
-                action: PriorActionKind::ThatMany,
-                filter: Box::new(ObjectFilter {
-                    is_ability: true,
-                    ..Default::default()
-                }),
-            });
         }
         ts.restore(pcp);
         if let Ok(player) = try_parse(ts, parse_player_ref)
@@ -857,7 +691,7 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             return Ok(not_cond(prior_event(PriorActionKind::CastThisWay)));
         }
         ts.restore(lcp);
-        // `you sacrificed/exiled/discarded/returned <N or more | a> <flt> this way`
+        // `you sacrificed/exiled/discarded/returned <flt> this way`
         const YOU_PRIOR_ACTS: &[(&[&str], PriorActionKind)] = &[
             (&["sacrificed"], PriorActionKind::SacrificedThisWay),
             (&["exiled"], PriorActionKind::ExiledThisWay),
@@ -867,18 +701,13 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         ];
         if ts.eat_word("you")
             && let Some(action) = eat_table(ts, YOU_PRIOR_ACTS)
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+            && ts.eat_phrase(&["this", "way"])
         {
-            if ts.next_number(false).is_some() {
-                let _ = ts.eat_any_phrase(&[&["or", "more"], &["or", "fewer"]]);
-            }
-            if let Ok(flt) = try_parse(ts, parse_object_filter)
-                && ts.eat_phrase(&["this", "way"])
-            {
-                return Ok(ConditionExpr::PriorActionMatched {
-                    action,
-                    filter: Box::new(flt),
-                });
-            }
+            return Ok(ConditionExpr::PriorActionMatched {
+                action,
+                filter: Box::new(flt),
+            });
         }
         ts.restore(lcp);
         if ts.eat_phrase(&["there", "are", "cards", "exiled", "with"])
@@ -1027,11 +856,7 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(lcp);
         if ts.eat_any_phrase(&[&["you", "sacrificed"], &["you've", "sacrificed"]]) {
-            let _ = ts.eat_any_phrase(&[&["one", "or", "more"], &["a"], &["an"]])
-                || (ts.next_number(false).is_some() && {
-                    let _ = ts.eat_phrase(&["or", "more"]);
-                    true
-                });
+            let _ = ts.eat_any_phrase(&[&["one", "or", "more"], &["a"], &["an"]]);
             if let Ok(flt) = try_parse(ts, parse_object_filter)
                 && ts.eat_phrase(&["this", "turn"])
             {
@@ -1083,11 +908,16 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             return Ok(player_check(p, PlayerConditionKind::ControlsMostCreatures));
         }
         ts.restore(lcp);
-        if (ts.eat_word("it") || ts.eat_tilde())
+        let is_tilde = ts.eat_tilde();
+        if (is_tilde || ts.eat_word("it"))
             && ts.eat_phrase(&["attacked", "a", "battle", "this", "turn"])
         {
             return Ok(ConditionExpr::SubjectCheck {
-                subject: Box::new(SubjectRef::SelfObject),
+                subject: Box::new(if is_tilde {
+                    SubjectRef::SelfObject
+                } else {
+                    SubjectRef::Anaphora(AnaphoraRef::It)
+                }),
                 kind: SubjectConditionKind::AttackedBattleThisTurn,
             });
         }
@@ -1133,13 +963,7 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             return Ok(ConditionExpr::Flag(ConditionFlag::PermanentLeftThisTurn));
         }
         ts.restore(lcp);
-        if ts.eat_phrase(&["a", "creature"])
-            && {
-                let _ = ts.eat_phrase(&["not", "named"]) && ts.eat_tilde();
-                true
-            }
-            && ts.eat_phrase(&["died", "this", "turn"])
-        {
+        if ts.eat_phrase(&["a", "creature", "died", "this", "turn"]) {
             return Ok(ConditionExpr::Flag(ConditionFlag::PermanentDiedThisTurn));
         }
         ts.restore(lcp);
@@ -1208,7 +1032,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         &["you", "control", "your", "commander"],
         &["you", "control", "a", "commander"],
     ]) {
-        let _ = ts.eat_phrase(&["that's", "a", "creature", "or", "planeswalker"]);
         return Ok(player_check(
             PlayerRef::You,
             PlayerConditionKind::ControlsCommander,
@@ -1231,27 +1054,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         ],
         &["it's", "the", "first", "time"],
     ]) {
-        // Optional trailing event description
-        {
-            let fcp = ts.checkpoint();
-            let _ = opt(ts, parse_counter_kind);
-            if ts.eat_any_word(&["counters", "counter"])
-                && ts.eat_phrase(&["have", "been", "put", "on"])
-                && try_parse(ts, parse_subject_ref).is_ok()
-                && ts.eat_phrase(&["this", "turn"])
-            {
-                // Consumed trailing counter placement detail.
-            } else {
-                ts.restore(fcp);
-                if try_parse(ts, parse_subject_ref).is_ok()
-                    && ts.eat_phrase(&["has", "become", "tapped", "this", "turn"])
-                {
-                    // Consumed trailing tap detail.
-                } else {
-                    ts.restore(fcp);
-                }
-            }
-        }
         return Ok(ConditionExpr::EventCheck(
             EventCheckKind::ResolutionCountThisTurn(1),
         ));
@@ -1505,11 +1307,18 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     // `it's on the battlefield` / `~ is on the battlefield`
     {
         let bcp = ts.checkpoint();
-        if ts.eat_phrase(&["it's", "on", "the", "battlefield"])
-            || (ts.eat_tilde() && ts.eat_phrase(&["is", "on", "the", "battlefield"]))
-        {
+        if ts.eat_phrase(&["it's", "on", "the", "battlefield"]) {
             return Ok(ConditionExpr::InZone {
                 subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+                zone: ZoneRef {
+                    zone: ZoneKind::Battlefield,
+                    owner: ZoneOwner::Default,
+                },
+            });
+        }
+        if ts.eat_tilde() && ts.eat_phrase(&["is", "on", "the", "battlefield"]) {
+            return Ok(ConditionExpr::InZone {
+                subject: Box::new(SubjectRef::SelfObject),
                 zone: ZoneRef {
                     zone: ZoneKind::Battlefield,
                     owner: ZoneOwner::Default,
@@ -1542,119 +1351,21 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(zcp);
     }
-    // `you / you've put [a/an/one or more] [<kind>] counter(s) on <subj> this turn`
-    {
-        let pcp = ts.checkpoint();
-        if ts.eat_any_phrase(&[&["you", "put"], &["you've", "put"]])
-            && ts.eat_any_phrase(&[&["one", "or", "more"], &["a"], &["an"]])
-        {
-            let kind_opt = if ts.eat_any_word(&["counter", "counters"]) {
-                Some(None)
-            } else if let Ok(ck) = try_parse(ts, parse_counter_kind)
-                && ts.eat_any_word(&["counter", "counters"])
-            {
-                Some(Some(ck))
-            } else {
-                None
-            };
-            if let Some(kind) = kind_opt
-                && ts.eat_word("on")
-                && let Ok(subject) = try_parse(ts, parse_subject_ref)
-                && ts.eat_phrase(&["this", "turn"])
-            {
-                return Ok(ConditionExpr::SubjectCheck {
-                    subject: Box::new(subject),
-                    kind: SubjectConditionKind::HasCounters(kind),
-                });
-            }
-        }
-        ts.restore(pcp);
-    }
-    // `it / ~ attacked this turn` or `it attacked during [its controller's | your] last turn`
+    // `it / ~ attacked this turn`
     {
         let acp = ts.checkpoint();
-        if (ts.eat_word("it") || ts.eat_tilde())
-            && ts.eat_word("attacked")
-            && (ts.eat_phrase(&["this", "turn"])
-                || (ts.eat_word("during")
-                    && ts.eat_any_phrase(&[
-                        &["its", "controller's", "last", "turn"],
-                        &["your", "last", "turn"],
-                    ])))
-        {
-            return Ok(ConditionExpr::SubjectState {
-                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
-                state: ObjectStateKind::AttackedOrBlockedThisTurn,
+        let is_tilde = ts.eat_tilde();
+        if (is_tilde || ts.eat_word("it")) && ts.eat_phrase(&["attacked", "this", "turn"]) {
+            return Ok(ConditionExpr::SubjectCheck {
+                subject: Box::new(if is_tilde {
+                    SubjectRef::SelfObject
+                } else {
+                    SubjectRef::Anaphora(AnaphoraRef::It)
+                }),
+                kind: SubjectConditionKind::AttackedThisCombat { or_blocked: false },
             });
         }
         ts.restore(acp);
-    }
-    // `you attacked with [a/an | exactly <N> | <N> or more] <flt> this turn/combat`
-    {
-        let acp = ts.checkpoint();
-        if ts.eat_phrase(&["you", "attacked", "with"]) {
-            let _ = ts.eat_word("exactly");
-            let n = if let Some(num) = ts.next_number(false) {
-                let _ = ts.eat_phrase(&["or", "more"]);
-                num
-            } else {
-                let _ = ts.eat_any_word(&["a", "an"]);
-                1
-            };
-            if try_parse(ts, parse_object_filter).is_ok()
-                && ts.eat_any_phrase(&[&["this", "turn"], &["this", "combat"]])
-            {
-                return Ok(player_check(
-                    PlayerRef::You,
-                    PlayerConditionKind::AttackedWithCount {
-                        min_count: to_min_u16(n),
-                    },
-                ));
-            }
-        }
-        ts.restore(acp);
-    }
-    // `it has the greatest/least power/toughness [or is tied for greatest/least ...] among <flt>`
-    {
-        let gcp = ts.checkpoint();
-        if (ts.eat_word("it") || ts.eat_tilde()) && ts.eat_phrase(&["has", "the"]) {
-            let greatest = if ts.eat_any_word(&["greatest", "highest"]) {
-                Some(true)
-            } else if ts.eat_any_word(&["least", "lowest"]) {
-                Some(false)
-            } else {
-                None
-            };
-            let stat = if ts.eat_word("power") {
-                Some(StatKind::Power)
-            } else if ts.eat_word("toughness") {
-                Some(StatKind::Toughness)
-            } else {
-                None
-            };
-            if let (Some(greatest), Some(stat)) = (greatest, stat) {
-                let _ = ts.eat_any_phrase(&[
-                    &["or", "is", "tied", "for", "greatest", "power"],
-                    &["or", "is", "tied", "for", "greatest", "toughness"],
-                    &["or", "is", "tied", "for", "greatest"],
-                    &["or", "is", "tied", "for", "least", "power"],
-                    &["or", "is", "tied", "for", "least", "toughness"],
-                    &["or", "is", "tied", "for", "least"],
-                ]);
-                if ts.eat_word("among") && try_parse(ts, parse_object_filter).is_ok() {
-                    return Ok(ConditionExpr::EventCheck(
-                        EventCheckKind::TiedForExtremeStat { stat, greatest },
-                    ));
-                }
-            }
-        }
-        ts.restore(gcp);
-    }
-    if ts.eat_any_phrase(&[
-        &["you", "created", "a", "token", "this", "turn"],
-        &["you've", "created", "a", "token", "this", "turn"],
-    ]) {
-        return Ok(prior_event(PriorActionKind::CreatedThisWay));
     }
     if ts.eat_any_phrase(&[
         &[
@@ -1704,7 +1415,8 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     // `<subj> has [a/an | <N> or more] [<kind>] counter(s) on it`
     {
         let hcp = ts.checkpoint();
-        if (ts.eat_tilde() || ts.eat_word("it")) && ts.eat_word("has") {
+        let is_tilde = ts.eat_tilde();
+        if (is_tilde || ts.eat_word("it")) && ts.eat_word("has") {
             let min_n = if ts.eat_any_word(&["a", "an"]) {
                 Some(1i32)
             } else if let Some(n) = ts.next_number(false)
@@ -1720,7 +1432,11 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             {
                 return Ok(cmp_cond(
                     ValueExpr::CounterCount {
-                        subject: Box::new(SubjectRef::SelfObject),
+                        subject: Box::new(if is_tilde {
+                            SubjectRef::SelfObject
+                        } else {
+                            SubjectRef::Anaphora(AnaphoraRef::It)
+                        }),
                         kind,
                     },
                     CompareOp::Ge,
@@ -1751,14 +1467,10 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(cp);
     }
-    // `[at least one | two or more | one or more] <flt> was/is milled/exiled/discarded/destroyed/revealed/sacrificed/returned/beheld [this way]`
+    // `[at least one | one or more] <flt> was/is milled/exiled/discarded/destroyed/revealed/sacrificed/returned/beheld [this way]`
     {
         let cp = ts.checkpoint();
-        let _ = ts.eat_any_phrase(&[
-            &["at", "least", "one"],
-            &["two", "or", "more"],
-            &["one", "or", "more"],
-        ]);
+        let _ = ts.eat_any_phrase(&[&["at", "least", "one"], &["one", "or", "more"]]);
         if let Ok(flt) = try_parse(ts, parse_object_filter)
             && ts.eat_any_word(&["was", "were", "is", "are"])
         {
@@ -1790,46 +1502,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
                 ),
                 (&["created", "this", "way"], PriorActionKind::CreatedThisWay),
                 (&["cast", "this", "way"], PriorActionKind::CastThisWay),
-                (
-                    &[
-                        "put",
-                        "into",
-                        "a",
-                        "graveyard",
-                        "from",
-                        "the",
-                        "battlefield",
-                        "this",
-                        "turn",
-                    ],
-                    PriorActionKind::DestroyedThisWay,
-                ),
-                (
-                    &[
-                        "put",
-                        "into",
-                        "your",
-                        "graveyard",
-                        "from",
-                        "anywhere",
-                        "this",
-                        "turn",
-                    ],
-                    PriorActionKind::DestroyedThisWay,
-                ),
-                (
-                    &[
-                        "put",
-                        "into",
-                        "a",
-                        "graveyard",
-                        "from",
-                        "anywhere",
-                        "this",
-                        "turn",
-                    ],
-                    PriorActionKind::DestroyedThisWay,
-                ),
             ];
             if let Some(action) = eat_table(ts, PRIOR_ACTS) {
                 return Ok(ConditionExpr::PriorActionMatched {
@@ -1850,7 +1522,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         {
             return Ok(ConditionExpr::EventCheck(EventCheckKind::KickedWith(mc)));
         }
-        let _ = ts.eat_word("twice");
         return Ok(ConditionExpr::Flag(ConditionFlag::WasKicked));
     }
     {
@@ -1858,11 +1529,9 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         if ts.eat_any_phrase(&[&["you", "cast", "it"], &["you", "cast", "them"]])
             || (ts.eat_phrase(&["you", "cast"]) && ts.eat_tilde())
         {
-            let _ = ts.eat_any_phrase(&[
-                &["from", "your", "hand"],
-                &["during", "your", "main", "phase"],
-                &["this", "way"],
-            ]);
+            if ts.eat_phrase(&["from", "your", "hand"]) {
+                return Ok(ConditionExpr::Flag(ConditionFlag::WasCastFromHand));
+            }
             return Ok(ConditionExpr::Flag(ConditionFlag::YouCastIt));
         }
         ts.restore(cp);
@@ -1903,14 +1572,8 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     ]) {
         return Ok(ConditionExpr::Flag(ConditionFlag::PermanentLeftThisTurn));
     }
-    if ts.eat_any_phrase(&[
-        &["that", "creature", "dies", "this", "way"],
-        &["that", "creature", "dies", "this", "turn"],
-    ]) {
+    if ts.eat_phrase(&["that", "creature", "dies", "this", "way"]) {
         return Ok(prior_event(PriorActionKind::DestroyedThisWay));
-    }
-    if ts.eat_phrase(&["that", "spell", "is", "countered", "this", "way"]) {
-        return Ok(prior_event(PriorActionKind::ExiledThisWay));
     }
     if ts.eat_phrase(&[
         "a", "player", "other", "than", "you", "lost", "life", "this", "turn",
@@ -2014,7 +1677,8 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     // `~ is the only <flt> in <zone>`
     {
         let ncp = ts.checkpoint();
-        if (ts.eat_tilde() || ts.eat_word("it"))
+        let is_tilde = ts.eat_tilde();
+        if (is_tilde || ts.eat_word("it"))
             && ts.eat_phrase(&["is", "the", "only"])
             && let Ok(mut flt) = try_parse(ts, parse_object_filter)
         {
@@ -2024,11 +1688,22 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             {
                 flt.zones.push(zref);
             }
-            if !flt.zones.is_empty() {
-                return Ok(cmp_cond(
-                    ValueExpr::Count(Box::new(flt)),
-                    CompareOp::Eq,
-                    ValueExpr::Const(1),
+            if let Some(&zone) = flt.zones.first() {
+                let subj = if is_tilde {
+                    SubjectRef::SelfObject
+                } else {
+                    SubjectRef::Anaphora(AnaphoraRef::It)
+                };
+                return Ok(ConditionExpr::And(
+                    Box::new(ConditionExpr::InZone {
+                        subject: Box::new(subj),
+                        zone,
+                    }),
+                    Box::new(cmp_cond(
+                        ValueExpr::Count(Box::new(flt)),
+                        CompareOp::Eq,
+                        ValueExpr::Const(1),
+                    )),
                 ));
             }
         }
@@ -2036,12 +1711,19 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     }
 
     if ts.eat_any_phrase(&[
-        &["a", "creature", "died", "this", "turn"],
         &[
             "a", "creature", "died", "under", "your", "control", "this", "turn",
         ],
         &["a", "creature", "you", "controlled", "died", "this", "turn"],
     ]) {
+        return Ok(ConditionExpr::PlayerTurnEvent {
+            player: PlayerRef::You,
+            event: TurnEventKind::CreatureDied,
+            filter: None,
+            min_count: 1,
+        });
+    }
+    if ts.eat_phrase(&["a", "creature", "died", "this", "turn"]) {
         return Ok(ConditionExpr::Flag(ConditionFlag::PermanentDiedThisTurn));
     }
     {
@@ -2053,7 +1735,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             {
                 return Ok(ConditionExpr::EventCheck(EventCheckKind::KickedWith(mc)));
             }
-            let _ = ts.eat_word("twice");
             return Ok(ConditionExpr::Flag(ConditionFlag::WasKicked));
         }
         ts.restore(cp);
@@ -2269,20 +1950,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         ));
     }
     {
-        let acp = ts.checkpoint();
-        if let Some(n) = ts.next_number(false)
-            && ts.eat_phrase(&["or", "more", "creatures", "attacked", "this", "turn"])
-        {
-            return Ok(player_check(
-                PlayerRef::You,
-                PlayerConditionKind::AttackedWithCount {
-                    min_count: to_min_u16(n),
-                },
-            ));
-        }
-        ts.restore(acp);
-    }
-    {
         let lcp = ts.checkpoint();
         if ts.eat_tilde() && ts.eat_phrase(&["attacked", "this", "turn"]) {
             return Ok(ConditionExpr::SubjectCheck {
@@ -2294,65 +1961,6 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     }
     if ts.eat_phrase(&["evidence", "was", "collected"]) {
         return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
-    }
-    if ts.eat_any_phrase(&[
-        &[
-            "one", "or", "more", "cards", "were", "put", "into", "exile", "this", "turn",
-        ],
-        &[
-            "one", "or", "more", "of", "them", "entered", "from", "exile", "or", "was", "cast",
-            "from", "exile",
-        ],
-        &[
-            "one",
-            "or",
-            "more",
-            "of",
-            "them",
-            "entered",
-            "from",
-            "a",
-            "graveyard",
-            "or",
-            "was",
-            "cast",
-            "from",
-            "a",
-            "graveyard",
-        ],
-    ]) {
-        return Ok(prior_event(PriorActionKind::ExiledThisWay));
-    }
-    // `the top card of your library is <color/flt>`
-    {
-        let tcp = ts.checkpoint();
-        if ts.eat_phrase(&["the", "top", "card", "of"])
-            && let Ok(zone) = try_parse(ts, parse_zone_ref)
-            && ts.eat_word("is")
-        {
-            let _ = ts.eat_any_word(&["a", "an"]);
-            if let Ok(flt) = try_parse(ts, parse_object_filter) {
-                return Ok(ConditionExpr::ZoneHasCount {
-                    filter: Box::new(flt),
-                    zone,
-                    min_count: 1,
-                });
-            }
-            if let Some(w) = ts.peek_word()
-                && let Some(c) = crate::vocab::lookup_color(&w.to_ascii_lowercase())
-            {
-                ts.next_word();
-                return Ok(ConditionExpr::ZoneHasCount {
-                    filter: Box::new(ObjectFilter {
-                        any_colors: c,
-                        ..Default::default()
-                    }),
-                    zone,
-                    min_count: 1,
-                });
-            }
-        }
-        ts.restore(tcp);
     }
     // `~ is still on the battlefield`
     {

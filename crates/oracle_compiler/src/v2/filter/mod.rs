@@ -107,75 +107,6 @@ const PLAYER_REF_HEAD: &[(&[&[&str]], PlayerRef)] = &[
         ],
         PlayerRef::MostObjectsPlayer,
     ),
-    (
-        &[
-            &["the", "next", "player", "in", "the", "chosen", "direction"],
-            &["the", "player", "to", "their", "right"],
-            &["the", "player", "to", "their", "left"],
-            &["the", "player", "to", "your", "right"],
-            &["the", "player", "to", "your", "left"],
-            &["the", "first", "player"],
-            &["the", "second", "player"],
-            &["the", "third", "player"],
-            &["the", "other", "player"],
-            &["the", "monarch"],
-        ],
-        PlayerRef::ThatPlayer,
-    ),
-    (
-        &[
-            &["the", "opponent", "to", "your", "left"],
-            &["the", "opponent", "to", "your", "right"],
-            &["the", "opponent", "to", "their", "left"],
-            &["the", "opponent", "to", "their", "right"],
-        ],
-        PlayerRef::AnyOpponent,
-    ),
-    (
-        &[&["a", "second", "player"], &["a", "third", "player"]],
-        PlayerRef::AnyPlayer,
-    ),
-];
-
-const OTHER_THAN_PLAYERS: &[(&[&[&str]], PlayerRef)] = &[
-    (
-        &[
-            &["each", "player", "other", "than"],
-            &["any", "player", "other", "than"],
-            &["a", "player", "other", "than"],
-        ],
-        PlayerRef::EachOtherPlayer,
-    ),
-    (
-        &[
-            &["each", "opponent", "other", "than"],
-            &["an", "opponent", "other", "than"],
-            &["any", "opponent", "other", "than"],
-        ],
-        PlayerRef::EachOtherOpponent,
-    ),
-    (
-        &[
-            &["any", "number", "of", "target", "players", "other", "than"],
-            &["target", "player", "other", "than"],
-        ],
-        PlayerRef::TargetPlayer,
-    ),
-    (
-        &[
-            &[
-                "any",
-                "number",
-                "of",
-                "target",
-                "opponents",
-                "other",
-                "than",
-            ],
-            &["target", "opponent", "other", "than"],
-        ],
-        PlayerRef::TargetOpponent,
-    ),
 ];
 
 const PLAYER_REF_MID: &[(&[&[&str]], PlayerRef)] = &[
@@ -324,37 +255,10 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     if let Some(p) = eat_phrase_groups(ts, PLAYER_REF_HEAD) {
         return Ok(p);
     }
-    {
-        let mcp = ts.checkpoint();
-        if ts.eat_any_phrase(&[
-            &["an", "opponent", "with", "the", "most"],
-            &["the", "opponent", "with", "the", "most"],
-            &["the", "player", "with", "the", "most"],
-            &["a", "player", "with", "the", "most"],
-        ]) && try_parse(ts, parse_object_filter).is_ok()
-        {
-            let _ = ts.eat_any_phrase(&[
-                &["among", "your", "opponents"],
-                &["among", "all", "players"],
-            ]);
-            return Ok(PlayerRef::MostObjectsPlayer);
-        }
-        ts.restore(mcp);
-    }
-    if ts.eat_phrase(&["each", "player", "on", "your", "team"]) {
-        return Ok(PlayerRef::You);
-    }
     if ts.eat_phrase(&[
         "each", "player", "who", "searched", "their", "library", "this", "way",
     ]) {
         return Ok(PlayerRef::SearchedLibraryPlayer);
-    }
-    if ts.eat_any_phrase(&[
-        &["each", "player", "who", "controls", "the", "most"],
-        &["the", "player", "who", "controls", "the", "most"],
-    ]) {
-        let _ = try_parse(ts, parse_object_filter);
-        return Ok(PlayerRef::MostObjectsPlayer);
     }
     if ts.eat_phrase(&["each", "other", "opponent"]) {
         return Ok(PlayerRef::EachOtherOpponent);
@@ -363,15 +267,11 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
         &["each", "other", "player"],
         &["another", "player"],
         &["other", "players"],
+        &["each", "player", "other", "than", "you"],
+        &["any", "player", "other", "than", "you"],
+        &["a", "player", "other", "than", "you"],
     ]) {
         return Ok(PlayerRef::EachOtherPlayer);
-    }
-    for &(phrases, pref) in OTHER_THAN_PLAYERS {
-        let ecp = ts.checkpoint();
-        if ts.eat_any_phrase(phrases) && try_parse(ts, parse_player_ref).is_ok() {
-            return Ok(pref);
-        }
-        ts.restore(ecp);
     }
     if let Some(p) = eat_phrase_groups(ts, PLAYER_REF_MID) {
         return Ok(p);
@@ -424,33 +324,10 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     if ts.eat_phrase(&["its", "owner"]) {
         return Ok(PlayerRef::ItsOwner);
     }
-    if ts.eat_any_phrase(&[
-        &["any", "number", "of", "target", "players"],
-        &["any", "number", "of", "target", "opponents"],
-    ]) {
-        return Ok(PlayerRef::TargetPlayer);
-    }
-    {
-        let ncp = ts.checkpoint();
-        let _ = ts.eat_phrase(&["up", "to"]);
-        if ts.next_number(false).is_some()
-            && ts.eat_any_phrase(&[&["target", "players"], &["target", "opponents"]])
-            && ts
-                .peek_word()
-                .is_some_and(|w| w.eq_ignore_ascii_case("each"))
-        {
-            return Ok(PlayerRef::TargetPlayer);
-        }
-        ts.restore(ncp);
-    }
-    if ts.eat_phrase(&["the", "player", "with", "the", "most", "life"]) {
-        let _ = ts.eat_phrase(&["or", "tied", "for", "most", "life"]);
-        return Ok(PlayerRef::HighestLifePlayer);
-    }
     if ts.eat_phrase(&["the", "chosen", "player"]) {
         return Ok(PlayerRef::ChosenPlayer);
     }
-    if ts.eat_any_phrase(&[&["your", "team"], &["you"]]) {
+    if ts.eat_word("you") {
         return Ok(PlayerRef::You);
     }
     Err(ts.err("expected player reference"))
@@ -615,12 +492,27 @@ pub fn parse_zone_ref(ts: &mut TokenStream<'_>) -> PResult<ZoneRef> {
             (&["the", "library", "of"], ZoneKind::Library),
         ];
         if let Some(zone) = eat_phrase_table(ts, OF_ZONES)
-            && try_parse(ts, parse_player_ref).is_ok()
+            && let Ok(player) = try_parse(ts, parse_player_ref)
         {
-            return Ok(ZoneRef {
-                zone,
-                owner: ZoneOwner::ThatPlayer,
-            });
+            let owner = match player {
+                PlayerRef::You => Some(ZoneOwner::You),
+                PlayerRef::ThatPlayer | PlayerRef::ChosenPlayer => Some(ZoneOwner::ThatPlayer),
+                PlayerRef::TargetPlayer => Some(ZoneOwner::TargetPlayer),
+                PlayerRef::TargetOpponent => Some(ZoneOwner::TargetOpponent),
+                PlayerRef::AnyOpponent
+                | PlayerRef::DefendingPlayer
+                | PlayerRef::EnchantedPlayer => Some(ZoneOwner::Opponent),
+                PlayerRef::EachOpponent | PlayerRef::EachOtherOpponent => {
+                    Some(ZoneOwner::Opponents)
+                }
+                PlayerRef::EachPlayer => Some(ZoneOwner::EachPlayer),
+                PlayerRef::AnyPlayer => Some(ZoneOwner::Any),
+                PlayerRef::ItsOwner | PlayerRef::ItsController => Some(ZoneOwner::ItsOwner),
+                _ => None,
+            };
+            if let Some(owner) = owner {
+                return Ok(ZoneRef { zone, owner });
+            }
         }
         ts.restore(zcp);
     }
@@ -805,15 +697,13 @@ pub fn parse_zone_dest(ts: &mut TokenStream<'_>) -> PResult<(ZoneDest, EntryModi
         } else {
             let jb_cp = ts.checkpoint();
             if ts.eat_phrase(&["just", "beneath", "the", "top"])
-                && let Ok(depth) = try_parse(ts, crate::v2::value::parse_value_expr)
+                && let Ok(ValueExpr::Const(n)) = try_parse(ts, crate::v2::value::parse_value_expr)
+                && n >= 1
                 && ts.eat_any_word(&["cards", "card"])
                 && ts.eat_word("of")
                 && try_parse(ts, parse_zone_ref).is_ok()
             {
-                let d = match depth {
-                    ValueExpr::Const(n) => u16::try_from(n.max(1)).unwrap_or(1),
-                    _ => 0,
-                };
+                let d = u16::try_from(n).unwrap_or(1);
                 library_position = Some(LibraryPosition::FromTop(d));
             } else {
                 ts.restore(jb_cp);
@@ -896,24 +786,9 @@ pub fn parse_zone_dest(ts: &mut TokenStream<'_>) -> PResult<(ZoneDest, EntryModi
         }
         if ts.eat_any_phrase(&[&["and", "attacking"], &["attacking"]]) {
             modifiers.attacking = true;
-            let _ = ts.eat_any_phrase(&[
-                &["that", "opponent"],
-                &["that", "player"],
-                &["the", "defending", "player"],
-                &["defending", "player"],
-            ]);
-            let _ = ts.eat_any_phrase(&[
-                &["or", "a", "planeswalker", "they", "control"],
-                &["or", "a", "planeswalker", "that", "player", "controls"],
-            ]);
             continue;
         }
-        if ts.eat_any_phrase(&[
-            &["face", "up", "or", "face", "down"],
-            &["face", "down", "or", "face", "up"],
-            &["face", "down"],
-            &["face-down"],
-        ]) {
+        if ts.eat_any_phrase(&[&["face", "down"], &["face-down"]]) {
             modifiers.face_down = true;
             continue;
         }
@@ -941,44 +816,17 @@ pub fn parse_zone_dest(ts: &mut TokenStream<'_>) -> PResult<(ZoneDest, EntryModi
         {
             let wcp = ts.checkpoint();
             ts.eat_word("with");
-            let cnt = if ts.eat_word("x") {
-                0
-            } else if ts.eat_phrase(&["a", "number", "of"]) {
-                1
-            } else {
-                let n = ts.next_number(true).unwrap_or(1);
-                let _ = ts.eat_word("fewer");
-                n
-            };
-            let _ = ts.eat_word("additional");
-            if let Ok(ck) = try_parse(ts, parse_counter_kind)
-                && (ts.eat_word("counter") || ts.eat_word("counters"))
+            if let Some(cnt) = ts.next_number(true)
+                && cnt >= 1
             {
-                let _ = ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]);
-                if ts.eat_phrase(&["equal", "to"]) {
-                    let _ = try_parse(ts, crate::v2::value::parse_value_expr);
+                let _ = ts.eat_word("additional");
+                if let Ok(ck) = try_parse(ts, parse_counter_kind)
+                    && (ts.eat_word("counter") || ts.eat_word("counters"))
+                {
+                    let _ = ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]);
+                    modifiers.with_counter = Some((ck, u16::try_from(cnt).unwrap_or(1)));
+                    continue;
                 }
-                if ts.eat_phrase(&["if", "it's"]) {
-                    let _ = try_parse(ts, parse_object_filter);
-                }
-                modifiers.with_counter = Some((ck, u16::try_from(cnt.max(0)).unwrap_or(1)));
-                // Optional chained counter (`and a lifelink counter on it`, `and an additional loyalty counter on it if it's a planeswalker`)
-                let acp = ts.checkpoint();
-                if ts.eat_word("and") {
-                    let _ = ts.next_number(true);
-                    let _ = ts.eat_word("additional");
-                    if try_parse(ts, parse_counter_kind).is_ok()
-                        && (ts.eat_word("counter") || ts.eat_word("counters"))
-                    {
-                        let _ = ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]);
-                        if ts.eat_phrase(&["if", "it's"]) {
-                            let _ = try_parse(ts, parse_object_filter);
-                        }
-                    } else {
-                        ts.restore(acp);
-                    }
-                }
-                continue;
             }
             ts.restore(wcp);
         }
@@ -1032,10 +880,10 @@ fn simple_filter_flag(low: &str) -> Option<FilterFlags> {
         "renowned" => Some(FilterFlags::RENOWNED),
         "adventure" => Some(FilterFlags::HAS_ADVENTURE),
         "modified" => Some(FilterFlags::MODIFIED),
-        "transformed" | "double-faced" => Some(FilterFlags::TRANSFORMED),
+        "transformed" => Some(FilterFlags::TRANSFORMED),
         "equipped" => Some(FilterFlags::EQUIPPED),
-        "face-down" | "foretold" => Some(FilterFlags::FACE_DOWN),
-        "face-up" | "plotted" => Some(FilterFlags::FACE_UP),
+        "face-down" => Some(FilterFlags::FACE_DOWN),
+        "face-up" => Some(FilterFlags::FACE_UP),
         "commander" | "commanders" => Some(FilterFlags::IS_COMMANDER),
         "noncommander" => Some(FilterFlags::NOT_COMMANDER),
         _ => None,
@@ -1096,7 +944,7 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
 
     // Optional leading articles / `another` / `other` / `differently named`
     let _ = ts.eat_any_word(&["a", "an", "the"]);
-    // Support self-named planeswalker subtype filter (`a ~ planeswalker` normalized from `a Lukka planeswalker`)
+    // Support self-named planeswalker subtype filter (`a ~ planeswalker`)
     {
         let pcp = ts.checkpoint();
         if ts.eat_tilde() && ts.eat_any_word(&["planeswalker", "planeswalkers"]) {
@@ -1279,7 +1127,7 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
             && card_types_seen.is_empty()
         {
             let (p, t) = (*p, *t);
-            ts.pos += 1;
+            ts.next_tok();
             push_stat_bound(
                 &mut flt,
                 StatKind::Power,
@@ -1393,7 +1241,7 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
             break;
         }
         if low == "and" {
-            // Allow `activated and triggered abilities` (`Volatile Stormdrake`)
+            // Allow `activated and triggered abilities`
             if flt.is_ability
                 && ts.peek_n(1).is_some_and(|t| {
                     matches!(t.kind, TokenKind::Word(nw) if nw.eq_ignore_ascii_case("triggered") || nw.eq_ignore_ascii_case("activated"))
@@ -1402,7 +1250,7 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                 ts.next_word();
                 continue;
             }
-            // Allow `spell and ability` / `spells and abilities` (`Whirlwind Denial`)
+            // Allow `spell and ability` / `spells and abilities`
             if flt.any_spell
                 && ts.peek_n(1).is_some_and(|t| {
                     matches!(t.kind, TokenKind::Word(nw) if nw.eq_ignore_ascii_case("ability") || nw.eq_ignore_ascii_case("abilities"))
@@ -1532,11 +1380,6 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
             "unblocked" => {
                 ts.next_word();
                 flt.combat = Some(CombatState::Unblocked);
-            }
-            "ring-bearer" | "ring-bearers" => {
-                ts.next_word();
-                card_types_seen.push(CardTypeMask::CREATURE);
-                flt.flags = flt.flags.union(FilterFlags::MODIFIED);
             }
             "last" => {
                 let next_is_obj = ts.peek_n(1).is_some_and(|t| {
@@ -1717,7 +1560,6 @@ fn is_filter_modifier_word(w: &str, vocab: &crate::vocab::Vocabulary) -> bool {
                 | "unblocked"
                 | "modified"
                 | "transformed"
-                | "double-faced"
                 | "equipped"
                 | "enchanted"
                 | "face-down"
@@ -1726,7 +1568,5 @@ fn is_filter_modifier_word(w: &str, vocab: &crate::vocab::Vocabulary) -> bool {
                 | "colored"
                 | "multicolored"
                 | "monocolored"
-                | "foretold"
-                | "plotted"
         )
 }

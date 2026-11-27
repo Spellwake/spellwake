@@ -22,17 +22,6 @@ pub(super) fn parse_additional_combat(ts: &mut TokenStream<'_>) -> PResult<Effec
         &["after", "this", "combat", "phase"],
     ]);
     let _ = ts.eat_comma();
-    if ts.eat_any_phrase(&[
-        &["there", "is", "an", "additional", "beginning", "phase"],
-        &["there's", "an", "additional", "beginning", "phase"],
-    ]) {
-        let _ = ts.eat_phrase(&["after", "this", "phase"]);
-        return Ok(player_action(
-            PlayerRef::You,
-            PlayerActionKind::ExtraTurn,
-            Duration::UntilEndOfTurn,
-        ));
-    }
     if ts.eat_phrase(&["there", "are"]) {
         let cp = ts.checkpoint();
         if let Some(n) = ts.next_number(false)
@@ -69,9 +58,7 @@ pub(super) fn parse_additional_combat(ts: &mut TokenStream<'_>) -> PResult<Effec
 }
 
 /// Parse extended mana-spend purposes inside `Spend this mana only to ...` and
-/// `This mana can't be spent to ...` (`Adarkar Unicorn`, `Overgrown Zealot`,
-/// `Unblinking Observer`, `Niko Defies Destiny`, `Quinjet Technician`, `Ice Cauldron`,
-/// `Gallifrey Council Chamber`, `Jegantha, the Wellspring`, `Qarsi Deceiver`).
+/// `This mana can't be spent to ...`.
 pub(super) fn try_parse_extra_mana_spend_purpose(
     ts: &mut TokenStream<'_>,
 ) -> Option<crate::v2::ir::ManaSpendPurpose> {
@@ -192,23 +179,6 @@ pub(super) fn parse_temporary_static_clause(ts: &mut TokenStream<'_>) -> PResult
 pub(super) fn parse_activation_restrictions(
     ts: &mut TokenStream<'_>,
 ) -> PResult<Vec<ActivationRestriction>> {
-    // `Activate no more than [twice | <N> times] each turn` / `Activate no more times each turn than <val>`
-    {
-        let ncp = ts.checkpoint();
-        if ts.eat_phrase(&["activate", "no", "more", "than"])
-            && (ts.eat_phrase(&["twice", "each", "turn"])
-                || (ts.next_number(false).is_some() && ts.eat_phrase(&["times", "each", "turn"])))
-        {
-            return Ok(vec![ActivationRestriction::OnceEachTurn]);
-        }
-        ts.restore(ncp);
-        if ts.eat_phrase(&["activate", "no", "more", "times", "each", "turn", "than"])
-            && crate::v2::parser::try_parse(ts, crate::v2::value::parse_value_expr).is_ok()
-        {
-            return Ok(vec![ActivationRestriction::OnceEachTurn]);
-        }
-        ts.restore(ncp);
-    }
     let valid_head = ts.eat_phrase(&["activate", "only"])
         || ts.eat_phrase(&["cast", "this", "spell", "only"])
         || {
@@ -356,31 +326,14 @@ pub(super) fn parse_activation_restrictions(
             {
                 let cond_slice = &ts.tokens[ts.pos..ao_idx];
                 let mut cond_ts = ts.sub_stream(cond_slice, ParseStage::Effect);
-                let cond = parse_condition(&mut cond_ts).or_else(|_| {
-                    cond_ts.pos = 0;
-                    super::sentence_ext::parse_extra_clause_condition(&mut cond_ts)
-                })?;
+                let cond = parse_condition(&mut cond_ts)?;
                 cond_ts.expect_eof()?;
-                ts.pos = ao_idx;
+                ts.commit_substream_eof(ao_idx, &cond_ts);
                 out.push(ActivationRestriction::OnlyIf(Box::new(cond)));
             } else {
-                let ccp = ts.checkpoint();
-                let mut cond = match parse_condition(ts) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        ts.restore(ccp);
-                        super::sentence_ext::parse_extra_clause_condition(ts)?
-                    }
-                };
+                let mut cond = parse_condition(ts)?;
                 if ts.eat_phrase(&["or", "if"]) {
-                    let c2_cp = ts.checkpoint();
-                    let c2 = match parse_condition(ts) {
-                        Ok(c) => c,
-                        Err(_) => {
-                            ts.restore(c2_cp);
-                            super::sentence_ext::parse_extra_clause_condition(ts)?
-                        }
-                    };
+                    let c2 = parse_condition(ts)?;
                     cond = crate::v2::ir::ConditionExpr::Or(Box::new(cond), Box::new(c2));
                 }
                 out.push(ActivationRestriction::OnlyIf(Box::new(cond)));
@@ -401,15 +354,8 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
     ts: &mut TokenStream<'_>,
 ) -> PResult<Vec<Effect>> {
     use crate::v2::parser::try_parse;
-    let parse_cond = |s: &mut TokenStream<'_>| {
-        let ccp = s.checkpoint();
-        parse_condition(s).or_else(|_| {
-            s.restore(ccp);
-            super::sentence_ext::parse_extra_clause_condition(s)
-        })
-    };
 
-    // 1. `This ability ...` (triggers only once/if, can't be copied, still resolves, costs {M} less/more if)
+    // 1. `This ability ...` (triggers only once/if, costs {M} less/more if)
     {
         let cp = ts.checkpoint();
         if ts.eat_phrase(&["this", "ability"]) {
@@ -417,10 +363,10 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
                 return Ok(vec![Effect::Restriction(vec![ActivationRestriction::Once])]);
             }
             if ts.eat_phrase(&["triggers", "only", "if"])
-                && let Ok(mut cond) = parse_cond(ts)
+                && let Ok(mut cond) = try_parse(ts, parse_condition)
             {
                 if ts.eat_phrase(&["or", "if"])
-                    && let Ok(c2) = parse_cond(ts)
+                    && let Ok(c2) = try_parse(ts, parse_condition)
                 {
                     cond = crate::v2::ir::ConditionExpr::Or(Box::new(cond), Box::new(c2));
                 }
@@ -429,37 +375,6 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
                         ActivationRestriction::OnlyIf(Box::new(cond)),
                     ])]);
                 }
-            }
-            ts.restore(cp);
-            if ts.eat_phrase(&["this", "ability", "can't", "be", "copied"]) {
-                let mut out = vec![apply_continuous(
-                    StaticAbility::RuleRestriction {
-                        subject: None,
-                        rule: RuleRestrictionKind::CantBeCountered,
-                        condition: None,
-                    },
-                    Duration::Instant,
-                )];
-                if ts.eat_phrase(&["and", "x", "can't", "be"]) && ts.next_number(false) == Some(0) {
-                    out.push(player_action(
-                        PlayerRef::You,
-                        PlayerActionKind::XCantBeZero,
-                        Duration::Instant,
-                    ));
-                }
-                if ts.is_eof() {
-                    return Ok(out);
-                }
-            }
-            ts.restore(cp);
-            if ts.eat_phrase(&[
-                "this", "ability", "still", "resolves", "if", "its", "target", "becomes", "illegal",
-            ]) && ts.is_eof()
-            {
-                return Ok(vec![apply_continuous(
-                    StaticAbility::GlobalFlag(crate::v2::ir::StaticFlagKind::AppliesInAllZones),
-                    Duration::Instant,
-                )]);
             }
             ts.restore(cp);
             if ts.eat_phrase(&["this", "ability", "costs"])
@@ -474,7 +389,7 @@ pub(super) fn parse_extra_restriction_or_cost_sentence(
                 };
                 if let Some(less) = less
                     && ts.eat_word("if")
-                    && let Ok(cond) = parse_cond(ts)
+                    && let Ok(cond) = try_parse(ts, parse_condition)
                     && ts.is_eof()
                 {
                     return Ok(vec![apply_continuous(
@@ -847,28 +762,20 @@ pub(in crate::v2) fn parse_from_zone_list(ts: &mut TokenStream<'_>) -> PResult<V
         from.push(z1);
         loop {
             let zcp = ts.checkpoint();
-            if ts.eat_any_word(&["or", "and"]) {
+            let had_comma = ts.eat_comma();
+            let had_conj = ts.eat_any_word(&["and/or", "or", "and"]);
+            if had_comma || had_conj {
                 let _ = ts.eat_word("from");
-                if let Ok(z2) = try_parse(ts, parse_zone_ref) {
+                if let Ok(mut z2) = try_parse(ts, parse_zone_ref) {
+                    if z2.owner == ZoneOwner::Default
+                        && matches!(
+                            z2.zone,
+                            ZoneKind::Graveyard | ZoneKind::Hand | ZoneKind::Library
+                        )
+                    {
+                        z2.owner = z1.owner;
+                    }
                     from.push(z2);
-                    continue;
-                }
-                let bare = if ts.eat_any_word(&["graveyard", "graveyards"]) {
-                    Some(ZoneKind::Graveyard)
-                } else if ts.eat_any_word(&["hand", "hands"]) {
-                    Some(ZoneKind::Hand)
-                } else if ts.eat_any_word(&["library", "libraries"]) {
-                    Some(ZoneKind::Library)
-                } else if ts.eat_word("exile") {
-                    Some(ZoneKind::Exile)
-                } else {
-                    None
-                };
-                if let Some(zone) = bare {
-                    from.push(ZoneRef {
-                        zone,
-                        owner: z1.owner,
-                    });
                     continue;
                 }
             }

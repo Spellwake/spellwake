@@ -156,16 +156,10 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         if ts.eat_phrase(&["any", "amount", "of", "life"]) {
             return Ok(Cost::PayAnyAmountLife);
         }
-        if ts.eat_phrase(&["any", "amount", "of", "mana"])
-            || ts.eat_phrase(&["its", "mana", "cost"])
-            || ts.eat_phrase(&["that", "card's", "mana", "cost"])
-            || ts.eat_phrase(&["that", "creature's", "mana", "cost"])
-            || ts.eat_phrase(&["enchanted", "creature's", "mana", "cost"])
-            || ts.eat_phrase(&["enchanted", "permanent's", "mana", "cost"])
-        {
+        if ts.eat_phrase(&["any", "amount", "of", "mana"]) {
             return Ok(Cost::PayAnyAmountMana);
         }
-        // `Pay six {C}` (`Emrakul, the World Anew`)
+        // `Pay six {C}`
         {
             let mcp = ts.checkpoint();
             if let Some(n) = ts.next_number(false)
@@ -209,7 +203,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Err(ts.err("expected `life`, energy, or mana after `pay`"));
     }
 
-    // `Behold a/an <flt>` (`Osseous Exhale`, Tarkir Dragonstorm)
+    // `Behold a/an <flt>`
     if ts.eat_word("behold") {
         let filter = parse_object_filter(ts)?;
         return Ok(Cost::Behold(filter));
@@ -234,7 +228,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
             ValueExpr::Const(1)
         };
         let mut filter = parse_object_filter(ts)?;
-        // Support `Sacrifice a Food or another creature` (`Malevolent Noble`)
+        // Support `Sacrifice a Food or another creature`
         let ocp = ts.checkpoint();
         if ts.eat_word("or") {
             let _ = ts.eat_word("a") || ts.eat_word("an");
@@ -279,20 +273,12 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         ts.restore(gcp);
     }
 
-    // `Unattach ~` / `Unattach <filter> from <subj>` (`Captain America, First Avenger`)
+    // `Unattach ~`
     if ts.eat_word("unattach") {
         if ts.eat_tilde() {
             return Ok(Cost::UnattachSelf);
         }
-        let ucp = ts.checkpoint();
-        if try_parse(ts, parse_object_filter).is_ok()
-            && ts.eat_word("from")
-            && (ts.eat_tilde() || try_parse(ts, parse_subject_ref).is_ok())
-        {
-            return Ok(Cost::UnattachSelf);
-        }
-        ts.restore(ucp);
-        return Err(ts.err("expected `~` or `<filter> from <subj>` after `unattach`"));
+        return Err(ts.err("expected `~` after `unattach`"));
     }
 
     // `Blight <val>`
@@ -371,7 +357,6 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         if ts.eat_word("from") {
             from.push(parse_zone_ref(ts)?);
         }
-        let _ = ts.eat_phrase(&["face", "up"]) || ts.eat_phrase(&["face", "down"]);
         if ts.eat_phrase(&["equal", "to"]) {
             count = parse_value_expr(ts)?;
         }
@@ -382,7 +367,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         });
     }
 
-    // `Untap <N> [tapped] <filter>` (`Crackleburr`, etc.)
+    // `Untap <N> [tapped] <filter>`
     if ts.eat_word("untap") {
         if ts.eat_tilde() {
             return Ok(Cost::UntapSelf);
@@ -500,7 +485,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
             }
             ck
         };
-        // Optional `or a/an <kind2> counter` (`Ion Storm`)
+        // Optional `or a/an <kind2> counter`
         let mut kind2_opt = None;
         {
             let ocp = ts.checkpoint();
@@ -590,7 +575,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Err(ts.err("expected `card(s)` after `mill` in cost"));
     }
 
-    // `Reveal ~ from your hand` / `Reveal your hand` / `Reveal the player you chose` / `Reveal <N> <filter> from your hand`
+    // `Reveal ~ from your hand` / `Reveal your hand` / `Reveal <N> <filter> from your hand`
     if ts.eat_word("reveal") {
         if ts.eat_phrase(&["your", "hand"]) {
             return Ok(Cost::RevealFromHand {
@@ -600,21 +585,6 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
                     ..Default::default()
                 },
             });
-        }
-        if ts.eat_phrase(&["the", "player", "you", "chose"]) {
-            return Ok(Cost::ChooseObject(SubjectRef::Player(
-                PlayerRef::ChosenPlayer,
-            )));
-        }
-        if ts.eat_phrase(&["the", "creature", "type", "you", "chose"])
-            || ts.eat_phrase(&["the", "type", "you", "chose"])
-        {
-            return Ok(Cost::ChooseObject(SubjectRef::Group(Box::new(
-                ObjectFilter {
-                    predicates: vec![FilterPredicate::OfChosenCreatureType],
-                    ..Default::default()
-                },
-            ))));
         }
         if ts.eat_tilde() {
             let _ = ts.eat_phrase(&["from", "your", "hand"]);
@@ -636,31 +606,6 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         let filter = parse_object_filter(ts)?;
         let _ = ts.eat_phrase(&["from", "your", "hand"]);
         return Ok(Cost::RevealFromHand { count, filter });
-    }
-
-    // `Roll a d<N>` / `Roll a <N>-sided die`
-    {
-        let rcp = ts.checkpoint();
-        if ts.eat_word("roll") {
-            let _ = ts.eat_word("a") || ts.eat_word("an");
-            if let Some(w) = ts.peek_word()
-                && let Some(rest) = w.strip_prefix('d').or_else(|| w.strip_prefix('D'))
-                && let Ok(sides) = rest.parse::<i32>()
-            {
-                ts.next_word();
-                return Ok(Cost::ChooseObject(SubjectRef::OneOfThem(ValueExpr::Const(
-                    sides,
-                ))));
-            }
-            if let Some(sides) = ts.next_number(false)
-                && (ts.eat_phrase(&["sided", "die"]) || ts.eat_word("die"))
-            {
-                return Ok(Cost::ChooseObject(SubjectRef::OneOfThem(ValueExpr::Const(
-                    sides,
-                ))));
-            }
-        }
-        ts.restore(rcp);
     }
 
     // `Choose <keywords>` OR `Choose <subj1> [or <subj2>]`
