@@ -217,7 +217,33 @@ fn parse_zone_verb_frame_inner(
             }
             ts.restore(dcp);
         }
-        let cnt = if ts.eat_word("a") {
+        let cnt = if ts.eat_phrase(&["a", "number", "of", "cards", "equal", "to"]) {
+            let v = parse_value_expr(ts)?;
+            let random = ts.eat_phrase(&["at", "random"]);
+            return Ok((
+                vec![Effect::ZoneOp {
+                    actor,
+                    op: ZoneOpKind::Discard {
+                        hand: false,
+                        random,
+                    },
+                    subject: SubjectRef::Player(actor),
+                    from: vec![ZoneRef {
+                        zone: ZoneKind::Hand,
+                        owner: ZoneOwner::Default,
+                    }],
+                    to: None,
+                    modifiers: EntryModifiers::default(),
+                    except: None,
+                    count: Some(CountSpec {
+                        count: v,
+                        up_to,
+                        any_number: false,
+                    }),
+                }],
+                (),
+            ));
+        } else if ts.eat_word("a") {
             ValueExpr::Const(1)
         } else {
             parse_value_expr(ts)?
@@ -989,14 +1015,34 @@ fn parse_zone_verb_frame_inner(
                 break;
             }
         }
-        let except = if ts.eat_word("except") {
-            Some(Box::new(parse_subject_ref(ts)?))
-        } else {
-            None
+        let mut except = {
+            let ecp = ts.checkpoint();
+            let _ = ts.eat_comma();
+            if ts.eat_word("except") {
+                let _ = ts.eat_word("for");
+                Some(Box::new(parse_subject_ref(ts)?))
+            } else {
+                ts.restore(ecp);
+                None
+            }
         };
         let (dest, modifiers) = parse_zone_dest(ts)?;
         if ts.eat_word("from") {
             from.push(parse_zone_ref(ts)?);
+        }
+        if except.is_none() {
+            let ecp = ts.checkpoint();
+            let _ = ts.eat_comma();
+            if ts.eat_word("except") {
+                let _ = ts.eat_word("for");
+                if let Ok(ex_subj) = try_parse(ts, parse_subject_ref) {
+                    except = Some(Box::new(ex_subj));
+                } else {
+                    ts.restore(ecp);
+                }
+            } else {
+                ts.restore(ecp);
+            }
         }
         let _ = ts.eat_phrase(&[
             "instead",
@@ -1181,11 +1227,33 @@ fn parse_zone_verb_frame_inner(
                 && let Some(kind) = kind_opt
             {
                 let mut pairs = vec![(base, kind)];
+                let mut choice_branches: Vec<Vec<CounterKind>> = Vec::new();
                 let mut is_choice = false;
                 loop {
                     let acp = ts.checkpoint();
+                    let had_comma = ts.eat_comma();
                     let sep_or = ts.eat_word("or");
-                    if sep_or || ts.eat_word("and") {
+                    let sep_and = ts.eat_word("and");
+                    if had_comma || sep_or || sep_and {
+                        // `and a counter from among <k1>, <k2>, ...` (`Elspeth Resplendent`)
+                        let fcp = ts.checkpoint();
+                        if ts.eat_phrase(&["a", "counter", "from", "among"])
+                            || ts.eat_phrase(&[
+                                "your", "choice", "of", "a", "counter", "from", "among",
+                            ])
+                        {
+                            let mut opts = Vec::new();
+                            while let Ok(k) = try_parse(ts, parse_counter_kind) {
+                                opts.push(k);
+                                let _ = ts.eat_comma();
+                                let _ = ts.eat_word("or") || ts.eat_word("and");
+                            }
+                            if !opts.is_empty() {
+                                choice_branches.push(opts);
+                                continue;
+                            }
+                        }
+                        ts.restore(fcp);
                         let c2 = if ts.eat_word("a") || ts.eat_word("an") || ts.eat_word("another")
                         {
                             Some(ValueExpr::Const(1))
@@ -1225,6 +1293,54 @@ fn parse_zone_verb_frame_inner(
                             mutation: ObjectMutation::PutCounters { kind: k, count },
                             duration: Duration::Instant,
                         });
+                    }
+                    for opts in choice_branches {
+                        let branches = opts
+                            .into_iter()
+                            .map(|k| {
+                                vec![Effect::MutateObject {
+                                    subject: subject.clone(),
+                                    mutation: ObjectMutation::PutCounters {
+                                        kind: k,
+                                        count: ValueExpr::Const(1),
+                                    },
+                                    duration: Duration::Instant,
+                                }]
+                            })
+                            .collect();
+                        out.push(Effect::PromptChoice {
+                            chooser: actor,
+                            kind: crate::v2::ir::ChoiceKind::ChooseBranch(branches),
+                        });
+                    }
+                    // Chained `and <cnt2> <kind2> counter(s) on <subj2>` (`Captain America, Team Leader`)
+                    loop {
+                        let ccp = ts.checkpoint();
+                        if ts.eat_word("and") {
+                            let c2 = if ts.eat_word("a") || ts.eat_word("an") {
+                                Some(ValueExpr::Const(1))
+                            } else {
+                                opt(ts, parse_value_expr)
+                            };
+                            if let Some(c2) = c2
+                                && let Ok(k2) = try_parse(ts, parse_counter_kind)
+                                && (ts.eat_word("counter") || ts.eat_word("counters"))
+                                && ts.eat_word("on")
+                                && let Ok(subj2) = try_parse(ts, parse_subject_ref)
+                            {
+                                out.push(Effect::MutateObject {
+                                    subject: subj2,
+                                    mutation: ObjectMutation::PutCounters {
+                                        kind: k2,
+                                        count: c2,
+                                    },
+                                    duration: Duration::Instant,
+                                });
+                                continue;
+                            }
+                        }
+                        ts.restore(ccp);
+                        break;
                     }
                     if is_choice {
                         return Ok((

@@ -26,6 +26,24 @@ pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec>
         }
         ts.restore(tm_cp);
     }
+    {
+        let amt_cp = ts.checkpoint();
+        if ts.eat_phrase(&["an", "amount", "of", "mana", "of"]) {
+            let chosen = ts.eat_phrase(&["the", "chosen", "color"]);
+            let that_c = !chosen && ts.eat_phrase(&["that", "color"]);
+            if (chosen || that_c)
+                && ts.eat_phrase(&["equal", "to"])
+                && let Ok(amount) = try_parse(ts, parse_value_expr)
+            {
+                return Ok(if chosen {
+                    ManaSpec::ChosenColor(amount)
+                } else {
+                    ManaSpec::ThatColor(amount)
+                });
+            }
+        }
+        ts.restore(amt_cp);
+    }
     if ts.eat_phrase(&["an", "amount", "of"])
         && let Some(mc) = ts.eat_mana_cost()
         && ts.eat_phrase(&["equal", "to"])

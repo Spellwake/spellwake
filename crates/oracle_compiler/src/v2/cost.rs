@@ -29,15 +29,21 @@ pub fn parse_cost_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Cost>> {
             costs.push(next);
             continue;
         }
-        // Conjoined sacrifice targets (`Sacrifice a Swamp and a Forest`, `Sacrifice a creature and ~`,
-        // `Sacrifice a white creature, a blue creature, and a black creature`)
+        // Conjoined sacrifice/exile targets (`Sacrifice a Swamp and a Forest`, `Exile two cards from your graveyard and ~`)
         if matches!(
             costs.last(),
-            Some(Cost::Sacrifice { .. } | Cost::SacrificeSelf)
+            Some(
+                Cost::Sacrifice { .. } | Cost::SacrificeSelf | Cost::Exile { .. } | Cost::ExileSelf
+            )
         ) {
+            let is_exile = matches!(costs.last(), Some(Cost::Exile { .. } | Cost::ExileSelf));
             let scp = ts.checkpoint();
             if ts.eat_tilde() || ts.eat_word("it") {
-                costs.push(Cost::SacrificeSelf);
+                costs.push(if is_exile {
+                    Cost::ExileSelf
+                } else {
+                    Cost::SacrificeSelf
+                });
                 continue;
             }
             let count = if ts.eat_word("all")
@@ -53,7 +59,15 @@ pub fn parse_cost_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Cost>> {
                 ValueExpr::Const(1)
             };
             if let Ok(filter) = try_parse(ts, parse_object_filter) {
-                costs.push(Cost::Sacrifice { count, filter });
+                costs.push(if is_exile {
+                    Cost::Exile {
+                        count,
+                        filter,
+                        from: Vec::new(),
+                    }
+                } else {
+                    Cost::Sacrifice { count, filter }
+                });
                 continue;
             }
             ts.restore(scp);
@@ -126,6 +140,14 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         }
         if ts.eat_phrase(&["life", "equal", "to"]) {
             let amt = parse_value_expr(ts)?;
+            return Ok(Cost::PayLife(amt));
+        }
+        if ts
+            .peek_word()
+            .is_some_and(|w| w.eq_ignore_ascii_case("half"))
+            && let Ok(amt) = try_parse(ts, parse_value_expr)
+        {
+            let _ = ts.eat_word("life");
             return Ok(Cost::PayLife(amt));
         }
         let amt = parse_value_expr(ts)?;
@@ -223,19 +245,36 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
             return Ok(Cost::ExileSelf);
         }
         if ts.eat_phrase(&["the", "top"]) {
+            let t_cp = ts.checkpoint();
             let count = if ts.eat_word("card") {
-                ValueExpr::Const(1)
+                Some(ValueExpr::Const(1))
+            } else if let Ok(n) = try_parse(ts, parse_value_expr)
+                && (ts.eat_word("cards") || ts.eat_word("card"))
+            {
+                Some(n)
             } else {
-                let n = parse_value_expr(ts)?;
-                let _ = ts.eat_word("cards") || ts.eat_word("card");
-                n
+                None
             };
-            if ts.eat_word("of") {
-                let zone = parse_zone_ref(ts)?;
+            if let Some(count) = count
+                && ts.eat_word("of")
+                && let Ok(zone) = try_parse(ts, parse_zone_ref)
+            {
                 return Ok(Cost::ExileTop { zone, count });
             }
+            ts.restore(t_cp);
+            if let Ok(filter) = try_parse(ts, parse_object_filter)
+                && ts.eat_word("of")
+                && let Ok(zone) = try_parse(ts, parse_zone_ref)
+            {
+                return Ok(Cost::Exile {
+                    count: ValueExpr::Const(1),
+                    filter,
+                    from: vec![zone],
+                });
+            }
+            ts.restore(t_cp);
         }
-        let count =
+        let mut count =
             if ts.eat_phrase(&["any", "number", "of"]) || ts.eat_phrase(&["one", "or", "more"]) {
                 ValueExpr::Var(crate::v2::ir::VarName::X)
             } else if let Some(n) = ts.next_number(true) {
@@ -249,6 +288,9 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         let mut from = Vec::new();
         if ts.eat_word("from") {
             from.push(parse_zone_ref(ts)?);
+        }
+        if ts.eat_phrase(&["equal", "to"]) {
+            count = parse_value_expr(ts)?;
         }
         return Ok(Cost::Exile {
             count,

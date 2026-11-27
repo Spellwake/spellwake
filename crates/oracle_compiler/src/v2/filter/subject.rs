@@ -30,6 +30,30 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
         || ts.eat_phrase(&["one", "or", "more", "targets"])
         || ts.eat_phrase(&["any", "number", "of", "targets"])
     {
+        // `any target that isn't a <subtype>` (`Wrathful Red Dragon`, `Wrathful Raptors`)
+        let ex_cp = ts.checkpoint();
+        if ts.eat_phrase(&["that", "isn't"])
+            && (ts.eat_word("a") || ts.eat_word("an"))
+            && let Some(sub) = ts
+                .peek_word()
+                .and_then(|w| ts.vocab.lookup_subtype(&w.to_ascii_lowercase()))
+        {
+            ts.next_word();
+            let mut flt = ObjectFilter::default();
+            flt.forbidden_subtypes.push(sub.to_string());
+            return Ok(SubjectRef::Compound(vec![
+                SubjectRef::TargetPlayer {
+                    opponent_only: false,
+                    count: TargetCount::Exact(1),
+                },
+                SubjectRef::TargetObject {
+                    filter: Box::new(flt),
+                    count: TargetCount::Exact(1),
+                    another: false,
+                },
+            ]));
+        }
+        ts.restore(ex_cp);
         return Ok(SubjectRef::AnyTarget);
     }
     {
@@ -182,7 +206,7 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                 if another {
                     flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
                 }
-                // Support trailing `or player` / `and/or player(s)` (`target creature or player`, `target creature, planeswalker, or player`, `target creatures, planeswalkers, and/or players`)
+                // Support trailing `or player` / `or opponent` / `and/or player(s)` (`target creature or player`, `target artifact, creature, planeswalker, or opponent`)
                 let p_cp = ts.checkpoint();
                 let _ = ts.eat_comma();
                 if ts.eat_phrase(&["or", "player"])
@@ -198,6 +222,23 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                         },
                         SubjectRef::TargetPlayer {
                             opponent_only: false,
+                            count,
+                        },
+                    ]));
+                }
+                if ts.eat_phrase(&["or", "opponent"])
+                    || ts.eat_phrase(&["or", "opponents"])
+                    || ts.eat_phrase(&["and/or", "opponent"])
+                    || ts.eat_phrase(&["and/or", "opponents"])
+                {
+                    return Ok(SubjectRef::Compound(vec![
+                        SubjectRef::TargetObject {
+                            filter: Box::new(flt),
+                            count,
+                            another,
+                        },
+                        SubjectRef::TargetPlayer {
+                            opponent_only: true,
                             count,
                         },
                     ]));
@@ -345,11 +386,36 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                     this_game: true,
                 });
             }
-            if ts.eat_phrase(&["dealt", "combat", "damage", "this", "turn", "by"]) {
+            if ts.eat_phrase(&["dealt", "combat", "damage", "this", "turn", "by"])
+                || ts.eat_phrase(&["dealt", "damage", "this", "turn", "by"])
+            {
                 let src = parse_object_filter(ts)?;
                 return Ok(SubjectRef::PlayersDealtCombatDamageBy {
                     player: p,
                     source: Box::new(src),
+                    this_game: false,
+                });
+            }
+            {
+                let dd_cp = ts.checkpoint();
+                if ts.eat_phrase(&["dealt", "damage", "by"])
+                    && ts.eat_tilde()
+                    && ts.eat_phrase(&["this", "turn"])
+                {
+                    return Ok(SubjectRef::PlayersDealtCombatDamageBy {
+                        player: p,
+                        source: Box::new(ObjectFilter::default()),
+                        this_game: false,
+                    });
+                }
+                ts.restore(dd_cp);
+            }
+            if ts.eat_phrase(&["dealt", "damage", "this", "way"])
+                || ts.eat_phrase(&["dealt", "combat", "damage", "this", "way"])
+            {
+                return Ok(SubjectRef::PlayersDealtCombatDamageBy {
+                    player: p,
+                    source: Box::new(ObjectFilter::default()),
                     this_game: false,
                 });
             }
@@ -638,7 +704,13 @@ pub fn parse_anaphora(ts: &mut TokenStream<'_>) -> Option<AnaphoraRef> {
     if ts.eat_phrase(&["those", "cards"]) {
         return Some(AnaphoraRef::ThoseCards);
     }
-    if ts.eat_word("it") || ts.eat_word("itself") || ts.eat_word("him") || ts.eat_word("her") {
+    if ts.eat_word("it")
+        || ts.eat_word("itself")
+        || ts.eat_word("he")
+        || ts.eat_word("she")
+        || ts.eat_word("him")
+        || ts.eat_word("her")
+    {
         return Some(AnaphoraRef::It);
     }
     if ts.eat_word("them") {

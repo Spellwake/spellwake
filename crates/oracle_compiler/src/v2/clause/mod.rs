@@ -407,7 +407,11 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
     {
         let cp = ts.checkpoint();
         if ts.eat_word("if") && opt(ts, parse_player_ref).is_some() {
-            let succeeded = if ts.eat_word("do") || ts.eat_word("does") {
+            let succeeded = if ts.eat_word("do")
+                || ts.eat_word("does")
+                || ts.eat_word("pay")
+                || ts.eat_word("pays")
+            {
                 Some(true)
             } else if ts.eat_word("don't")
                 || ts.eat_word("doesn't")
@@ -446,9 +450,11 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         ts.restore(cp);
     }
 
-    // 3. Mana spend rider: `If that mana is spent [to cast | on] <spell_flt>, <rider>` OR `When you spend this mana to cast <spell_flt>, <rider>`
+    // 3. Mana spend rider: `If/When that mana is spent [to cast | on] <spell_flt>, <rider>` OR `When you spend this mana to cast <spell_flt>, <rider>`
     if ts.eat_phrase(&["if", "that", "mana", "is", "spent", "to", "cast"])
         || ts.eat_phrase(&["if", "that", "mana", "is", "spent", "on"])
+        || ts.eat_phrase(&["when", "that", "mana", "is", "spent", "to", "cast"])
+        || ts.eat_phrase(&["when", "that", "mana", "is", "spent", "on"])
         || ts.eat_phrase(&["when", "you", "spend", "this", "mana", "to", "cast"])
     {
         let spell_filter = parse_object_filter(ts)?;
@@ -1108,6 +1114,37 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             duration: Duration::UntilEndOfTurn,
         }]);
     }
+    // 7b1b2. `Its/Their/<subj>'s activated abilities can't be activated [unless they're mana abilities] [dur]` (`Koma, Cosmos Serpent`, `Deadlock Trap`)
+    {
+        let acp = ts.checkpoint();
+        let subj_opt = if ts.eat_word("its") {
+            Some(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It))
+        } else if ts.eat_word("their") {
+            Some(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::Them))
+        } else if let Ok(s) = try_parse(ts, parse_subject_ref)
+            && ts.eat_word("'s")
+        {
+            Some(s)
+        } else {
+            None
+        };
+        if let Some(subj) = subj_opt
+            && ts.eat_phrase(&["activated", "abilities", "can't", "be", "activated"])
+        {
+            let _ = ts.eat_phrase(&["unless", "they're", "mana", "abilities"])
+                || ts.eat_phrase(&["unless", "they", "are", "mana", "abilities"]);
+            let duration = crate::v2::clause::subject_verbs::parse_trailing_duration(ts)
+                .unwrap_or(Duration::UntilEndOfTurn);
+            return Ok(vec![Effect::MutateObject {
+                subject: subj,
+                mutation: ObjectMutation::ApplyRule(
+                    RuleRestrictionKind::ActivatedAbilitiesCantBeActivated,
+                ),
+                duration,
+            }]);
+        }
+        ts.restore(acp);
+    }
     // 7b1c. `<subj>'s base power [and toughness] become(s) equal to <val> [dur]` OR `the base power and toughness of <subj> become equal to <val> [dur]` (`Belligerent Yearling`, `PuPu UFO`, `Sita Varma`, `Halfdane`)
     {
         let bcp = ts.checkpoint();
@@ -1342,6 +1379,10 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                 tail_ts.restore(pcp);
                 let _ = tail_ts.eat_word("pays") || tail_ts.eat_word("pay");
                 if let Ok(c) = try_parse(&mut tail_ts, parse_cost_atom) {
+                    if tail_ts.eat_phrase(&["plus", "an", "additional"]) || tail_ts.eat_word("plus")
+                    {
+                        let _ = try_parse(&mut tail_ts, parse_cost_atom);
+                    }
                     let _ = opt(&mut tail_ts, crate::v2::value::parse_for_each_expr);
                     if tail_ts.is_eof() { Some(c) } else { None }
                 } else {
@@ -2018,19 +2059,53 @@ fn parse_single_clause(
         let cp = ts.checkpoint();
         if let Ok(player) = try_parse(ts, parse_player_ref) {
             let _ = ts.eat_word("each");
-            // `<player> who can't/didn't/doesn't <verb>` (`Plaguecrafter`, `Momentum Breaker`, `Fandaniel`)
-            if (ts.eat_phrase(&["who", "can't"])
-                || ts.eat_phrase(&["who", "didn't"])
-                || ts.eat_phrase(&["who", "doesn't"]))
-                && let Ok((body, _)) = try_parse(ts, |s| parse_player_verb_frame(s, player))
+            // `<player> who can't/didn't/doesn't [<prior_verb> this way] <verb>` (`Plaguecrafter`, `Kroxa`, `Strongarm Tactics`, `Hollow Marauder`)
             {
-                return Ok((
-                    vec![Effect::ForEach {
-                        over: ForEachDomain::EachPlayerWhoCant(player),
-                        body,
-                    }],
-                    Some(player),
-                ));
+                let wd_cp = ts.checkpoint();
+                if ts.eat_phrase(&["who", "can't"])
+                    || ts.eat_phrase(&["who", "didn't"])
+                    || ts.eat_phrase(&["who", "doesn't"])
+                {
+                    // Case 1: `<player> who didn't <prior_verb> this way <effect_verb>` (`Kroxa`, `Strongarm Tactics`)
+                    if let Some(tw_idx) = find_phrase_index(ts.tokens, ts.pos, &["this", "way"])
+                        && tw_idx > ts.pos
+                        && tw_idx + 2 < ts.tokens.len()
+                    {
+                        let prior_slice = &ts.tokens[ts.pos..tw_idx];
+                        let mut prior_ts = ts.sub_stream(prior_slice, ParseStage::Effect);
+                        if parse_player_verb_frame(&mut prior_ts, player).is_ok()
+                            && prior_ts.is_eof()
+                        {
+                            ts.pos = tw_idx + 2;
+                            if let Ok((body, _)) =
+                                try_parse(ts, |s| parse_player_verb_frame(s, player))
+                            {
+                                return Ok((
+                                    vec![Effect::ForEach {
+                                        over: ForEachDomain::EachPlayerWhoCant(player),
+                                        body,
+                                    }],
+                                    Some(player),
+                                ));
+                            }
+                        }
+                    }
+                    ts.restore(wd_cp);
+                    if (ts.eat_phrase(&["who", "can't"])
+                        || ts.eat_phrase(&["who", "didn't"])
+                        || ts.eat_phrase(&["who", "doesn't"]))
+                        && let Ok((body, _)) = try_parse(ts, |s| parse_player_verb_frame(s, player))
+                    {
+                        return Ok((
+                            vec![Effect::ForEach {
+                                over: ForEachDomain::EachPlayerWhoCant(player),
+                                body,
+                            }],
+                            Some(player),
+                        ));
+                    }
+                }
+                ts.restore(wd_cp);
             }
             // `<player> who controls [N or more] <flt> <verb>` (`Shatter the Sky`, `Depopulate`)
             {

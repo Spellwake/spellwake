@@ -81,11 +81,119 @@ pub(super) fn parse_filter_post_modifiers(
             ));
             continue;
         }
+        // `except for <type/subtype/token list>` (`Elspeth Tirel`, `Scourglass`, `Cyclone Summoner`, `Elesh Norn`)
+        {
+            let exc_cp = ts.checkpoint();
+            if ts.eat_phrase(&["except", "for"]) {
+                let mut ex_flt = ObjectFilter::default();
+                let mut saw_any = false;
+                loop {
+                    let _ = ts.eat_word("a") || ts.eat_word("an");
+                    if ts.eat_word("tokens") || ts.eat_word("token") {
+                        ex_flt.token = Some(true);
+                        saw_any = true;
+                    } else if let Some(w) = ts.peek_word() {
+                        let low = w.to_ascii_lowercase();
+                        if let Some(ct) = lookup_card_type(&low) {
+                            ts.next_word();
+                            ex_flt.any_types = ex_flt.any_types.union(ct);
+                            saw_any = true;
+                        } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+                            ts.next_word();
+                            ex_flt.subtypes.push(sub.to_string());
+                            saw_any = true;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                    let sep_cp = ts.checkpoint();
+                    let had_comma = ts.eat_comma();
+                    let had_conj = ts.eat_word("and") || ts.eat_word("or") || ts.eat_word("and/or");
+                    if !had_comma && !had_conj {
+                        ts.restore(sep_cp);
+                        break;
+                    }
+                }
+                if saw_any {
+                    flt.predicates
+                        .push(FilterPredicate::Exclude(Box::new(SubjectRef::Group(
+                            Box::new(ex_flt),
+                        ))));
+                    continue;
+                }
+            }
+            ts.restore(exc_cp);
+        }
+        // Exact relative clauses (`Skyship Weatherlight`, `Siren's Call`, `Season of the Witch`)
+        if (ts.eat_phrase(&["that", "was", "exiled", "with"])
+            || ts.eat_phrase(&["that", "were", "exiled", "with"]))
+            && ts.eat_tilde()
+        {
+            flt.flags = flt.flags.union(FilterFlags::EXILED_WITH_SELF);
+            continue;
+        }
+        if ts.eat_phrase(&["that", "didn't", "attack", "this", "turn"]) {
+            flt.predicates
+                .push(FilterPredicate::Exclude(Box::new(SubjectRef::Group(
+                    Box::new(ObjectFilter {
+                        flags: FilterFlags::ATTACKED_THIS_TURN,
+                        ..Default::default()
+                    }),
+                ))));
+            continue;
+        }
         if ts.eat_phrase(&["with", "an", "activated", "ability"])
             || ts.eat_phrase(&["with", "activated", "abilities"])
         {
             flt.is_ability = true;
             continue;
+        }
+        // `with <kw> abilities` (`Herald of the Forgotten`: `permanent cards with cycling abilities`)
+        {
+            let kw_cp = ts.checkpoint();
+            if ts.eat_word("with")
+                && let Ok(kw) = try_parse(ts, crate::v2::filter::parse_keyword_kind)
+                && (ts.eat_word("abilities") || ts.eat_word("ability"))
+            {
+                flt.predicates.push(FilterPredicate::HasNamedAbility(kw));
+                continue;
+            }
+            ts.restore(kw_cp);
+        }
+        // `with total power/mana value <val> or less/greater` (`Nethroi, Apex of Death`, `Mossbridge Troll`, `Pair o' Dice Lost`)
+        {
+            let tp_cp = ts.checkpoint();
+            if ts.eat_phrase(&["with", "total"]) {
+                let stat = if ts.eat_word("power") {
+                    Some(StatKind::Power)
+                } else if ts.eat_word("toughness") {
+                    Some(StatKind::Toughness)
+                } else if ts.eat_phrase(&["mana", "value"]) {
+                    Some(StatKind::ManaValue)
+                } else {
+                    None
+                };
+                if let Some(stat) = stat
+                    && let Ok(val) = try_parse(ts, parse_value_expr)
+                {
+                    let op = if ts.eat_phrase(&["or", "less"]) {
+                        CompareOp::Le
+                    } else if ts.eat_phrase(&["or", "greater"]) {
+                        CompareOp::Ge
+                    } else {
+                        CompareOp::Eq
+                    };
+                    flt.stat_bounds.push(StatBound {
+                        stat,
+                        op,
+                        value: Box::new(val),
+                    });
+                    continue;
+                }
+            }
+            ts.restore(tp_cp);
         }
         // Controller / owner clauses
         if ts.eat_phrase(&["you", "don't", "control"]) {
@@ -345,6 +453,29 @@ pub(super) fn parse_filter_post_modifiers(
             flt.combat = Some(CombatState::Attacking);
             continue;
         }
+        // `that's attacking alone` / `that are attacking alone` (`Crowd of True Believers`, `Ordruun Mentor`)
+        if ts.eat_phrase(&["that's", "attacking", "alone"])
+            || ts.eat_phrase(&["that", "are", "attacking", "alone"])
+        {
+            flt.combat = Some(CombatState::Attacking);
+            continue;
+        }
+        // `that were/was put into <z1> from <z2> this turn` (`Fell Shepherd`, `Builder's Bane`)
+        {
+            let gy_cp = ts.checkpoint();
+            if (ts.eat_phrase(&["that", "were", "put", "into"])
+                || ts.eat_phrase(&["that", "was", "put", "into"]))
+                && let Ok(z1) = try_parse(ts, parse_zone_ref)
+                && ts.eat_word("from")
+                && (ts.eat_word("anywhere") || try_parse(ts, parse_zone_ref).is_ok())
+                && ts.eat_phrase(&["this", "turn"])
+            {
+                flt.zones.push(z1);
+                flt.flags = flt.flags.union(FilterFlags::DIED_THIS_TURN);
+                continue;
+            }
+            ts.restore(gy_cp);
+        }
         if ts.eat_phrase(&["controlled", "by", "different", "players"]) {
             flt.flags = flt.flags.union(FilterFlags::DIFFERENT_NAMES);
             continue;
@@ -419,6 +550,9 @@ pub(super) fn parse_filter_post_modifiers(
         }
         if ts.eat_phrase(&["you", "control"]) || ts.eat_phrase(&["you", "cast"]) {
             flt.controller = Some(ControllerRelation::You);
+            if ts.eat_phrase(&["but", "don't", "own"]) {
+                flt.owner = Some(ControllerRelation::Opponent);
+            }
             continue;
         }
         {

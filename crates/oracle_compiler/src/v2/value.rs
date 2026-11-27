@@ -37,7 +37,36 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         return Ok(ValueExpr::Mul(Box::new(ValueExpr::Const(2)), Box::new(rhs)));
     }
     if ts.eat_word("half") {
-        let expr = parse_value_expr(ts)?;
+        let hcp = ts.checkpoint();
+        let life_player =
+            if ts.eat_phrase(&["your", "life", "total"]) || ts.eat_phrase(&["your", "life"]) {
+                Some(PlayerRef::You)
+            } else if ts.eat_phrase(&["their", "life", "total"])
+                || ts.eat_phrase(&["their", "life"])
+                || ts.eat_phrase(&["that", "player's", "life", "total"])
+                || ts.eat_phrase(&["that", "player's", "life"])
+            {
+                Some(PlayerRef::ThatPlayer)
+            } else if ts.eat_phrase(&["target", "player's", "life", "total"])
+                || ts.eat_phrase(&["target", "player's", "life"])
+            {
+                Some(PlayerRef::TargetPlayer)
+            } else if ts.eat_phrase(&["target", "opponent's", "life", "total"])
+                || ts.eat_phrase(&["target", "opponent's", "life"])
+            {
+                Some(PlayerRef::TargetOpponent)
+            } else {
+                None
+            };
+        let expr = if let Some(p) = life_player {
+            ValueExpr::PlayerStat {
+                player: p,
+                stat: PlayerStatKind::LifeTotal,
+            }
+        } else {
+            ts.restore(hcp);
+            parse_value_expr(ts)?
+        };
         let _ = ts.eat_comma();
         let rounding = if ts.eat_phrase(&["rounded", "up"]) {
             Rounding::Up
@@ -362,6 +391,9 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         });
     }
     if ts.eat_phrase(&["your", "devotion", "to"]) {
+        if ts.eat_phrase(&["that", "color"]) || ts.eat_phrase(&["the", "chosen", "color"]) {
+            return Ok(ValueExpr::Devotion(crate::ast::ColorMask::EMPTY));
+        }
         let mut mask = crate::ast::ColorMask::EMPTY;
         loop {
             if let Some(w) = ts.peek_word()
@@ -559,6 +591,11 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
             }),
         });
     }
+    if ts.eat_phrase(&["your", "devotion", "to", "that", "color"])
+        || ts.eat_phrase(&["your", "devotion", "to", "the", "chosen", "color"])
+    {
+        return Ok(ValueExpr::Devotion(crate::ast::ColorMask::EMPTY));
+    }
     if ts.eat_phrase(&["the", "total", "power", "of"]) {
         let _ = ts.eat_word("all") || ts.eat_word("the");
         let flt = parse_object_filter(ts)?;
@@ -567,6 +604,35 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
             stat: StatKind::Power,
             filter: Box::new(flt),
         });
+    }
+    if ts.eat_phrase(&[
+        "the",
+        "number",
+        "of",
+        "colors",
+        "in",
+        "your",
+        "commanders'",
+        "color",
+        "identity",
+    ]) || ts.eat_phrase(&[
+        "the",
+        "number",
+        "of",
+        "colors",
+        "in",
+        "your",
+        "commander's",
+        "color",
+        "identity",
+    ]) {
+        return Ok(ValueExpr::ColorCount(Box::new(SubjectRef::Group(
+            Box::new(crate::v2::ir::ObjectFilter {
+                flags: crate::v2::ir::FilterFlags::IS_COMMANDER,
+                owner: Some(crate::ast::ControllerRelation::OwnerYou),
+                ..Default::default()
+            }),
+        ))));
     }
     if ts.eat_phrase(&["the", "highest", "life", "total", "among", "all", "players"])
         || ts.eat_phrase(&["the", "highest", "life", "total", "among", "players"])
@@ -1415,18 +1481,28 @@ pub fn parse_for_each_expr(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
     }
     {
         let dcp = ts.checkpoint();
-        if ts.eat_word("different")
-            && (ts.eat_phrase(&["mana", "value"])
-                || ts.eat_word("power")
-                || ts.eat_word("toughness")
-                || ts.eat_phrase(&["card", "type"])
-                || ts.eat_phrase(&["creature", "type"]))
+        let _ = ts.eat_word("different");
+        if (ts.eat_phrase(&["mana", "value"])
+            || ts.eat_word("power")
+            || ts.eat_word("toughness")
+            || ts.eat_phrase(&["card", "type"])
+            || ts.eat_phrase(&["creature", "type"]))
             && ts.eat_word("among")
             && let Ok(flt) = try_parse(ts, parse_object_filter)
         {
             return Ok(ValueExpr::DistinctCardTypesAmong(Box::new(flt)));
         }
         ts.restore(dcp);
+    }
+    {
+        let ccp = ts.checkpoint();
+        if ts.eat_phrase(&["color", "of"])
+            && let Ok(subj) = try_parse(ts, parse_subject_ref)
+        {
+            let _ = ts.eat_phrase(&["it", "targets"]);
+            return Ok(ValueExpr::ColorCount(Box::new(subj)));
+        }
+        ts.restore(ccp);
     }
     if ts.eat_phrase(&["counter", "on"])
         && let Ok(subject) = try_parse(ts, parse_subject_ref)
@@ -1477,6 +1553,36 @@ pub fn parse_for_each_expr(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         || ts.eat_phrase(&["player", "being", "attacked"])
     {
         return Ok(ValueExpr::OpponentsCount);
+    }
+    if ts.eat_phrase(&["opponent", "dealt", "damage"])
+        || ts.eat_phrase(&["opponent", "dealt", "combat", "damage"])
+    {
+        let _ = ts.eat_phrase(&["this", "turn"]) || ts.eat_phrase(&["this", "way"]);
+        return Ok(ValueExpr::PlayersWhoDidThisTurn {
+            event: TurnEventKind::LifeLost,
+            opponents_only: true,
+        });
+    }
+    if matches!(
+        ts.peek().map(|t| &t.kind),
+        Some(TokenKind::Mana(ManaSymbol::Energy))
+    ) {
+        let ecp = ts.checkpoint();
+        ts.next_tok();
+        if ts.eat_phrase(&["paid", "this", "way"]) {
+            return Ok(ValueExpr::PriorActionCount(
+                PriorActionKind::EnergyPaidThisWay,
+            ));
+        }
+        ts.restore(ecp);
+    }
+    if ts.eat_phrase(&["of", "those", "creatures"])
+        || ts.eat_phrase(&["of", "those", "permanents"])
+        || ts.eat_phrase(&["of", "those", "cards"])
+        || ts.eat_phrase(&["flip", "you", "won"])
+        || ts.eat_phrase(&["creature", "chosen", "this", "way"])
+    {
+        return Ok(ValueExpr::PriorActionCount(PriorActionKind::ThatMany));
     }
     if ts.eat_phrase(&["card", "drawn", "this", "way"])
         || ts.eat_phrase(&["cards", "drawn", "this", "way"])

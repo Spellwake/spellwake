@@ -735,25 +735,94 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             });
         }
         ts.restore(lcp);
-        if ts.eat_phrase(&["its", "mana", "value"])
-            && (ts.eat_word("was") || ts.eat_word("is"))
-            && let Ok(val) = try_parse(ts, parse_value_expr)
+        // `its / that spell's / that creature's / that card's <stat> is/was <val> [or less|or greater]` (`Reject Imperfection`, `Deathknell Berserker`)
         {
-            let op = if ts.eat_phrase(&["or", "less"]) {
-                CompareOp::Le
-            } else if ts.eat_phrase(&["or", "greater"]) {
-                CompareOp::Ge
+            let subj_opt = if ts.eat_word("its") {
+                Some(SubjectRef::Anaphora(AnaphoraRef::It))
+            } else if ts.eat_phrase(&["that", "spell's"]) {
+                Some(SubjectRef::Anaphora(AnaphoraRef::ThatSpell))
+            } else if ts.eat_phrase(&["that", "creature's"]) {
+                Some(SubjectRef::Anaphora(AnaphoraRef::ThatCreature))
+            } else if ts.eat_phrase(&["that", "card's"]) {
+                Some(SubjectRef::Anaphora(AnaphoraRef::ThatCard))
+            } else if ts.eat_phrase(&["that", "permanent's"]) {
+                Some(SubjectRef::Anaphora(AnaphoraRef::ThatPermanent))
             } else {
-                CompareOp::Eq
+                None
             };
-            return Ok(ConditionExpr::Compare {
-                lhs: Box::new(ValueExpr::ObjectStat {
-                    subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
-                    stat: StatKind::ManaValue,
-                }),
-                op,
-                rhs: Box::new(val),
-            });
+            if let Some(subj) = subj_opt {
+                let stat_opt = if ts.eat_phrase(&["mana", "value"]) {
+                    Some(StatKind::ManaValue)
+                } else if ts.eat_word("power") {
+                    Some(StatKind::Power)
+                } else if ts.eat_word("toughness") {
+                    Some(StatKind::Toughness)
+                } else {
+                    None
+                };
+                if let Some(stat) = stat_opt
+                    && (ts.eat_word("was") || ts.eat_word("is"))
+                    && let Ok(val) = try_parse(ts, parse_value_expr)
+                {
+                    let op = if ts.eat_phrase(&["or", "less"]) {
+                        CompareOp::Le
+                    } else if ts.eat_phrase(&["or", "greater"]) || ts.eat_phrase(&["or", "more"]) {
+                        CompareOp::Ge
+                    } else {
+                        CompareOp::Eq
+                    };
+                    return Ok(ConditionExpr::Compare {
+                        lhs: Box::new(ValueExpr::ObjectStat {
+                            subject: Box::new(subj),
+                            stat,
+                        }),
+                        op,
+                        rhs: Box::new(val),
+                    });
+                }
+            }
+        }
+        ts.restore(lcp);
+        // `you don't/didn't cast/play that card this way` (`Solstice Revelations`)
+        if (ts.eat_phrase(&["you", "don't", "cast"])
+            || ts.eat_phrase(&["you", "didn't", "cast"])
+            || ts.eat_phrase(&["you", "don't", "play"])
+            || ts.eat_phrase(&["you", "didn't", "play"]))
+            && (ts.eat_phrase(&["that", "card", "this", "way"])
+                || ts.eat_phrase(&["it", "this", "way"])
+                || ts.eat_phrase(&["a", "card", "this", "way"]))
+        {
+            return Ok(ConditionExpr::Not(Box::new(ConditionExpr::EventCheck(
+                EventCheckKind::PriorObjectEvent(PriorActionKind::CastThisWay),
+            ))));
+        }
+        ts.restore(lcp);
+        // `you sacrificed/exiled/discarded/returned <N or more | a> <flt> this way` (`Rise of the Witch-king`, `Flood of Tears`)
+        if ts.eat_word("you") {
+            let act_opt = if ts.eat_word("sacrificed") {
+                Some(PriorActionKind::SacrificedThisWay)
+            } else if ts.eat_word("exiled") {
+                Some(PriorActionKind::ExiledThisWay)
+            } else if ts.eat_word("discarded") {
+                Some(PriorActionKind::DiscardedThisWay)
+            } else if ts.eat_word("returned") || ts.eat_word("return") {
+                Some(PriorActionKind::ReturnedThisWay)
+            } else {
+                None
+            };
+            if let Some(action) = act_opt {
+                if ts.next_number(false).is_some() {
+                    let _ = ts.eat_phrase(&["or", "more"]) || ts.eat_phrase(&["or", "fewer"]);
+                }
+                if let Ok(flt) = try_parse(ts, parse_object_filter)
+                    && ts.eat_phrase(&["this", "way"])
+                {
+                    return Ok(ConditionExpr::PriorActionMatched {
+                        action,
+                        filter: Box::new(flt),
+                    });
+                }
+            }
         }
         ts.restore(lcp);
         if ts.eat_phrase(&["there", "are", "cards", "exiled", "with"])
@@ -868,15 +937,21 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
             return Ok(ConditionExpr::Flag(ConditionFlag::LesserManaValueSpell));
         }
         ts.restore(lcp);
-        // `~'s <keyword> cost was paid` / `~ was cast using <keyword>` / `<subj> was cast for its <keyword> cost`
-        if ts.eat_tilde()
-            && ts.eat_word("'s")
+        // `~'s / its <keyword> cost was paid` / `the {M} cost was paid` / `<subj> was cast for its <keyword> cost`
+        if ((ts.eat_tilde() && ts.eat_word("'s")) || ts.eat_word("its"))
             && let Ok(kw) = try_parse(ts, parse_keyword_kind)
             && ts.eat_phrase(&["cost", "was", "paid"])
         {
             return Ok(ConditionExpr::EventCheck(EventCheckKind::KeywordCostPaid(
                 kw,
             )));
+        }
+        ts.restore(lcp);
+        if ts.eat_word("the")
+            && ts.eat_mana_cost().is_some()
+            && ts.eat_phrase(&["cost", "was", "paid"])
+        {
+            return Ok(ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid));
         }
         ts.restore(lcp);
         if (ts.eat_tilde()

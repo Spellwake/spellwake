@@ -527,12 +527,25 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                     i += 1;
                     continue;
                 }
-                if ate_period && !is_spell {
+                if ate_period {
                     let mut tail_ts =
                         TokenStream::new(line, &toks[ts.pos..], vocab, ParseStage::Static);
                     if let Ok(st) = parse_static_ability(&mut tail_ts) {
                         out.keywords.extend(kws);
                         out.statics.push(st);
+                        i += 1;
+                        continue;
+                    }
+                    let mut eff_ts =
+                        TokenStream::new(line, &toks[ts.pos..], vocab, ParseStage::Effect);
+                    if let Ok(effs) = crate::v2::clause::parse_effect_sentence(&mut eff_ts)
+                        && {
+                            let _ = eff_ts.eat_period();
+                            eff_ts.is_eof()
+                        }
+                    {
+                        out.keywords.extend(kws);
+                        out.spell_effects.extend(effs);
                         i += 1;
                         continue;
                     }

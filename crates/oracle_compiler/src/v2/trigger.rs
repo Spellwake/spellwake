@@ -731,7 +731,9 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
             }
             if ts.eat_word("draw") || ts.eat_word("draws") {
                 if (ts.eat_phrase(&["your", "second", "card"])
-                    || ts.eat_phrase(&["their", "second", "card"]))
+                    || ts.eat_phrase(&["their", "second", "card"])
+                    || ts.eat_phrase(&["your", "first", "or", "second", "card"])
+                    || ts.eat_phrase(&["their", "first", "or", "second", "card"]))
                     && (ts.eat_phrase(&["each", "turn"]) || ts.eat_phrase(&["in", "a", "turn"]))
                 {
                     return Ok(vec![TriggerEvent::NthCardDrawn { player, nth: 2 }]);
@@ -798,10 +800,16 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
             }
             if (ts.eat_word("activate") || ts.eat_word("activates"))
                 && (ts.eat_phrase(&["an", "ability"])
-                    || ts.eat_phrase(&["a", "loyalty", "ability"]))
+                    || ts.eat_phrase(&["a", "loyalty", "ability"])
+                    || ts.eat_phrase(&["a", "boast", "ability"])
+                    || ts.eat_phrase(&["an", "exhaust", "ability"])
+                    || ts.eat_phrase(&["a", "mana", "ability"]))
             {
                 if ts.eat_word("of") {
                     let _ = opt(ts, parse_object_filter);
+                }
+                if ts.eat_phrase(&["that", "targets"]) {
+                    let _ = opt(ts, parse_subject_ref);
                 }
                 let non_mana_only = ts.eat_phrase(&["that", "isn't", "a", "mana", "ability"]);
                 return Ok(vec![TriggerEvent::AbilityActivated {
@@ -1442,6 +1450,7 @@ fn parse_subject_trigger_verb(
     }
     if ts.eat_word("leaves") || ts.eat_word("leave") {
         if ts.eat_phrase(&["the", "battlefield"]) {
+            let _ = ts.eat_phrase(&["without", "dying"]);
             return Ok(TriggerEvent::ZoneChange {
                 from: Some(ZoneKind::Battlefield),
                 to: None,
@@ -1671,6 +1680,33 @@ fn parse_subject_trigger_verb(
         return Ok(TriggerEvent::SubjectState {
             subject,
             event: SubjectTriggerKind::TurnedFaceUp,
+        });
+    }
+    if ts.eat_phrase(&["is", "tapped", "for", "mana"])
+        || ts.eat_phrase(&["are", "tapped", "for", "mana"])
+    {
+        let mut flt = match subject {
+            SubjectRef::Group(f) | SubjectRef::All(f) | SubjectRef::Each(f) => *f,
+            _ => ObjectFilter::default(),
+        };
+        if ts.eat_phrase(&["of", "the", "chosen", "color"]) {
+            flt.predicates
+                .push(crate::v2::ir::FilterPredicate::OfChosenColor);
+        }
+        return Ok(TriggerEvent::PlayerObjectEvent {
+            player: crate::v2::ir::PlayerRef::AnyPlayer,
+            kind: PlayerObjectTriggerKind::TappedForMana,
+            filter: Some(flt),
+        });
+    }
+    if ts.eat_phrase(&["causes", "a", "player", "to", "shuffle", "their", "library"])
+        || ts.eat_phrase(&[
+            "causes", "an", "opponent", "to", "shuffle", "their", "library",
+        ])
+    {
+        return Ok(TriggerEvent::PlayerAction {
+            player: crate::v2::ir::PlayerRef::AnyPlayer,
+            action: PlayerTriggerKind::ShufflesLibrary,
         });
     }
     if ts.eat_phrase(&["becomes", "tapped"]) || ts.eat_phrase(&["become", "tapped"]) {

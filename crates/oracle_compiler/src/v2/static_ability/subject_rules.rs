@@ -975,6 +975,7 @@ pub(super) fn parse_subject_static_ability(
             ts.restore(lcp3);
             break;
         }
+        parse_static_subject_tail(ts, &subject, &condition, &mut parts);
         return Ok(if parts.len() == 1 {
             parts.remove(0)
         } else {
@@ -1152,30 +1153,33 @@ pub(super) fn parse_subject_static_ability(
                 }
                 ts.restore(kcp);
             }
-            if ts.eat_word("and")
-                && let Some(quoted) = ts.next_quoted()
             {
-                let compiled = crate::v2::card::compile_face_v2(
-                    crate::FaceInput {
-                        name: "~",
-                        type_line: "Permanent",
-                        oracle_text: quoted,
-                    },
-                    ts.vocab,
-                );
-                if !compiled.is_ok() {
-                    return Err(compiled
-                        .errors
-                        .into_iter()
-                        .next()
-                        .unwrap_or_else(|| ts.err("failed to compile static granted ability")));
+                let qcp = ts.checkpoint();
+                let _ = ts.eat_comma();
+                if ts.eat_word("and")
+                    && let Some(quoted) = ts.next_quoted()
+                {
+                    let compiled = crate::v2::card::compile_face_v2(
+                        crate::FaceInput {
+                            name: "~",
+                            type_line: "Permanent",
+                            oracle_text: quoted,
+                        },
+                        ts.vocab,
+                    );
+                    if !compiled.is_ok() {
+                        return Err(compiled.errors.into_iter().next().unwrap_or_else(|| {
+                            ts.err("failed to compile static granted ability")
+                        }));
+                    }
+                    parts.push(StaticAbility::GrantAbility {
+                        subject: subject.clone(),
+                        ability: Box::new(compiled),
+                        condition: condition.clone(),
+                    });
+                    continue;
                 }
-                parts.push(StaticAbility::GrantAbility {
-                    subject: subject.clone(),
-                    ability: Box::new(compiled),
-                    condition: condition.clone(),
-                });
-                continue;
+                ts.restore(qcp);
             }
             ts.restore(hcp);
             let lcp = ts.checkpoint();
@@ -1227,6 +1231,7 @@ pub(super) fn parse_subject_static_ability(
             }
             break;
         }
+        parse_static_subject_tail(ts, &subject, &condition, &mut parts);
         return Ok(if parts.len() == 1 {
             parts.remove(0)
         } else {
@@ -1322,10 +1327,16 @@ pub(super) fn parse_subject_static_ability(
         } else {
             condition
         };
-        return Ok(StaticAbility::SubjectRule {
-            subject,
+        let mut parts = vec![StaticAbility::SubjectRule {
+            subject: subject.clone(),
             rule: SubjectStaticRule::MustAttack,
-            condition: final_cond,
+            condition: final_cond.clone(),
+        }];
+        parse_static_subject_tail(ts, &subject, &final_cond, &mut parts);
+        return Ok(if parts.len() == 1 {
+            parts.remove(0)
+        } else {
+            StaticAbility::Compound(parts)
         });
     }
 
@@ -1556,7 +1567,18 @@ pub(super) fn parse_subject_static_ability(
                 || ts.eat_phrase(&["its", "controller", "pays"]))
             && let Ok(cost) = try_parse(ts, crate::v2::cost::parse_cost_atom)
         {
-            let per_creature = ts.eat_phrase(&["for", "each", "of", "those", "creatures"])
+            let (cost, scaled_per) = match cost {
+                crate::v2::ir::Cost::ScaledMana {
+                    base,
+                    scale:
+                        crate::v2::ir::ValueExpr::PriorActionCount(
+                            crate::v2::ir::PriorActionKind::ThatMany,
+                        ),
+                } => (crate::v2::ir::Cost::Mana(base), true),
+                other => (other, false),
+            };
+            let per_creature = scaled_per
+                || ts.eat_phrase(&["for", "each", "of", "those", "creatures"])
                 || ts.eat_phrase(&[
                     "for",
                     "each",
@@ -1620,23 +1642,24 @@ pub(super) fn parse_subject_static_ability(
             }
             let acp = ts.checkpoint();
             let _ = ts.eat_comma();
-            if ts.eat_phrase(&[
-                "and",
-                "its",
-                "activated",
-                "abilities",
-                "can't",
-                "be",
-                "activated",
-            ]) || ts.eat_phrase(&[
-                "and",
-                "their",
-                "activated",
-                "abilities",
-                "can't",
-                "be",
-                "activated",
-            ]) {
+            if (ts.eat_phrase(&["and", "its", "activated", "abilities"])
+                || ts.eat_phrase(&["and", "their", "activated", "abilities"]))
+                && {
+                    let _ = ts.eat_phrase(&["with", "{t}", "in", "their", "costs"])
+                        || (ts.eat_word("with")
+                            && matches!(
+                                ts.peek().map(|t| &t.kind),
+                                Some(crate::v2::lexer::TokenKind::Mana(
+                                    crate::v2::ir::ManaSymbol::Tap
+                                ))
+                            )
+                            && {
+                                ts.next_tok();
+                                ts.eat_phrase(&["in", "their", "costs"])
+                            });
+                    ts.eat_phrase(&["can't", "be", "activated"])
+                }
+            {
                 let _ = ts.eat_phrase(&["unless", "they're", "mana", "abilities"])
                     || ts.eat_phrase(&["unless", "they", "are", "mana", "abilities"]);
                 parts.push(StaticAbility::RuleRestriction {
@@ -1685,6 +1708,7 @@ pub(super) fn parse_subject_static_ability(
             ts.restore(kcp);
             break;
         }
+        parse_static_subject_tail(ts, &subject, &condition, &mut parts);
         return Ok(if parts.len() == 1 {
             parts.remove(0)
         } else {
@@ -1713,8 +1737,22 @@ fn parse_static_subject_tail(
             ts.restore(cp);
             break;
         }
-        // `has/have "<quoted>"` or `has/have <kws>`
+        // `has/have base power and [base] toughness each equal to <val>` (`Opalescence`)
         if ts.eat_word("has") || ts.eat_word("have") {
+            let bp_cp = ts.checkpoint();
+            if ts.eat_phrase(&["base", "power", "and"]) {
+                let _ = ts.eat_word("base");
+                if ts.eat_phrase(&["toughness", "each", "equal", "to"])
+                    && let Ok(val) = try_parse(ts, parse_value_expr)
+                {
+                    parts.push(StaticAbility::DynamicBasePT {
+                        power: Some(val.clone()),
+                        toughness: Some(val),
+                    });
+                    continue;
+                }
+            }
+            ts.restore(bp_cp);
             if let Some(quoted) = ts.next_quoted() {
                 let compiled = crate::v2::card::compile_face_v2(
                     crate::FaceInput {
@@ -1742,6 +1780,54 @@ fn parse_static_subject_tail(
             }
             ts.restore(cp);
             break;
+        }
+        // `can attack as though it/they didn't have defender` (`Spire Serpent`)
+        if ts.eat_phrase(&[
+            "can", "attack", "as", "though", "it", "didn't", "have", "defender",
+        ]) || ts.eat_phrase(&[
+            "can", "attack", "as", "though", "they", "didn't", "have", "defender",
+        ]) {
+            parts.push(StaticAbility::SubjectRule {
+                subject: subject.clone(),
+                rule: SubjectStaticRule::CanAttackWithDefender,
+                condition: condition.clone(),
+            });
+            continue;
+        }
+        // `can block creatures with <kw> [abilities] as though they didn't have <kw | those abilities>` (`Street Savvy`)
+        if ts.eat_phrase(&["can", "block", "creatures", "with"])
+            && let Ok(kw) = try_parse(ts, crate::v2::filter::parse_keyword_kind)
+        {
+            let _ = ts.eat_word("abilities");
+            if (ts.eat_phrase(&["as", "though", "they", "didn't", "have"])
+                || ts.eat_phrase(&["as", "though", "it", "had"]))
+                && (ts.eat_phrase(&["those", "abilities"])
+                    || try_parse(ts, crate::v2::filter::parse_keyword_kind).is_ok())
+            {
+                parts.push(StaticAbility::SubjectRule {
+                    subject: subject.clone(),
+                    rule: SubjectStaticRule::IgnoreKeywordForBlocking(kw),
+                    condition: condition.clone(),
+                });
+                continue;
+            }
+        }
+        ts.restore(cp);
+        let _ = ts.eat_comma();
+        let had_and = ts.eat_word("and");
+        // Trailing `and equip {M}` after `"<quoted>"` (`Armed with Proof`, `Dan Lewis`)
+        if had_and
+            && ts
+                .peek_word()
+                .is_some_and(|w| w.eq_ignore_ascii_case("equip"))
+            && let Ok((keywords, _)) = try_parse(ts, parse_keyword_list)
+        {
+            parts.push(StaticAbility::GrantKeywords {
+                subject: subject.clone(),
+                keywords,
+                condition: condition.clone(),
+            });
+            continue;
         }
         // `can't <rule>`
         if ts.eat_word("can't")
@@ -1778,9 +1864,10 @@ fn parse_static_subject_tail(
         let cp2 = ts.checkpoint();
         let _ = ts.eat_comma();
         let _ = ts.eat_word("and");
-        // `is/are [a/an] <colors/subtypes/types> [in addition to ...]`
+        // `is/are [a/an] [legendary] <colors/subtypes/types> [in addition to ...]`
         if ts.eat_word("is") || ts.eat_word("are") {
             let _ = ts.eat_word("a") || ts.eat_word("an");
+            let _ = ts.eat_word("legendary");
             let mut colors = crate::ast::ColorMask::EMPTY;
             let mut subtypes = Vec::new();
             let mut saw_type = false;
@@ -1882,10 +1969,14 @@ pub(super) fn parse_cant_rule(ts: &mut TokenStream<'_>) -> PResult<RuleRestricti
             let cond = parse_condition(ts)?;
             return Ok(RuleRestrictionKind::CantAttackUnless(Box::new(cond)));
         }
-        if ts
-            .peek_word()
-            .is_some_and(|w| w.eq_ignore_ascii_case("you"))
-            && let Ok(tgt) = try_parse(ts, parse_subject_ref)
+        if !ts.peek_word().is_some_and(|w| {
+            w.eq_ignore_ascii_case("unless")
+                || w.eq_ignore_ascii_case("alone")
+                || w.eq_ignore_ascii_case("or")
+                || w.eq_ignore_ascii_case("and")
+                || w.eq_ignore_ascii_case("during")
+                || w.eq_ignore_ascii_case("as")
+        }) && let Ok(tgt) = try_parse(ts, parse_subject_ref)
         {
             return Ok(RuleRestrictionKind::CantAttackTarget(Box::new(tgt)));
         }

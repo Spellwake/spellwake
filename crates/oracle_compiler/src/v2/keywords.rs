@@ -301,13 +301,20 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
             }
         }
         KeywordKind::Suspend | KeywordKind::Awaken | KeywordKind::Impending => {
-            // `Suspend 3 — {1}{R}` / `Awaken 4—{4}{W}{W}`
+            // `Suspend 3 — {1}{R}` / `Suspend X—{X}{W}{W}` / `Awaken 4—{4}{W}{W}`
             if let Some(n) = ts.next_number(false).and_then(|v| u16::try_from(v).ok()) {
                 let _ = ts.eat_em_dash();
                 if let Ok(costs) = try_parse(ts, parse_cost_list) {
                     Some(KeywordParam::NumberAndCost(n, costs))
                 } else {
                     Some(KeywordParam::Number(n))
+                }
+            } else if ts.eat_word("x") {
+                let _ = ts.eat_em_dash();
+                if let Ok(costs) = try_parse(ts, parse_cost_list) {
+                    Some(KeywordParam::Cost(costs))
+                } else {
+                    Some(KeywordParam::VariableX)
                 }
             } else {
                 None

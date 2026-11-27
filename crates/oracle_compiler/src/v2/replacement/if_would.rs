@@ -87,6 +87,21 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                 }
             }
             ts.restore(wcp);
+            if ts.eat_word("die")
+                && ts.eat_comma()
+                && let Ok(instead) = try_parse(ts, parse_instead_clause)
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::EventInstead {
+                        event: TriggerEvent::Dies {
+                            subject: SubjectRef::SelfObject,
+                        },
+                        instead,
+                    });
+                }
+            }
+            ts.restore(wcp);
             if ts.eat_phrase(&["deal", "combat", "damage", "to"])
                 && let Ok(target) = try_parse(ts, parse_subject_ref)
                 && ts.eat_comma()
@@ -109,6 +124,82 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
         ts.restore(cp);
     }
 
+    // 1a0c3. `If you would scry a number of cards, scry that many cards plus <N> instead.` (`Kenessos, Priest of Thassa`)
+    //        `If you would draw one or more cards, [you] draw that many cards plus <N> instead.` (`Quantum Riddler`)
+    {
+        let ycp = ts.checkpoint();
+        if ts.eat_phrase(&["you", "would"]) {
+            if ts.eat_phrase(&["scry", "a", "number", "of", "cards"])
+                && ts.eat_comma()
+                && ts.eat_phrase(&["scry", "that", "many", "cards", "plus"])
+                && let Some(n) = ts.next_number(false)
+                && ts.eat_word("instead")
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::EventInstead {
+                        event: TriggerEvent::PlayerAction {
+                            player: PlayerRef::You,
+                            action: PlayerTriggerKind::Scry,
+                        },
+                        instead: vec![crate::v2::ir::Effect::MutatePlayer {
+                            player: PlayerRef::You,
+                            mutation: crate::v2::ir::PlayerMutation::ScaledAction {
+                                kind: crate::v2::ir::ScaledPlayerAction::Scry,
+                                amount: ValueExpr::Add(
+                                    Box::new(ValueExpr::PriorActionCount(
+                                        crate::v2::ir::PriorActionKind::ThatMany,
+                                    )),
+                                    Box::new(ValueExpr::Const(n)),
+                                ),
+                            },
+                            duration: crate::v2::ir::Duration::Instant,
+                        }],
+                    });
+                }
+            }
+            ts.restore(ycp);
+            if ts.eat_phrase(&["you", "would", "draw", "one", "or", "more", "cards"])
+                && ts.eat_comma()
+                && {
+                    let _ = ts.eat_word("you");
+                    ts.eat_phrase(&["draw", "that", "many", "cards", "plus"])
+                }
+                && let Some(n) = ts.next_number(false)
+                && ts.eat_word("instead")
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::EventInstead {
+                        event: TriggerEvent::PlayerAction {
+                            player: PlayerRef::You,
+                            action: PlayerTriggerKind::CardDrawn,
+                        },
+                        instead: vec![crate::v2::ir::Effect::ZoneOp {
+                            actor: PlayerRef::You,
+                            op: crate::v2::ir::ZoneOpKind::Draw,
+                            subject: SubjectRef::Player(PlayerRef::You),
+                            from: Vec::new(),
+                            to: None,
+                            modifiers: crate::v2::ir::EntryModifiers::default(),
+                            except: None,
+                            count: Some(crate::v2::ir::CountSpec {
+                                count: ValueExpr::Add(
+                                    Box::new(ValueExpr::PriorActionCount(
+                                        crate::v2::ir::PriorActionKind::ThatMany,
+                                    )),
+                                    Box::new(ValueExpr::Const(n)),
+                                ),
+                                up_to: false,
+                                any_number: false,
+                            }),
+                        }],
+                    });
+                }
+            }
+        }
+        ts.restore(ycp);
+    }
     // 1a0c3. `If a source would deal damage to ~, prevent that damage. <rider>` (`Swans of Bryn Argoll`)
     {
         let cp = ts.checkpoint();

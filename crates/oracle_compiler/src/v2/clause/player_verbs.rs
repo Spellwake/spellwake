@@ -1426,14 +1426,28 @@ pub(super) fn parse_player_verb_frame(
             }
         };
         let _ = ts.eat_phrase(&["any", "number", "of", "times"]);
-        return Ok((
-            vec![Effect::MutatePlayer {
-                player: actor,
-                mutation: PlayerMutation::PayCost(cost),
-                duration: Duration::Instant,
-            }],
-            (),
-        ));
+        let mut out = vec![Effect::MutatePlayer {
+            player: actor,
+            mutation: PlayerMutation::PayCost(cost),
+            duration: Duration::Instant,
+        }];
+        // Support compound `pay {M} and <N> life` (`Ripples of Undeath`, `Phyrexian`-style pay costs)
+        {
+            let acp = ts.checkpoint();
+            if ts.eat_word("and")
+                && let Ok(amt) = try_parse(ts, parse_value_expr)
+                && ts.eat_word("life")
+            {
+                out.push(Effect::MutatePlayer {
+                    player: actor,
+                    mutation: PlayerMutation::PayCost(Cost::PayLife(amt)),
+                    duration: Duration::Instant,
+                });
+            } else {
+                ts.restore(acp);
+            }
+        }
+        return Ok((out, ()));
     }
 
     // 5. `gain(s) control of <subj> [dur]`

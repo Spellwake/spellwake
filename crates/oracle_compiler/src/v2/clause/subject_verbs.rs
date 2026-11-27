@@ -115,6 +115,29 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         }]);
     }
     let subject = parse_subject_ref(ts)?;
+    let mut out = parse_subject_predicate(ts, subject.clone())?;
+    // Compositional `and <second predicate on same subject>` (`Wishful Merfolk`, `Xathrid Gorgon`,
+    // `Disciple of Kangee`, `Minsc, Beloved Ranger`, `Coward // Killer`, `March from Velis Vel`,
+    // `Hellcat, Undying Vigilante`, `Gideon, Champion of Justice`, `Jade Orb of Dragonkind`)
+    loop {
+        let ccp = ts.checkpoint();
+        let _ = ts.eat_comma();
+        if ts.eat_word("and")
+            && !ts
+                .peek_word()
+                .is_some_and(|w| w.eq_ignore_ascii_case("target"))
+            && let Ok(more) = try_parse(ts, |s| parse_subject_predicate(s, subject.clone()))
+        {
+            out.extend(more);
+            continue;
+        }
+        ts.restore(ccp);
+        break;
+    }
+    Ok(out)
+}
+
+fn parse_subject_predicate(ts: &mut TokenStream<'_>, subject: SubjectRef) -> PResult<Vec<Effect>> {
     let _ = ts.eat_word("also") || ts.eat_word("each");
 
     // 1. `<src> deals <amt> damage ...` OR `<src> deals damage equal to <val> to <tgt>` OR `<src> deals damage to <tgt> equal to <val>`
@@ -184,7 +207,28 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             if !ts.eat_word("to") {
                 return Err(ts.err("expected `to` after `damage`"));
             }
-            let target = parse_damage_target(ts)?;
+            let mut target = parse_damage_target(ts)?;
+            {
+                let ecp = ts.checkpoint();
+                let _ = ts.eat_comma();
+                if ts.eat_word("except") {
+                    let _ = ts.eat_word("for");
+                    if let Ok(ex_subj) = try_parse(ts, parse_subject_ref) {
+                        match &mut target {
+                            SubjectRef::All(f) | SubjectRef::Each(f) | SubjectRef::Group(f) => {
+                                f.predicates.push(crate::v2::ir::FilterPredicate::Exclude(
+                                    Box::new(ex_subj),
+                                ));
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        ts.restore(ecp);
+                    }
+                } else {
+                    ts.restore(ecp);
+                }
+            }
             let scaled_amt = if let Some(fe) = opt(ts, parse_for_each_expr) {
                 if amount == ValueExpr::Const(1) {
                     fe
@@ -200,6 +244,18 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                 amount: scaled_amt,
                 divided_by: None,
             });
+            if (ts.eat_phrase(&["and", "doesn't", "untap", "during"])
+                || ts.eat_phrase(&["and", "don't", "untap", "during"]))
+                && (ts.eat_phrase(&["your", "next", "untap", "step"])
+                    || ts.eat_phrase(&["its", "controller's", "next", "untap", "step"])
+                    || ts.eat_phrase(&["their", "controllers'", "next", "untap", "steps"]))
+            {
+                out.push(Effect::MutateObject {
+                    subject: subject.clone(),
+                    mutation: ObjectMutation::StateAction(ObjectStateAction::DoesntUntapNextUntap),
+                    duration: Duration::UntilYourNextTurn,
+                });
+            }
             let cp = ts.checkpoint();
             let has_sep = if ts.eat_comma() {
                 let _ = ts.eat_word("and");
@@ -1322,6 +1378,16 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                 duration: Duration::Permanent,
             }]);
         }
+        if ts.eat_word("foretold") {
+            return Ok(vec![Effect::MutateObject {
+                subject,
+                mutation: ObjectMutation::GrantKeywords(vec![crate::v2::ir::KeywordSpec {
+                    kind: crate::v2::ir::KeywordKind::Foretell,
+                    param: None,
+                }]),
+                duration: Duration::Permanent,
+            }]);
+        }
         if ts.eat_phrase(&["the", "basic", "land", "type", "of", "your", "choice"]) {
             let _ = ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"])
                 || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"])
@@ -1420,15 +1486,16 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             } else if let Some(c) = lookup_color(&low) {
                 ts.next_word();
                 colors = colors.union(c);
-            } else if low == "and"
-                && ts.peek_n(1).is_some_and(|t| {
-                    matches!(t.kind, TokenKind::Word(nw) if {
-                        let nl = nw.to_ascii_lowercase();
-                        lookup_color(&nl).is_some()
-                            || lookup_card_type(&nl).is_some()
-                            || ts.vocab.lookup_subtype(&nl).is_some()
-                    })
-                })
+            } else if low == "colorless"
+                || (low == "and"
+                    && ts.peek_n(1).is_some_and(|t| {
+                        matches!(t.kind, TokenKind::Word(nw) if {
+                            let nl = nw.to_ascii_lowercase();
+                            lookup_color(&nl).is_some()
+                                || lookup_card_type(&nl).is_some()
+                                || ts.vocab.lookup_subtype(&nl).is_some()
+                        })
+                    }))
             {
                 ts.next_word();
             } else {
@@ -1834,6 +1901,17 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             }]);
         }
         ts.restore(acp);
+    }
+    if ts.eat_phrase(&["can", "block", "any", "number", "of", "creatures"]) {
+        let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+        return Ok(vec![Effect::ApplyContinuous {
+            effect: Box::new(StaticAbility::SubjectRule {
+                subject,
+                rule: SubjectStaticRule::CanBlockAnyNumber,
+                condition: None,
+            }),
+            duration,
+        }]);
     }
     if ts.eat_phrase(&["must", "be", "blocked", "this", "turn", "if", "able"]) {
         return Ok(vec![Effect::ApplyContinuous {

@@ -5406,3 +5406,302 @@ fn v2_wave13_compositional_grammar_deep_ir_assertions() {
     }));
     let _ = PlayerRef::You;
 }
+
+/// 17. Deep Wave 14 compositional IR assertions (zero new IR enum variants;
+///     `static_ability/cost_modifiers.rs` & `static_ability/player_rules.rs` modular splits):
+///     `Koma, Cosmos Serpent`, `Nykthos, Shrine to Nyx`, `Chromatic Orrery`, `Whirlwind Denial`,
+///     `Fractured Identity`, `Allosaurus Shepherd`, `Opalescence`, `Nazgul Battle-Mace`,
+///     `Elspeth Tirel`, `Elspeth Resplendent`, `Nethroi, Apex of Death`, `War Room`,
+///     `Lich's Tomb`, `The Blue Spirit`, `Wrathful Red Dragon`, `Price of Betrayal`,
+///     `Hold for Ransom`, `Benevolent Blessing`, `Convergence of Dominion`, `Psychogenic Probe`,
+///     `Xathrid Gorgon`, `Wishful Merfolk`, `Gift of the Viper`, and `Herald of the Forgotten`.
+#[test]
+fn v2_wave14_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        Ability, CastPermissionMode, Effect, ObjectMutation, PlayerTriggerKind,
+        RuleRestrictionKind, StaticAbility, StaticFlagKind, SubjectRef, TriggerEvent,
+    };
+
+    let vocab_path = std::env::var("SPELLWAKE_CREATURE_VOCABULARY_INPUT")
+        .expect("SPELLWAKE_CREATURE_VOCABULARY_INPUT must be set");
+    let vocab = Vocabulary::load_from_file(std::path::Path::new(&vocab_path)).expect("load vocab");
+
+    // 1. Batch strict-compilation gate across 24 iconic Wave 14 cards
+    let wave14_cards = [
+        (
+            "Whirlwind Denial",
+            "Instant",
+            "For each spell and ability your opponents control, counter it unless its controller pays {4}.",
+        ),
+        (
+            "Nykthos, Shrine to Nyx",
+            "Legendary Land",
+            "{T}: Add {C}.\n{2}, {T}: Choose a color. Add an amount of mana of that color equal to your devotion to that color.",
+        ),
+        (
+            "Chromatic Orrery",
+            "Legendary Artifact",
+            "You may spend mana as though it were mana of any color.\n{T}: Add {C}{C}{C}{C}{C}.\n{5}, {T}: Draw a card for each color among permanents you control.",
+        ),
+        (
+            "Opalescence",
+            "Enchantment",
+            "Each other non-Aura enchantment is a creature in addition to its other types and has base power and base toughness each equal to its mana value.",
+        ),
+        (
+            "Elspeth Tirel",
+            "Legendary Planeswalker - Elspeth",
+            "+2: You gain 1 life for each creature you control.\n-2: Create three 1/1 white Soldier creature tokens.\n-5: Destroy all other permanents except for lands and tokens.",
+        ),
+        (
+            "Elspeth Resplendent",
+            "Legendary Planeswalker - Elspeth",
+            "+1: Choose up to one target creature. Put a +1/+1 counter and a counter from among flying, first strike, lifelink, or vigilance on it.",
+        ),
+        (
+            "Gift of the Viper",
+            "Instant",
+            "Put a +1/+1 counter, a reach counter, and a deathtouch counter on target creature. Untap it.",
+        ),
+        (
+            "War Room",
+            "Land",
+            "{T}: Add {C}.\n{3}, {T}, Pay life equal to the number of colors in your commanders' color identity: Draw a card.",
+        ),
+        (
+            "Lich's Tomb",
+            "Artifact",
+            "You don't lose the game for having 0 or less life.\nWhenever you lose life, sacrifice a permanent for each 1 life you lost.",
+        ),
+        (
+            "The Blue Spirit",
+            "Legendary Creature - Human Rogue",
+            "You may cast the first creature spell you cast each turn as though it had flash.\nWhenever a nontoken creature you control enters during combat, draw a card.",
+        ),
+        (
+            "Wrathful Red Dragon",
+            "Creature - Dragon",
+            "Flying\nWhenever a Dragon you control is dealt damage, it deals that much damage to any target that isn't a Dragon.",
+        ),
+        (
+            "Price of Betrayal",
+            "Sorcery",
+            "Remove up to five counters from target artifact, creature, planeswalker, or opponent.",
+        ),
+        (
+            "Hold for Ransom",
+            "Enchantment - Aura",
+            "Enchant creature\nEnchanted creature can't attack or block and has \"{7}: Hold for Ransom's controller sacrifices it and draws a card. Activate only as a sorcery.\"",
+        ),
+        (
+            "Benevolent Blessing",
+            "Enchantment - Aura",
+            "Flash\nEnchant creature\nAs this Aura enters, choose a color.\nEnchanted creature has protection from the chosen color. This effect doesn't remove Auras and Equipment you control that are already attached to it.",
+        ),
+        (
+            "Convergence of Dominion",
+            "Artifact",
+            "Dynastic Command Node \u{2014} As long as you control your commander, activated abilities of cards in your graveyard cost {2} less to activate. This effect can't reduce the mana in that ability's activation cost to less than one mana.",
+        ),
+        (
+            "Psychogenic Probe",
+            "Artifact",
+            "Whenever a spell or ability causes a player to shuffle their library, this artifact deals 2 damage to that player.",
+        ),
+        (
+            "Wishful Merfolk",
+            "Creature - Merfolk",
+            "Defender\n{1}{U}: This creature loses defender and becomes a Human until end of turn.",
+        ),
+        (
+            "Xathrid Gorgon",
+            "Creature - Gorgon",
+            "Deathtouch\n{2}{B}, {T}: Put a petrification counter on target creature. It gains defender and becomes a colorless artifact in addition to its other types. Its activated abilities can't be activated.",
+        ),
+        (
+            "Herald of the Forgotten",
+            "Creature - Cat",
+            "Flying\nWhen this creature enters, if you cast it, return any number of target permanent cards with cycling abilities from your graveyard to the battlefield.",
+        ),
+        (
+            "Banishing Slash",
+            "Sorcery",
+            "Destroy up to one target artifact, enchantment, or tapped creature. Then if you control an artifact and an enchantment, create a 2/2 white Samurai creature token with vigilance.",
+        ),
+        (
+            "Ashes of the Abhorrent",
+            "Enchantment",
+            "Players can't cast spells from graveyards or activate abilities of cards in graveyards.\nWhenever a creature dies, you gain 1 life.",
+        ),
+        (
+            "Indomitable Might",
+            "Enchantment - Aura",
+            "Flash\nEnchant creature\nEnchanted creature gets +3/+3.\nEnchanted creature's controller may have it assign its combat damage as though it weren't blocked.",
+        ),
+        (
+            "Serra Bestiary",
+            "Enchantment - Aura",
+            "Enchant creature\nAt the beginning of your upkeep, sacrifice this Aura unless you pay {W}{W}.\nEnchanted creature can't attack or block, and its activated abilities with {T} in their costs can't be activated.",
+        ),
+        (
+            "Super-Soldier Serum",
+            "Enchantment - Aura",
+            "Enchant creature\nEnchanted creature gets +2/+2, has first strike and vigilance, and is a legendary Soldier in addition to its other types.",
+        ),
+    ];
+    for (name, type_line, text) in wave14_cards {
+        let compiled = compile_v2_strict(name, type_line, text, &vocab);
+        assert!(
+            !compiled.faces[0].spell_effects.is_empty()
+                || !compiled.faces[0].abilities.is_empty()
+                || !compiled.faces[0].statics.is_empty()
+                || !compiled.faces[0].replacements.is_empty(),
+            "{name} should produce non-empty typed IR"
+        );
+    }
+
+    // 2. Opalescence -> Compound([SetSubtypes, DynamicBasePT])
+    let opalescence = compile_v2_strict(
+        "Opalescence",
+        "Enchantment",
+        "Each other non-Aura enchantment is a creature in addition to its other types and has base power and base toughness each equal to its mana value.",
+        &vocab,
+    );
+    assert!(opalescence.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::Compound(parts)
+            if parts.iter().any(|p| matches!(p, StaticAbility::SetSubtypes { keep_existing: true, .. }))
+            && parts.iter().any(|p| matches!(p, StaticAbility::DynamicBasePT { power: Some(_), toughness: Some(_) }))
+    )));
+
+    // 3. Lich's Tomb -> GlobalFlag(DontLoseForZeroLife)
+    let tomb = compile_v2_strict(
+        "Lich's Tomb",
+        "Artifact",
+        "You don't lose the game for having 0 or less life.",
+        &vocab,
+    );
+    assert!(tomb.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::GlobalFlag(StaticFlagKind::DontLoseForZeroLife)
+    )));
+
+    // 4. The Blue Spirit -> NextSpellModifier wrapping AsThoughFlash
+    let spirit = compile_v2_strict(
+        "The Blue Spirit",
+        "Legendary Creature - Human Rogue",
+        "You may cast the first creature spell you cast each turn as though it had flash.",
+        &vocab,
+    );
+    assert!(spirit.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::NextSpellModifier { effect, .. }
+            if matches!(effect.as_ref(), StaticAbility::ZoneCastPermission { mode: CastPermissionMode::AsThoughFlash { .. }, .. })
+    )));
+
+    // 5. Ashes of the Abhorrent -> Compound([CantCastSpellsMatching, RuleRestriction(ActivatedAbilitiesCantBeActivated)])
+    let ashes = compile_v2_strict(
+        "Ashes of the Abhorrent",
+        "Enchantment",
+        "Players can't cast spells from graveyards or activate abilities of cards in graveyards.",
+        &vocab,
+    );
+    assert!(ashes.faces[0].statics.iter().any(|s| matches!(
+        s,
+        StaticAbility::Compound(parts)
+            if parts.iter().any(|p| matches!(p, StaticAbility::CantCastSpellsMatching { .. }))
+            && parts.iter().any(|p| matches!(p, StaticAbility::RuleRestriction { rule: RuleRestrictionKind::ActivatedAbilitiesCantBeActivated, .. }))
+    )));
+
+    // 6. Wrathful Red Dragon -> AnyTarget except Dragon -> Compound([TargetPlayer, TargetObject(forbidden_subtypes: ["Dragon"])])
+    let dragon = compile_v2_strict(
+        "Wrathful Red Dragon",
+        "Creature - Dragon",
+        "Whenever a Dragon you control is dealt damage, it deals that much damage to any target that isn't a Dragon.",
+        &vocab,
+    );
+    assert!(dragon.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { body, .. } => body.iter().any(|e| matches!(
+            e,
+            Effect::DealDamage {
+                target: SubjectRef::Compound(parts),
+                ..
+            } if parts.iter().any(|p| matches!(
+                p,
+                SubjectRef::TargetObject { filter, .. }
+                    if filter.forbidden_subtypes.iter().any(|s| s == "Dragon")
+            ))
+        )),
+        _ => false,
+    }));
+
+    // 7. Gift of the Viper -> 3 PutCounters mutations + Untap
+    let viper = compile_v2_strict(
+        "Gift of the Viper",
+        "Instant",
+        "Put a +1/+1 counter, a reach counter, and a deathtouch counter on target creature. Untap it.",
+        &vocab,
+    );
+    let put_count = viper.faces[0]
+        .spell_effects
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Effect::MutateObject {
+                    mutation: ObjectMutation::PutCounters { .. },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(put_count, 3);
+
+    // 8. Psychogenic Probe -> PlayerTriggerKind::ShufflesLibrary
+    let probe = compile_v2_strict(
+        "Psychogenic Probe",
+        "Artifact",
+        "Whenever a spell or ability causes a player to shuffle their library, this artifact deals 2 damage to that player.",
+        &vocab,
+    );
+    assert!(probe.faces[0].abilities.iter().any(|a| match a {
+        Ability::Triggered { trigger, .. } => trigger.events.iter().any(|ev| matches!(
+            ev,
+            TriggerEvent::PlayerAction {
+                action: PlayerTriggerKind::ShufflesLibrary,
+                ..
+            }
+        )),
+        _ => false,
+    }));
+
+    // 9. Wishful Merfolk -> chained RemoveKeywords + BecomeCreatureTypes on same subject
+    let merfolk = compile_v2_strict(
+        "Wishful Merfolk",
+        "Creature - Merfolk",
+        "{1}{U}: This creature loses defender and becomes a Human until end of turn.",
+        &vocab,
+    );
+    assert!(merfolk.faces[0].abilities.iter().any(|a| match a {
+        Ability::Activated { body, .. } => {
+            body.iter().any(|e| {
+                matches!(
+                    e,
+                    Effect::MutateObject {
+                        mutation: ObjectMutation::RemoveKeywords(_),
+                        ..
+                    }
+                )
+            }) && body.iter().any(|e| {
+                matches!(
+                    e,
+                    Effect::MutateObject {
+                        mutation: ObjectMutation::BecomeCreatureTypes { .. },
+                        ..
+                    }
+                )
+            })
+        }
+        _ => false,
+    }));
+}

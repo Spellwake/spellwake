@@ -48,6 +48,21 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     if ts.eat_phrase(&["each", "other", "player"]) || ts.eat_phrase(&["another", "player"]) {
         return Ok(PlayerRef::EachOtherPlayer);
     }
+    {
+        let ecp = ts.checkpoint();
+        if ts.eat_phrase(&["each", "player", "other", "than"])
+            && try_parse(ts, parse_player_ref).is_ok()
+        {
+            return Ok(PlayerRef::EachOtherPlayer);
+        }
+        ts.restore(ecp);
+        if ts.eat_phrase(&["each", "opponent", "other", "than"])
+            && try_parse(ts, parse_player_ref).is_ok()
+        {
+            return Ok(PlayerRef::EachOtherOpponent);
+        }
+        ts.restore(ecp);
+    }
     if ts.eat_phrase(&["each", "opponent"]) || ts.eat_phrase(&["your", "opponents"]) {
         return Ok(PlayerRef::EachOpponent);
     }
@@ -144,9 +159,27 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
         return Ok(PlayerRef::ItsController);
     }
     {
+        let t_cp = ts.checkpoint();
+        if ts.eat_word("target") && try_parse(ts, parse_object_filter).is_ok() && ts.eat_word("'s")
+        {
+            if ts.eat_word("owner") {
+                return Ok(PlayerRef::ItsOwner);
+            }
+            if ts.eat_word("controller") {
+                return Ok(PlayerRef::ItsController);
+            }
+        }
+        ts.restore(t_cp);
+    }
+    {
         let ocp = ts.checkpoint();
-        if ts.eat_tilde() && ts.eat_word("'s") && ts.eat_word("owner") {
-            return Ok(PlayerRef::ItsOwner);
+        if ts.eat_tilde() && ts.eat_word("'s") {
+            if ts.eat_word("owner") {
+                return Ok(PlayerRef::ItsOwner);
+            }
+            if ts.eat_word("controller") {
+                return Ok(PlayerRef::ItsController);
+            }
         }
         ts.restore(ocp);
     }
@@ -653,7 +686,25 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                         || w.eq_ignore_ascii_case("and")
                         || w.eq_ignore_ascii_case("and/or")
                 }) && ts.peek_n(1).is_some_and(|t| {
-                    matches!(t.kind, TokenKind::Word(nw) if lookup_card_type(&nw.to_ascii_lowercase()).is_some() || ts.vocab.lookup_subtype(&nw.to_ascii_lowercase()).is_some())
+                    matches!(t.kind, TokenKind::Word(nw) if {
+                        let nl = nw.to_ascii_lowercase();
+                        lookup_card_type(&nl).is_some()
+                            || ts.vocab.lookup_subtype(&nl).is_some()
+                            || matches!(
+                                nl.as_str(),
+                                "tapped"
+                                    | "untapped"
+                                    | "legendary"
+                                    | "nonland"
+                                    | "noncreature"
+                                    | "basic"
+                                    | "snow"
+                                    | "multicolored"
+                                    | "colorless"
+                                    | "attacking"
+                                    | "blocking"
+                            )
+                    })
                 }) {
                     pending_or_type = true;
                     continue;
@@ -667,14 +718,30 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                     continue;
                 }
             }
-            // Allow Oxford comma inside subtype lists (`Elf, Warrior, or Tyvar`, `Cleric, Rogue, Warrior, and Wizard`)
+            // Allow Oxford comma inside subtype lists (`Elf, Warrior, or Tyvar`, `Cleric, Rogue, Warrior, and Wizard`, `Knight, Aura, Equipment, or legendary artifact`)
             if saw_subtype {
                 if ts.peek_word().is_some_and(|w| {
                     w.eq_ignore_ascii_case("or")
                         || w.eq_ignore_ascii_case("and")
                         || w.eq_ignore_ascii_case("and/or")
                 }) && ts.peek_n(1).is_some_and(|t| {
-                    matches!(t.kind, TokenKind::Word(nw) if ts.vocab.lookup_subtype(&nw.to_ascii_lowercase()).is_some())
+                    matches!(t.kind, TokenKind::Word(nw) if {
+                        let nl = nw.to_ascii_lowercase();
+                        ts.vocab.lookup_subtype(&nl).is_some()
+                            || lookup_card_type(&nl).is_some()
+                            || matches!(
+                                nl.as_str(),
+                                "tapped"
+                                    | "untapped"
+                                    | "legendary"
+                                    | "nonland"
+                                    | "noncreature"
+                                    | "basic"
+                                    | "snow"
+                                    | "multicolored"
+                                    | "colorless"
+                            )
+                    })
                 }) {
                     pending_or_subtype = true;
                     continue;
@@ -760,6 +827,15 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                                 | "warped"
                                 | "suspended"
                                 | "kicked"
+                                | "tapped"
+                                | "untapped"
+                                | "legendary"
+                                | "nonland"
+                                | "noncreature"
+                                | "basic"
+                                | "snow"
+                                | "multicolored"
+                                | "colorless"
                         )
                 }
                 _ => false,
@@ -828,6 +904,17 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
             break;
         }
         if low == "and" {
+            // Allow `spell and ability` / `spells and abilities` (`Whirlwind Denial`)
+            if flt.any_spell
+                && ts.peek_n(1).is_some_and(|t| {
+                    matches!(t.kind, TokenKind::Word(nw) if nw.eq_ignore_ascii_case("ability") || nw.eq_ignore_ascii_case("abilities"))
+                })
+            {
+                ts.next_word();
+                ts.next_word();
+                flt.is_ability = true;
+                continue;
+            }
             // Only consume `and` inside a noun phrase if immediately followed by a color, card type
             // ("instant and sorcery spells"), or subtype ("Vampires and Zombies"), NOT a verb!
             let next_ok = ts.peek_n(1).is_some_and(|t| match t.kind {
