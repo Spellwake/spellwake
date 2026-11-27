@@ -9,6 +9,7 @@
 
 pub(crate) mod player_actions;
 mod player_verbs;
+mod subject_combat;
 mod subject_verbs;
 pub(crate) mod tokens;
 mod zone_verbs;
@@ -125,6 +126,29 @@ pub fn parse_effect_sentence(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
 }
 
 fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
+    // Strip optional Saga chapter flavor/ability word prefix (`Gungnir — ...`, `Judgment Bolt — ...`)
+    {
+        let aw_cp = ts.checkpoint();
+        let mut word_count = 0usize;
+        let mut found_dash = false;
+        while word_count < 4 {
+            match ts.peek().map(|t| &t.kind) {
+                Some(TokenKind::Word(_)) => {
+                    ts.next_tok();
+                    word_count += 1;
+                }
+                Some(TokenKind::EmDash) if word_count >= 1 => {
+                    ts.next_tok();
+                    found_dash = true;
+                    break;
+                }
+                _ => break,
+            }
+        }
+        if !found_dash {
+            ts.restore(aw_cp);
+        }
+    }
     // Strip optional leading `Then [,]` or `Instead [,]` sequential/replacement connector
     if ts.eat_word("then") {
         let _ = ts.eat_comma();
@@ -605,7 +629,10 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
             body,
         }]);
     }
-    if ts.eat_phrase(&["until", "your", "next", "upkeep"]) && ts.eat_comma() {
+    if (ts.eat_phrase(&["until", "your", "next", "upkeep"])
+        || ts.eat_phrase(&["until", "the", "beginning", "of", "your", "next", "upkeep"]))
+        && ts.eat_comma()
+    {
         let body = parse_sentence_top(ts)?;
         return Ok(vec![Effect::ScopedDuration {
             duration: Duration::UntilYourNextUpkeep,
@@ -1125,9 +1152,11 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         }]);
     }
 
-    // 8. Activation / trigger / cast restrictions (`Activate only ...`, `This ability triggers only once each turn`, `Cast this spell only ...`)
+    // 8. Activation / trigger / cast restrictions (`Activate only ...`, `This ability triggers only once/twice each turn`, `Cast this spell only ...`)
     if ts.eat_phrase(&[
         "this", "ability", "triggers", "only", "once", "each", "turn",
+    ]) || ts.eat_phrase(&[
+        "this", "ability", "triggers", "only", "twice", "each", "turn",
     ]) {
         return Ok(vec![Effect::Restriction(vec![
             ActivationRestriction::OnceEachTurn,

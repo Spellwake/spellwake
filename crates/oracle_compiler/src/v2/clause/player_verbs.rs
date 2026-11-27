@@ -992,7 +992,11 @@ pub(super) fn parse_player_verb_frame(
 
     // 3f. `copy(ies) <subj> [twice | <N> times] [for each <expr>] [, except ...]` (`Copy target instant or sorcery spell`, `Jaya`, `Donal`, `Tawnos`, `Fork`, `The Sixth Doctor`)
     if ts.eat_word("copy") || ts.eat_word("copies") {
-        let subject = parse_subject_ref(ts)?;
+        let subject = if ts.eat_phrase(&["that", "spell", "or", "ability"]) {
+            SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatSpell)
+        } else {
+            parse_subject_ref(ts)?
+        };
         let count = if ts.eat_word("twice") {
             ValueExpr::Const(2)
         } else {
@@ -1025,11 +1029,11 @@ pub(super) fn parse_player_verb_frame(
     {
         let subject = parse_subject_ref(ts)?;
         if ts.eat_phrase(&["by", "replacing", "all", "instances", "of"]) {
-            let kind = if ts.eat_phrase(&["one", "color", "word", "with", "another"])
-                || ts.eat_phrase(&[
-                    "one", "color", "word", "with", "another", "or", "one", "basic", "land",
-                    "type", "with", "another",
-                ]) {
+            let kind = if ts.eat_phrase(&[
+                "one", "color", "word", "with", "another", "or", "one", "basic", "land", "type",
+                "with", "another",
+            ]) || ts.eat_phrase(&["one", "color", "word", "with", "another"])
+            {
                 CharacteristicKind::Color
             } else if ts.eat_phrase(&["one", "basic", "land", "type", "with", "another"]) {
                 CharacteristicKind::BasicLandType
@@ -1309,6 +1313,7 @@ pub(super) fn parse_player_verb_frame(
                 return Err(ts.err("expected `life`, energy, or mana after `pay`"));
             }
         };
+        let _ = ts.eat_phrase(&["any", "number", "of", "times"]);
         return Ok((
             vec![Effect::MutatePlayer {
                 player: actor,
@@ -1923,6 +1928,25 @@ pub(super) fn parse_player_verb_frame(
         ));
     }
     if ts.eat_word("remove") || ts.eat_word("removes") {
+        if ts.eat_phrase(&["those", "counters"]) || ts.eat_phrase(&["those", "counter"]) {
+            let subject = if ts.eat_word("from") {
+                parse_subject_ref(ts)?
+            } else {
+                SubjectRef::SelfObject
+            };
+            return Ok((
+                vec![Effect::MutateObject {
+                    subject,
+                    mutation: ObjectMutation::RemoveCounters {
+                        kind: CounterKind::Any,
+                        count: None,
+                        all: true,
+                    },
+                    duration: Duration::Instant,
+                }],
+                (),
+            ));
+        }
         let _ = ts.eat_phrase(&["up", "to"]);
         let (all, count) = if ts.eat_word("all") {
             (true, None)

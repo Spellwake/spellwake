@@ -468,6 +468,83 @@ fn parse_zone_verb_frame_inner(
                 (),
             ));
         }
+        // `exile [any number of target players' | all opponents'] graveyards` (`Thraben Charm`, `Stonespeaker Crystal`, `The Death of Gwen Stacy`, `Szat's Will`)
+        if ts.eat_phrase(&["any", "number", "of", "target", "players'", "graveyards"])
+            || ts.eat_phrase(&["any", "number", "of", "target", "opponents'", "graveyards"])
+            || ts.eat_phrase(&["all", "opponents'", "graveyards"])
+            || ts.eat_phrase(&["all", "players'", "graveyards"])
+        {
+            let zref = ZoneRef {
+                zone: ZoneKind::Graveyard,
+                owner: ZoneOwner::Opponents,
+            };
+            return Ok((
+                vec![Effect::ZoneOp {
+                    actor,
+                    op: ZoneOpKind::Exile {
+                        face_down: false,
+                        counters: None,
+                    },
+                    subject: SubjectRef::All(Box::new(ObjectFilter {
+                        any_card: true,
+                        zones: vec![zref],
+                        ..Default::default()
+                    })),
+                    from: vec![zref],
+                    to: None,
+                    modifiers: EntryModifiers::default(),
+                    except: None,
+                    count: None,
+                }],
+                (),
+            ));
+        }
+        // `exile any number of <subj> [from <zone>] [face down] [with counters] [until <dur>]` (`Dimir Machinations`, `Abdel Adrian`, `Glorious Protector`)
+        {
+            let acp = ts.checkpoint();
+            if ts.eat_phrase(&["any", "number", "of"])
+                && let Ok(subject) = try_parse(ts, parse_subject_ref)
+            {
+                let mut from = Vec::new();
+                if ts.eat_word("from")
+                    && let Ok(z1) = try_parse(ts, parse_zone_ref)
+                {
+                    from.push(z1);
+                }
+                let face_down = ts.eat_phrase(&["face", "down"]);
+                let counters = parse_exile_with_counters(ts);
+                let ex_dur = parse_trailing_duration(ts);
+                let eff = Effect::ZoneOp {
+                    actor,
+                    op: ZoneOpKind::Exile {
+                        face_down,
+                        counters,
+                    },
+                    subject,
+                    from,
+                    to: None,
+                    modifiers: EntryModifiers {
+                        face_down,
+                        ..EntryModifiers::default()
+                    },
+                    except: None,
+                    count: Some(CountSpec {
+                        count: ValueExpr::Const(0),
+                        up_to: false,
+                        any_number: true,
+                    }),
+                };
+                let eff = match ex_dur {
+                    Some(duration) => Effect::ScopedDuration {
+                        duration,
+                        body: vec![eff],
+                    },
+                    None => eff,
+                };
+                return Ok((vec![eff], ()));
+            }
+            ts.restore(acp);
+        }
         // `exile <zone>` (`exile target player's graveyard`, `exile all graveyards`, `exile each opponent's graveyard`)
         {
             let zcp = ts.checkpoint();
@@ -1239,8 +1316,28 @@ fn parse_zone_verb_frame_inner(
                 (),
             ));
         }
-        // 14c. `put them back in any order` / `put <subj> on top` / `put <subj> [from <zone>] into/onto/on <dest> [from <zone>]`
-        let subject = if let Ok(s) = try_parse(ts, parse_subject_ref) {
+        // 14c. `put them back in any order` / `put <subj> on top` / `put [up to <val> | a random] <subj> [from <zone>] into/onto/on <dest> [from <zone>]`
+        let put_count = {
+            let pcp = ts.checkpoint();
+            if ts.eat_phrase(&["up", "to"])
+                && let Ok(val) = try_parse(ts, parse_value_expr)
+                && !ts.peek_phrase(&["of", "them"])
+            {
+                Some(CountSpec {
+                    count: val,
+                    up_to: true,
+                    any_number: false,
+                })
+            } else {
+                ts.restore(pcp);
+                None
+            }
+        };
+        let is_random_put = ts.eat_phrase(&["a", "random"]) || ts.eat_word("random");
+        let subject = if let Ok(mut s) = try_parse(ts, parse_subject_ref) {
+            if is_random_put && let SubjectRef::Group(ref mut flt) = s {
+                flt.flags = flt.flags.union(crate::v2::ir::FilterFlags::AT_RANDOM);
+            }
             s
         } else if ts.eat_word("one") {
             SubjectRef::OneOfThem(ValueExpr::Const(1))
@@ -1370,7 +1467,7 @@ fn parse_zone_verb_frame_inner(
             to: Some(dest),
             modifiers,
             except: None,
-            count: None,
+            count: put_count,
         }];
         let cp = ts.checkpoint();
         if ts.eat_word("and")
@@ -1793,11 +1890,52 @@ fn parse_zone_verb_frame_inner(
             if ts.eat_phrase(&["cards", "from", "the", "top", "of"])
                 && let Ok(zref) = try_parse(ts, parse_zone_ref)
                 && ts.eat_word("until")
-                && opt(ts, parse_player_ref).is_some()
-                && (ts.eat_word("reveal") || ts.eat_word("reveals"))
             {
-                let _ = opt(ts, parse_value_expr);
-                if let Ok(flt) = try_parse(ts, parse_object_filter) {
+                let mut count_spec = None;
+                let flt_opt = if opt(ts, parse_player_ref).is_some()
+                    && (ts.eat_word("reveal") || ts.eat_word("reveals"))
+                {
+                    let deferred_num = ts.eat_phrase(&["a", "number", "of"]);
+                    if !deferred_num && let Some(v) = opt(ts, parse_value_expr) {
+                        count_spec = Some(CountSpec {
+                            count: v,
+                            up_to: false,
+                            any_number: false,
+                        });
+                    }
+                    let f = try_parse(ts, parse_object_filter).ok();
+                    if deferred_num
+                        && ts.eat_phrase(&["equal", "to"])
+                        && let Ok(v) = try_parse(ts, parse_value_expr)
+                    {
+                        count_spec = Some(CountSpec {
+                            count: v,
+                            up_to: false,
+                            any_number: false,
+                        });
+                    }
+                    f
+                } else {
+                    // Passive: `until <count> <flt> is/are revealed [and exiles that card]` (`Blessed Reincarnation`, `Mind Funeral`, `Indomitable Creativity`, `Mirror-Mad Phantasm`)
+                    if let Some(v) = opt(ts, parse_value_expr) {
+                        count_spec = Some(CountSpec {
+                            count: v,
+                            up_to: false,
+                            any_number: false,
+                        });
+                    }
+                    if let Ok(f) = try_parse(ts, parse_object_filter)
+                        && (ts.eat_phrase(&["is", "revealed"])
+                            || ts.eat_phrase(&["are", "revealed"]))
+                    {
+                        let _ = ts.eat_phrase(&["and", "exiles", "that", "card"])
+                            || ts.eat_phrase(&["and", "exile", "that", "card"]);
+                        Some(f)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(flt) = flt_opt {
                     return Ok((
                         vec![Effect::ZoneOp {
                             actor,
@@ -1809,7 +1947,7 @@ fn parse_zone_verb_frame_inner(
                             to: None,
                             modifiers: EntryModifiers::default(),
                             except: None,
-                            count: None,
+                            count: count_spec,
                         }],
                         (),
                     ));

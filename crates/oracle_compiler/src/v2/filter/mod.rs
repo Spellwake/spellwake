@@ -45,7 +45,7 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
     if ts.eat_phrase(&["each", "other", "opponent"]) {
         return Ok(PlayerRef::EachOtherOpponent);
     }
-    if ts.eat_phrase(&["each", "other", "player"]) {
+    if ts.eat_phrase(&["each", "other", "player"]) || ts.eat_phrase(&["another", "player"]) {
         return Ok(PlayerRef::EachOtherPlayer);
     }
     if ts.eat_phrase(&["each", "opponent"]) || ts.eat_phrase(&["your", "opponents"]) {
@@ -175,6 +175,10 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
             return Ok(PlayerRef::TargetPlayer);
         }
         ts.restore(ncp);
+    }
+    if ts.eat_phrase(&["the", "player", "with", "the", "most", "life"]) {
+        let _ = ts.eat_phrase(&["or", "tied", "for", "most", "life"]);
+        return Ok(PlayerRef::HighestLifePlayer);
     }
     if ts.eat_phrase(&["the", "chosen", "player"]) {
         return Ok(PlayerRef::ChosenPlayer);
@@ -432,6 +436,22 @@ pub fn parse_zone_dest(ts: &mut TokenStream<'_>) -> PResult<(ZoneDest, EntryModi
             library_position = Some(LibraryPosition::FromTop(3));
         } else if ts.eat_phrase(&["fourth", "from", "the", "top"]) {
             library_position = Some(LibraryPosition::FromTop(4));
+        } else {
+            let jb_cp = ts.checkpoint();
+            if ts.eat_phrase(&["just", "beneath", "the", "top"])
+                && let Ok(depth) = try_parse(ts, crate::v2::value::parse_value_expr)
+                && (ts.eat_word("cards") || ts.eat_word("card"))
+                && ts.eat_word("of")
+                && try_parse(ts, parse_zone_ref).is_ok()
+            {
+                let d = match depth {
+                    ValueExpr::Const(n) => u16::try_from(n.max(1)).unwrap_or(1),
+                    _ => 0,
+                };
+                library_position = Some(LibraryPosition::FromTop(d));
+            } else {
+                ts.restore(jb_cp);
+            }
         }
         if library_position.is_some()
             && (ts.eat_phrase(&["or", "on", "the", "bottom"])
@@ -1032,9 +1052,17 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                 ts.next_word();
                 flt.flags = flt.flags.union(FilterFlags::IS_COMMANDER);
             }
+            "non-~" => {
+                ts.next_word();
+                flt.flags = flt.flags.union(FilterFlags::EXCLUDE_SELF);
+            }
             "noncommander" => {
                 ts.next_word();
                 flt.flags = flt.flags.union(FilterFlags::NOT_COMMANDER);
+            }
+            "source" | "sources" => {
+                ts.next_word();
+                flt.any_permanent = true;
             }
             "nonland" => {
                 ts.next_word();

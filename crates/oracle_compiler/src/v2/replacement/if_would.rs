@@ -125,6 +125,175 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
         ts.restore(cp);
     }
 
+    // 1a0f2. `If you tap <flt> for mana, it produces twice / three times as much of that mana instead.` (`Nyxbloom Ancient`, `Mana Reflection`, `Virtue of Strength`)
+    {
+        let cp = ts.checkpoint();
+        if let Ok(player) = try_parse(ts, crate::v2::filter::parse_player_ref)
+            && (ts.eat_word("tap") || ts.eat_word("taps"))
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+            && ts.eat_phrase(&["for", "mana"])
+            && ts.eat_comma()
+            && ts.eat_phrase(&["it", "produces"])
+        {
+            let mult = if ts.eat_word("twice") {
+                Some(2i32)
+            } else if ts.eat_phrase(&["three", "times"]) {
+                Some(3i32)
+            } else {
+                None
+            };
+            if let Some(m) = mult
+                && ts.eat_phrase(&["as", "much", "of", "that", "mana", "instead"])
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::EventInstead {
+                        event: TriggerEvent::PlayerObjectEvent {
+                            player,
+                            kind: crate::v2::ir::PlayerObjectTriggerKind::TappedForMana,
+                            filter: Some(flt),
+                        },
+                        instead: vec![crate::v2::ir::Effect::MutatePlayer {
+                            player,
+                            mutation: crate::v2::ir::PlayerMutation::AddMana(
+                                crate::v2::ir::ManaSpec::AnyColor {
+                                    amount: ValueExpr::Const(m),
+                                    single_color: false,
+                                },
+                            ),
+                            duration: crate::v2::ir::Duration::Instant,
+                        }],
+                    });
+                }
+            }
+        }
+        ts.restore(cp);
+    }
+
+    // 1a0f3. `If <player> would mill one or more cards, <player> mill(s) that many cards plus <N> instead.` (`The Water Crystal`)
+    //        `If <player> would search a library, <player> searches the top <N> cards of that library instead.` (`Aven Mindcensor`)
+    {
+        let cp = ts.checkpoint();
+        if let Ok(player) = try_parse(ts, crate::v2::filter::parse_player_ref)
+            && ts.eat_word("would")
+        {
+            let m_cp = ts.checkpoint();
+            if ts.eat_phrase(&["mill", "one", "or", "more", "cards"])
+                && ts.eat_comma()
+                && try_parse(ts, crate::v2::filter::parse_player_ref).is_ok()
+                && (ts.eat_word("mill") || ts.eat_word("mills"))
+                && ts.eat_phrase(&["that", "many", "cards", "plus"])
+                && let Ok(extra) = try_parse(ts, parse_value_expr)
+                && ts.eat_word("instead")
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::EventInstead {
+                        event: TriggerEvent::PlayerObjectEvent {
+                            player,
+                            kind: crate::v2::ir::PlayerObjectTriggerKind::MillsCard,
+                            filter: None,
+                        },
+                        instead: vec![crate::v2::ir::Effect::ZoneOp {
+                            actor: player,
+                            op: crate::v2::ir::ZoneOpKind::Mill,
+                            subject: SubjectRef::Player(player),
+                            from: vec![crate::v2::ir::ZoneRef {
+                                zone: ZoneKind::Library,
+                                owner: crate::v2::ir::ZoneOwner::ThatPlayer,
+                            }],
+                            to: None,
+                            modifiers: crate::v2::ir::EntryModifiers::default(),
+                            except: None,
+                            count: Some(crate::v2::ir::CountSpec {
+                                count: ValueExpr::Add(
+                                    Box::new(ValueExpr::PriorActionCount(
+                                        crate::v2::ir::PriorActionKind::ThatMany,
+                                    )),
+                                    Box::new(extra),
+                                ),
+                                up_to: false,
+                                any_number: false,
+                            }),
+                        }],
+                    });
+                }
+            }
+            ts.restore(m_cp);
+            if ts.eat_phrase(&["search", "a", "library"])
+                && ts.eat_comma()
+                && try_parse(ts, crate::v2::filter::parse_player_ref).is_ok()
+                && (ts.eat_word("search") || ts.eat_word("searches"))
+                && ts.eat_phrase(&["the", "top"])
+                && let Ok(depth) = try_parse(ts, parse_value_expr)
+                && (ts.eat_word("cards") || ts.eat_word("card"))
+                && ts.eat_phrase(&["of", "that", "library", "instead"])
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::EventInstead {
+                        event: TriggerEvent::PlayerAction {
+                            player,
+                            action: PlayerTriggerKind::SearchesLibrary,
+                        },
+                        instead: vec![crate::v2::ir::Effect::ZoneOp {
+                            actor: player,
+                            op: crate::v2::ir::ZoneOpKind::LookTop { reveal: false },
+                            subject: SubjectRef::Player(player),
+                            from: vec![crate::v2::ir::ZoneRef {
+                                zone: ZoneKind::Library,
+                                owner: crate::v2::ir::ZoneOwner::ThatPlayer,
+                            }],
+                            to: None,
+                            modifiers: crate::v2::ir::EntryModifiers::default(),
+                            except: None,
+                            count: Some(crate::v2::ir::CountSpec {
+                                count: depth,
+                                up_to: false,
+                                any_number: false,
+                            }),
+                        }],
+                    });
+                }
+            }
+            ts.restore(m_cp);
+            if ts.eat_phrase(&["roll", "one", "or", "more"])
+                && {
+                    let _ = ts.eat_word("planar");
+                    ts.eat_word("dice")
+                }
+                && ts.eat_comma()
+                && ts.eat_phrase(&["instead", "roll", "that", "many"])
+                && {
+                    let _ = ts.eat_word("planar");
+                    ts.eat_phrase(&["dice", "plus"])
+                }
+                && let Ok(extra) = try_parse(ts, parse_value_expr)
+                && ts.eat_phrase(&["and", "ignore"])
+                && (ts.eat_phrase(&["the", "lowest", "roll"]) || ts.eat_word("one"))
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::EventInstead {
+                        event: TriggerEvent::RolledDie { player, value: 0 },
+                        instead: vec![crate::v2::ir::Effect::MutatePlayer {
+                            player,
+                            mutation: crate::v2::ir::PlayerMutation::RollDie {
+                                sides: 20,
+                                count: match extra {
+                                    ValueExpr::Const(n) => u8::try_from(n.max(1) + 1).unwrap_or(2),
+                                    _ => 2,
+                                },
+                            },
+                            duration: crate::v2::ir::Duration::Instant,
+                        }],
+                    });
+                }
+            }
+        }
+        ts.restore(cp);
+    }
+
     // 1a0f. `If a land is tapped for mana, it produces {M} instead of any other type and amount.` (`Contamination`)
     {
         let cp = ts.checkpoint();
@@ -460,6 +629,46 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
         return Err(ts.err("unsupported counter-doubling replacement clause"));
     }
 
+    // 1c0. `If ~ is in your opening hand, you may begin the game with ~ on the battlefield` (`Quicksilver, Brash Blur`)
+    {
+        let ocp = ts.checkpoint();
+        if ts.eat_tilde()
+            && ts.eat_phrase(&["is", "in", "your", "opening", "hand"])
+            && ts.eat_comma()
+            && ts.eat_phrase(&["you", "may", "begin", "the", "game", "with"])
+            && ts.eat_tilde()
+            && ts.eat_phrase(&["on", "the", "battlefield"])
+        {
+            let _ = ts.eat_period();
+            if ts.is_eof() {
+                return Ok(Replacement::Rule(
+                    crate::v2::ir::ReplacementRuleKind::OpeningHandOnBattlefield,
+                ));
+            }
+        }
+        ts.restore(ocp);
+    }
+    // 1c0b. `If [a player | that player [or that planeswalker's controller]] would gain life [this turn], that player gains no life instead.` (`Sulfuric Vortex`, `Flames of the Blood Hand`)
+    {
+        let ncp = ts.checkpoint();
+        if let Ok(player) = try_parse(ts, crate::v2::filter::parse_player_ref)
+            && ts.eat_phrase(&["would", "gain", "life"])
+        {
+            let _ = ts.eat_phrase(&["this", "turn"]);
+            if ts.eat_comma()
+                && ts.eat_phrase(&["that", "player", "gains", "no", "life", "instead"])
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::PlayerRule {
+                        player,
+                        rule: PlayerReplacementKind::ModifyLifeGain { add: 0, factor: 0 },
+                    });
+                }
+            }
+        }
+        ts.restore(ncp);
+    }
     // 1c. `If you would gain life [while <cond>], you gain that much life plus <N> / twice that much life instead.`
     {
         let cp = ts.checkpoint();

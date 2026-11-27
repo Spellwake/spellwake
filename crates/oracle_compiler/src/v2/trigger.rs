@@ -117,6 +117,15 @@ pub fn parse_trigger_header(ts: &mut TokenStream<'_>) -> PResult<TriggerSpec> {
             }
             ts.restore(wcp);
         }
+        if ts.eat_phrase(&["during", "combat"]) {
+            intervening_if = Some(merge_cond(
+                intervening_if,
+                ConditionExpr::EventCheck(crate::v2::ir::EventCheckKind::DuringStep(
+                    TurnStepAst::BeginningOfCombat,
+                )),
+            ));
+            continue;
+        }
         if ts.eat_phrase(&["during", "your", "turn"]) {
             intervening_if = Some(merge_cond(
                 intervening_if,
@@ -372,12 +381,16 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
             }
             if ts.eat_word("cast") || ts.eat_word("casts") {
                 if ts.eat_tilde() || ts.eat_phrase(&["this", "spell"]) || ts.eat_word("it") {
+                    let from_outside_hand = ts
+                        .eat_phrase(&["from", "anywhere", "other", "than", "exile"])
+                        || ts.eat_phrase(&["from", "anywhere", "other", "than", "your", "hand"])
+                        || ts.eat_phrase(&["from", "anywhere", "other", "than", "their", "hand"]);
                     if ts.eat_phrase(&["or", "cycle"]) && ts.eat_tilde() {
                         return Ok(vec![
                             TriggerEvent::SpellCast {
                                 caster: player,
                                 spell: None,
-                                from_outside_hand: false,
+                                from_outside_hand,
                             },
                             TriggerEvent::Cycled {
                                 player,
@@ -388,7 +401,7 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                     return Ok(vec![TriggerEvent::SpellCast {
                         caster: player,
                         spell: None,
-                        from_outside_hand: false,
+                        from_outside_hand,
                     }]);
                 }
                 let _ = ts.eat_phrase(&["your", "next"])
@@ -405,13 +418,31 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                         .contains(&crate::v2::ir::FilterPredicate::FromOutsideHand)
                 }) || ts
                     .eat_phrase(&["from", "anywhere", "other", "than", "their", "hand"])
-                    || ts.eat_phrase(&["from", "anywhere", "other", "than", "your", "hand"]);
+                    || ts.eat_phrase(&["from", "anywhere", "other", "than", "your", "hand"])
+                    || ts.eat_phrase(&["from", "anywhere", "other", "than", "exile"]);
+                let _ = ts.eat_phrase(&["using", "mana", "produced", "by"]) && ts.eat_tilde();
                 let _ = ts.eat_phrase(&["each", "turn"]);
-                return Ok(vec![TriggerEvent::SpellCast {
+                let mut evs = vec![TriggerEvent::SpellCast {
                     caster: player,
                     spell,
                     from_outside_hand,
-                }]);
+                }];
+                {
+                    let bcp = ts.checkpoint();
+                    if (ts.eat_phrase(&["or", "activate", "an", "ability"])
+                        || ts.eat_phrase(&["or", "activates", "an", "ability"]))
+                        && ts.eat_phrase(&["that", "targets", "only"])
+                        && ts.eat_tilde()
+                    {
+                        evs.push(TriggerEvent::AbilityActivated {
+                            player,
+                            non_mana_only: false,
+                        });
+                    } else {
+                        ts.restore(bcp);
+                    }
+                }
+                return Ok(evs);
             }
             if ts.eat_word("sacrifice") || ts.eat_word("sacrifices") {
                 let _ = ts.eat_phrase(&["one", "or", "more"]);
@@ -454,6 +485,7 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                     let _ = opt(ts, parse_subject_ref);
                 }
                 if ts.eat_word("with") {
+                    let _ = ts.eat_word("exactly");
                     let min_count = ts
                         .next_number(false)
                         .and_then(|n| u8::try_from(n).ok())
@@ -468,6 +500,12 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                     }
                 }
                 ts.restore(acp);
+            }
+            if ts.eat_phrase(&["pay", "this", "cost", "one", "or", "more", "times"]) {
+                return Ok(vec![TriggerEvent::AbilityActivated {
+                    player,
+                    non_mana_only: false,
+                }]);
             }
             {
                 let rcp = ts.checkpoint();
@@ -760,6 +798,12 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
                 }]);
             }
             if ts.eat_word("discard") || ts.eat_word("discards") {
+                if ts.eat_tilde() {
+                    return Ok(vec![TriggerEvent::PlayerAction {
+                        player,
+                        action: PlayerTriggerKind::CardDiscarded,
+                    }]);
+                }
                 if ts.eat_phrase(&["one", "or", "more", "cards"])
                     || ts.eat_phrase(&["a", "card"])
                     || ts.eat_word("cards")
@@ -806,11 +850,19 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
             }
             if ts.eat_word("play") || ts.eat_word("plays") {
                 if ts.eat_phrase(&["a", "land"]) {
-                    let from_exile = ts.eat_phrase(&["from", "exile"]);
+                    let from_exile = ts.eat_phrase(&["from", "exile"])
+                        || ts.eat_phrase(&["from", "anywhere", "other", "than", "your", "hand"])
+                        || ts.eat_phrase(&["from", "anywhere", "other", "than", "their", "hand"]);
                     if ts.eat_phrase(&["or", "cast", "a", "spell"])
                         || ts.eat_phrase(&["or", "casts", "a", "spell"])
                     {
-                        let spell_from_exile = ts.eat_phrase(&["from", "exile"]);
+                        let spell_from_exile = ts.eat_phrase(&["from", "exile"])
+                            || ts
+                                .eat_phrase(&["from", "anywhere", "other", "than", "your", "hand"])
+                            || ts.eat_phrase(&[
+                                "from", "anywhere", "other", "than", "their", "hand",
+                            ])
+                            || ts.eat_phrase(&["from", "anywhere", "other", "than", "exile"]);
                         return Ok(vec![
                             TriggerEvent::PlayerAction {
                                 player,
@@ -1157,6 +1209,62 @@ pub fn parse_trigger_event_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Trigger
         }
     }
 
+    // `one or more opponents [each] lose [exactly <N>] life` (`Ob Nixilis, Captive Kingpin`)
+    {
+        let ocp = ts.checkpoint();
+        if ts.eat_phrase(&["one", "or", "more", "opponents"]) {
+            let _ = ts.eat_word("each");
+            if ts.eat_word("lose") {
+                if ts.eat_word("exactly") {
+                    let _ = ts.next_number(false);
+                }
+                if ts.eat_word("life") {
+                    return Ok(vec![TriggerEvent::LifeChanged {
+                        player: crate::v2::ir::PlayerRef::EachOpponent,
+                        gained: false,
+                    }]);
+                }
+            }
+        }
+        ts.restore(ocp);
+    }
+
+    // `an ability of <subj> is activated` (`Illusionist's Bracers`, `Battlemage's Bracers`)
+    {
+        let ab_cp = ts.checkpoint();
+        if ts.eat_phrase(&["an", "ability", "of"])
+            && try_parse(ts, parse_subject_ref).is_ok()
+            && ts.eat_phrase(&["is", "activated"])
+        {
+            return Ok(vec![TriggerEvent::AbilityActivated {
+                player: crate::v2::ir::PlayerRef::You,
+                non_mana_only: false,
+            }]);
+        }
+        ts.restore(ab_cp);
+    }
+
+    // `a spell or ability you control counters a spell` (`Baral, Chief of Compliance`, `Lullmage Mentor`)
+    if ts.eat_phrase(&[
+        "a", "spell", "or", "ability", "you", "control", "counters", "a", "spell",
+    ]) {
+        return Ok(vec![TriggerEvent::SpellCast {
+            caster: crate::v2::ir::PlayerRef::AnyOpponent,
+            spell: None,
+            from_outside_hand: false,
+        }]);
+    }
+
+    // `the final chapter ability of a Saga you control resolves` (`Narci, Fable Singer`, `Historian's Boon`)
+    if ts.eat_phrase(&[
+        "the", "final", "chapter", "ability", "of", "a", "saga", "you", "control", "resolves",
+    ]) {
+        return Ok(vec![TriggerEvent::AbilityActivated {
+            player: crate::v2::ir::PlayerRef::You,
+            non_mana_only: true,
+        }]);
+    }
+
     // `day becomes night or night becomes day`
     if ts.eat_phrase(&["day", "becomes", "night", "or", "night", "becomes", "day"]) {
         return Ok(vec![TriggerEvent::Global(
@@ -1469,7 +1577,10 @@ fn parse_subject_trigger_verb(
     }
     if ts.eat_phrase(&["is", "put", "into"]) || ts.eat_phrase(&["are", "put", "into"]) {
         let z = crate::v2::filter::parse_zone_ref(ts)?;
-        let from = if ts.eat_phrase(&["from", "anywhere"]) {
+        let from = if ts.eat_phrase(&["from", "anywhere", "other", "than"]) {
+            let _ = try_parse(ts, crate::v2::filter::parse_zone_ref);
+            None
+        } else if ts.eat_phrase(&["from", "anywhere"]) {
             None
         } else if ts.eat_word("from") {
             try_parse(ts, crate::v2::filter::parse_zone_ref)
