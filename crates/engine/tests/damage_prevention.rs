@@ -60,9 +60,17 @@ fn damage(amount: i64) -> Instruction {
 }
 
 fn shield(amount: i64) -> Instruction {
-    Instruction::CreatePreventionShield {
-        amount: amount.into(),
-    }
+    Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec {
+        selector: None,
+        payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+            amount: amount.into(),
+        },
+        duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+        condition: None,
+        one_shot: true,
+        as_emblem: None,
+        emblem_label: None,
+    }))
 }
 
 fn context_with(labels: [&str; 5]) -> GameContext {
@@ -1082,9 +1090,7 @@ fn copied_shields_are_independent_effects_and_survive_copy_cessation() {
                     A,
                     ExecutableBody::new(
                         BodyTarget::SingleCreature,
-                        vec![Instruction::CreatePreventionShield {
-                            amount: exact(HUGE),
-                        }],
+                        vec![Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec { selector: None, payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield { amount: exact(HUGE) }, duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn, condition: None, one_shot: true, as_emblem: None, emblem_label: None }))],
                     ),
                 ),
                 (
@@ -1094,7 +1100,7 @@ fn copied_shields_are_independent_effects_and_survive_copy_cessation() {
                         BodyTarget::SingleSpell(
                             spellwake_engine::program::SpellFilter::copyable_instruction(),
                         ),
-                        vec![Instruction::CopySpell],
+                        vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell()))],
                     ),
                 ),
                 (
@@ -1102,7 +1108,7 @@ fn copied_shields_are_independent_effects_and_survive_copy_cessation() {
                     A,
                     ExecutableBody::new(
                         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                        vec![Instruction::CounterSpell],
+                        vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard)))],
                     ),
                 ),
                 (
@@ -1235,9 +1241,21 @@ fn zero_and_negative_literal_programs_reject_without_restricting_huge_positive_a
             A,
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::CreatePreventionShield {
-                    amount: exact(HUGE),
-                }],
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload:
+                            spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: exact(HUGE),
+                            },
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))],
             ),
         )],
     );

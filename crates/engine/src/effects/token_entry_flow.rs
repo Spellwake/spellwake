@@ -673,22 +673,26 @@ impl EffectWindow {
             .controller();
         let current = self.evaluated_characteristics()?;
         let current_inst = self.current_instruction()?;
+        let token_attacking_scope = match current_inst {
+            Instruction::CreateTokens { creations } => creations
+                .iter()
+                .find_map(|creation| creation.attacking_defender),
+            _ => None,
+        };
         let enters_attacking = mobilize
+            || token_attacking_scope.is_some()
             || matches!(
                 current_inst,
-                Instruction::CreateAttackingTokens { .. }
-                    | Instruction::CreateTokenCopy {
-                        attacking: true,
-                        ..
-                    }
-                    | Instruction::CreateTokenCopyExt {
-                        enters_attacking: true,
-                        ..
-                    }
+                Instruction::CreateTokenCopyExt {
+                    enters_attacking: true,
+                    ..
+                }
             );
         let defender_scope = match current_inst {
-            Instruction::CreateAttackingTokens { defender_scope, .. }
-            | Instruction::CreateTokenCopyExt {
+            Instruction::CreateTokens { .. } => {
+                token_attacking_scope.unwrap_or(crate::token::AttackingDefenderScope::AnyLegal)
+            }
+            Instruction::CreateTokenCopyExt {
                 enters_attacking: true,
                 defender_scope,
                 ..
@@ -1928,7 +1932,7 @@ impl EffectWindow {
                 }
             }
         }
-        if let Some(Instruction::CreateTokenCopy {
+        if let Some(Instruction::CreateTokenCopyExt {
             sacrifice_at_end_step,
             exile_at_end_step,
             ..

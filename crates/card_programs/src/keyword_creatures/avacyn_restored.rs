@@ -333,7 +333,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                         "three 1/1 red Human creature tokens with haste",
                         vocabulary,
                     )?,
-                    ScheduleCreatedTokenSacrifice,
+                    Instruction::ScheduleDelayedStepTrigger { step: spellwake_engine::turn::Step::End, own_step_only: false, body: Box::new(ExecutableBody::new(BodyTarget::None, vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::CreatedTokens, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice })))])) },
                 ],
             )
         }
@@ -390,7 +390,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                 spellwake_engine::program::SpellFilter::any()
                     .ordinal_this_turn(std::num::NonZeroU32::new(2)?),
             ),
-            vec![CounterSpell],
+            vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard)))],
         ),
         "Target creature gets +2/+2 until end of turn. If it's paired with a creature, that creature also gets +2/+2 until end of turn." => {
             (
@@ -409,7 +409,7 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
             BodyTarget::SingleSpell(
                 spellwake_engine::program::SpellFilter::any().targeting_player(),
             ),
-            vec![CounterSpell],
+            vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard)))],
         ),
         "Up to two target creatures can't be blocked this turn." => (
             SingleCreature,
@@ -1526,20 +1526,18 @@ fn creature(
                     NoTarget,
                     vec![
                         RequireCondition(spellwake_engine::program::InterveningCondition::NoOtherControlledCreatures),
-                        Instruction::LookTopChoose {
-                            count: spellwake_engine::program::ValueExpr::Literal(4.into()),
+                        Instruction::LookTopChooseExt {
                             library_owner: spellwake_engine::program::ResolvingPlayer::Controller,
+                            chooser: spellwake_engine::program::ResolvingPlayer::Controller,
+                            count: spellwake_engine::program::ValueExpr::Literal(4.into()),
                             filter: None,
-                            reveal: false,
-                            reveal_only: false,
-                            to_battlefield: false,
-                            enters_tapped: false,
-                            take_all_matching: false,
                             max_picks: 1,
-                            rest_to_graveyard: false,
-                            rest_to_exile: false,
-                            rest_to_top: false,
-                            random_rest_order: false,
+                            take_all_matching: false,
+                            keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
+                            rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
+                            reveal_kept: false,
+                            reveal_all: false,
+                            reveal_only: false,
                             secondary: None,
                         },
                     ],
@@ -1641,7 +1639,7 @@ fn creature(
                 fixed_cost("{1}{G}")?,
                 SourceCost::Tap,
                 NoTarget,
-                controlled_creature_pair(SingleCreature, FightFixedTargets),
+                controlled_creature_pair(SingleCreature, Instruction::Fight { first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst), second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond) }),
             ));
             return Some(program);
         }
@@ -1803,9 +1801,10 @@ fn creature(
                 spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::of_type(CardType::Instant)),
                 NoTarget,
                 vec![
-                    OfferManaPayment {
+                    OfferDynamicManaPayment {
                         payer: ResolvingPlayer::Controller,
-                        cost: fixed_cost("{1}")?,
+                        fixed: fixed_cost("{1}")?,
+                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                         paid_destination: 1,
                         declined_destination: 2,
                     },

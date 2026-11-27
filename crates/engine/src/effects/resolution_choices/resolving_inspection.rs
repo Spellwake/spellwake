@@ -29,13 +29,19 @@ fn resolving_copy_retains_its_complete_payload_after_original_entry_departure() 
                 2,
                 B,
                 BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
             hand(
                 3,
                 A,
                 BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-                vec![Instruction::CounterSpell],
+                vec![Instruction::StackOp(Box::new(
+                    crate::toolbox::StackOpSpec::counter_targeted(
+                        crate::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))],
             ),
             seed(4, B, ObjectDestination::Battlefield { controller: B }, mana),
         ],

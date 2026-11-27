@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![allow(dead_code, unused_imports)]
 //! Runtime and validation integration tests for Pass F2-B Wave 8B engine additions:
-//! - `Instruction::MoveCounters` (direct 1-target move, interactive `any_number` `CounterRemoval`,
+//! - `ObjectMutation::MoveCounters` (direct 1-target move, interactive `any_number` `CounterRemoval`,
 //!   and CR 122.5 no-op when `from == to`)
 //! - `SpellDefinition.uncastable_mana_cost` (CR 118.6: normal hand cast rejected, Suspend and
 //!   Cascade free casts succeed)
@@ -507,7 +507,7 @@ fn find_hand_card_by_name(game: &GameState, owner: SeatId, expected: &str) -> Ob
 }
 
 // ---------------------------------------------------------------------------
-// 1. MoveCounters: direct move, interactive any_number CounterRemoval, CR 122.5
+// 1. ObjectMutation::MoveCounters: direct move, interactive any_number CounterRemoval, CR 122.5
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -846,6 +846,8 @@ fn create_token_copy_ext_enters_attacking_and_defender_scope_and_pair_pt() {
                 override_pt: None,
                 extra_colors: BTreeSet::new(),
                 defender_scope: AttackingDefenderScope::Player(ResolvingPlayer::DefendingPlayer),
+                override_colors: None,
+                strip_mana_cost: false,
             }],
         ),
     });

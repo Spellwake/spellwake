@@ -252,13 +252,18 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
             ExecutableBody::new(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![
-                    Instruction::OfferManaPayment {
+                    Instruction::OfferDynamicManaPayment {
                         payer: ResolvingPlayer::TargetSpellController,
-                        cost: ManaCost::generic(3.into()),
+                        fixed: ManaCost::generic(3.into()),
+                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                         paid_destination: 2,
                         declined_destination: 1,
                     },
-                    Instruction::CounterSpell,
+                    Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    )),
                 ],
             ),
         ),
@@ -270,9 +275,10 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
                     spellwake_engine::program::SpellFilter::any(),
                 ),
                 vec![
-                    Instruction::OfferManaPayment {
+                    Instruction::OfferDynamicManaPayment {
                         payer: ResolvingPlayer::UniqueRelatedPlayer,
-                        cost: ManaCost::generic(1.into()),
+                        fixed: ManaCost::generic(1.into()),
+                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                         paid_destination: 3,
                         declined_destination: 1,
                     },
@@ -305,7 +311,9 @@ fn expected_new_program(name: &str, vocabulary: &CreatureTypeVocabulary) -> Prog
                 BodyTarget::SingleSpell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
         ),
         _ => panic!("unlisted new source"),

@@ -674,7 +674,19 @@ fn optional_damage_uses_real_damage_owner_and_decline_leaves_no_damage() {
 #[test]
 fn optional_prevention_shield_creates_one_owned_effect_or_skips() {
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
-        let state = creature_optional(Instruction::CreatePreventionShield { amount: 3.into() });
+        let state = creature_optional(Instruction::ApplyContinuous(Box::new(
+            crate::toolbox::ApplyContinuousSpec {
+                selector: None,
+                payload: crate::toolbox::ContinuousPayload::TargetPreventionShield {
+                    amount: 3.into(),
+                },
+                duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+                condition: None,
+                one_shot: true,
+                as_emblem: None,
+                emblem_label: None,
+            },
+        )));
         let result = take_or_decline(&state, choice);
         assert_tail(&result);
         assert_eq!(
@@ -1271,9 +1283,10 @@ fn captured_optional_controller_survives_real_source_departure_and_control_chang
 
 fn captured_offer_body() -> Vec<Instruction> {
     vec![
-        Instruction::OfferManaPayment {
+        Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::UniqueRelatedPlayer,
-            cost: ManaCost::generic(1.into()),
+            fixed: ManaCost::generic(1.into()),
+            extra_generic: crate::program::ValueExpr::Literal(0.into()),
             paid_destination: 4,
             declined_destination: 1,
         },
@@ -1733,7 +1746,11 @@ fn spell_optional(operation: Instruction) -> (GameState, StackEntryId) {
 #[test]
 fn optional_counter_removes_the_real_target_spell_once_or_skips() {
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
-        let (state, donor) = spell_optional(Instruction::CounterSpell);
+        let (state, donor) = spell_optional(Instruction::StackOp(Box::new(
+            crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ),
+        )));
         let result = take_or_decline(&state, choice);
         assert_tail(&result);
         assert_eq!(
@@ -1767,7 +1784,9 @@ fn optional_counter_removes_the_real_target_spell_once_or_skips() {
 #[test]
 fn optional_targetless_copy_uses_the_real_copy_owner_without_a_target_child() {
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
-        let (state, donor) = spell_optional(Instruction::CopySpell);
+        let (state, donor) = spell_optional(Instruction::StackOp(Box::new(
+            crate::toolbox::StackOpSpec::copy_targeted_spell(),
+        )));
         let result = take_or_decline(&state, choice);
         assert_tail(&result);
         assert_eq!(
@@ -1804,13 +1823,19 @@ fn optional_copy_preserves_actual_copy_targets_child_and_rejects_reused_or_forei
                 2,
                 A,
                 BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-                vec![Instruction::CounterSpell],
+                vec![Instruction::StackOp(Box::new(
+                    crate::toolbox::StackOpSpec::counter_targeted(
+                        crate::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))],
             ),
             hand(
                 3,
                 A,
                 BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
-                wrapped(Instruction::CopySpell),
+                wrapped(Instruction::StackOp(Box::new(
+                    crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))),
             ),
         ],
     );
@@ -1906,9 +1931,14 @@ fn copy_receiver(source_cost: SourceCost) -> Program {
             source_cost,
             body: ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                wrapped(Instruction::CopyTargetToSource {
+                wrapped(Instruction::BecomeCopy {
+                    receiver: Box::new(crate::program::EffectSubject::AbilitySource),
+                    donor: crate::program::MoveSubjectRef::TargetObject,
                     duration: ResolvedDuration::NoStatedDuration,
-                    power_toughness: None,
+                    exceptions: Box::new(crate::program::CopyExceptions {
+                        override_pt: None,
+                        ..Default::default()
+                    }),
                 }),
             ),
         }],
@@ -2125,16 +2155,19 @@ fn target_spell_controller_role_comes_from_the_actual_card_spell_or_spell_copy()
                 2,
                 B,
                 BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
             hand(
                 3,
                 A,
                 BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
                 vec![
-                    Instruction::OfferManaPayment {
+                    Instruction::OfferDynamicManaPayment {
                         payer: ResolvingPlayer::TargetSpellController,
-                        cost: ManaCost::free(),
+                        fixed: ManaCost::free(),
+                        extra_generic: crate::program::ValueExpr::Literal(0.into()),
                         paid_destination: 2,
                         declined_destination: 1,
                     },
@@ -2317,9 +2350,10 @@ fn payment_mana_source_denials_reach_physical_control_tap_capability_and_age_gua
 #[test]
 fn colored_resolution_cost_rejects_missing_required_color_before_valid_exact_spend() {
     let state = pending(vec![
-        Instruction::OfferManaPayment {
+        Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::Controller,
-            cost: ManaCost::specific(ManaType::Blue, 1.into()),
+            fixed: ManaCost::specific(ManaType::Blue, 1.into()),
+            extra_generic: crate::program::ValueExpr::Literal(0.into()),
             paid_destination: 2,
             declined_destination: 1,
         },
@@ -2360,7 +2394,15 @@ fn colored_resolution_cost_rejects_missing_required_color_before_valid_exact_spe
 #[test]
 fn optional_damage_preserves_the_real_order_child_and_consumes_the_offer_once() {
     let body = vec![
-        Instruction::CreatePreventionShield { amount: 1.into() },
+        Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec {
+            selector: None,
+            payload: crate::toolbox::ContinuousPayload::TargetPreventionShield { amount: 1.into() },
+            duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+            condition: None,
+            one_shot: true,
+            as_emblem: None,
+            emblem_label: None,
+        })),
         Instruction::CreateDamageMultiplier { factor: 2.into() },
         Instruction::OptionalEffect {
             chooser: ResolvingPlayer::Controller,
@@ -2449,7 +2491,11 @@ fn forged_payment_and_color_frames_cannot_replace_current_owned_work() {
     wrong_revision.revision += 1;
     let mut wrong_payer = actual.clone();
     wrong_payer.payer = B;
-    let (foreign, _) = spell_optional(Instruction::CounterSpell);
+    let (foreign, _) = spell_optional(Instruction::StackOp(Box::new(
+        crate::toolbox::StackOpSpec::counter_targeted(
+            crate::toolbox::CounterDestination::Graveyard,
+        ),
+    )));
     let mut wrong_entry = actual.clone();
     wrong_entry.entry = optional_frame(&foreign).entry();
     assert_ne!(wrong_entry.entry, actual.entry);
@@ -2747,9 +2793,10 @@ fn returned_mana_source_incarnation_rejects_old_identity_before_current_source_s
 #[test]
 fn same_original_typed_inputs_reexecute_every_payment_parent_child_journal_and_whole_state() {
     let body = vec![
-        Instruction::OfferManaPayment {
+        Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::Controller,
-            cost: ManaCost::generic(3.into()),
+            fixed: ManaCost::generic(3.into()),
+            extra_generic: crate::program::ValueExpr::Literal(0.into()),
             paid_destination: 1,
             declined_destination: 4,
         },
@@ -2899,9 +2946,10 @@ fn nonempty_resolution_locals_survive_each_mana_prefix_and_both_optional_outcome
             into: CreatureTypeSlot::new(0),
             excluding: BTreeSet::new(),
         },
-        Instruction::OfferManaPayment {
+        Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::Controller,
-            cost: ManaCost::generic(3.into()),
+            fixed: ManaCost::generic(3.into()),
+            extra_generic: crate::program::ValueExpr::Literal(0.into()),
             paid_destination: 2,
             declined_destination: 5,
         },
@@ -3098,9 +3146,10 @@ fn actual_by_player_group_retains_two_entry_causes_for_distinct_payer_and_option
         body: ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferManaPayment {
+                Instruction::OfferDynamicManaPayment {
                     payer: ResolvingPlayer::UniqueRelatedPlayer,
-                    cost: ManaCost::generic(1.into()),
+                    fixed: ManaCost::generic(1.into()),
+                    extra_generic: crate::program::ValueExpr::Literal(0.into()),
                     paid_destination: 1,
                     declined_destination: 3,
                 },

@@ -128,7 +128,9 @@ fn fixture_with_sources(
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
-                    vec![Instruction::CopySpell],
+                    vec![Instruction::StackOp(Box::new(
+                        crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                    ))],
                 ),
             ),
         ));

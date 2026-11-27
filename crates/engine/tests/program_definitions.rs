@@ -245,8 +245,26 @@ fn act(game: &GameState, actor: SeatId, command: GameCommand) -> Result<GameStat
 #[test]
 fn spell_support_filter_is_explicit_and_independent_of_counter_copy_order() {
     for instructions in [
-        vec![Instruction::CounterSpell, Instruction::CopySpell],
-        vec![Instruction::CopySpell, Instruction::CounterSpell],
+        vec![
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            )),
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            )),
+        ],
+        vec![
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            )),
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            )),
+        ],
     ] {
         for filter in [
             spellwake_engine::program::SpellFilter::any(),
@@ -329,7 +347,9 @@ fn targetless_spell_rejects_supplied_target_but_is_copyable_and_counterable() {
                     BodyTarget::SingleSpell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
-                    vec![Instruction::CopySpell],
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                    ))],
                 ),
             ),
             ObjectDestination::Hand,
@@ -341,7 +361,11 @@ fn targetless_spell_rejects_supplied_target_but_is_copyable_and_counterable() {
                 ManaCost::free(),
                 body(
                     BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                    vec![Instruction::CounterSpell],
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    ))],
                 ),
             ),
             ObjectDestination::Hand,

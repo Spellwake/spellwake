@@ -74,6 +74,8 @@ pub struct TokenCreation {
     /// A size expression that overrides the template's base power and toughness.
     pub base_size: Option<TokenSize>,
     pub recipients: TokenRecipients,
+    /// When `Some`, tokens in this group enter tapped and attacking according to the scope.
+    pub attacking_defender: Option<AttackingDefenderScope>,
 }
 impl TokenCreation {
     /// Create one token for the resolving controller through the batch mechanism.
@@ -84,6 +86,7 @@ impl TokenCreation {
             base_size: None,
             enters_tapped: false,
             recipients: TokenRecipients::Controller,
+            attacking_defender: None,
         }
     }
 }

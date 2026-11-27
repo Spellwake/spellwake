@@ -2184,7 +2184,6 @@ pub(crate) enum DelayedCopyAction {
     ReturnExiledWithCounters(Vec<ObjectId>),
     ReturnExiled(Vec<ObjectId>),
     Sacrifice(Vec<ObjectId>),
-    Exile(Vec<ObjectId>),
     SpellTwice(Box<CastOccurrence>, BTreeSet<crate::characteristics::Color>),
     AbilityTwice(
         Arc<crate::effects::CapturedAbilityCopy>,
@@ -2473,20 +2472,6 @@ impl TriggerState {
             original,
             step,
             DelayedCopyAction::Sacrifice(objects),
-        ));
-    }
-    pub(crate) fn delay_copy_exile(
-        &mut self,
-        original: StackEntryId,
-        controller: SeatId,
-        step: crate::turn::Step,
-        objects: Vec<ObjectId>,
-    ) {
-        self.delayed_copy_steps.push((
-            controller,
-            original,
-            step,
-            DelayedCopyAction::Exile(objects),
         ));
     }
     pub(crate) fn attacked_this_turn(&self, object: ObjectId) -> bool {

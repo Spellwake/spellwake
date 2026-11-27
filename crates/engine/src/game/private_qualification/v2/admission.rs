@@ -69,8 +69,32 @@ mod tests {
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
                 vec![
-                    crate::program::Instruction::CreatePreventionShield { amount: 1.into() },
-                    crate::program::Instruction::CreatePreventionShield { amount: 0.into() },
+                    crate::program::Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec {
+                            selector: None,
+                            payload: crate::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: 1.into(),
+                            },
+                            duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+                            condition: None,
+                            one_shot: true,
+                            as_emblem: None,
+                            emblem_label: None,
+                        },
+                    )),
+                    crate::program::Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec {
+                            selector: None,
+                            payload: crate::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: 0.into(),
+                            },
+                            duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+                            condition: None,
+                            one_shot: true,
+                            as_emblem: None,
+                            emblem_label: None,
+                        },
+                    )),
                 ],
             ),
         ));

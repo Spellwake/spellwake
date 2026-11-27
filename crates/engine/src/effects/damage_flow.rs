@@ -767,8 +767,6 @@ impl EffectWindow {
                             .and_then(|p| p.get(instruction)),
                         Some(
                             Instruction::Fight { .. }
-                                | Instruction::FightFixedTargets
-                                | Instruction::DivideDamageAmongTargets { .. }
                                 | Instruction::DivideDamageExprAmongTargets { .. }
                                 | Instruction::DivideThreeDamageAmongTargets
                                 | Instruction::DamageOrderedTargets { .. }

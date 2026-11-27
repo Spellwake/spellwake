@@ -125,7 +125,9 @@ fn copied_player_target_spell_can_retarget_a_creature_independently() {
             spell(
                 3,
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
         ],
         vec![CardId(1)],

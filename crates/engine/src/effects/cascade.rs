@@ -79,30 +79,18 @@ impl EffectWindow {
             Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::SacrificeRandomUntilLand
-            | Instruction::FlipCoin { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::Discover { .. }
             | Instruction::SearchLibrary { .. }
-            | Instruction::LookTopChoose {
-                random_rest_order: true,
-                ..
-            }
             | Instruction::LookTopChooseExt {
                 rest_dest: crate::program::LookTopRestDest::BottomRandom,
-                ..
-            }
-            | Instruction::RevealUntilMatch {
-                random_rest_order: true,
                 ..
             }
             | Instruction::RevealUntilMatchExt {
                 rest_dest: crate::program::LookTopRestDest::BottomRandom,
                 ..
             } => true,
-            Instruction::ForEachPlayer { body, .. } => {
-                body.instructions.iter().any(Self::instruction_uses_random)
-            }
             Instruction::RepeatLoop { body, .. }
             | Instruction::EmitReflexiveTrigger { body }
             | Instruction::FixedTargetClause(body) => {
@@ -331,7 +319,6 @@ impl EffectWindow {
             Some(
                 Instruction::CascadeBottom
                     | Instruction::SacrificeRandomUntilLand
-                    | Instruction::FlipCoin { .. }
                     | Instruction::RollDie { .. }
                     | Instruction::FlipCoins { .. }
             )
@@ -612,42 +599,6 @@ impl EffectWindow {
                     vec![],
                     DrawJournal::default(),
                     RulesJournal::default(),
-                )?,
-                entropy,
-            ));
-        }
-        if let Some(Instruction::FlipCoin { lose_destination }) = self
-            .payloads
-            .get(&work.cursor.entry)
-            .and_then(StackPayload::instructions)
-            .and_then(|ops| ops.get(work.cursor.instruction))
-        {
-            let lose_destination = *lose_destination;
-            let (won, entropy) = tape.flip_coin()?;
-            let player = work.chooser;
-            let cursor = work.cursor;
-            let cause = EventCause::Instruction {
-                entry: cursor.entry,
-                instruction: cursor.instruction,
-            };
-            let before = self.rules_snapshot(None)?;
-            self.pending_work = Some(PendingWork::Resolution(cursor));
-            if won {
-                self.advance_instruction()?;
-            } else {
-                self.set_instruction(lose_destination)?;
-            }
-            let mut append = RulesJournal::default();
-            self.emit_from(cause, &before, None, &mut append, |_, _, _| {
-                Ok(vec![RulesOccurrence::CoinFlipped { player, won }])
-            })?;
-            return Ok((
-                self.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    append,
                 )?,
                 entropy,
             ));

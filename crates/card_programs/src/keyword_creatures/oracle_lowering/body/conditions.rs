@@ -184,11 +184,7 @@ pub(super) fn resolve_prev_anaphora_ref(
     let has_checked_top = instructions.iter().any(|op| {
         matches!(
             op,
-            Instruction::LookTopChoose {
-                reveal_only: true,
-                ..
-            } | Instruction::MayRevealLibraryTop
-                | Instruction::RevealUntilMatch { .. }
+            Instruction::MayRevealLibraryTop
                 | Instruction::RevealUntilMatchExt { .. }
                 | Instruction::LookTopChooseExt { .. }
         ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
@@ -206,11 +202,7 @@ pub(super) fn resolve_prev_anaphora_ref(
         })
     });
     instructions.iter().rev().find_map(|op| match op {
-        Instruction::LookTopChoose {
-            reveal_only: true, ..
-        }
-        | Instruction::MayRevealLibraryTop
-        | Instruction::RevealUntilMatch { .. }
+        Instruction::MayRevealLibraryTop
         | Instruction::RevealUntilMatchExt { .. }
         | Instruction::LookTopChooseExt { .. } => Some(MatchObjectRef::RevealedTop),
         Instruction::Discard { .. } => Some(MatchObjectRef::DiscardedCard),
@@ -2623,7 +2615,7 @@ pub(in super::super) fn lower_resolution_condition(
                 .rev()
                 .find_map(|op| match op {
                     Instruction::Clash { .. } => Some(true),
-                    Instruction::FlipCoins { .. } | Instruction::FlipCoin { .. } => Some(false),
+                    Instruction::FlipCoins { .. } => Some(false),
                     _ => None,
                 })
                 .unwrap_or(false);
@@ -3717,12 +3709,10 @@ pub(in super::super) fn lower_resolution_condition(
             }
         }
         ConditionAst::PlayerCoinFlipOutcome { player, outcome } => {
-            let prior_flip = builder.instructions.iter().any(|op| {
-                matches!(
-                    op,
-                    Instruction::FlipCoin { .. } | Instruction::FlipCoins { .. }
-                )
-            });
+            let prior_flip = builder
+                .instructions
+                .iter()
+                .any(|op| matches!(op, Instruction::FlipCoins { .. }));
             let player_ok =
                 *player == PlayerRefAst::You || (*player == PlayerRefAst::ThatPlayer && prior_flip);
             if !player_ok {
@@ -4664,13 +4654,10 @@ pub(super) fn lower_subject_to_object_query(
                     | "the returned creature"
             ) && !builder.instructions.is_empty()
             {
-                let has_tokens = builder.instructions.iter().any(|op| {
-                    matches!(
-                        op,
-                        Instruction::CreateTokens { .. }
-                            | Instruction::CreateAttackingTokens { .. }
-                    )
-                });
+                let has_tokens = builder
+                    .instructions
+                    .iter()
+                    .any(|op| matches!(op, Instruction::CreateTokens { .. }));
                 let has_zone_op = builder.instructions.iter().any(|op| {
                     matches!(
                         op,
@@ -4680,7 +4667,6 @@ pub(super) fn lower_subject_to_object_query(
                             | Instruction::Discard { .. }
                             | Instruction::Mill { .. }
                             | Instruction::ExileTopPlay { .. }
-                            | Instruction::LookTopChoose { .. }
                             | Instruction::LookTopChooseExt { .. }
                     )
                 });

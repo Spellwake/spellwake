@@ -585,7 +585,9 @@ fn copied_spell_retain_and_changed_targets_are_bound_options() {
                 BodyTarget::SingleSpell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
         ),
     ]);
@@ -783,7 +785,21 @@ fn singleton_damage_effect_order_uses_only_current_offered_application() {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleCreature,
-                vec![Instruction::CreatePreventionShield { amount: 2.into() }],
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload:
+                            spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: 2.into(),
+                            },
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))],
             ),
         ),
         card(
@@ -792,7 +808,21 @@ fn singleton_damage_effect_order_uses_only_current_offered_application() {
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleCreature,
-                vec![Instruction::CreatePreventionShield { amount: 4.into() }],
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload:
+                            spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: 4.into(),
+                            },
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))],
             ),
         ),
         card(
@@ -894,9 +924,21 @@ fn combat_declarations_damage_order_and_prevention_use_actual_simultaneous_frame
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleCreature,
-                vec![Instruction::CreatePreventionShield {
-                    amount: amount.into(),
-                }],
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload:
+                            spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: amount.into(),
+                            },
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))],
             ),
         ));
     }
@@ -1367,9 +1409,12 @@ fn option_index_choice_bundle_projects_human_labels_and_translates_round_trip() 
     bb.insert(ManaType::Black, 2.into());
     let spell = instant(
         BodyTarget::None,
-        vec![Instruction::AddMana(EffectManaYield::ChoiceBundle {
-            options: vec![ww, bb],
-        })],
+        vec![Instruction::AddManaForPlayer {
+            player: spellwake_engine::program::ResolvingPlayer::Controller,
+            yield_kind: EffectManaYield::ChoiceBundle {
+                options: vec![ww, bb],
+            },
+        }],
     );
     let source = main_state(vec![card(1, A, ObjectDestination::Hand, spell)]);
     let cast = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
@@ -1540,14 +1585,20 @@ fn predicate_restricted_mana_projects_enforces_atomically_and_round_trips_wire()
     let producer = instant(
         BodyTarget::None,
         vec![
-            Instruction::AddMana(EffectManaYield::RestrictedFixed {
-                bundle: [(ManaType::Red, 2.into())].into(),
-                restriction: no_generic_rule,
-            }),
-            Instruction::AddMana(EffectManaYield::RestrictedFixed {
-                bundle: [(ManaType::Green, 1.into())].into(),
-                restriction: legendary_rule,
-            }),
+            Instruction::AddManaForPlayer {
+                player: spellwake_engine::program::ResolvingPlayer::Controller,
+                yield_kind: EffectManaYield::RestrictedFixed {
+                    bundle: [(ManaType::Red, 2.into())].into(),
+                    restriction: no_generic_rule,
+                },
+            },
+            Instruction::AddManaForPlayer {
+                player: spellwake_engine::program::ResolvingPlayer::Controller,
+                yield_kind: EffectManaYield::RestrictedFixed {
+                    bundle: [(ManaType::Green, 1.into())].into(),
+                    restriction: legendary_rule,
+                },
+            },
         ],
     );
     // Costs {1}{R}: cannot be paid with 2 no-generic {R} because generic {1} cannot use disallow_generic mana.

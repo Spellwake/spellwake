@@ -313,7 +313,9 @@ fn pending_copy(instruction: Instruction) -> (GameState, StackEntryId) {
                     BodyTarget::SingleSpell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
-                    vec![Instruction::CopySpell],
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                    ))],
                 ),
             ),
             (
@@ -321,7 +323,11 @@ fn pending_copy(instruction: Instruction) -> (GameState, StackEntryId) {
                 A,
                 ExecutableBody::new(
                     BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                    vec![Instruction::CounterSpell],
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    ))],
                 ),
             ),
         ],

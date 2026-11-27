@@ -1110,7 +1110,9 @@ fn copy_pending() -> GameState {
                 91,
                 B,
                 ManaCost::free(),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
                 BodyTarget::SingleSpell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
@@ -1140,8 +1142,8 @@ fn damage_pending() -> GameState {
                 A,
                 ManaCost::free(),
                 vec![
-                    Instruction::CreatePreventionShield { amount: 1.into() },
-                    Instruction::CreatePreventionShield { amount: 1.into() },
+                    Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec { selector: None, payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield { amount: 1.into() }, duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn, condition: None, one_shot: true, as_emblem: None, emblem_label: None })),
+                    Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec { selector: None, payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield { amount: 1.into() }, duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn, condition: None, one_shot: true, as_emblem: None, emblem_label: None })),
                     spellwake_engine::program::Instruction::DealDamage(Box::new(
                         spellwake_engine::toolbox::DealDamageSpec {
                             source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,

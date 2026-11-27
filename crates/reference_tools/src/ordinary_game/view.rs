@@ -1928,8 +1928,12 @@ fn interaction_program(program: &spellwake_engine::program::Program) -> bool {
                 {
                     true
                 }
-                (BodyTarget::SingleSpell(filter), [Instruction::CounterSpell])
-                    if filter == spellwake_engine::program::SpellFilter::any() =>
+                (BodyTarget::SingleSpell(filter), [Instruction::StackOp(spec)])
+                    if filter == spellwake_engine::program::SpellFilter::any()
+                        && **spec
+                            == spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                spellwake_engine::toolbox::CounterDestination::Graveyard,
+                            ) =>
                 {
                     true
                 }

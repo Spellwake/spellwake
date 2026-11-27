@@ -604,9 +604,14 @@ fn copied_cleanup_source_functions_before_expiry_then_waiting_only_triggers_repe
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::CopyTargetToSource {
+            vec![Instruction::BecomeCopy {
+                receiver: Box::new(crate::program::EffectSubject::AbilitySource),
+                donor: crate::program::MoveSubjectRef::TargetObject,
                 duration: ResolvedDuration::UntilEndOfTurn,
-                power_toughness: None,
+                exceptions: Box::new(crate::program::CopyExceptions {
+                    override_pt: None,
+                    ..Default::default()
+                }),
             }],
         ),
     });
@@ -763,6 +768,7 @@ fn represented_sba_reasons_union_and_stolen_apnap_use_real_check_identity_and_ow
                         base_size: None,
                         enters_tapped: false,
                         recipients: TokenRecipients::Controller,
+                        attacking_defender: None,
                     }],
                 }],
             ),
@@ -894,7 +900,9 @@ fn complete_pass_run() -> Run {
         instant(
             card,
             BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
-            vec![Instruction::CopySpell],
+            vec![Instruction::StackOp(Box::new(
+                crate::toolbox::StackOpSpec::copy_targeted_spell(),
+            ))],
         )
     };
     let mut run = Run::new(

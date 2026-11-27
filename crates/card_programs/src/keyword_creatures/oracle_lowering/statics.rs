@@ -14837,7 +14837,9 @@ fn lower_granted_ward_trigger(
         return None;
     }
     let mut body = lower_ward_cost_body(&atoms, vocabulary).ok()?;
-    body.instructions.push(Instruction::CounterWardSource);
+    body.instructions.push(Instruction::StackOp(Box::new(
+        spellwake_engine::toolbox::StackOpSpec::counter_ward_source(),
+    )));
     let trigger = TriggeredAbility {
         id: TriggeredAbilityId(0),
         condition: TriggerSpec::new(TriggerEvent::Targeted {
@@ -15043,7 +15045,19 @@ pub(super) fn lower_ability_change(
                         BodyTarget::None,
                         vec![
                             Instruction::Myriad,
-                            Instruction::ScheduleCreatedTokenExile(Step::EndCombat),
+                            Instruction::ScheduleDelayedStepTrigger {
+                                step: Step::EndCombat,
+                                own_step_only: false,
+                                body: Box::new(ExecutableBody::new(
+                                    BodyTarget::None,
+                                    vec![Instruction::ZoneOp(Box::new(
+                                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                            spellwake_engine::toolbox::ObjectQuery::CreatedTokens,
+                                            spellwake_engine::toolbox::ZoneDest::exile(),
+                                        ),
+                                    ))],
+                                )),
+                            },
                         ],
                     ),
                 });
@@ -15221,12 +15235,13 @@ pub(super) fn lower_ability_change(
                         grouping: TriggerGrouping::EachOccurrence,
                         body: ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::AddMana(
-                                EffectManaYield::RetainedUntilEndOfCombat {
+                            vec![Instruction::AddManaForPlayer {
+                                player: ResolvingPlayer::Controller,
+                                yield_kind: EffectManaYield::RetainedUntilEndOfCombat {
                                     kind: ManaType::Red,
                                     amount: ValueExpr::literal(n),
                                 },
-                            )],
+                            }],
                         ),
                     });
                 } else if raw_trimmed

@@ -104,7 +104,7 @@ pub(super) fn compile(
             Some((condition, minimum, maximum, distinct_targets))
         });
         if line=="Myriad" {
-            triggers.push((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::AttackTriggerMode::Individual { capture_defender: true }),ExecutableBody::new(BodyTarget::None,vec![Instruction::Myriad,Instruction::ScheduleCreatedTokenExile(spellwake_engine::turn::Step::EndCombat)])));
+            triggers.push((spellwake_engine::program::TriggerSpec::attacks(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::AttackTriggerMode::Individual { capture_defender: true }),ExecutableBody::new(BodyTarget::None,vec![Instruction::Myriad,Instruction::ScheduleDelayedStepTrigger { step: spellwake_engine::turn::Step::EndCombat, own_step_only: false, body: Box::new(ExecutableBody::new(BodyTarget::None, vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::CreatedTokens, spellwake_engine::toolbox::ZoneDest::exile())))])) }])));
         } else if line == "Whenever you cast a planeswalker spell, you may return this card from your graveyard to the battlefield." {
             triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(spellwake_engine::program::PlayerRelation::Controller, spellwake_engine::program::SpellFilter::of_type(spellwake_engine::program::CardType::Planeswalker)).in_zone(spellwake_engine::program::TriggerZone::Graveyard),ExecutableBody::new(BodyTarget::None,vec![
                 Instruction::OptionalEffect {chooser:ResolvingPlayer::Controller},crate::keyword_creatures::oracle_lowering::toolbox_emit::return_source_graveyard_to_battlefield(false),
@@ -453,8 +453,12 @@ pub(super) fn compile(
             let (price, action) = action.split_once(". If you do, create ")?;
             let creation = create_tokens(action.strip_suffix('.')?,vocabulary)?;
             triggers.push((spellwake_engine::program::TriggerSpec::spell_cast(PlayerRelation::Controller, spellwake_engine::program::SpellFilter::of_type(CardType::Artifact)),
-                ExecutableBody::new(BodyTarget::None, vec![Instruction::OfferManaPayment {
-                    cost:fixed_cost(price)?,payer:ResolvingPlayer::Controller,paid_destination:1,declined_destination:2,
+                ExecutableBody::new(BodyTarget::None, vec![Instruction::OfferDynamicManaPayment {
+                    payer: ResolvingPlayer::Controller,
+                    fixed: fixed_cost(price)?,
+                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
+                    paid_destination: 1,
+                    declined_destination: 2,
                 }, creation])));
         } else if let Some((subject, effect)) = line.strip_prefix("Whenever ").and_then(|s|s.split_once(" or another nontoken creature you control dies, create "))
             && (subject == face.name || Some(subject) == face.name.split(',').next()) {
@@ -1302,9 +1306,10 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferManaPayment {
+                Instruction::OfferDynamicManaPayment {
                     payer: ResolvingPlayer::Controller,
-                    cost: fixed_cost(cost)?,
+                    fixed: fixed_cost(cost)?,
+                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                     paid_destination: 2,
                     declined_destination: 1,
                 },
@@ -1423,20 +1428,18 @@ pub(super) fn body(
         let count = u8::try_from(amount(number)?).ok().filter(|&n| n > 0)?;
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::LookTopChoose {
-                count: spellwake_engine::program::ValueExpr::literal(i64::from(count)),
+            vec![Instruction::LookTopChooseExt {
                 library_owner: ResolvingPlayer::Controller,
+                chooser: ResolvingPlayer::Controller,
+                count: spellwake_engine::program::ValueExpr::literal(i64::from(count)),
                 filter: None,
-                reveal: false,
-                reveal_only: false,
-                to_battlefield: false,
-                enters_tapped: false,
-                take_all_matching: false,
                 max_picks: 1,
-                rest_to_graveyard: true,
-                rest_to_exile: false,
-                rest_to_top: false,
-                random_rest_order: false,
+                take_all_matching: false,
+                keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
+                rest_dest: spellwake_engine::program::LookTopRestDest::Graveyard,
+                reveal_kept: false,
+                reveal_all: false,
+                reveal_only: false,
                 secondary: None,
             }],
         ));
@@ -1603,7 +1606,19 @@ pub(super) fn body(
             BodyTarget::None,
             vec![
                 Instruction::CreateTokens { creations },
-                Instruction::ScheduleCreatedTokenExile(spellwake_engine::turn::Step::End),
+                Instruction::ScheduleDelayedStepTrigger {
+                    step: spellwake_engine::turn::Step::End,
+                    own_step_only: false,
+                    body: Box::new(ExecutableBody::new(
+                        BodyTarget::None,
+                        vec![Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::CreatedTokens,
+                                spellwake_engine::toolbox::ZoneDest::exile(),
+                            ),
+                        ))],
+                    )),
+                },
             ],
         ));
     }
@@ -1740,8 +1755,12 @@ pub(super) fn body(
         use spellwake_engine::program::PermanentTargetAction;
         let maximum = u16::try_from(amount(subjects)?).ok()?;
         return Some(ExecutableBody::new(BodyTarget::SinglePermanent, vec![
-            Instruction::OfferManaPayment {
-                cost: fixed_cost(price)?, payer: ResolvingPlayer::Controller, paid_destination: 1, declined_destination: 2,
+            Instruction::OfferDynamicManaPayment {
+                payer: ResolvingPlayer::Controller,
+                fixed: fixed_cost(price)?,
+                extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
+                paid_destination: 1,
+                declined_destination: 2,
             },
             Instruction::AffectPermanentTargets { minimum: 0, maximum, action: PermanentTargetAction::TapAndSkipNextUntap },
         ]));
@@ -1755,9 +1774,10 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferManaPayment {
-                    cost: fixed_cost(price)?,
+                Instruction::OfferDynamicManaPayment {
                     payer: ResolvingPlayer::Controller,
+                    fixed: fixed_cost(price)?,
+                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                     paid_destination: 1,
                     declined_destination: 3,
                 },
@@ -1885,9 +1905,10 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferManaPayment {
-                    cost: fixed_cost(cost)?,
+                Instruction::OfferDynamicManaPayment {
                     payer: ResolvingPlayer::TriggeringAttackerController,
+                    fixed: fixed_cost(cost)?,
+                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                     paid_destination: 2,
                     declined_destination: 1,
                 },
@@ -1903,9 +1924,10 @@ pub(super) fn body(
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::OfferManaPayment {
-                    cost: fixed_cost(cost)?,
+                Instruction::OfferDynamicManaPayment {
                     payer: ResolvingPlayer::UniqueRelatedPlayer,
+                    fixed: fixed_cost(cost)?,
+                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                     paid_destination: 2,
                     declined_destination: 1,
                 },
@@ -1923,9 +1945,12 @@ pub(super) fn body(
         let (kind, _) = price.required.into_iter().next()?;
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AddMana(
-                spellwake_engine::program::EffectManaYield::CombatDamageUntilCleanup(kind),
-            )],
+            vec![Instruction::AddManaForPlayer {
+                player: ResolvingPlayer::Controller,
+                yield_kind: spellwake_engine::program::EffectManaYield::CombatDamageUntilCleanup(
+                    kind,
+                ),
+            }],
         ));
     }
     if let Some(description) = text.strip_prefix("create ").and_then(|s| {
@@ -1989,14 +2014,15 @@ pub(super) fn body(
     if text == "add {R} for each 1 life your opponents have lost this turn." {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AddMana(
-                spellwake_engine::program::EffectManaYield::Counted {
+            vec![Instruction::AddManaForPlayer {
+                player: ResolvingPlayer::Controller,
+                yield_kind: spellwake_engine::program::EffectManaYield::Counted {
                     kind: spellwake_engine::mana::ManaType::Red,
                     amount: spellwake_engine::program::ValueExpr::PlayerStat(
                         spellwake_engine::program::PlayerStatExpr::OpponentsLifeLostThisTurn,
                     ),
                 },
-            )],
+            }],
         ));
     }
     if let Some((source, damage)) = text

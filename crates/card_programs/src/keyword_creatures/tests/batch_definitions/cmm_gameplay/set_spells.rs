@@ -1038,7 +1038,11 @@ fn cmm_rise_of_the_eldrazi_survives_a_counter_destroys_draws_four_and_gives_an_e
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                Instruction::CounterSpell,
+                Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                )),
             ),
         ),
     ];

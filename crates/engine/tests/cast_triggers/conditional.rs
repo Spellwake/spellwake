@@ -255,6 +255,7 @@ fn token_timestamp_pause_restores_control_cursor_then_jumps_over_else() {
                 base_size: None,
                 enters_tapped: false,
                 recipients: TokenRecipients::Controller,
+                attacking_defender: None,
             }],
         },
         Instruction::Jump { destination: 4 },

@@ -284,7 +284,7 @@ pub(super) fn spell(
         ),
         "Each instant and sorcery card in your graveyard gains flashback until end of turn. The flashback cost is equal to its mana cost." => (
             NoTarget,
-            vec![GrantFlashback(spellwake_engine::program::FlashbackSubject::ControllerGraveyard)],
+            vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller))), ObjectFilter::instant_or_sorcery()), spellwake_engine::toolbox::ObjectMutation::GrantFlashback)))],
         ),
         "Destroy target creature. If that creature was a Human, you gain life equal to its toughness." => (
             SingleCreature,
@@ -428,7 +428,7 @@ pub(super) fn spell(
         "Counter target spell. If that spell is countered this way, exile it instead of putting it into its owner's graveyard." => {
             (
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                vec![CounterSpellToExile],
+                vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Exile)))],
             )
         }
         "Target creature gains undying until end of turn." => {
@@ -456,9 +456,9 @@ pub(super) fn spell(
                         },
                         destination: 3,
                     },
-                    GrantProtectionChosenColor(ProtectionRecipients::ControllerAndPermanents),
+                    Instruction::GrantChosenProtection { recipients: ProtectionRecipients::ControllerAndPermanents, duration: ResolvedDuration::UntilEndOfTurn },
                     Jump { destination: 4 },
-                    GrantProtectionChosenColor(ProtectionRecipients::TargetPermanent),
+                    Instruction::GrantChosenProtection { recipients: ProtectionRecipients::TargetPermanent, duration: ResolvedDuration::UntilEndOfTurn },
                 ],
             )
         }
@@ -695,13 +695,14 @@ pub(super) fn spell(
         "Counter target spell unless its controller pays {1}. That player discards a card." => (
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
             vec![
-                OfferManaPayment {
+                OfferDynamicManaPayment {
                     payer: ResolvingPlayer::TargetSpellController,
-                    cost: fixed_cost("{1}")?,
+                    fixed: fixed_cost("{1}")?,
+                    extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                     paid_destination: 2,
                     declined_destination: 1,
                 },
-                CounterSpell,
+                Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard))),
                 Discard {
                     players: spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::TargetSpellController),
                     amount: amount(1),
@@ -711,7 +712,7 @@ pub(super) fn spell(
         "Copy target instant or sorcery spell you control. If this spell was cast from a graveyard, copy that spell twice instead. You may choose new targets for the copies." => (
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::instant_or_sorcery().controlled()),
             vec![
-                CopySpell,
+                Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell())),
                 BranchIfFalse {
                     condition: ResolutionCondition {
                         left: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::CastFromGraveyard),
@@ -720,7 +721,7 @@ pub(super) fn spell(
                     },
                     destination: 3,
                 },
-                CopySpell,
+                Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell())),
             ],
         ),
         "Target player mills X cards. If this spell was cast from a graveyard, that player mills twice that many cards instead." => (
@@ -785,7 +786,7 @@ pub(super) fn spell(
                     FilteredPermanent(ObjectFilter::creature().not_controlled()),
                     RememberPermanentTarget,
                 ),
-                FightFixedTargets,
+                Instruction::Fight { first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst), second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond) },
             ],
         ),
         "Target creature fights another target creature." => (
@@ -793,7 +794,7 @@ pub(super) fn spell(
             vec![
                 clause(SingleCreature, RememberPermanentTarget),
                 clause(SingleCreature, RememberPermanentTarget),
-                FightFixedTargets,
+                Instruction::Fight { first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst), second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond) },
             ],
         ),
         "Counter target spell. Return target permanent to its owner's hand." => (
@@ -801,7 +802,7 @@ pub(super) fn spell(
             vec![
                 clause(
                     BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                    CounterSpell,
+                    Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard))),
                 ),
                 clause(BodyTarget::SinglePermanent, crate::keyword_creatures::oracle_lowering::toolbox_emit::return_to_owners_hand()),
             ],
@@ -845,20 +846,18 @@ pub(super) fn spell(
         "Look at the top four cards of your library. Put one of them into your hand and the rest into your graveyard." => {
             (
                 NoTarget,
-                vec![LookTopChoose {
-                    count: amount(4),
+                vec![LookTopChooseExt {
                     library_owner: ResolvingPlayer::Controller,
+                    chooser: ResolvingPlayer::Controller,
+                    count: amount(4),
                     filter: None,
-                    reveal: false,
-                    reveal_only: false,
-                    to_battlefield: false,
-                    enters_tapped: false,
-                    take_all_matching: false,
                     max_picks: 1,
-                    rest_to_graveyard: true,
-                    rest_to_exile: false,
-                    rest_to_top: false,
-                    random_rest_order: false,
+                    take_all_matching: false,
+                    keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
+                    rest_dest: spellwake_engine::program::LookTopRestDest::Graveyard,
+                    reveal_kept: false,
+                    reveal_all: false,
+                    reveal_only: false,
                     secondary: None,
                 }],
             )
@@ -1209,20 +1208,18 @@ pub(super) fn compile(
                 delta: CounterCostDelta::RemoveAll,
                 tap_source: true,
                 sacrifice_source: false,
-            }, NoTarget, vec![Instruction::LookTopChoose {
-                count: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::PaidNamedCounters),
+            }, NoTarget, vec![Instruction::LookTopChooseExt {
                 library_owner: spellwake_engine::program::ResolvingPlayer::Controller,
+                chooser: spellwake_engine::program::ResolvingPlayer::Controller,
+                count: spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::PaidNamedCounters),
                 filter: None,
-                reveal: false,
-                reveal_only: false,
-                to_battlefield: false,
-                enters_tapped: false,
-                take_all_matching: false,
                 max_picks: 1,
-                rest_to_graveyard: false,
-                rest_to_exile: false,
-                rest_to_top: false,
-                random_rest_order: false,
+                take_all_matching: false,
+                keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
+                rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
+                reveal_kept: false,
+                reveal_all: false,
+                reveal_only: false,
                 secondary: None,
             }]);
             let mut program = Program::artifact(Some(price()?), vec![look]);
@@ -1285,28 +1282,28 @@ pub(super) fn compile(
             return Some(program);
         }
         "Hexproof\nWhenever Geist of Saint Traft attacks, create a 4/4 white Angel creature token with flying that's tapped and attacking. Exile that token at end of combat." => {
-            let CreateTokens { creations } = tokens(
+            let CreateTokens { mut creations } = tokens(
                 "a 4/4 white Angel creature token with flying", amount(1), true, vocabulary,
             )? else { return None };
+            for creation in &mut creations {
+                creation.attacking_defender = Some(spellwake_engine::token::AttackingDefenderScope::AnyLegal);
+            }
             (
                 "Hexproof",
                 vec![(spellwake_engine::program::TriggerSpec::self_attacks(), NoTarget, vec![
-                    CreateAttackingTokens {
-                        creations,
-                        defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
-                    },
-                    ScheduleCreatedTokenExile(Step::EndCombat),
+                    CreateTokens { creations },
+                    Instruction::ScheduleDelayedStepTrigger { step: Step::EndCombat, own_step_only: false, body: Box::new(ExecutableBody::new(BodyTarget::None, vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::CreatedTokens, spellwake_engine::toolbox::ZoneDest::exile())))])) },
                 ])],
             )
         }
         "Whenever this creature attacks, create a 2/2 green Wolf creature token that's tapped and attacking for each creature card in your graveyard." => {
-            let CreateTokens { creations } = tokens(
+            let CreateTokens { mut creations } = tokens(
                 "a 2/2 green Wolf creature token", spellwake_engine::program::ValueExpr::count_graveyard(spellwake_engine::program::ResolvingPlayer::Controller, spellwake_engine::program::ObjectFilter::creature()), true, vocabulary,
             )? else { return None };
-            ("", vec![(spellwake_engine::program::TriggerSpec::self_attacks(), NoTarget, vec![CreateAttackingTokens {
-                creations,
-                defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
-            }])])
+            for creation in &mut creations {
+                creation.attacking_defender = Some(spellwake_engine::token::AttackingDefenderScope::AnyLegal);
+            }
+            ("", vec![(spellwake_engine::program::TriggerSpec::self_attacks(), NoTarget, vec![CreateTokens { creations }])])
         }
         "Creatures you control enter as a copy of this creature." => {
             let mut program = base("")?;
@@ -1392,7 +1389,7 @@ pub(super) fn compile(
                 spellwake_engine::program::TriggerSpec::deals_damage(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::DamageTriggerRecipient::Creature, true),
                 NoTarget,
                 vec![
-                    FlipCoin { lose_destination: 2 },
+                    Instruction::FlipCoins { player: ResolvingPlayer::Controller, mode: spellwake_engine::program::CoinFlipMode::Single, win_body: None, lose_body: None, lose_destination: Some(2) },
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::destroy_subject(
                         spellwake_engine::program::EffectSubject::TriggerSubject,
                         false,
@@ -1507,7 +1504,7 @@ pub(super) fn compile(
             vec![(
                 etb,
                 BodyTarget::FilteredOwnGraveyardCard(ObjectFilter::instant_or_sorcery()),
-                vec![GrantFlashback(spellwake_engine::program::FlashbackSubject::Target)],
+                vec![Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::GrantFlashback)))],
             )],
         ),
         "Flash\nFlying\nWhen this creature enters, remove target attacking or blocking creature from combat." => (
@@ -1592,9 +1589,10 @@ pub(super) fn compile(
                 spellwake_engine::program::TriggerSpec::enters(spellwake_engine::program::ObjectFilter::creature().controlled().other_than_ability_source().with_power(spellwake_engine::program::PowerFilter::AtMost(2))),
                 NoTarget,
                 vec![
-                    OfferManaPayment {
+                    OfferDynamicManaPayment {
                         payer: ResolvingPlayer::Controller,
-                        cost: fixed_cost("{1}")?,
+                        fixed: fixed_cost("{1}")?,
+                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                         paid_destination: 1,
                         declined_destination: 2,
                     },
@@ -2892,20 +2890,18 @@ pub(super) fn compile(
                 vec![(
                     etb,
                     NoTarget,
-                    vec![LookTopChoose {
-                        count: amount(2),
+                    vec![LookTopChooseExt {
                         library_owner: ResolvingPlayer::Controller,
+                        chooser: ResolvingPlayer::Controller,
+                        count: amount(2),
                         filter: None,
-                        reveal: false,
-                        reveal_only: false,
-                        to_battlefield: false,
-                        enters_tapped: false,
-                        take_all_matching: false,
                         max_picks: 1,
-                        rest_to_graveyard: true,
-                        rest_to_exile: false,
-                        rest_to_top: false,
-                        random_rest_order: false,
+                        take_all_matching: false,
+                        keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
+                        rest_dest: spellwake_engine::program::LookTopRestDest::Graveyard,
+                        reveal_kept: false,
+                        reveal_all: false,
+                        reveal_only: false,
                         secondary: None,
                     }],
                 )],

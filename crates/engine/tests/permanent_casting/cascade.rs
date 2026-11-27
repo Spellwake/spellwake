@@ -26,7 +26,11 @@ fn scenario(hit: bool, copies: u64) -> GameState {
     let mut answer = spell(
         6,
         B,
-        Instruction::CounterSpell,
+        Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                spellwake_engine::toolbox::CounterDestination::Graveyard,
+            ),
+        )),
         ManaCost::free(),
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
     );

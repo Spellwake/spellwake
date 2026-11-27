@@ -2378,12 +2378,10 @@ impl EffectWindow {
                                     applied_effects: Vec::new(),
                                 });
                             } else if !self.characteristics.bestowed_spells.contains(&cid)
-                                && self.linked_return_work.as_ref().is_some_and(|work| {
-                                    matches!(
-                                        work.origin,
-                                        LinkedReturnOrigin::GraveyardTransformed { .. }
-                                    ) && work.objects.contains(&cid)
-                                })
+                                && self
+                                    .linked_return_work
+                                    .as_ref()
+                                    .is_some_and(|work| false && work.objects.contains(&cid))
                                 && let Some(face) = self.prospective_entry_face(cid)
                             {
                                 entry_view.current_types = face.card_types.clone();

@@ -519,7 +519,9 @@ fn copying_an_opponents_control_spell_binds_the_copy_controller_and_new_target()
             spell(
                 4,
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
         ],
         vec![CardId(1), CardId(2)],

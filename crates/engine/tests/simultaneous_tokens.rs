@@ -52,6 +52,7 @@ fn group(definition: TokenDefinition, count: i64, recipients: TokenRecipients) -
         base_size: None,
         enters_tapped: false,
         recipients,
+        attacking_defender: None,
     }
 }
 fn create(creations: Vec<TokenCreation>) -> Instruction {
@@ -570,6 +571,7 @@ fn oversized_materialization_rejects_without_a_rule_cap_or_partial_birth() {
                 base_size: None,
                 enters_tapped: false,
                 recipients: TokenRecipients::Controller,
+                attacking_defender: None,
             }])],
             vec![],
         );
@@ -595,13 +597,19 @@ fn owned_copied_batch_creates_for_copy_controller_after_the_original_is_countere
     let mut copier = spell(
         2,
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-        vec![Instruction::CopySpell],
+        vec![Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+        ))],
     );
     copier.owner = P1;
     let counter = spell(
         3,
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-        vec![Instruction::CounterSpell],
+        vec![Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                spellwake_engine::toolbox::CounterDestination::Graveyard,
+            ),
+        ))],
     );
     let game = start(
         vec![create(vec![group(

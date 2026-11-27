@@ -7,9 +7,10 @@ fn optional(chooser: ResolvingPlayer) -> Instruction {
     Instruction::OptionalEffect { chooser }
 }
 fn offer(payer: ResolvingPlayer, paid: usize, declined: usize) -> Instruction {
-    Instruction::OfferManaPayment {
+    Instruction::OfferDynamicManaPayment {
         payer,
-        cost: ManaCost::generic(3.into()),
+        fixed: ManaCost::generic(3.into()),
+        extra_generic: crate::program::ValueExpr::Literal(0.into()),
         paid_destination: paid,
         declined_destination: declined,
     }
@@ -144,9 +145,10 @@ fn payment_uses_existing_cost_validity_including_explicit_zero() {
         assert_eq!(
             check(
                 BodyTarget::None,
-                vec![Instruction::OfferManaPayment {
+                vec![Instruction::OfferDynamicManaPayment {
                     payer: ResolvingPlayer::Controller,
-                    cost,
+                    fixed: cost,
+                    extra_generic: crate::program::ValueExpr::Literal(0.into()),
                     paid_destination: 1,
                     declined_destination: 1,
                 }]
@@ -161,9 +163,10 @@ fn payment_uses_existing_cost_validity_including_explicit_zero() {
         assert_eq!(
             check(
                 BodyTarget::None,
-                vec![Instruction::OfferManaPayment {
+                vec![Instruction::OfferDynamicManaPayment {
                     payer: ResolvingPlayer::Controller,
-                    cost,
+                    fixed: cost,
+                    extra_generic: crate::program::ValueExpr::Literal(0.into()),
                     paid_destination: 1,
                     declined_destination: 1,
                 }]
@@ -301,9 +304,10 @@ fn unreachable_new_instructions_still_validate_context_syntax_and_cost() {
             DefinitionError::InvalidControlFlow,
         ),
         (
-            Instruction::OfferManaPayment {
+            Instruction::OfferDynamicManaPayment {
                 payer: ResolvingPlayer::Controller,
-                cost: ManaCost::generic((-1).into()),
+                fixed: ManaCost::generic((-1).into()),
+                extra_generic: crate::program::ValueExpr::Literal(0.into()),
                 paid_destination: 2,
                 declined_destination: 2,
             },
@@ -447,9 +451,14 @@ fn either_payment_successor_can_skip_assignment_but_same_slot_branch_merge_is_va
 
 #[test]
 fn optional_and_either_payment_path_preserve_possible_moved_donor() {
-    let copy = || Instruction::CopyTargetToSource {
+    let copy = || Instruction::BecomeCopy {
+        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
+        donor: crate::program::MoveSubjectRef::TargetObject,
         duration: ResolvedDuration::UntilEndOfTurn,
-        power_toughness: None,
+        exceptions: Box::new(crate::program::CopyExceptions {
+            override_pt: None,
+            ..Default::default()
+        }),
     };
     assert_eq!(
         check(

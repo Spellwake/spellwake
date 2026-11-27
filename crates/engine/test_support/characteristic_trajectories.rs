@@ -1632,7 +1632,19 @@ pub(crate) fn latent_damage(shield: bool, multiplier: bool, shield_first: bool) 
         ),
     ];
     if shield {
-        body.push(Instruction::CreatePreventionShield { amount: 2.into() });
+        body.push(Instruction::ApplyContinuous(Box::new(
+            spellwake_engine::toolbox::ApplyContinuousSpec {
+                selector: None,
+                payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                    amount: 2.into(),
+                },
+                duration: ResolvedDuration::UntilEndOfTurn,
+                condition: None,
+                one_shot: true,
+                as_emblem: None,
+                emblem_label: None,
+            },
+        )));
     }
     if multiplier {
         body.push(Instruction::CreateDamageMultiplier { factor: 2.into() });

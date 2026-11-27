@@ -49,6 +49,10 @@ pub enum ContinuousPayload {
     },
     /// Generalized damage-prevention shield for this turn.
     PreventDamage(Box<TurnPreventionSpec>),
+    /// Next-N-damage prevention shield applied to the resolving target permanent or player.
+    TargetPreventionShield {
+        amount: spellwake_contracts::RulesInteger,
+    },
     /// Skip `count` next turns for each player resolved by `player`.
     SkipTurns {
         player: PlayerSelector,
@@ -86,6 +90,7 @@ impl ContinuousPayload {
             Self::PlayPermission { player, .. } => player.uses_target(),
             Self::SkipTurns { player, count } => player.uses_target() || count.uses_target(),
             Self::SkipStep { player, .. } => player.uses_target(),
+            Self::TargetPreventionShield { .. } => true,
         }
     }
 
@@ -118,6 +123,7 @@ impl ContinuousPayload {
             | Self::DoublePt { .. }
             | Self::CombatAction(_)
             | Self::PreventDamage(_)
+            | Self::TargetPreventionShield { .. }
             | Self::Emblem(_) => Ok(()),
         }
     }

@@ -688,14 +688,20 @@ fn seeds() -> Vec<SeedCard> {
         spell(
             11,
             B,
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            )),
             ManaCost::specific(ManaType::Blue, 2.into()),
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
         ),
         spell(
             12,
             A,
-            Instruction::CopySpell,
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            )),
             ManaCost::specific(ManaType::Blue, 2.into()),
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         ),
@@ -733,7 +739,9 @@ fn seeds() -> Vec<SeedCard> {
         spell(
             15,
             B,
-            Instruction::CopySpell,
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            )),
             ManaCost::specific(ManaType::Blue, 2.into()),
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
         ),

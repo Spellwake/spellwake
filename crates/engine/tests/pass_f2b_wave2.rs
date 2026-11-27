@@ -2,7 +2,7 @@
 //! Runtime integration tests for Pass F2-B Wave 2 primitives:
 //! - CR 701.60 `CounterKind::Suspect` (Menace + CannotBlock)
 //! - `StatAggregate::Min`
-//! - `Instruction::CounterSpellToLibrary { top }`
+//! - `Instruction::StackOp` (`StackOpSpec::counter_targeted(CounterDestination::Library { top })`)
 //! - `StaticRestriction` (`ControllerHasShroud`, `ControllerCantLoseOpponentsCantWin`,
 //!   `ControllerCantLoseForZeroLife`, `ControllerCantWinOpponentsCantLose`,
 //!   `CantPlayLands`, `PreventCounters` on permanents and players)
@@ -153,6 +153,7 @@ fn bonus_token_on_create_and_others_enter_with_counters_expr() {
                         amount: ValueExpr::literal(2),
                         base_size: None,
                         recipients: TokenRecipients::Controller,
+                        attacking_defender: None,
                     }],
                 }],
             ),

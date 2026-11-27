@@ -84,7 +84,11 @@ fn seed(case: &str) -> (NativeCandidate, AliasContext) {
         let (target, mut body) = if case == "TR4" {
             (
                 BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-                vec![Instruction::CounterSpell],
+                vec![Instruction::StackOp(Box::new(
+                    crate::toolbox::StackOpSpec::counter_targeted(
+                        crate::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))],
             )
         } else {
             (

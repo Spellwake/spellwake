@@ -349,7 +349,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             amount.rewrite_creature_type(change.from, change.to);
         };
         match instruction {
-            Instruction::AddMana(yield_kind) | Instruction::AddManaForPlayer { yield_kind, .. } => {
+            Instruction::AddManaForPlayer { yield_kind, .. } => {
                 let inner = match yield_kind {
                     crate::program::EffectManaYield::RetainedUntilCleanup(inner) => inner.as_mut(),
                     other => other,
@@ -384,7 +384,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::Blight { amount, .. }
             | Instruction::Discard { amount, .. }
             | Instruction::ExileTopPlay { count: amount, .. }
-            | Instruction::LookTopChoose { count: amount, .. }
             | Instruction::RepeatLoop { count: amount, .. } => rewrite_amount(amount),
             Instruction::ChooseObjects {
                 min,
@@ -399,8 +398,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
             }
             Instruction::Sacrifice { amount, .. } => rewrite_amount(amount),
-            Instruction::CreateTokens { creations }
-            | Instruction::CreateAttackingTokens { creations, .. } => {
+            Instruction::CreateTokens { creations } => {
                 for spec in creations {
                     rewrite_amount(&mut spec.amount);
                 }
@@ -413,18 +411,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     obj.rewrite_creature_type(change.from, change.to);
                 }
             }
-            Instruction::LookTopChoose {
-                filter, secondary, ..
-            } => {
-                if let Some(filter) = filter {
-                    filter.rewrite_creature_type(change.from, change.to);
-                }
-                if let Some(sec) = secondary {
-                    sec.filter.rewrite_creature_type(change.from, change.to);
-                }
-            }
-            Instruction::ChooseObjects { filter, .. }
-            | Instruction::RevealUntilMatch { filter, .. } => {
+            Instruction::ChooseObjects { filter, .. } => {
                 filter.rewrite_creature_type(change.from, change.to);
             }
             Instruction::RepeatLoop { body: inner, .. } => {
@@ -521,16 +508,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     _ => {}
                 }
             }
-            Instruction::CreateTokenCopy {
-                count,
-                add_subtypes,
-                ..
-            } => {
-                count.rewrite_creature_type(change.from, change.to);
-                if add_subtypes.remove(&change.from) {
-                    add_subtypes.insert(change.to);
-                }
-            }
             Instruction::BindResolutionX(expr) => {
                 expr.rewrite_creature_type(change.from, change.to);
             }
@@ -543,11 +520,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::DivideDamageExprAmongTargets { total, .. } => {
                 total.rewrite_creature_type(change.from, change.to);
             }
-            Instruction::DivideDamageAmongTargets { .. }
-            | Instruction::DistributeCountersAmongTargets { .. }
+            Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::ChooseOneLastMoved { .. }
-            | Instruction::CounterMatchingStackObjects { .. }
-            | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ExileTopPlay { .. }
             | Instruction::ChooseValue { .. }
@@ -560,6 +534,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
+            | Instruction::StackOp(_)
             | Instruction::Vote { .. }
             | Instruction::Incubate { .. }
             | Instruction::Connive { .. }
@@ -573,13 +548,10 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ManifestDread
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
-            | Instruction::CastLinkedFaceDownFree
             | Instruction::Ripple(_)
             | Instruction::Demonstrate
             | Instruction::Enlist => {}
-            Instruction::Monstrosity { amount }
-            | Instruction::CopyStackObject { count: amount, .. }
-            | Instruction::Earthbend { amount } => {
+            Instruction::Monstrosity { amount } | Instruction::Earthbend { amount } => {
                 amount.rewrite_creature_type(change.from, change.to);
             }
             Instruction::RollDie { bands, .. } => {
@@ -597,11 +569,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
                 if let Some(inner) = lose_body {
                     body(change, inner);
-                }
-            }
-            Instruction::ChooseOptionForPlayers { options, .. } => {
-                for branch in options {
-                    body(change, &mut branch.body);
                 }
             }
             Instruction::Behold { filter, .. } => {
@@ -623,17 +590,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     body(change, &mut act.body);
                 }
             }
-            Instruction::BecomeCopyFixedTargets { exceptions, .. } => {
-                if exceptions.extra_creature_subtypes.remove(&change.from) {
-                    exceptions.extra_creature_subtypes.insert(change.to);
-                }
-                for tr in &mut exceptions.extra_triggered {
-                    trigger(change, tr);
-                }
-                for act in &mut exceptions.extra_activated {
-                    body(change, &mut act.body);
-                }
-            }
             Instruction::BranchIfFalse { condition, .. } => {
                 condition.left.rewrite_creature_type(change.from, change.to);
                 condition
@@ -645,8 +601,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             Instruction::CreateTokenAndAttach { definition } => {
                 definition.rewrite_creature_types(change)
             }
-            Instruction::CreateTokens { creations }
-            | Instruction::CreateAttackingTokens { creations, .. } => {
+            Instruction::CreateTokens { creations } => {
                 for creation in creations {
                     match &mut creation.base_size {
                         Some(crate::token::TokenSize::AtCreation(size)) => {
@@ -702,7 +657,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 }
                 _ => {}
             },
-            Instruction::ForEachPlayer { body: inner, .. } => body(change, inner),
             Instruction::OfferAnyPlayer {
                 cost_body,
                 paid_body,
@@ -721,19 +675,22 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                     filter.rewrite_creature_type(change.from, change.to);
                 }
             }
-            Instruction::MoveCounters { amount, .. } => {
-                if let Some(expr) = amount {
-                    rewrite_amount(expr);
-                }
-            }
             Instruction::RevealUntilMatchExt { filter, count, .. } => {
                 filter.rewrite_creature_type(change.from, change.to);
                 rewrite_amount(count);
             }
-            Instruction::LookTopChooseExt { count, filter, .. } => {
+            Instruction::LookTopChooseExt {
+                count,
+                filter,
+                secondary,
+                ..
+            } => {
                 rewrite_amount(count);
                 if let Some(filter) = filter {
                     filter.rewrite_creature_type(change.from, change.to);
+                }
+                if let Some(sec) = secondary {
+                    sec.filter.rewrite_creature_type(change.from, change.to);
                 }
             }
             Instruction::RevealTopTwoPiles { count, .. } => {
@@ -751,7 +708,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             // Draw's chosen-type reference remains a runtime local value.
             Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
-            | Instruction::OfferManaPayment { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
             | Instruction::ReturnDelayedGraveyardToHand(_)
@@ -770,15 +726,12 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
             | Instruction::Proliferate
-            | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateDamageMultiplier { .. }
             | Instruction::OfferSourceCounters { .. }
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::DivideThreeDamageAmongTargets
             | Instruction::DamageOrderedTargets { .. }
-            | Instruction::FightFixedTargets
-            | Instruction::BindOrderedPermanents { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
@@ -795,12 +748,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::AdditionalLoyaltyActivation
             | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::ExileTopForPlay { .. }
-            | Instruction::ScheduleCreatedTokenExile(_)
-            | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
-            | Instruction::GrantFlashback(_)
-            | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. }
             | Instruction::ReturnEarthbentCard
             | Instruction::SelectExtremeLifePlayer { .. }
@@ -809,7 +757,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
-            | Instruction::FlipCoin { .. }
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::Myriad
@@ -825,7 +772,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
             | Instruction::ReturnDelayedGraveyardCard(_)
-            | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedPermanentToHand(_)
             | Instruction::ReturnDelayedExileWithCounters(_)
             | Instruction::ReturnDelayedExile(_)
@@ -836,22 +782,9 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             | Instruction::ResolveCounterKeyword(_)
             | Instruction::SacrificeEvoked
             | Instruction::SacrificeStateTriggerSource
-            | Instruction::CounterWardSource
-            | Instruction::CounterTriggeringStackObject
-            | Instruction::GainCastCardAbilities { .. }
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::Attach(_)
-            | Instruction::CounterSpellToExile
-            | Instruction::CounterSpellToLibrary { .. }
-            | Instruction::CounterSpell
-            | Instruction::GainControlOfSpell
-            | Instruction::ChangeOnlyTarget
-            | Instruction::ChooseNewTargets
-            | Instruction::CopyAbility
-            | Instruction::CopySpell
-            | Instruction::CopyTargetToSource { .. }
-            | Instruction::GrantProtectionChosenColor(_)
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. } => {}

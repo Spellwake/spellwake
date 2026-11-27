@@ -101,9 +101,14 @@ fn join_requires_definite_reads_and_rejects_possible_duplicate_producers() {
 }
 #[test]
 fn moved_donor_at_a_join_is_rejected_but_disjoint_paths_remain_admitted() {
-    let copy = Instruction::CopyTargetToSource {
+    let copy = Instruction::BecomeCopy {
+        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
+        donor: crate::program::MoveSubjectRef::TargetObject,
         duration: ResolvedDuration::UntilEndOfTurn,
-        power_toughness: None,
+        exceptions: Box::new(crate::program::CopyExceptions {
+            override_pt: None,
+            ..Default::default()
+        }),
     };
     assert_eq!(
         check(

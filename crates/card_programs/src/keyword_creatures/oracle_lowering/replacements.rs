@@ -6771,33 +6771,9 @@ fn lower_inline_replacement_body(
         if ins.is_empty() || ast_has_unresolved_replacement_refs(ins) {
             return None;
         }
-        let mut body = lower_inline_replacement_instructions(ins, vocabulary, ids).ok()?;
+        let body = lower_inline_replacement_instructions(ins, vocabulary, ids).ok()?;
         if body.target != BodyTarget::None || body.instructions.is_empty() {
             return None;
-        }
-        for op in &mut body.instructions {
-            match op {
-                Instruction::ZoneOp(_) => {}
-                Instruction::ExileTopForPlay {
-                    until_next_from_source,
-                } => {
-                    *op = Instruction::ExileTopPlay {
-                        count: ValueExpr::literal(1),
-                        library_owner: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        duration: if *until_next_from_source {
-                            spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource
-                        } else {
-                            spellwake_engine::program::ImpulsePlayDuration::ThisTurn
-                        },
-                        cast_only: false,
-                        free: false,
-                        any_color: false,
-                        face_down: false,
-                        grant_play: true,
-                    };
-                }
-                _ => {}
-            }
         }
         if !validate_inline_followup_body(&body, vocabulary) {
             return None;
@@ -7997,7 +7973,19 @@ fn lower_entry_copy_exception(
                 BodyTarget::None,
                 vec![
                     Instruction::Myriad,
-                    Instruction::ScheduleCreatedTokenExile(Step::EndCombat),
+                    Instruction::ScheduleDelayedStepTrigger {
+                        step: Step::EndCombat,
+                        own_step_only: false,
+                        body: Box::new(ExecutableBody::new(
+                            BodyTarget::None,
+                            vec![Instruction::ZoneOp(Box::new(
+                                spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                    spellwake_engine::toolbox::ObjectQuery::CreatedTokens,
+                                    spellwake_engine::toolbox::ZoneDest::exile(),
+                                ),
+                            ))],
+                        )),
+                    },
                 ],
             ),
         }),

@@ -558,6 +558,7 @@ impl TokenCreationWire {
                 TokenRecipientsWire::EachPlayer => TokenRecipients::EachPlayer,
                 TokenRecipientsWire::EachOpponent => TokenRecipients::EachOpponent,
             },
+            attacking_defender: None,
         })
     }
 }
@@ -1035,7 +1036,9 @@ enum Op {
         amount: u16,
     },
     BindOrderedPermanents {
+        #[allow(dead_code)]
         minimum: u16,
+        #[allow(dead_code)]
         maximum: u16,
     },
     FixedTargetClause {
@@ -4200,9 +4203,10 @@ impl Body {
                         cost,
                         paid_destination,
                         declined_destination,
-                    } => Instruction::OfferManaPayment {
+                    } => Instruction::OfferDynamicManaPayment {
                         payer: payer.into(),
-                        cost: cost.native()?,
+                        fixed: cost.native()?,
+                        extra_generic: ValueExpr::Literal(0.into()),
                         paid_destination: instruction_destination(paid_destination)?,
                         declined_destination: instruction_destination(declined_destination)?,
                     },
@@ -4273,9 +4277,9 @@ impl Body {
                     Op::GrantNoMaxHandSizeRestOfGame {} => {
                         Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec { selector: None, payload: spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(Box::new(spellwake_engine::program::TemporaryRuleKind::TemporaryStatic(Box::new(spellwake_engine::characteristics::StaticContinuousAbility::DrawRule { id: spellwake_engine::characteristics::StaticAbilityId(1), rule: spellwake_engine::characteristics::StaticDrawRule::NoMaximumHandSize })))), duration: spellwake_engine::characteristics::ResolvedDuration::NoStatedDuration, condition: None, one_shot: false, as_emblem: None, emblem_label: None }))
                     }
-                    Op::ChangeOnlyTarget {} => Instruction::ChangeOnlyTarget,
-                    Op::GainControlOfSpell {} => Instruction::GainControlOfSpell,
-                    Op::ChooseNewTargets {} => Instruction::ChooseNewTargets,
+                    Op::ChangeOnlyTarget {} => Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::retarget(true))),
+                    Op::GainControlOfSpell {} => Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::gain_control())),
+                    Op::ChooseNewTargets {} => Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::retarget(false))),
                     Op::MoveGroup { group, destination } => {
                         let dest = match public_destination(&destination)? {
                             spellwake_engine::program::PublicZoneDestination::Hand | spellwake_engine::program::PublicZoneDestination::Command => spellwake_engine::toolbox::ZoneDest::Hand,
@@ -4292,9 +4296,25 @@ impl Body {
                     }
                     Op::DrawTargetPlayer { amount } => Instruction::DrawCards(Box::new(spellwake_engine::toolbox::DrawCardsSpec { players: spellwake_engine::toolbox::PlayerSelector::Group(spellwake_engine::program::AffectedPlayers::One(spellwake_engine::program::ResolvingPlayer::TargetPlayer)), amount: amount.native(vocabulary)?, bind_drawn: None })),
                     Op::ReturnExiledTargetCohort {next_end_step,owner_controls}=>Instruction::ReturnExiledTargetCohort {next_end_step,owner_controls},
-                    Op::ExileTopForPlay {until_next_from_source}=>Instruction::ExileTopForPlay {until_next_from_source},
+                    Op::ExileTopForPlay { until_next_from_source } => Instruction::ExileTopPlay {
+                        count: ValueExpr::Literal(1.into()),
+                        library_owner: spellwake_engine::program::AffectedPlayers::One(spellwake_engine::program::ResolvingPlayer::Controller),
+                        duration: if until_next_from_source {
+                            spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource
+                        } else {
+                            spellwake_engine::program::ImpulsePlayDuration::ThisTurn
+                        },
+                        cast_only: false,
+                        free: false,
+                        any_color: false,
+                        face_down: false,
+                        grant_play: true,
+                    },
                     Op::ExileTopFaceDown {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::ZoneScan { zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), filter: Box::new(spellwake_engine::program::ObjectFilter::any()), slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(spellwake_engine::program::ValueExpr::literal(1))) }, spellwake_engine::toolbox::ZoneDest::Exile { face_down: true, viewer: Some(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller)), link_to_source: true, delayed_return: None, link_group: None }))),
-                    Op::AddFixedMana { produced } => Instruction::AddMana(spellwake_engine::program::EffectManaYield::Fixed(mana_map(produced)?)),
+                    Op::AddFixedMana { produced } => Instruction::AddManaForPlayer {
+                        player: spellwake_engine::program::ResolvingPlayer::Controller,
+                        yield_kind: spellwake_engine::program::EffectManaYield::Fixed(mana_map(produced)?),
+                    },
                     Op::DrawEachPlayer { amount } => Instruction::DrawCards(Box::new(spellwake_engine::toolbox::DrawCardsSpec { players: spellwake_engine::toolbox::PlayerSelector::Group(spellwake_engine::program::AffectedPlayers::EachPlayer), amount: amount.native(vocabulary)?, bind_drawn: None })),
                     Op::CreateOpponentUpkeepDamageEmblems { amount } => Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::emblem(spellwake_engine::toolbox::PlayerSelector::Group(spellwake_engine::program::AffectedPlayers::EachOpponent), spellwake_engine::emblem::EmblemDefinition::UpkeepDamage { amount }))),
                     Op::CreateOpponentSpellcastDamageEmblems { amount, noncreature_only } => Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec::emblem(spellwake_engine::toolbox::PlayerSelector::Group(spellwake_engine::program::AffectedPlayers::EachOpponent), spellwake_engine::emblem::EmblemDefinition::SpellcastDamage { amount, noncreature_only }))),
@@ -4405,9 +4425,17 @@ impl Body {
                         excluding: subtype_set(excluding, vocabulary, "excluded creature type")?,
                     },
                     Op::Damage { amount } => Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec { source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource, recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets, amount: spellwake_engine::program::DamageAmountSpec::Expr(spellwake_engine::program::ValueExpr::Literal(amount)), exile_if_dies: false })),
-                    Op::CreatePreventionShield { amount } => {
-                        Instruction::CreatePreventionShield { amount }
-                    }
+                    Op::CreatePreventionShield { amount } => Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec {
+                            selector: None,
+                            payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield { amount },
+                            duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                            condition: None,
+                            one_shot: true,
+                            as_emblem: None,
+                            emblem_label: None,
+                        },
+                    )),
                     Op::CreateDamageMultiplier { factor } => {
                         Instruction::CreateDamageMultiplier { factor }
                     }
@@ -4480,8 +4508,30 @@ impl Body {
                     }
                     Op::PayControllerLife {amount} => Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::pay(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller), spellwake_engine::program::ValueExpr::literal(i64::from(amount))))),
                     Op::Encore {} => Instruction::Encore,
-                    Op::ScheduleCreatedTokenSacrifice {} => Instruction::ScheduleCreatedTokenSacrifice,
-                    Op::ScheduleCreatedTokenExile {at} => Instruction::ScheduleCreatedTokenExile(step(&at)?),
+                    Op::ScheduleCreatedTokenSacrifice {} => Instruction::ScheduleDelayedStepTrigger {
+                        step: spellwake_engine::turn::Step::End,
+                        own_step_only: false,
+                        body: Box::new(ExecutableBody::new(
+                            BodyTarget::None,
+                            vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::CreatedTokens,
+                                spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice,
+                                },
+                            )))],
+                        )),
+                    },
+                    Op::ScheduleCreatedTokenExile { at } => Instruction::ScheduleDelayedStepTrigger {
+                        step: step(&at)?,
+                        own_step_only: false,
+                        body: Box::new(ExecutableBody::new(
+                            BodyTarget::None,
+                            vec![Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                spellwake_engine::toolbox::ObjectQuery::CreatedTokens,
+                                spellwake_engine::toolbox::ZoneDest::exile(),
+                            )))],
+                        )),
+                    },
                     Op::PutCountersOnOtherCreatures {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::creature().controlled().other_than_ability_source()))), spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::PlusOne, amount: ValueExpr::Literal(1.into()) }))),
                     Op::PutNamedCounterOnSource { kind, amount } => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(
                         spellwake_engine::toolbox::ObjectQuery::Source,
@@ -4501,11 +4551,23 @@ impl Body {
                     Op::ReturnOwnGraveyardCardsOfTypeToHand { kind } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), spellwake_engine::program::ObjectFilter::from_clause(spellwake_engine::program::ObjectClause::any().any_types(spellwake_engine::program::CardTypeMask::from_card_type(card_type(&kind)?)))), spellwake_engine::toolbox::ZoneDest::Hand))),
                     Op::ExileTargetWithLink { group } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Exile { face_down: false, viewer: None, link_to_source: false, delayed_return: None, link_group: Some(group.into()) }))),
                     Op::ReturnCardsExiledWithLink { group } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::LinkedExile { group: Some(group.into()) }, spellwake_engine::toolbox::ZoneDest::battlefield(spellwake_engine::toolbox::ZoneController::Owner)))),
-                    Op::GrantFlashback { targeted } => Instruction::GrantFlashback(if targeted {
-                        spellwake_engine::program::FlashbackSubject::Target
-                    } else {
-                        spellwake_engine::program::FlashbackSubject::ControllerGraveyard
-                    }),
+                    Op::GrantFlashback { targeted } => Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::all(
+                            if targeted {
+                                spellwake_engine::toolbox::ObjectQuery::Targets
+                            } else {
+                                spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                            spellwake_engine::program::ResolvingPlayer::Controller,
+                                        ),
+                                    )),
+                                    spellwake_engine::program::ObjectFilter::instant_or_sorcery(),
+                                )
+                            },
+                            spellwake_engine::toolbox::ObjectMutation::GrantFlashback,
+                        ),
+                    )),
                     Op::TransformSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Transform))),
                     Op::RegenerateSource {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ObjectMutation::Regenerate))),
                     Op::RemoveTargetFromCombat {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::RemoveFromCombat))),
@@ -4538,13 +4600,22 @@ impl Body {
                     Op::RequireNoOtherControlledCreatures {} => Instruction::RequireCondition(spellwake_engine::program::InterveningCondition::NoOtherControlledCreatures),
                     Op::RequireControlledCreatureCount { count } => Instruction::RequireCondition(spellwake_engine::program::InterveningCondition::ControlledCreatureCount(count)),
                     Op::Cascade{}=>Instruction::Cascade,
-                    Op::FlipCoin {lose_destination}=>Instruction::FlipCoin {lose_destination},
+                    Op::FlipCoin { lose_destination } => Instruction::FlipCoins {
+                        player: spellwake_engine::program::ResolvingPlayer::Controller,
+                        mode: spellwake_engine::program::CoinFlipMode::Single,
+                        win_body: None,
+                        lose_body: None,
+                        lose_destination: Some(lose_destination),
+                    },
                     Op::CascadeBottom{}=>Instruction::CascadeBottom,
-                    Op::BindOrderedPermanents {minimum,maximum}=>Instruction::BindOrderedPermanents {minimum,maximum},
+                    Op::BindOrderedPermanents { .. } => return Err("BindOrderedPermanents retired".to_owned()),
                     Op::ExileLibraryTop {player,amount} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::ZoneScan { zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(player.into()))), filter: Box::new(spellwake_engine::program::ObjectFilter::default()), slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(ValueExpr::Literal(i64::from(amount).into()))) }, spellwake_engine::toolbox::ZoneDest::exile()))),
                     Op::FixedTargetClause { body } => Instruction::FixedTargetClause(Box::new(body.native(vocabulary)?)),
                     Op::ExileResolvingSpell {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Source, spellwake_engine::toolbox::ZoneDest::exile()))),
-                    Op::FightFixedTargets {} => Instruction::FightFixedTargets,
+                    Op::FightFixedTargets {} => Instruction::Fight {
+                        first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst),
+                        second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond),
+                    },
                     Op::PairWithCreature { entrant_only } => Instruction::PairWithCreature { entrant_only },
                     Op::PhaseOut { subject } => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(match subject.as_str() {
                         "Target" => spellwake_engine::toolbox::ObjectQuery::Targets,
@@ -4552,12 +4623,24 @@ impl Body {
                         "ControlledLands" => spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(spellwake_engine::program::EffectSubject::Matching(spellwake_engine::program::ObjectFilter::land().controlled()))),
                         _ => return Err(format!("unknown phasing subject {subject}")),
                     }, spellwake_engine::toolbox::ObjectMutation::PhaseOut))),
-                    Op::AddRestrictedManaChoice { colors } => Instruction::AddMana(spellwake_engine::program::EffectManaYield::RestrictedChoice { colors: colors.iter().map(|value| mana(value)).collect::<Result<_, _>>()?, amount: spellwake_engine::program::ValueExpr::literal(1), restriction: spellwake_engine::mana::ManaRestriction::NoncreatureSpell }),
-                    Op::AddCombatDamageManaUntilCleanup { kind } => Instruction::AddMana(spellwake_engine::program::EffectManaYield::CombatDamageUntilCleanup(mana(&kind)?)),
-                    Op::AddCountedMana { kind, amount } => Instruction::AddMana(spellwake_engine::program::EffectManaYield::Counted { kind: mana(&kind)?, amount: amount.native(vocabulary)? }),
-                    Op::AddSplitMana { first, second, amount } => Instruction::AddMana(spellwake_engine::program::EffectManaYield::Split {
-                        first: mana(&first)?, second: mana(&second)?, amount: amount.native(vocabulary)?,
-                    }),
+                    Op::AddRestrictedManaChoice { colors } => Instruction::AddManaForPlayer {
+                        player: spellwake_engine::program::ResolvingPlayer::Controller,
+                        yield_kind: spellwake_engine::program::EffectManaYield::RestrictedChoice { colors: colors.iter().map(|value| mana(value)).collect::<Result<_, _>>()?, amount: spellwake_engine::program::ValueExpr::literal(1), restriction: spellwake_engine::mana::ManaRestriction::NoncreatureSpell },
+                    },
+                    Op::AddCombatDamageManaUntilCleanup { kind } => Instruction::AddManaForPlayer {
+                        player: spellwake_engine::program::ResolvingPlayer::Controller,
+                        yield_kind: spellwake_engine::program::EffectManaYield::CombatDamageUntilCleanup(mana(&kind)?),
+                    },
+                    Op::AddCountedMana { kind, amount } => Instruction::AddManaForPlayer {
+                        player: spellwake_engine::program::ResolvingPlayer::Controller,
+                        yield_kind: spellwake_engine::program::EffectManaYield::Counted { kind: mana(&kind)?, amount: amount.native(vocabulary)? },
+                    },
+                    Op::AddSplitMana { first, second, amount } => Instruction::AddManaForPlayer {
+                        player: spellwake_engine::program::ResolvingPlayer::Controller,
+                        yield_kind: spellwake_engine::program::EffectManaYield::Split {
+                            first: mana(&first)?, second: mana(&second)?, amount: amount.native(vocabulary)?,
+                        },
+                    },
                     Op::DamageRelatedPlayerAmount { amount } => Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec { source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource, recipients: spellwake_engine::toolbox::DamageTargetQuery::Players(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::UniqueRelatedPlayer)), amount: spellwake_engine::program::DamageAmountSpec::Expr(amount.native(vocabulary)?), exile_if_dies: false })),
                     Op::DamageOpponentsAmount { amount } => Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec { source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource, recipients: spellwake_engine::toolbox::DamageTargetQuery::Players(spellwake_engine::toolbox::PlayerSelector::Group(spellwake_engine::program::AffectedPlayers::EachOpponent)), amount: spellwake_engine::program::DamageAmountSpec::Expr(amount.native(vocabulary)?), exile_if_dies: false })),
                     Op::ReturnGraveyardTargetsTapped { count: _ } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Battlefield { controller: spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), tapped: true, attacking: false, transformed: false, face_down: false, entering_counters: Vec::new(), attach_to: None }))),
@@ -4599,7 +4682,7 @@ impl Body {
                     ),
                     Op::SacrificeEvoked {} => Instruction::SacrificeEvoked,
                     Op::SacrificeStateTriggerSource {} => Instruction::SacrificeStateTriggerSource,
-                    Op::CounterWardSource {} => Instruction::CounterWardSource,
+                    Op::CounterWardSource {} => Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_ward_source())),
                     Op::ModifyGroupByAmount { group, scale, amount, keywords } => { let s: spellwake_engine::characteristics::PowerToughness = scale.into(); let amt = amount.native(vocabulary)?; Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec { selector: Some(spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(effect_group(&group, vocabulary)?))), payload: spellwake_engine::toolbox::ContinuousPayload::DynamicBoost { power: amt.clone().scaled(s.power), toughness: amt.scaled(s.toughness), keywords: keyword_set(keywords)?, suppress_keywords: BTreeSet::new() }, duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn, condition: None, one_shot: false, as_emblem: None, emblem_label: None })) },
                     Op::AddExperienceCounter {} => Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::add_counter(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller), spellwake_engine::effects::CounterKind::Experience, spellwake_engine::program::ValueExpr::literal(1)))),
                     Op::GrantControllerFlashUntilCleanup {} => Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec { selector: None, payload: spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(Box::new(spellwake_engine::program::TemporaryRuleKind::FilteredFlash { player: spellwake_engine::program::ResolvingPlayer::Controller, filter: spellwake_engine::program::ObjectFilter::default(), next_only: false })), duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn, condition: None, one_shot: false, as_emblem: None, emblem_label: None })),
@@ -4672,25 +4755,32 @@ impl Body {
                     Op::ReturnOwnGraveyardCreatureToBattlefield {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::battlefield(spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))))))),
                     Op::ReturnAnyGraveyardCreatureOrPlaneswalker {} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::battlefield(spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))))))),
                     Op::ReturnOwnGraveyardPermanentToBattlefield { tapped } => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Battlefield { controller: spellwake_engine::toolbox::ZoneController::Player(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), tapped, attacking: false, transformed: false, face_down: false, entering_counters: Vec::new(), attach_to: None }))),
-                    Op::CounterSpell {} => Instruction::CounterSpell,
+                    Op::CounterSpell {} => Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard))),
                     Op::WatchNextSpellOrLoyaltyTwice {}=>Instruction::WatchNextSpellOrLoyaltyTwice,
                     Op::Myriad {}=>Instruction::Myriad,
                     Op::RequireCastFromGraveyard {}=>Instruction::RequireCondition(spellwake_engine::program::InterveningCondition::CastFromGraveyard),
                     Op::WatchNextLoyaltyCopy {}=>Instruction::WatchNextLoyaltyCopy,
-                    Op::CopyAbility {}=>Instruction::CopyAbility,
-                    Op::CopySpell {} => Instruction::CopySpell,
+                    Op::CopyAbility {} => Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::copy_targeted_ability())),
+                    Op::CopySpell {} => Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell())),
                     Op::CopyTargetToSource {
                         duration,
                         power_toughness,
-                    } => Instruction::CopyTargetToSource {
+                    } => Instruction::BecomeCopy {
+                        receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
+                        donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
                         duration: duration.into(),
-                        power_toughness: power_toughness.map(Into::into),
+                        exceptions: Box::new(spellwake_engine::program::CopyExceptions {
+                            override_pt: power_toughness.map(Into::into),
+                            ..Default::default()
+                        }),
                     },
                     Op::PutIndestructibleCounter {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::Indestructible, amount: ValueExpr::Literal(1.into()) }))),
                     Op::PutLoyaltyCounter {} => Instruction::MutateObject(Box::new(spellwake_engine::toolbox::MutateObjectSpec::all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ObjectMutation::AddCounters { kind: spellwake_engine::effects::CounterKind::Loyalty, amount: ValueExpr::Literal(1.into()) }))),
-                    Op::GrantProtectionChosenColor { for_controller_and_permanents } => Instruction::GrantProtectionChosenColor(
-                        if for_controller_and_permanents { spellwake_engine::program::ProtectionRecipients::ControllerAndPermanents }
-                        else { spellwake_engine::program::ProtectionRecipients::TargetPermanent }),
+                    Op::GrantProtectionChosenColor { for_controller_and_permanents } => Instruction::GrantChosenProtection {
+                        recipients: if for_controller_and_permanents { spellwake_engine::program::ProtectionRecipients::ControllerAndPermanents }
+                        else { spellwake_engine::program::ProtectionRecipients::TargetPermanent },
+                        duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                    },
                     Op::PutPowerToughnessCounters { counters } => {
                         let c: spellwake_engine::characteristics::PowerToughnessCounters = counters.into();
                         let (kind, amount) = if c.minus_one.is_positive() {
@@ -6040,6 +6130,7 @@ fn effect_group_wire(group: spellwake_engine::program::EffectSubject) -> Value {
             json!(format!("{filter:?}"))
         }
         EffectSubject::CreatedTokens => json!("CreatedTokens"),
+        EffectSubject::LinkedFirst => json!({"kind":"LinkedFirst"}),
         EffectSubject::LastMoved => json!("LastMoved"),
         EffectSubject::TargetAndSameNameMatching(filter) => {
             json!({"target_and_same_name_matching": permanent_group_wire(filter)})
@@ -10210,7 +10301,6 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::OfferSourceCounters{amount,placed_destination,declined_destination}=>json!({"op":"OfferSourceCounters","amount":amount,"placed_destination":placed_destination,"declined_destination":declined_destination}),
             Instruction::OptionalSequence { chooser, instructions } => json!({"op":"OptionalSequence","chooser":format!("{chooser:?}"),"instructions":instructions}),
             Instruction::OptionalEffect { chooser } => json!({"op":"OptionalEffect","chooser":format!("{chooser:?}")}),
-            Instruction::OfferManaPayment { payer, cost: quoted, paid_destination, declined_destination } => json!({"op":"OfferManaPayment","payer":format!("{payer:?}"),"cost":cost(quoted),"paid_destination":paid_destination.to_string(),"declined_destination":declined_destination.to_string()}),
             Instruction::BranchIfFalse { condition, destination } => json!({"op":"BranchIfFalse","condition":resolution_condition(condition),"destination":destination.to_string()}),
             Instruction::Jump { destination } => json!({"op":"Jump","destination":destination.to_string()}),
             Instruction::ZoneOp(spec) => {
@@ -10294,6 +10384,12 @@ pub fn body(value: &ExecutableBody) -> Value {
                     && let spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) = &spec.payload
                 {
                     json!({"op":"CreateContinuousEffect","parts":parts_spec(parts),"duration":duration(spec.duration)})
+                } else if spec.selector.is_none()
+                    && spec.condition.is_none()
+                    && spec.as_emblem.is_none()
+                    && let spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield { amount } = &spec.payload
+                {
+                    json!({"op":"CreatePreventionShield","amount":amount})
                 } else {
                     json!({"op":"ApplyContinuous","spec":format!("{spec:?}")})
                 }
@@ -10306,17 +10402,27 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::SetObjectTag { query, key, value } => json!({"op":"SetObjectTag","query":format!("{query:?}"),"key":format!("{key:?}"),"value":format!("{value:?}")}),
             Instruction::UpdateStateTrack { key, op } => json!({"op":"UpdateStateTrack","key":format!("{key:?}"),"op":format!("{op:?}")}),
             Instruction::SideDeckOp(spec) => json!({"op":"SideDeckOp","spec":format!("{spec:?}")}),
-            Instruction::CreateTokenAndAttach { definition } => json!({"op":"CreateTokenAndAttach","definition":token_definition(definition)}),
-            Instruction::CreateAttackingTokens {
-                creations,
-                defender_scope,
-            } => {
-                if *defender_scope == spellwake_engine::token::AttackingDefenderScope::AnyLegal {
-                    json!({"op":"CreateAttackingTokens","creations":creations.iter().map(token_creation).collect::<Vec<_>>()})
+            Instruction::StackOp(spec) => {
+                use spellwake_engine::toolbox::{CounterDestination, StackOpSpec};
+                if **spec == StackOpSpec::counter_targeted(CounterDestination::Graveyard) {
+                    json!({"op":"CounterSpell"})
+                } else if **spec == StackOpSpec::copy_targeted_spell() {
+                    json!({"op":"CopySpell"})
+                } else if **spec == StackOpSpec::copy_targeted_ability() {
+                    json!({"op":"CopyAbility"})
+                } else if **spec == StackOpSpec::retarget(true) {
+                    json!({"op":"ChangeOnlyTarget"})
+                } else if **spec == StackOpSpec::retarget(false) {
+                    json!({"op":"ChooseNewTargets"})
+                } else if **spec == StackOpSpec::gain_control() {
+                    json!({"op":"GainControlOfSpell"})
+                } else if **spec == StackOpSpec::counter_ward_source() {
+                    json!({"op":"CounterWardSource"})
                 } else {
-                    json!({"op":"CreateAttackingTokens","creations":creations.iter().map(token_creation).collect::<Vec<_>>(),"defender_scope":format!("{defender_scope:?}")})
+                    json!({"op":"StackOp","spec":format!("{spec:?}")})
                 }
             }
+            Instruction::CreateTokenAndAttach { definition } => json!({"op":"CreateTokenAndAttach","definition":token_definition(definition)}),
             Instruction::CreateTokens { creations } =>
                 json!({"op":"CreateTokens","creations":creations.iter().map(token_creation).collect::<Vec<_>>()}),
             Instruction::RememberPermanentTarget => json!({"op":"RememberPermanentTarget"}),
@@ -10326,33 +10432,12 @@ pub fn body(value: &ExecutableBody) -> Value {
                 spellwake_engine::program::CombatUntapGroup::AttackersIfSourceAttacksHighestLife=>json!({"op":"ExtraCombatHighestLife"}),
                 spellwake_engine::program::CombatUntapGroup::SourceAndControlledSubtype(subtype)=>json!({"op":"ExtraCombatSubtype","subtype":projection::creature_type_id(*subtype)}),
             },
-            Instruction::ChangeOnlyTarget => json!({"op":"ChangeOnlyTarget"}),
-            Instruction::GainControlOfSpell => json!({"op":"GainControlOfSpell"}),
-            Instruction::ChooseNewTargets => json!({"op":"ChooseNewTargets"}),
             Instruction::ReturnExiledTargetCohort {next_end_step,owner_controls}=>{
                 let mut value = json!({"op":"ReturnExiledTargetCohort","next_end_step":next_end_step});
                 if *owner_controls { value["owner_controls"] = json!(true); }
                 value
             },
             Instruction::ReturnDelayedExileWithCounters(objects)=>json!({"op":"ReturnDelayedExileWithCounters","objects":format!("{objects:?}")}),
-            Instruction::ExileTopForPlay {until_next_from_source}=>json!({"op":"ExileTopForPlay","until_next_from_source":until_next_from_source}),
-            Instruction::AddMana(yield_kind) => match yield_kind {
-                spellwake_engine::program::EffectManaYield::Fixed(produced) => json!({"op":"AddFixedMana","produced":mana_values(produced)}),
-                spellwake_engine::program::EffectManaYield::RestrictedChoice { colors, .. } => json!({"op":"AddRestrictedManaChoice","colors":colors.iter().map(|color|format!("{color:?}")).collect::<Vec<_>>()}),
-                spellwake_engine::program::EffectManaYield::RestrictedFixed { bundle, restriction } => json!({"op":"AddRestrictedFixedMana","produced":mana_values(bundle),"restriction":format!("{restriction:?}")}),
-                spellwake_engine::program::EffectManaYield::RestrictedCounted { kind, amount, restriction } => json!({"op":"AddRestrictedCountedMana","kind":format!("{kind:?}"),"amount":instruction_amount(amount),"restriction":format!("{restriction:?}")}),
-                spellwake_engine::program::EffectManaYield::CombatDamageUntilCleanup(kind) => json!({"op":"AddCombatDamageManaUntilCleanup","kind":format!("{kind:?}")}),
-                spellwake_engine::program::EffectManaYield::RetainedUntilEndOfCombat { kind, amount } => json!({"op":"AddRetainedUntilEndOfCombatMana","kind":format!("{kind:?}"),"amount":instruction_amount(amount)}),
-                spellwake_engine::program::EffectManaYield::Counted { kind, amount } => json!({"op":"AddCountedMana","kind":format!("{kind:?}"),"amount":instruction_amount(amount)}),
-                spellwake_engine::program::EffectManaYield::Split { first, second, amount } => json!({"op":"AddSplitMana","first":format!("{first:?}"),"second":format!("{second:?}"),"amount":instruction_amount(amount)}),
-                spellwake_engine::program::EffectManaYield::Choice { colors, amount } => json!({"op":"AddManaChoice","colors":colors.iter().map(|color|format!("{color:?}")).collect::<Vec<_>>(),"amount":instruction_amount(amount)}),
-                spellwake_engine::program::EffectManaYield::ChoiceBundle { options } => json!({"op":"AddManaChoiceBundle","options":options.iter().map(mana_values).collect::<Vec<_>>()}),
-                spellwake_engine::program::EffectManaYield::LandProducible { controller, amount } => json!({"op":"AddManaLandProducible","controller":affected_players(*controller),"amount":instruction_amount(amount)}),
-                spellwake_engine::program::EffectManaYield::CommanderIdentity { amount } => json!({"op":"AddManaCommanderIdentity","amount":instruction_amount(amount)}),
-                spellwake_engine::program::EffectManaYield::SourceChosenColor { amount } => json!({"op":"AddManaSourceChosenColor","amount":instruction_amount(amount)}),
-                spellwake_engine::program::EffectManaYield::DistinctColors { amount } => json!({"op":"AddManaDistinctColors","amount":instruction_amount(amount)}),
-                spellwake_engine::program::EffectManaYield::RetainedUntilCleanup(inner) => json!({"op":"AddManaRetainedUntilCleanup","inner":format!("{inner:?}")}),
-            },
             Instruction::RequireCondition(cond) => match cond {
                 spellwake_engine::program::InterveningCondition::ReturnSourceOnBattlefield => json!({"op":"RequireReturnSourceOnBattlefield"}),
                 spellwake_engine::program::InterveningCondition::Monarch { opponent } => json!({"op":"RequireMonarch","opponent":opponent}),
@@ -10383,9 +10468,6 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::Discard { players, amount } => json!({"op":"Discard","players":affected_players(*players),"amount":instruction_amount(amount)}),
             Instruction::ChooseCreatureType { into, excluding } => {
                 json!({"op":"ChooseCreatureType","into":into.ordinal().to_string(),"excluding":excluding.iter().map(|value|projection::creature_type_id(*value)).collect::<Vec<_>>()})
-            }
-            Instruction::CreatePreventionShield { amount } => {
-                json!({"op":"CreatePreventionShield","amount":amount})
             }
             Instruction::CreateDamageMultiplier { factor } => {
                 json!({"op":"CreateDamageMultiplier","factor":factor})
@@ -10532,11 +10614,8 @@ pub fn body(value: &ExecutableBody) -> Value {
                 })
             }
             Instruction::Cascade=>json!({"op":"Cascade"}),
-            Instruction::FlipCoin {lose_destination}=>json!({"op":"FlipCoin","lose_destination":lose_destination}),
             Instruction::CascadeBottom=>json!({"op":"CascadeBottom"}),
-            Instruction::BindOrderedPermanents {minimum,maximum}=>json!({"op":"BindOrderedPermanents","minimum":minimum,"maximum":maximum}),
             Instruction::FixedTargetClause(clause)=>json!({"op":"FixedTargetClause","body":body(clause)}),
-            Instruction::FightFixedTargets => json!({"op":"FightFixedTargets"}),
             Instruction::PairWithCreature { entrant_only } => json!({"op":"PairWithCreature","entrant_only":entrant_only}),
             Instruction::ReturnChosenXGraveyardCreatures=>json!({"op":"ReturnChosenXGraveyardCreatures"}),
             Instruction::DamageTargetControllersCreatures { amount, include_target, require_damaged_creatures_to_attack } =>
@@ -10558,7 +10637,6 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::EndStepCast{kind,permanent,turn}=>json!({"op":"EndStepCast","kind":format!("{kind:?}"),"object":format!("{permanent:?}"),"turn":turn}),
             Instruction::SacrificeDelayedObjects(objects) => json!({"op":"SacrificeDelayedObjects","objects":objects.iter().map(|o|format!("{o:?}")).collect::<Vec<_>>()}),
             Instruction::ScheduleArtifactReturn(object) => json!({"op":"ScheduleArtifactReturn","object":format!("{object:?}")}),
-            Instruction::ReturnDelayedGraveyardCardTransformed(object) => json!({"op":"ReturnDelayedGraveyardCardTransformed","object":format!("{object:?}")}),
             Instruction::ReturnDelayedGraveyardCard(object) => json!({"op":"ReturnDelayedGraveyardCard","object":format!("{object:?}")}),
             Instruction::ReturnDelayedPermanentToHand(object) => json!({"op":"ReturnDelayedPermanentToHand","object":format!("{object:?}")}),
             Instruction::ReturnDelayedExile(objects) => if let [object]=objects.as_slice() {json!({"op":"ReturnDelayedExile","object":format!("{object:?}")})} else {json!({"op":"ReturnDelayedExile","objects":objects.iter().map(|o|format!("{o:?}")).collect::<Vec<_>>()})},
@@ -10586,10 +10664,7 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::ExileDefeatedSiege => json!({"op":"ExileDefeatedSiege"}),
             Instruction::CastDefeatedSiege => json!({"op":"CastDefeatedSiege"}),
             Instruction::Encore => json!({"op":"Encore"}),
-            Instruction::ScheduleCreatedTokenSacrifice => json!({"op":"ScheduleCreatedTokenSacrifice"}),
-            Instruction::ScheduleCreatedTokenExile(at)=>json!({"op":"ScheduleCreatedTokenExile","at":format!("{at:?}")}),
             Instruction::ExileDelayedObjects(objects)=>json!({"op":"ExileDelayedObjects","objects":objects.iter().map(|o|format!("{o:?}")).collect::<Vec<_>>()}),
-            Instruction::GrantFlashback(subject) => json!({"op":"GrantFlashback","targeted":*subject==spellwake_engine::program::FlashbackSubject::Target}),
             Instruction::AdvanceClassLevel(level) => json!({"op":"AdvanceClassLevel","level":level}),
             Instruction::SolveSourceCase => json!({"op":"SolveSourceCase"}),
             Instruction::BecomePreparedSource => json!({"op":"BecomePreparedSource"}),
@@ -10597,7 +10672,6 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::ResolveGrowth(k)=>match k{spellwake_engine::program::GrowthKeyword::Increment=>json!({"op":"Increment"}),spellwake_engine::program::GrowthKeyword::Mentor=>json!({"op":"Mentor"}),spellwake_engine::program::GrowthKeyword::Evolve=>json!({"op":"Evolve"}),spellwake_engine::program::GrowthKeyword::Backup{amount,printed_below}=>json!({"op":"Backup","amount":amount,"printed_below":keywords(printed_below)})},
             Instruction::SacrificeEvoked => json!({"op":"SacrificeEvoked"}),
             Instruction::SacrificeStateTriggerSource => json!({"op":"SacrificeStateTriggerSource"}),
-            Instruction::CounterWardSource => json!({"op":"CounterWardSource"}),
             Instruction::ResolvePowerAbility(kind) => json!({"op":"ResolvePowerAbility","kind":format!("{kind:?}")}),
             Instruction::Attach(kind) => json!({"op":format!("{kind:?}")}),
             Instruction::ChooseRevealedHandCard { minimum_mana_value, nonland_only, count, action, filter: _ } => {
@@ -10606,25 +10680,13 @@ pub fn body(value: &ExecutableBody) -> Value {
                 if count.get() != 1 { wire["count"] = json!(count.get()); }
                 wire
             }
-            Instruction::GainCastCardAbilities {recipient, donor} =>
-                json!({"op":"GainCastCardAbilities","recipient":format!("{recipient:?}"),"donor":format!("{:?}",donor.object)}),
-            Instruction::CounterSpellToExile => json!({"op":"CounterSpellToExile"}),
-            Instruction::CounterSpell => json!({"op":"CounterSpell"}),
             Instruction::WatchNextSpellOrLoyaltyTwice=>json!({"op":"WatchNextSpellOrLoyaltyTwice"}),
             Instruction::Myriad=>json!({"op":"Myriad"}),
             Instruction::WatchNextLoyaltyCopy =>json!({"op":"WatchNextLoyaltyCopy"}),
             Instruction::CopyCapturedAbility =>json!({"op":"CopyCapturedAbility"}),
-            Instruction::CopyAbility=>json!({"op":"CopyAbility"}),
-            Instruction::CopySpell => json!({"op":"CopySpell"}),
-            Instruction::CopyTargetToSource { duration: value, power_toughness } => {
-                json!({"op":"CopyTargetToSource","duration":duration(*value),"power_toughness":power_toughness.as_ref().map(pt)})
-            }
             Instruction::MayRevealLibraryTop => json!({"op":"MayRevealLibraryTop"}),
             Instruction::ExileTopPlay { count, library_owner, duration, cast_only, free, any_color, face_down, grant_play } => {
                 json!({"op":"ExileTopPlay","count":instruction_amount(count),"library_owner":affected_players(*library_owner),"duration":format!("{duration:?}"),"cast_only":cast_only,"free":free,"any_color":any_color,"face_down":face_down,"grant_play":grant_play})
-            }
-            Instruction::LookTopChoose { count, filter, reveal, to_battlefield, enters_tapped, take_all_matching, max_picks, rest_to_graveyard, rest_to_exile, rest_to_top, .. } => {
-                json!({"op":"LookTopChoose","count":instruction_amount(count),"filter":filter.as_ref().map(|f| format!("{f:?}")),"reveal":reveal,"to_battlefield":to_battlefield,"enters_tapped":enters_tapped,"take_all_matching":take_all_matching,"max_picks":max_picks,"rest_to_graveyard":rest_to_graveyard,"rest_to_exile":rest_to_exile,"rest_to_top":rest_to_top})
             }
             Instruction::RepeatLoop { count, body } => {
                 json!({"op":"RepeatLoop","count":instruction_amount(count),"body":format!("{body:?}")})
@@ -10636,7 +10698,11 @@ pub fn body(value: &ExecutableBody) -> Value {
                 paid_destination,
                 declined_destination,
             } => {
-                json!({"op":"OfferDynamicManaPayment","payer":format!("{payer:?}"),"fixed":format!("{fixed:?}"),"extra_generic":instruction_amount(extra_generic),"paid":paid_destination,"declined":declined_destination})
+                if *extra_generic == ValueExpr::Literal(0.into()) {
+                    json!({"op":"OfferManaPayment","payer":format!("{payer:?}"),"cost":cost(fixed),"paid_destination":paid_destination.to_string(),"declined_destination":declined_destination.to_string()})
+                } else {
+                    json!({"op":"OfferDynamicManaPayment","payer":format!("{payer:?}"),"fixed":format!("{fixed:?}"),"extra_generic":instruction_amount(extra_generic),"paid":paid_destination,"declined":declined_destination})
+                }
             }
             Instruction::CollectEvidence { player, minimum } => {
                 json!({"op":"CollectEvidence","player":format!("{player:?}"),"minimum":instruction_amount(minimum)})
@@ -10644,17 +10710,6 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::Blight { player, amount } => {
                 json!({"op":"Blight","player":format!("{player:?}"),"amount":instruction_amount(amount)})
             }
-            Instruction::RevealUntilMatch { filter, to_battlefield, enters_tapped, keep_all_revealed, rest_to_graveyard, rest_to_exile, rest_to_bottom, .. } => {
-                json!({"op":"RevealUntilMatch","filter":format!("{filter:?}"),"to_battlefield":to_battlefield,"enters_tapped":enters_tapped,"keep_all_revealed":keep_all_revealed,"rest_to_graveyard":rest_to_graveyard,"rest_to_exile":rest_to_exile,"rest_to_bottom":rest_to_bottom})
-            }
-            Instruction::GrantProtectionChosenColor(spellwake_engine::program::ProtectionRecipients::TargetPermanent) =>
-                json!({"op":"GrantProtectionChosenColor"}),
-            Instruction::GrantProtectionChosenColor(spellwake_engine::program::ProtectionRecipients::ControllerAndPermanents) =>
-                json!({"op":"GrantProtectionChosenColor","for_controller_and_permanents":true}),
-            Instruction::GrantProtectionChosenColor(spellwake_engine::program::ProtectionRecipients::AbilitySource) =>
-                json!({"op":"GrantProtectionChosenColor","ability_source":true}),
-            Instruction::GrantProtectionChosenColor(spellwake_engine::program::ProtectionRecipients::Matching(filter)) =>
-                json!({"op":"GrantProtectionChosenColor","matching":format!("{filter:?}")}),
             Instruction::ScheduleDelayedStepTrigger {
                 step,
                 own_step_only,
@@ -10671,14 +10726,8 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::ChooseOption { chooser, options } => {
                 json!({"op":"ChooseOption","chooser":format!("{chooser:?}"),"options":options.len()})
             }
-            Instruction::DivideDamageAmongTargets { total } => {
-                json!({"op":"DivideDamageAmongTargets","total":total})
-            }
             Instruction::DivideDamageExprAmongTargets { total, max_targets } => {
                 json!({"op":"DivideDamageExprAmongTargets","total":instruction_amount(total),"maxTargets":max_targets})
-            }
-            Instruction::CreateTokenCopy { source, count, tapped, attacking, sacrifice_at_end_step, exile_at_end_step, grant_keywords, nonlegendary, override_pt, override_colors, add_subtypes, add_card_types, strip_mana_cost, recipients } => {
-                json!({"op":"CreateTokenCopy","source":format!("{source:?}"),"count":instruction_amount(count),"tapped":tapped,"attacking":attacking,"sacrifice_at_end_step":sacrifice_at_end_step,"exile_at_end_step":exile_at_end_step,"grant_keywords":format!("{grant_keywords:?}"),"nonlegendary":nonlegendary,"override_pt":override_pt,"override_colors":format!("{override_colors:?}"),"add_subtypes":format!("{add_subtypes:?}"),"add_card_types":format!("{add_card_types:?}"),"strip_mana_cost":strip_mana_cost,"recipients":format!("{recipients:?}")})
             }
             Instruction::BindResolutionX(expr) => {
                 json!({"op":"BindResolutionX","expr":instruction_amount(expr)})
@@ -10695,9 +10744,6 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::BecomeCopy { receiver, donor, duration, exceptions } => {
                 json!({"op":"BecomeCopy","receiver":format!("{receiver:?}"),"donor":format!("{donor:?}"),"duration":format!("{duration:?}"),"exceptions":format!("{exceptions:?}")})
             }
-            Instruction::BecomeCopyFixedTargets { duration, exceptions } => {
-                json!({"op":"BecomeCopyFixedTargets","duration":format!("{duration:?}"),"exceptions":format!("{exceptions:?}")})
-            }
             Instruction::DistributeCountersAmongTargets { kind, total } => {
                 json!({"op":"DistributeCountersAmongTargets","kind":format!("{kind:?}"),"total":total})
             }
@@ -10709,9 +10755,6 @@ pub fn body(value: &ExecutableBody) -> Value {
             }
             Instruction::ChooseValue { chooser, domain } => {
                 json!({"op":"ChooseValue","chooser":format!("{chooser:?}"),"domain":format!("{domain:?}")})
-            }
-            Instruction::ChooseOptionForPlayers { players, options } => {
-                json!({"op":"ChooseOptionForPlayers","players":format!("{players:?}"),"options":options.len()})
             }
             Instruction::Vote { options, secret } => {
                 json!({"op":"Vote","options":options,"secret":secret})
@@ -10746,24 +10789,16 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::Monstrosity { amount } => json!({"op":"Monstrosity","amount":instruction_amount(amount)}),
             Instruction::Fight { first, second } => json!({"op":"Fight","first":format!("{first:?}"),"second":format!("{second:?}")}),
             Instruction::Exchange(spec) => json!({"op":"Exchange","spec":format!("{spec:?}")}),
-            Instruction::CopyStackObject { target, count, may_choose_new_targets } => json!({"op":"CopyStackObject","target":format!("{target:?}"),"count":instruction_amount(count),"may_choose_new_targets":may_choose_new_targets}),
-            Instruction::CastLinkedFaceDownFree => json!({"op":"CastLinkedFaceDownFree"}),
             Instruction::Ripple(n) => json!({"op":"Ripple","count":n}),
             Instruction::Demonstrate => json!({"op":"Demonstrate"}),
             Instruction::Enlist => json!({"op":"Enlist"}),
-            Instruction::CounterSpellToLibrary { top } => json!({"op":"CounterSpellToLibrary","top":top}),
-            Instruction::CounterTriggeringStackObject => json!({"op":"CounterTriggeringStackObject"}),
-            Instruction::ForEachPlayer { players, body: inner } => json!({"op":"ForEachPlayer","players":format!("{players:?}"),"body":body(inner)}),
             Instruction::OfferAnyPlayer { players, cost_body, paid_body, declined_body } => json!({"op":"OfferAnyPlayer","players":format!("{players:?}"),"cost_body":body(cost_body),"paid_body":body(paid_body),"declined_body":declined_body.as_ref().map(body)}),
             Instruction::DealDamageToAnnouncedTargets { amount, min_targets, max_targets } => json!({"op":"DealDamageToAnnouncedTargets","amount":instruction_amount(amount),"min_targets":min_targets,"max_targets":max_targets}),
             Instruction::GrantChosenProtection { recipients, duration: dur } => json!({"op":"GrantChosenProtection","recipients":format!("{recipients:?}"),"duration":duration(*dur)}),
-            Instruction::LookTopChooseExt { library_owner, chooser, count, filter, max_picks, take_all_matching, keep_dest, rest_dest, reveal_kept } => json!({"op":"LookTopChooseExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"count":instruction_amount(count),"filter":format!("{filter:?}"),"max_picks":max_picks,"take_all_matching":take_all_matching,"keep_dest":format!("{keep_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"reveal_kept":reveal_kept}),
+            Instruction::LookTopChooseExt { library_owner, chooser, count, filter, max_picks, take_all_matching, keep_dest, rest_dest, reveal_kept, .. } => json!({"op":"LookTopChooseExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"count":instruction_amount(count),"filter":format!("{filter:?}"),"max_picks":max_picks,"take_all_matching":take_all_matching,"keep_dest":format!("{keep_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"reveal_kept":reveal_kept}),
             Instruction::RevealTopTwoPiles { count, controller_divides, target_opponent, chosen_dest, other_dest } => json!({"op":"RevealTopTwoPiles","count":instruction_amount(count),"controller_divides":controller_divides,"target_opponent":target_opponent,"chosen_dest":format!("{chosen_dest:?}"),"other_dest":format!("{other_dest:?}")}),
-            Instruction::RevealUntilMatchExt { library_owner, chooser, filter, count, match_dest, rest_dest, keep_all_revealed } => json!({"op":"RevealUntilMatchExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"filter":format!("{filter:?}"),"count":instruction_amount(count),"match_dest":format!("{match_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"keep_all_revealed":keep_all_revealed}),
-            Instruction::CreateTokenCopyExt { source, count, recipients, enters_tapped, enters_attacking, haste, sacrifice_at_end_step, exile_at_end_step, nonlegendary, extra_types, extra_subtypes, extra_keywords, override_pt, extra_colors, defender_scope } => json!({"op":"CreateTokenCopyExt","source":format!("{source:?}"),"count":instruction_amount(count),"recipients":format!("{recipients:?}"),"enters_tapped":enters_tapped,"enters_attacking":enters_attacking,"haste":haste,"sacrifice_at_end_step":sacrifice_at_end_step,"exile_at_end_step":exile_at_end_step,"nonlegendary":nonlegendary,"extra_types":format!("{extra_types:?}"),"extra_subtypes":format!("{extra_subtypes:?}"),"extra_keywords":format!("{extra_keywords:?}"),"override_pt":format!("{override_pt:?}"),"extra_colors":format!("{extra_colors:?}"),"defender_scope":format!("{defender_scope:?}")}),
-            Instruction::MoveCounters { from, to, kind, all, any_number, amount } => json!({"op":"MoveCounters","from":format!("{from:?}"),"to":format!("{to:?}"),"kind":format!("{kind:?}"),"all":all,"any_number":any_number,"amount":amount.as_ref().map(instruction_amount)}),
-            Instruction::CounterMatchingStackObjects { filter, include_spells, include_abilities, opponents_only } => json!({"op":"CounterMatchingStackObjects","filter":filter.as_ref().map(|f| format!("{f:?}")),"include_spells":include_spells,"include_abilities":include_abilities,"opponents_only":opponents_only}),
-            Instruction::TransferAllCountersFromTriggeringLki { to } => json!({"op":"TransferAllCountersFromTriggeringLki","to":effect_group_wire(**to)}),
+            Instruction::RevealUntilMatchExt { library_owner, chooser, filter, count, match_dest, rest_dest, keep_all_revealed, .. } => json!({"op":"RevealUntilMatchExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"filter":format!("{filter:?}"),"count":instruction_amount(count),"match_dest":format!("{match_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"keep_all_revealed":keep_all_revealed}),
+            Instruction::CreateTokenCopyExt { source, count, recipients, enters_tapped, enters_attacking, haste, sacrifice_at_end_step, exile_at_end_step, nonlegendary, extra_types, extra_subtypes, extra_keywords, override_pt, extra_colors, defender_scope, .. } => json!({"op":"CreateTokenCopyExt","source":format!("{source:?}"),"count":instruction_amount(count),"recipients":format!("{recipients:?}"),"enters_tapped":enters_tapped,"enters_attacking":enters_attacking,"haste":haste,"sacrifice_at_end_step":sacrifice_at_end_step,"exile_at_end_step":exile_at_end_step,"nonlegendary":nonlegendary,"extra_types":format!("{extra_types:?}"),"extra_subtypes":format!("{extra_subtypes:?}"),"extra_keywords":format!("{extra_keywords:?}"),"override_pt":format!("{override_pt:?}"),"extra_colors":format!("{extra_colors:?}"),"defender_scope":format!("{defender_scope:?}")}),
             Instruction::Earthbend { amount } => json!({"op":"Earthbend","amount":instruction_amount(amount)}),
             Instruction::ReturnEarthbentCard => json!({"op":"ReturnEarthbentCard"}),
             Instruction::AddManaForPlayer { player, yield_kind } => json!({"op":"AddManaForPlayer","player":format!("{player:?}"),"yield_kind":format!("{yield_kind:?}")}),
@@ -13432,7 +13467,11 @@ mod tests {
                 }
             };
             let primitive = match role {
-                ResolvingPlayer::TargetSpellController => Instruction::CounterSpell,
+                ResolvingPlayer::TargetSpellController => Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                )),
                 ResolvingPlayer::TargetPlayer => Instruction::AdjustLife(Box::new(
                     spellwake_engine::toolbox::AdjustLifeSpec::gain(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(
@@ -13473,9 +13512,10 @@ mod tests {
             };
             for instructions in [
                 vec![Instruction::OptionalEffect { chooser: role }, primitive],
-                vec![Instruction::OfferManaPayment {
+                vec![Instruction::OfferDynamicManaPayment {
                     payer: role,
-                    cost: quoted.clone(),
+                    fixed: quoted.clone(),
+                    extra_generic: ValueExpr::Literal(0.into()),
                     paid_destination: 1,
                     declined_destination: 1,
                 }],

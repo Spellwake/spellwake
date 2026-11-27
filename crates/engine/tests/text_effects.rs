@@ -668,7 +668,9 @@ fn copied_text_spells_choose_independent_words_and_retarget_independent_objects(
                 BodyTarget::SingleSpell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
         ],
         vec![CardId(1), CardId(2)],

@@ -11,9 +11,14 @@ fn copy_source() -> Program {
             body: body(
                 BodyTarget::SinglePermanent,
                 vec![
-                    Instruction::CopyTargetToSource {
+                    Instruction::BecomeCopy {
+                        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
+                        donor: crate::program::MoveSubjectRef::TargetObject,
                         duration: ResolvedDuration::NoStatedDuration,
-                        power_toughness: None,
+                        exceptions: Box::new(crate::program::CopyExceptions {
+                            override_pt: None,
+                            ..Default::default()
+                        }),
                     },
                     crate::program::Instruction::AdjustLife(Box::new(
                         crate::toolbox::AdjustLifeSpec::gain(

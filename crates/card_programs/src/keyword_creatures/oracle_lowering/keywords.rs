@@ -485,7 +485,9 @@ pub(super) fn lower_keyword(
                 return Err("oracle:ward-non-mana");
             }
             let mut body = lower_ward_cost_body(&atoms, vocabulary)?;
-            body.instructions.push(Instruction::CounterWardSource);
+            body.instructions.push(Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_ward_source(),
+            )));
             program.triggered.push(TriggeredAbility {
                 id: ids.triggered(),
                 condition: TriggerSpec::new(TriggerEvent::Targeted {
@@ -513,7 +515,19 @@ pub(super) fn lower_keyword(
                     BodyTarget::None,
                     vec![
                         Instruction::Myriad,
-                        Instruction::ScheduleCreatedTokenExile(Step::EndCombat),
+                        Instruction::ScheduleDelayedStepTrigger {
+                            step: Step::EndCombat,
+                            own_step_only: false,
+                            body: Box::new(ExecutableBody::new(
+                                BodyTarget::None,
+                                vec![Instruction::ZoneOp(Box::new(
+                                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                                        spellwake_engine::toolbox::ObjectQuery::CreatedTokens,
+                                        spellwake_engine::toolbox::ZoneDest::exile(),
+                                    ),
+                                ))],
+                            )),
+                        },
                     ],
                 ),
             });
@@ -927,9 +941,10 @@ pub(super) fn lower_keyword(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::OfferManaPayment {
+                        Instruction::OfferDynamicManaPayment {
                             payer: ResolvingPlayer::Controller,
-                            cost: mana,
+                            fixed: mana,
+                            extra_generic: ValueExpr::Literal(0.into()),
                             paid_destination: 1,
                             declined_destination: 3,
                         },
@@ -1799,12 +1814,13 @@ pub(super) fn lower_keyword(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::AddMana(
-                        EffectManaYield::RetainedUntilEndOfCombat {
+                    vec![Instruction::AddManaForPlayer {
+                        player: ResolvingPlayer::Controller,
+                        yield_kind: EffectManaYield::RetainedUntilEndOfCombat {
                             kind: ManaType::Red,
                             amount,
                         },
-                    )],
+                    }],
                 ),
             });
             Ok(())
@@ -1826,21 +1842,24 @@ pub(super) fn lower_keyword(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::CreateTokenCopy {
+                    vec![Instruction::CreateTokenCopyExt {
                         source: MoveSubjectRef::AbilitySource,
                         count: ValueExpr::literal(1),
-                        tapped: false,
-                        attacking: false,
+                        recipients: TokenRecipients::Controller,
+                        enters_tapped: false,
+                        enters_attacking: false,
+                        haste: false,
                         sacrifice_at_end_step: false,
                         exile_at_end_step: false,
-                        grant_keywords: BTreeSet::new(),
                         nonlegendary: false,
-                        override_pt: Some((1, 1)),
+                        extra_types: BTreeSet::new(),
+                        extra_subtypes: BTreeSet::new(),
+                        extra_keywords: BTreeSet::new(),
+                        override_pt: Some((1.into(), 1.into())),
+                        extra_colors: BTreeSet::new(),
                         override_colors: None,
-                        add_subtypes: BTreeSet::new(),
-                        add_card_types: BTreeSet::new(),
                         strip_mana_cost: false,
-                        recipients: TokenRecipients::Controller,
+                        defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
                     }],
                 ),
             });
@@ -1864,21 +1883,24 @@ pub(super) fn lower_keyword(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::CreateTokenCopy {
+                    vec![Instruction::CreateTokenCopyExt {
                         source: MoveSubjectRef::AbilitySource,
                         count: ValueExpr::event(EventValueKind::EnteredKickerCount(idx)),
-                        tapped: false,
-                        attacking: false,
+                        recipients: TokenRecipients::Controller,
+                        enters_tapped: false,
+                        enters_attacking: false,
+                        haste: false,
                         sacrifice_at_end_step: false,
                         exile_at_end_step: false,
-                        grant_keywords: BTreeSet::new(),
                         nonlegendary: false,
+                        extra_types: BTreeSet::new(),
+                        extra_subtypes: BTreeSet::new(),
+                        extra_keywords: BTreeSet::new(),
                         override_pt: None,
+                        extra_colors: BTreeSet::new(),
                         override_colors: None,
-                        add_subtypes: BTreeSet::new(),
-                        add_card_types: BTreeSet::new(),
                         strip_mana_cost: false,
-                        recipients: TokenRecipients::Controller,
+                        defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
                     }],
                 ),
             });
@@ -1927,25 +1949,28 @@ pub(super) fn lower_keyword(
                 },
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::CreateTokenCopy {
+                    vec![Instruction::CreateTokenCopyExt {
                         source: MoveSubjectRef::AbilitySource,
                         count: ValueExpr::literal(1),
-                        tapped: false,
-                        attacking: false,
+                        recipients: TokenRecipients::Controller,
+                        enters_tapped: false,
+                        enters_attacking: false,
+                        haste: false,
                         sacrifice_at_end_step: false,
                         exile_at_end_step: false,
-                        grant_keywords: BTreeSet::new(),
                         nonlegendary: false,
-                        override_pt: is_eternalize.then_some((4, 4)),
+                        extra_types: BTreeSet::new(),
+                        extra_subtypes: BTreeSet::from([zombie]),
+                        extra_keywords: BTreeSet::new(),
+                        override_pt: is_eternalize.then_some((4.into(), 4.into())),
+                        extra_colors: BTreeSet::new(),
                         override_colors: Some(BTreeSet::from([if is_eternalize {
                             Color::Black
                         } else {
                             Color::White
                         }])),
-                        add_subtypes: BTreeSet::from([zombie]),
-                        add_card_types: BTreeSet::new(),
                         strip_mana_cost: true,
-                        recipients: TokenRecipients::Controller,
+                        defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
                     }],
                 ),
             });
@@ -3717,10 +3742,13 @@ fn lower_non_mana_cumulative_upkeep(
             "{c}" => ManaType::Colourless,
             _ => return Err("oracle:cum-upkeep-cost"),
         };
-        vec![Instruction::AddMana(EffectManaYield::Counted {
-            kind: mana_type,
-            amount: age_count,
-        })]
+        vec![Instruction::AddManaForPlayer {
+            player: ResolvingPlayer::Controller,
+            yield_kind: EffectManaYield::Counted {
+                kind: mana_type,
+                amount: age_count,
+            },
+        }]
     } else if matches!(
         low.as_str(),
         "sacrifice a creature"
@@ -3759,6 +3787,7 @@ fn lower_non_mana_cumulative_upkeep(
             mode: spellwake_engine::program::CoinFlipMode::Count(age_count),
             win_body: None,
             lose_body: None,
+            lose_destination: None,
         }]
     } else if low == "exile the top card of your library" {
         pre_guard = Some(ResolutionCondition {
@@ -3833,6 +3862,7 @@ fn lower_non_mana_cumulative_upkeep(
                         amount: ValueExpr::literal(1),
                         base_size: None,
                         recipients: TokenRecipients::Player(ResolvingPlayer::ChosenPlayer),
+                        attacking_defender: None,
                     }],
                 },
             ],

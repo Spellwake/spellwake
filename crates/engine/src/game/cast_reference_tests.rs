@@ -168,7 +168,9 @@ fn run(case: &str) {
                 ManaCost::one(ManaType::Blue),
                 ExecutableBody::new(
                     BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-                    vec![crate::program::Instruction::CopySpell],
+                    vec![crate::program::Instruction::StackOp(Box::new(
+                        crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                    ))],
                 ),
             ),
         });

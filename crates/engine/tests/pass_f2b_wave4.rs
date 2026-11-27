@@ -5,7 +5,7 @@
 //! - `StaticSourceCondition` (`SourceAnyCounterAtLeast`, `SourceIsEquipped`,
 //!   `SourceIsEnchanted`, `AttachedHostMatches`, `ControlsExactCount`)
 //! - `SearchCardMatcher::SameNameAs` (ability source, target object, and dying trigger LKI)
-//! - `Instruction::CounterTriggeringStackObject` (targeting spells with once-per-turn
+//! - `Instruction::StackOp` (`StackOpSpec::counter_triggering` targeting spells with once-per-turn
 //!   grouping and `SpellCast` triggers)
 //! - `Instruction::SetSubjectTapped` (`CreatedTokens`, `TriggerSubject`, `LastMoved`)
 //! - Multi-target `Instruction::ShuffleTargetIntoLibrary` with `graveyard_target_bounds`

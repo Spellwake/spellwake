@@ -839,15 +839,11 @@ fn has_prior_non_attached_object_op(op: &Instruction) -> bool {
                 )
         }
         Instruction::CreateTokens { .. }
-        | Instruction::CreateTokenCopy { .. }
         | Instruction::CreateTokenCopyExt { .. }
-        | Instruction::CreateAttackingTokens { .. }
         | Instruction::Sacrifice { .. }
         | Instruction::SearchLibrary { .. }
-        | Instruction::LookTopChoose { .. }
         | Instruction::LookTopChooseExt { .. }
         | Instruction::RevealTopTwoPiles { .. }
-        | Instruction::RevealUntilMatch { .. }
         | Instruction::RevealUntilMatchExt { .. } => true,
         _ => false,
     }
@@ -867,9 +863,10 @@ pub(super) fn push_for_each_player(
     ops: Vec<Instruction>,
     builder: &mut BodyBuilder,
 ) {
-    builder.instructions.push(Instruction::ForEachPlayer {
-        players,
-        body: ExecutableBody::new(BodyTarget::None, ops),
+    builder.instructions.push(Instruction::ForEachPlayerQuery {
+        selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(players)),
+        bind_player: spellwake_engine::toolbox::BindingId::LOOP_PLAYER,
+        body: Box::new(ExecutableBody::new(BodyTarget::None, ops)),
     });
 }
 
@@ -1067,11 +1064,9 @@ fn has_prior_token_creation(ops: &[Instruction]) -> bool {
         matches!(
             op,
             Instruction::CreateTokens { .. }
-                | Instruction::CreateTokenCopy { .. }
                 | Instruction::CreateTokenCopyExt { .. }
                 | Instruction::CreateTokenAndAttach { .. }
                 | Instruction::CreateAuraTokenAttached { .. }
-                | Instruction::CreateAttackingTokens { .. }
         )
     })
 }
@@ -1123,8 +1118,7 @@ fn effect_mana_yield_uses_chosen_x(yield_spec: &EffectManaYield) -> bool {
 
 fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
     body.instructions.iter().any(|op| match op {
-        Instruction::AddMana(yield_spec)
-        | Instruction::AddManaForPlayer {
+        Instruction::AddManaForPlayer {
             yield_kind: yield_spec,
             ..
         } => effect_mana_yield_uses_chosen_x(yield_spec),
@@ -1200,7 +1194,6 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
         ),
         Instruction::BindResolutionX(amount) => value_expr_uses_chosen_x(amount),
         Instruction::DealDamageToAnnouncedTargets { amount, .. }
-        | Instruction::CreateTokenCopy { count: amount, .. }
         | Instruction::CreateTokenCopyExt { count: amount, .. }
         | Instruction::RollDie { count: amount, .. }
         | Instruction::Mill { amount, .. }
@@ -1209,7 +1202,6 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
         | Instruction::Surveil { amount, .. }
         | Instruction::Sacrifice { amount, .. }
         | Instruction::ExileTopPlay { count: amount, .. }
-        | Instruction::LookTopChoose { count: amount, .. }
         | Instruction::LookTopChooseExt { count: amount, .. }
         | Instruction::RevealTopTwoPiles { count: amount, .. } => value_expr_uses_chosen_x(amount),
 
@@ -1225,14 +1217,12 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
                     .as_ref()
                     .is_some_and(value_expr_uses_chosen_x)
         }
-        Instruction::CreateTokens { creations }
-        | Instruction::CreateAttackingTokens { creations, .. } => creations
+        Instruction::CreateTokens { creations } => creations
             .iter()
             .any(|c| value_expr_uses_chosen_x(&c.amount)),
         Instruction::BranchIfFalse { condition, .. } => {
             value_expr_uses_chosen_x(&condition.left) || value_expr_uses_chosen_x(&condition.right)
         }
-        Instruction::ForEachPlayer { body, .. } => body_uses_chosen_x(body),
         Instruction::RepeatLoop { count, body } => {
             value_expr_uses_chosen_x(count) || body_uses_chosen_x(body.as_ref())
         }
@@ -1300,7 +1290,6 @@ fn try_append_fixed_first_target_parts(
                 | Instruction::Jump { .. }
                 | Instruction::OptionalEffect { .. }
                 | Instruction::OptionalSequence { .. }
-                | Instruction::OfferManaPayment { .. }
                 | Instruction::OfferDynamicManaPayment { .. }
         )
     };
@@ -1351,11 +1340,9 @@ fn last_instruction_created_tokens(ops: &[Instruction]) -> bool {
         ops.last(),
         Some(
             Instruction::CreateTokens { .. }
-                | Instruction::CreateTokenCopy { .. }
                 | Instruction::CreateTokenCopyExt { .. }
                 | Instruction::CreateTokenAndAttach { .. }
                 | Instruction::CreateAuraTokenAttached { .. }
-                | Instruction::CreateAttackingTokens { .. }
         )
     ) || matches!(
         ops.last(),

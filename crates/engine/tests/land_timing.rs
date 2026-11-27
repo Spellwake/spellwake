@@ -1058,7 +1058,11 @@ fn opponent_instant_response_counters_actual_sorcery() {
         B,
         false,
         ManaCost::free(),
-        vec![Instruction::CounterSpell],
+        vec![Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                spellwake_engine::toolbox::CounterDestination::Graveyard,
+            ),
+        ))],
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
     ));
     let game = setup(Some(Step::PrecombatMain), cards);
@@ -1095,7 +1099,9 @@ fn copying_actual_sorcery_uses_owned_reply_and_blocks_land_during_decision() {
         B,
         false,
         ManaCost::free(),
-        vec![Instruction::CopySpell],
+        vec![Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+        ))],
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
     ));
     let game = setup(Some(Step::PrecombatMain), cards);
@@ -1254,7 +1260,14 @@ fn invalid_authored_sorcery_programs_reject_at_setup() {
         (ManaCost::free(), vec![], ObjectDestination::Hand),
         (
             ManaCost::free(),
-            vec![damage(), Instruction::CounterSpell],
+            vec![
+                damage(),
+                Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                )),
+            ],
             ObjectDestination::Hand,
         ),
         (

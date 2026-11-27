@@ -30,9 +30,10 @@ fn gain(amount: i64) -> Instruction {
 }
 fn offer(cost: i64) -> Vec<Instruction> {
     vec![
-        Instruction::OfferManaPayment {
+        Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::Controller,
-            cost: ManaCost::generic(cost.into()),
+            fixed: ManaCost::generic(cost.into()),
+            extra_generic: crate::program::ValueExpr::Literal(0.into()),
             paid_destination: 2,
             declined_destination: 1,
         },

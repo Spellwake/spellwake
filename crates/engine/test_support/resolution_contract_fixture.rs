@@ -168,8 +168,14 @@ pub fn body(
                         exile_if_dies: false,
                     }))
                 }
-                "CopySpell" => Instruction::CopySpell,
-                "CounterSpell" => Instruction::CounterSpell,
+                "CopySpell" => Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                )),
+                "CounterSpell" => Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                )),
                 _ => return Err("unlisted finite body instruction".into()),
             })
         })

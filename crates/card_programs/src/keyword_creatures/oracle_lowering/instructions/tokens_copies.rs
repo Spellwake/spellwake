@@ -242,21 +242,26 @@ pub(super) fn lower_tokens_copies_instruction(
                             } else {
                                 None
                             };
-                            trial.instructions.push(Instruction::CreateTokenCopy {
+                            trial.instructions.push(Instruction::CreateTokenCopyExt {
                                 source: src_ref,
                                 count: cnt,
-                                tapped: enters_tapped,
-                                attacking: enters_attacking,
+                                recipients,
+                                enters_tapped,
+                                enters_attacking,
+                                haste: false,
                                 sacrifice_at_end_step: parsed.sacrifice_at_end_step,
                                 exile_at_end_step: parsed.exile_at_end_step,
-                                grant_keywords: kws,
                                 nonlegendary: parsed.nonlegendary,
-                                override_pt,
+                                extra_types: parsed.add_card_types,
+                                extra_subtypes: parsed.add_subtypes,
+                                extra_keywords: kws,
+                                override_pt: override_pt
+                                    .map(|(p, t)| (i64::from(p).into(), i64::from(t).into())),
+                                extra_colors: BTreeSet::new(),
                                 override_colors,
-                                add_subtypes: parsed.add_subtypes,
-                                add_card_types: parsed.add_card_types,
                                 strip_mana_cost: parsed.strip_mana_cost,
-                                recipients,
+                                defender_scope:
+                                    spellwake_engine::token::AttackingDefenderScope::AnyLegal,
                             });
                             *builder = trial;
                             return Ok(());
@@ -292,23 +297,29 @@ pub(super) fn lower_tokens_copies_instruction(
                                 extra_colors: parsed.parsed_colors,
                                 defender_scope:
                                     spellwake_engine::token::AttackingDefenderScope::AnyLegal,
+                                override_colors: None,
+                                strip_mana_cost: false,
                             });
                         } else {
-                            trial.instructions.push(Instruction::CreateTokenCopy {
+                            trial.instructions.push(Instruction::CreateTokenCopyExt {
                                 source: src_ref,
                                 count: cnt,
-                                tapped: enters_tapped,
-                                attacking: enters_attacking,
+                                recipients,
+                                enters_tapped,
+                                enters_attacking,
+                                haste: false,
                                 sacrifice_at_end_step: false,
                                 exile_at_end_step: false,
-                                grant_keywords: BTreeSet::new(),
                                 nonlegendary: false,
+                                extra_types: BTreeSet::new(),
+                                extra_subtypes: BTreeSet::new(),
+                                extra_keywords: BTreeSet::new(),
                                 override_pt: None,
+                                extra_colors: BTreeSet::new(),
                                 override_colors: None,
-                                add_subtypes: BTreeSet::new(),
-                                add_card_types: BTreeSet::new(),
                                 strip_mana_cost: false,
-                                recipients,
+                                defender_scope:
+                                    spellwake_engine::token::AttackingDefenderScope::AnyLegal,
                             });
                         }
                         *builder = trial;
@@ -503,6 +514,7 @@ pub(super) fn lower_tokens_copies_instruction(
                             amount: amt,
                             base_size: None,
                             recipients,
+                            attacking_defender: None,
                         },
                         false,
                     )
@@ -686,17 +698,12 @@ pub(super) fn lower_tokens_copies_instruction(
                 if creation.recipients != TokenRecipients::Controller {
                     return Err("oracle:unsupported-attacking-token");
                 }
-                builder
-                    .instructions
-                    .push(Instruction::CreateAttackingTokens {
-                        creations: vec![creation],
-                        defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
-                    });
-            } else {
-                builder.instructions.push(Instruction::CreateTokens {
-                    creations: vec![creation],
-                });
+                creation.attacking_defender =
+                    Some(spellwake_engine::token::AttackingDefenderScope::AnyLegal);
             }
+            builder.instructions.push(Instruction::CreateTokens {
+                creations: vec![creation],
+            });
             Ok(())
         }
         InstructionAst::Amass { subtype, count } => {
@@ -757,6 +764,7 @@ pub(super) fn lower_tokens_copies_instruction(
                     amount: ValueExpr::literal(1),
                     base_size: None,
                     recipients: TokenRecipients::Controller,
+                    attacking_defender: None,
                 }],
             });
             builder.instructions.push(Instruction::Amass {
@@ -812,6 +820,7 @@ pub(super) fn lower_tokens_copies_instruction(
                             amount: amt,
                             base_size: None,
                             recipients: TokenRecipients::Controller,
+                            attacking_defender: None,
                         }],
                     });
                     Ok(())
@@ -824,6 +833,7 @@ pub(super) fn lower_tokens_copies_instruction(
                             amount: amt,
                             base_size: None,
                             recipients: TokenRecipients::EachPlayer,
+                            attacking_defender: None,
                         }],
                     });
                     Ok(())
@@ -836,6 +846,7 @@ pub(super) fn lower_tokens_copies_instruction(
                             amount: amt,
                             base_size: None,
                             recipients: TokenRecipients::EachOpponent,
+                            attacking_defender: None,
                         }],
                     });
                     Ok(())
@@ -850,6 +861,7 @@ pub(super) fn lower_tokens_copies_instruction(
                                 amount: amt,
                                 base_size: None,
                                 recipients: TokenRecipients::Player(ResolvingPlayer::LoopPlayer),
+                                attacking_defender: None,
                             }],
                         }],
                         builder,
@@ -865,6 +877,7 @@ pub(super) fn lower_tokens_copies_instruction(
                             amount: amt,
                             base_size: None,
                             recipients: TokenRecipients::Player(rp),
+                            attacking_defender: None,
                         }],
                     });
                     Ok(())
@@ -905,19 +918,23 @@ pub(super) fn lower_tokens_copies_instruction(
                     } else {
                         StackCopyTarget::TargetSpell
                     };
-                    builder.instructions.push(Instruction::CopyStackObject {
-                        target: copy_target,
-                        count: count_expr,
-                        may_choose_new_targets: false,
-                    });
+                    builder.instructions.push(Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::copy_stack(
+                            copy_target,
+                            count_expr,
+                            false,
+                        ),
+                    )));
                     Ok(())
                 }
                 SubjectRefAst::TriggerSubject if in_trigger => {
-                    builder.instructions.push(Instruction::CopyStackObject {
-                        target: StackCopyTarget::TriggeringSpell,
-                        count: count_expr,
-                        may_choose_new_targets: false,
-                    });
+                    builder.instructions.push(Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::copy_stack(
+                            StackCopyTarget::TriggeringSpell,
+                            count_expr,
+                            false,
+                        ),
+                    )));
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(raw) => {
@@ -944,11 +961,13 @@ pub(super) fn lower_tokens_copies_instruction(
                     } else {
                         return Err("oracle:unsupported-copy");
                     };
-                    builder.instructions.push(Instruction::CopyStackObject {
-                        target: copy_target,
-                        count: count_expr,
-                        may_choose_new_targets: false,
-                    });
+                    builder.instructions.push(Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::copy_stack(
+                            copy_target,
+                            count_expr,
+                            false,
+                        ),
+                    )));
                     Ok(())
                 }
                 SubjectRefAst::SelfObject => {
@@ -959,11 +978,13 @@ pub(super) fn lower_tokens_copies_instruction(
                     } else {
                         return Err("oracle:unsupported-copy");
                     };
-                    builder.instructions.push(Instruction::CopyStackObject {
-                        target: copy_target,
-                        count: count_expr,
-                        may_choose_new_targets: false,
-                    });
+                    builder.instructions.push(Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::copy_stack(
+                            copy_target,
+                            count_expr,
+                            false,
+                        ),
+                    )));
                     Ok(())
                 }
                 _ => Err("oracle:unsupported-copy"),
@@ -1008,9 +1029,11 @@ pub(super) fn lower_tokens_copies_instruction(
             };
             let bt = lower_battlefield_body_target(filter, vocabulary)?;
             builder.bind_target(bt)?;
-            builder.instructions.push(Instruction::CopyTargetToSource {
+            builder.instructions.push(Instruction::BecomeCopy {
+                receiver: Box::new(EffectSubject::AbilitySource),
+                donor: MoveSubjectRef::TargetObject,
                 duration: dur,
-                power_toughness: None,
+                exceptions: Box::new(CopyExceptions::default()),
             });
             Ok(())
         }
@@ -1030,9 +1053,11 @@ pub(super) fn lower_tokens_copies_instruction(
             ) =>
         {
             let dur = lower_duration(duration)?;
-            builder.instructions.push(Instruction::CopyTargetToSource {
+            builder.instructions.push(Instruction::BecomeCopy {
+                receiver: Box::new(EffectSubject::AbilitySource),
+                donor: MoveSubjectRef::TargetObject,
                 duration: dur,
-                power_toughness: None,
+                exceptions: Box::new(CopyExceptions::default()),
             });
             Ok(())
         }
@@ -1071,12 +1096,12 @@ pub(super) fn lower_tokens_copies_instruction(
                     .push(Instruction::FixedTargetClause(Box::new(
                         ExecutableBody::new(donor_bt, vec![Instruction::RememberPermanentTarget]),
                     )));
-                builder
-                    .instructions
-                    .push(Instruction::BecomeCopyFixedTargets {
-                        duration: dur,
-                        exceptions: Box::new(exc),
-                    });
+                builder.instructions.push(Instruction::BecomeCopy {
+                    receiver: Box::new(EffectSubject::LinkedFirst),
+                    donor: MoveSubjectRef::RememberedSecond,
+                    duration: dur,
+                    exceptions: Box::new(exc),
+                });
                 return Ok(());
             }
             let eff_receiver =
@@ -1446,10 +1471,14 @@ pub(super) fn lower_tokens_copies_instruction(
                     return false;
                 };
                 match last {
-                    Instruction::CreateAttackingTokens {
-                        defender_scope: ds, ..
-                    } => {
-                        *ds = defender_scope;
+                    Instruction::CreateTokens { creations }
+                        if creations.iter().any(|c| c.attacking_defender.is_some()) =>
+                    {
+                        for creation in creations {
+                            if creation.attacking_defender.is_some() {
+                                creation.attacking_defender = Some(defender_scope);
+                            }
+                        }
                         true
                     }
                     Instruction::CreateTokenCopyExt {
@@ -1458,45 +1487,6 @@ pub(super) fn lower_tokens_copies_instruction(
                         ..
                     } => {
                         *ds = defender_scope;
-                        true
-                    }
-                    Instruction::CreateTokenCopy {
-                        source,
-                        count,
-                        tapped,
-                        attacking: true,
-                        sacrifice_at_end_step,
-                        exile_at_end_step,
-                        grant_keywords,
-                        nonlegendary,
-                        override_pt,
-                        override_colors: None,
-                        add_subtypes,
-                        add_card_types,
-                        strip_mana_cost: false,
-                        recipients,
-                    } => {
-                        let mut extra_keywords = std::mem::take(grant_keywords);
-                        let haste = extra_keywords.remove(&KeywordAbility::Haste);
-                        let ext_pt =
-                            override_pt.map(|(p, t)| (i64::from(p).into(), i64::from(t).into()));
-                        *last = Instruction::CreateTokenCopyExt {
-                            source: *source,
-                            count: count.clone(),
-                            recipients: *recipients,
-                            enters_tapped: *tapped,
-                            enters_attacking: true,
-                            haste,
-                            sacrifice_at_end_step: *sacrifice_at_end_step,
-                            exile_at_end_step: *exile_at_end_step,
-                            nonlegendary: *nonlegendary,
-                            extra_types: std::mem::take(add_card_types),
-                            extra_subtypes: std::mem::take(add_subtypes),
-                            extra_keywords,
-                            override_pt: ext_pt,
-                            extra_colors: BTreeSet::new(),
-                            defender_scope,
-                        };
                         true
                     }
                     _ => false,
@@ -1616,10 +1606,8 @@ pub(super) fn lower_tokens_copies_instruction(
                 )?;
                 if trial.instructions.len() == before_len + 1
                     && apply_defender_scope(&mut trial.instructions)
-                    && let Some(
-                        Instruction::CreateTokens { creations }
-                        | Instruction::CreateAttackingTokens { creations, .. },
-                    ) = trial.instructions.last_mut()
+                    && let Some(Instruction::CreateTokens { creations }) =
+                        trial.instructions.last_mut()
                     && creations.len() == 1
                 {
                     creations[0].base_size = Some(token_size);
@@ -1854,28 +1842,15 @@ fn try_lower_extra_predefined_token_def(
 fn set_last_copy_may_choose_new_targets(ops: &mut [Instruction]) -> bool {
     for op in ops.iter_mut().rev() {
         match op {
-            Instruction::CopyStackObject {
-                may_choose_new_targets,
-                ..
-            } => {
-                *may_choose_new_targets = true;
-                return true;
-            }
-            Instruction::CopySpell => {
-                *op = Instruction::CopyStackObject {
-                    target: StackCopyTarget::TargetSpell,
-                    count: ValueExpr::literal(1),
-                    may_choose_new_targets: true,
-                };
-                return true;
-            }
-            Instruction::CopyAbility => {
-                *op = Instruction::CopyStackObject {
-                    target: StackCopyTarget::TargetAbility,
-                    count: ValueExpr::literal(1),
-                    may_choose_new_targets: true,
-                };
-                return true;
+            Instruction::StackOp(spec) => {
+                if let spellwake_engine::toolbox::StackOpKind::Copy {
+                    may_choose_new_targets,
+                    ..
+                } = &mut spec.op
+                {
+                    *may_choose_new_targets = true;
+                    return true;
+                }
             }
             Instruction::FlipCoins {
                 win_body,
@@ -1897,18 +1872,14 @@ fn set_last_copy_may_choose_new_targets(ops: &mut [Instruction]) -> bool {
             | Instruction::ScheduleDelayedStepTrigger { body, .. }
             | Instruction::EmitReflexiveTrigger { body, .. }
             | Instruction::RepeatLoop { body, .. }
-            | Instruction::FixedTargetClause(body) => {
+            | Instruction::FixedTargetClause(body)
+            | Instruction::ForEachPlayerQuery { body, .. }
+            | Instruction::ForEach { body, .. } => {
                 if set_last_copy_may_choose_new_targets(&mut body.instructions) {
                     return true;
                 }
             }
-            Instruction::ForEachPlayer { body, .. } => {
-                if set_last_copy_may_choose_new_targets(&mut body.instructions) {
-                    return true;
-                }
-            }
-            Instruction::ChooseOption { options, .. }
-            | Instruction::ChooseOptionForPlayers { options, .. } => {
+            Instruction::ChooseOption { options, .. } => {
                 for opt in options.iter_mut().rev() {
                     if set_last_copy_may_choose_new_targets(&mut opt.body.instructions) {
                         return true;

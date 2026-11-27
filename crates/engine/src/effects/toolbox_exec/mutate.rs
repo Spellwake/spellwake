@@ -604,6 +604,60 @@ impl EffectWindow {
                     mutated.push(id);
                 }
             }
+            ObjectMutation::TransferCountersFromTriggeringLki => {
+                let lki_counters: std::collections::BTreeMap<CounterKind, RulesInteger> = self
+                    .execution_bindings(entry.id())
+                    .and_then(|b| b.trigger.as_ref())
+                    .and_then(|binding| {
+                        binding
+                            .causes
+                            .members()
+                            .first()
+                            .and_then(|m| match &m.related {
+                                crate::occurrence::TriggerRelated::ZoneChange {
+                                    before, ..
+                                } => before.battlefield_all_counters.clone(),
+                                _ => None,
+                            })
+                            .or_else(|| binding.source.battlefield_all_counters.clone())
+                    })
+                    .unwrap_or_default();
+                for id in selected {
+                    if self
+                        .window
+                        .cards()
+                        .get(id)
+                        .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
+                    {
+                        for (kind, count) in &lki_counters {
+                            if count.is_positive() {
+                                self.place_divided_counters(
+                                    *kind,
+                                    vec![(id, count.clone())],
+                                    cause.clone(),
+                                    ctx.append,
+                                )?;
+                                succeeded = true;
+                            }
+                        }
+                        mutated.push(id);
+                    }
+                }
+            }
+            ObjectMutation::GrantFlashback => {
+                let evaluated = self.evaluated_characteristics()?;
+                for id in selected {
+                    if evaluated.get(id).is_some_and(|card| {
+                        card.zone == ObjectZone::Graveyard(controller)
+                            && (card.has_type(CardType::Instant)
+                                || card.has_type(CardType::Sorcery))
+                    }) {
+                        self.granted_flashback.insert(id);
+                        mutated.push(id);
+                        succeeded = true;
+                    }
+                }
+            }
             ObjectMutation::GainControl {
                 controller: new_ctrl,
                 duration,

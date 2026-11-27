@@ -329,9 +329,11 @@ pub(super) fn lower_control_misc_instruction(
                         },
                     );
                 }
-                builder
-                    .instructions
-                    .push(Instruction::ForEachPlayer { players, body: sub });
+                builder.instructions.push(Instruction::ForEachPlayerQuery {
+                    selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(players)),
+                    bind_player: spellwake_engine::toolbox::BindingId::LOOP_PLAYER,
+                    body: Box::new(sub),
+                });
                 return Ok(());
             }
             let chooser = lower_resolving_player_in_context(*player, builder, in_trigger)?;
@@ -456,9 +458,11 @@ pub(super) fn lower_control_misc_instruction(
                     self_pronoun_valid,
                     bound_x,
                 )?;
-                builder
-                    .instructions
-                    .push(Instruction::ForEachPlayer { players, body: sub });
+                builder.instructions.push(Instruction::ForEachPlayerQuery {
+                    selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(players)),
+                    bind_player: spellwake_engine::toolbox::BindingId::LOOP_PLAYER,
+                    body: Box::new(sub),
+                });
                 return Ok(());
             }
             let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
@@ -488,12 +492,15 @@ pub(super) fn lower_control_misc_instruction(
             if let CostAtomAst::PayMana(raw) = cost {
                 let idx = builder.instructions.len();
                 if let Some(mc) = parse_fixed_mana_cost(raw) {
-                    builder.instructions.push(Instruction::OfferManaPayment {
-                        payer: ResolvingPlayer::Controller,
-                        cost: mc,
-                        paid_destination: idx + 1,
-                        declined_destination: idx + 1,
-                    });
+                    builder
+                        .instructions
+                        .push(Instruction::OfferDynamicManaPayment {
+                            payer: ResolvingPlayer::Controller,
+                            fixed: mc,
+                            extra_generic: ValueExpr::Literal(0.into()),
+                            paid_destination: idx + 1,
+                            declined_destination: idx + 1,
+                        });
                     return Ok(());
                 } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
                     && x_cnt > 0
@@ -558,9 +565,10 @@ pub(super) fn lower_control_misc_instruction(
                     builder.instructions.len()
                 };
                 let op = if let Some(mc) = parse_fixed_mana_cost(raw) {
-                    Instruction::OfferManaPayment {
+                    Instruction::OfferDynamicManaPayment {
                         payer: rp,
-                        cost: mc,
+                        fixed: mc,
+                        extra_generic: ValueExpr::Literal(0.into()),
                         paid_destination: base_idx + 1,
                         declined_destination: base_idx + 1,
                     }
@@ -716,9 +724,17 @@ pub(super) fn lower_control_misc_instruction(
                     | PlayerRefAst::EachOtherPlayer
             ) {
                 let players = lower_affected_players_in_context(*chooser, builder, in_trigger)?;
-                builder
-                    .instructions
-                    .push(Instruction::ChooseOptionForPlayers { players, options });
+                builder.instructions.push(Instruction::ForEachPlayerQuery {
+                    selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(players)),
+                    bind_player: spellwake_engine::toolbox::BindingId::LOOP_PLAYER,
+                    body: Box::new(ExecutableBody::new(
+                        BodyTarget::None,
+                        vec![Instruction::ChooseOption {
+                            chooser: ResolvingPlayer::LoopPlayer,
+                            options,
+                        }],
+                    )),
+                });
             } else {
                 let rp = lower_resolving_player_in_context(*chooser, builder, in_trigger)?;
                 builder.instructions.push(Instruction::ChooseOption {
@@ -842,6 +858,7 @@ pub(super) fn lower_control_misc_instruction(
                 mode: spellwake_engine::program::CoinFlipMode::Single,
                 win_body: None,
                 lose_body: None,
+                lose_destination: None,
             });
             Ok(())
         }
@@ -1413,12 +1430,15 @@ pub(super) fn lower_control_misc_instruction(
             {
                 let payer = lower_resolving_player_in_context(player_ast, builder, in_trigger)?;
                 let offer_idx = builder.instructions.len();
-                builder.instructions.push(Instruction::OfferManaPayment {
-                    payer,
-                    cost: mana,
-                    paid_destination: 0,
-                    declined_destination: offer_idx + 1,
-                });
+                builder
+                    .instructions
+                    .push(Instruction::OfferDynamicManaPayment {
+                        payer,
+                        fixed: mana,
+                        extra_generic: ValueExpr::Literal(0.into()),
+                        paid_destination: 0,
+                        declined_destination: offer_idx + 1,
+                    });
                 if let Some(probe) = probed_body {
                     splice_probed_body(builder, probe)?;
                 } else {
@@ -1433,7 +1453,7 @@ pub(super) fn lower_control_misc_instruction(
                     )?;
                 }
                 let end_dest = builder.instructions.len();
-                if let Some(Instruction::OfferManaPayment {
+                if let Some(Instruction::OfferDynamicManaPayment {
                     paid_destination, ..
                 }) = builder.instructions.get_mut(offer_idx)
                 {
@@ -1622,9 +1642,13 @@ pub(super) fn lower_control_misc_instruction(
                         bound_x,
                     ) && !sub.instructions.is_empty()
                     {
-                        builder
-                            .instructions
-                            .push(Instruction::ForEachPlayer { players, body: sub });
+                        builder.instructions.push(Instruction::ForEachPlayerQuery {
+                            selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(
+                                players,
+                            )),
+                            bind_player: spellwake_engine::toolbox::BindingId::LOOP_PLAYER,
+                            body: Box::new(sub),
+                        });
                         return Ok(());
                     }
                 }
@@ -3364,8 +3388,6 @@ pub(super) fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
             | Instruction::ZoneOp(_)
             | Instruction::ForEachPlayerQuery { .. }
             | Instruction::Mill { .. }
-            | Instruction::CounterMatchingStackObjects { .. }
-            | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::MutateObject(_)
             | Instruction::ChooseObjects { .. }
             | Instruction::Blight { .. }
@@ -3376,6 +3398,13 @@ pub(super) fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
             if matches!(
                 spec.op,
                 spellwake_engine::toolbox::PlayerMutation::PayCounter { .. }
+            )
+    ) || matches!(
+        op,
+        Instruction::StackOp(spec)
+            if matches!(
+                spec.target,
+                spellwake_engine::toolbox::StackTargetSelector::Matching { .. }
             )
     )
 }
@@ -3768,9 +3797,10 @@ fn lower_hybrid_mana_payment_instruction(payer: ResolvingPlayer, raw: &str) -> O
         .map(|(cost, life)| {
             let label = format_mana_payment_label(&cost, life);
             let ops = if life == 0 {
-                vec![Instruction::OfferManaPayment {
+                vec![Instruction::OfferDynamicManaPayment {
                     payer,
-                    cost,
+                    fixed: cost,
+                    extra_generic: ValueExpr::Literal(0.into()),
                     paid_destination: 1,
                     declined_destination: 1,
                 }]
@@ -3783,9 +3813,10 @@ fn lower_hybrid_mana_payment_instruction(payer: ResolvingPlayer, raw: &str) -> O
                 ]
             } else {
                 vec![
-                    Instruction::OfferManaPayment {
+                    Instruction::OfferDynamicManaPayment {
                         payer,
-                        cost,
+                        fixed: cost,
+                        extra_generic: ValueExpr::Literal(0.into()),
                         paid_destination: 1,
                         declined_destination: 2,
                     },
@@ -3828,9 +3859,10 @@ fn lower_extra_pay_cost_instruction(
                     label,
                     body: ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::OfferManaPayment {
+                        vec![Instruction::OfferDynamicManaPayment {
                             payer,
-                            cost: mc,
+                            fixed: mc,
+                            extra_generic: ValueExpr::Literal(0.into()),
                             paid_destination: 1,
                             declined_destination: 1,
                         }],
@@ -3901,9 +3933,19 @@ pub(in super::super) fn emit_choice_for_player_ref(
             match kind {
                 ParsedChoiceKind::Domain(domain) => {
                     if let Some(options) = choice_domain_to_player_option_branches(&domain) {
-                        builder
-                            .instructions
-                            .push(Instruction::ChooseOptionForPlayers { players, options });
+                        builder.instructions.push(Instruction::ForEachPlayerQuery {
+                            selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(
+                                players,
+                            )),
+                            bind_player: spellwake_engine::toolbox::BindingId::LOOP_PLAYER,
+                            body: Box::new(ExecutableBody::new(
+                                BodyTarget::None,
+                                vec![Instruction::ChooseOption {
+                                    chooser: ResolvingPlayer::LoopPlayer,
+                                    options,
+                                }],
+                            )),
+                        });
                     } else {
                         push_for_each_player(
                             players,
@@ -5538,9 +5580,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_chosen_to_loop_ve(amount);
                 }
             }
-            Instruction::AddMana(yield_kind) => {
-                rewrite_chosen_to_loop_mana_yield(yield_kind);
-            }
             Instruction::AddManaForPlayer { player, yield_kind } => {
                 rewrite_chosen_to_loop_rp(player);
                 rewrite_chosen_to_loop_mana_yield(yield_kind);
@@ -5771,12 +5810,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     _ => {}
                 }
             }
-            Instruction::ChooseOptionForPlayers { players, options } => {
-                rewrite_chosen_to_loop_ap(players);
-                for br in options {
-                    rewrite_chosen_to_loop_ops(&mut br.body.instructions);
-                }
-            }
             Instruction::Scry { player, amount }
             | Instruction::Surveil { player, amount }
             | Instruction::Mill { player, amount }
@@ -5806,14 +5839,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_chosen_to_loop_ve(limit);
                 }
             }
-            Instruction::LookTopChoose {
-                count,
-                library_owner,
-                ..
-            } => {
-                rewrite_chosen_to_loop_ve(count);
-                rewrite_chosen_to_loop_rp(library_owner);
-            }
             Instruction::LookTopChooseExt {
                 library_owner,
                 chooser,
@@ -5832,9 +5857,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             }
             Instruction::RevealTopTwoPiles { count, .. } => {
                 rewrite_chosen_to_loop_ve(count);
-            }
-            Instruction::OfferManaPayment { payer, .. } => {
-                rewrite_chosen_to_loop_rp(payer);
             }
             Instruction::OfferDynamicManaPayment {
                 payer,
@@ -5866,32 +5888,15 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     if let TokenRecipients::Player(rp) = &mut c.recipients {
                         rewrite_chosen_to_loop_rp(rp);
                     }
-                }
-            }
-            Instruction::CreateAttackingTokens {
-                creations,
-                defender_scope,
-            } => {
-                for c in creations {
-                    rewrite_chosen_to_loop_ve(&mut c.amount);
-                    if let TokenRecipients::Player(rp) = &mut c.recipients {
+                    if let Some(
+                        spellwake_engine::token::AttackingDefenderScope::Player(rp)
+                        | spellwake_engine::token::AttackingDefenderScope::PlayerOrTheirPlaneswalker(
+                            rp,
+                        ),
+                    ) = &mut c.attacking_defender
+                    {
                         rewrite_chosen_to_loop_rp(rp);
                     }
-                }
-                if let spellwake_engine::token::AttackingDefenderScope::Player(rp)
-                | spellwake_engine::token::AttackingDefenderScope::PlayerOrTheirPlaneswalker(
-                    rp,
-                ) = defender_scope
-                {
-                    rewrite_chosen_to_loop_rp(rp);
-                }
-            }
-            Instruction::CreateTokenCopy {
-                count, recipients, ..
-            } => {
-                rewrite_chosen_to_loop_ve(count);
-                if let TokenRecipients::Player(rp) = recipients {
-                    rewrite_chosen_to_loop_rp(rp);
                 }
             }
             Instruction::CreateTokenCopyExt {
@@ -5917,10 +5922,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             }
             Instruction::RepeatLoop { count, body } => {
                 rewrite_chosen_to_loop_ve(count);
-                rewrite_chosen_to_loop_ops(&mut body.instructions);
-            }
-            Instruction::ForEachPlayer { players, body } => {
-                rewrite_chosen_to_loop_ap(players);
                 rewrite_chosen_to_loop_ops(&mut body.instructions);
             }
             Instruction::OfferAnyPlayer {
@@ -6439,9 +6440,7 @@ fn lower_standalone_choose_and_keep(
                 op,
                 Instruction::ZoneOp(_)
                     | Instruction::ForEachPlayerQuery { .. }
-                    | Instruction::LookTopChoose { .. }
                     | Instruction::LookTopChooseExt { .. }
-                    | Instruction::RevealUntilMatch { .. }
                     | Instruction::RevealUntilMatchExt { .. }
                     | Instruction::ExileTopPlay { .. }
                     | Instruction::Mill { .. }
@@ -6731,9 +6730,25 @@ pub(super) fn lower_shuffle_that_player_fallback(
                     return Ok(());
                 }
             }
-            Instruction::ForEachPlayer { players, .. }
-            | Instruction::OfferAnyPlayer { players, .. }
-            | Instruction::ChooseOptionForPlayers { players, .. } => {
+            Instruction::ForEachPlayerQuery { selector, .. } => {
+                if let PlayerSelector::Group(players) = selector.as_ref() {
+                    let ok = match players {
+                        AffectedPlayers::One(rp) => {
+                            is_safe_resolving_player_for_shuffle(*rp, builder, in_trigger)
+                        }
+                        _ => true,
+                    };
+                    if ok {
+                        builder.instructions.push(
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                                ZoneOpSpec::shuffle(PlayerSelector::Group(*players)),
+                            ),
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+            Instruction::OfferAnyPlayer { players, .. } => {
                 let ok = match players {
                     AffectedPlayers::One(rp) => {
                         is_safe_resolving_player_for_shuffle(*rp, builder, in_trigger)
@@ -6813,7 +6828,6 @@ pub(super) fn lower_shuffle_that_player_fallback(
             },
             Instruction::Scry { player, .. }
             | Instruction::Surveil { player, .. }
-            | Instruction::OfferManaPayment { payer: player, .. }
             | Instruction::OfferDynamicManaPayment { payer: player, .. }
             | Instruction::ChooseOption {
                 chooser: player, ..
@@ -6850,9 +6864,7 @@ pub(super) fn lower_shuffle_that_player_fallback(
                 Instruction::ZoneOp(_)
                     | Instruction::ForEachPlayerQuery { .. }
                     | Instruction::SearchLibrary { .. }
-                    | Instruction::LookTopChoose { .. }
                     | Instruction::LookTopChooseExt { .. }
-                    | Instruction::RevealUntilMatch { .. }
                     | Instruction::RevealUntilMatchExt { .. }
                     | Instruction::ChooseObjects { .. }
                     | Instruction::MutateObject(_)

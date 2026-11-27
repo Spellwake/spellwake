@@ -1407,8 +1407,7 @@ fn rewrite_instructions_unique_related_player(
 ) {
     for op in instructions {
         match op {
-            Instruction::CreateTokens { creations }
-            | Instruction::CreateAttackingTokens { creations, .. } => {
+            Instruction::CreateTokens { creations } => {
                 for creation in creations {
                     if let TokenRecipients::Player(p) = &mut creation.recipients {
                         rewrite_resolving_player_if_unique(p, replacement);
@@ -1649,11 +1648,7 @@ fn rewrite_instructions_unique_related_player(
             | Instruction::Surveil { player, .. }
             | Instruction::AddManaForPlayer { player, .. }
             | Instruction::Blight { player, .. }
-            | Instruction::CollectEvidence { player, .. }
-            | Instruction::LookTopChoose {
-                library_owner: player,
-                ..
-            } => {
+            | Instruction::CollectEvidence { player, .. } => {
                 rewrite_resolving_player_if_unique(player, replacement);
             }
             Instruction::LookTopChooseExt {
@@ -1664,8 +1659,7 @@ fn rewrite_instructions_unique_related_player(
                 rewrite_resolving_player_if_unique(library_owner, replacement);
                 rewrite_resolving_player_if_unique(chooser, replacement);
             }
-            Instruction::OfferManaPayment { payer, .. }
-            | Instruction::OfferDynamicManaPayment { payer, .. } => {
+            Instruction::OfferDynamicManaPayment { payer, .. } => {
                 rewrite_resolving_player_if_unique(payer, replacement);
             }
             Instruction::OptionalEffect { chooser }

@@ -1,5 +1,5 @@
 //! Execution handlers for Pass C orthogonal Comprehensive Rules instructions:
-//! RollDie, FlipCoins, ChooseValue, ChooseOptionForPlayers, Vote, Incubate,
+//! RollDie, FlipCoins, ChooseValue, Vote, Incubate,
 //! Connive / ConniveFinalize, Discover, Clash, RingTemptsYou,
 //! VentureIntoDungeon, TakeInitiative, UnlockDoor, Behold, and ManifestDread.
 use super::progress_rules::{RuleStepContext, StepOutcome};
@@ -294,6 +294,7 @@ impl EffectWindow {
                 mode: _,
                 win_body,
                 lose_body,
+                lose_destination,
             } => {
                 let cursor_snap = self
                     .resolution_cursor()
@@ -307,6 +308,10 @@ impl EffectWindow {
                 let won = cursor_snap.results.last_coin_flip_won == Some(true);
                 if let Some(cur) = self.resolution_cursor_mut() {
                     cur.results.coin_flip_ready = false;
+                }
+                if !won && let Some(dest) = lose_destination {
+                    self.set_instruction(dest)?;
+                    return Ok(StepOutcome::Continue);
                 }
                 let chosen_body = if won {
                     win_body.as_deref()
@@ -555,63 +560,6 @@ impl EffectWindow {
                     }
                 }
                 self.advance_instruction()?;
-                Ok(StepOutcome::Continue)
-            }
-            Instruction::ChooseOptionForPlayers { players, options } => {
-                let initialized = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .results
-                    .option_players_initialized;
-                if !initialized {
-                    let cursor_snap = self
-                        .resolution_cursor()
-                        .ok_or(EffectError::WrongResolutionFrame)?
-                        .clone();
-                    let seats =
-                        self.selection_players(players, entry.controller(), Some(&cursor_snap))?;
-                    if let Some(cur) = self.resolution_cursor_mut() {
-                        cur.results.pending_option_players = seats.into();
-                        cur.results.option_players_initialized = true;
-                    }
-                }
-                let next_actor = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .results
-                    .pending_option_players
-                    .front()
-                    .copied();
-                let Some(actor) = next_actor else {
-                    if let Some(cur) = self.resolution_cursor_mut() {
-                        cur.results.option_players_initialized = false;
-                    }
-                    self.advance_instruction()?;
-                    return Ok(StepOutcome::Continue);
-                };
-                let chosen = self
-                    .resolution_cursor_mut()
-                    .and_then(|c| c.chosen_option_index.take());
-                let Some(idx) = chosen else {
-                    let labels = options.iter().map(|b| b.label.clone()).collect();
-                    return Ok(StepOutcome::Pending(self.option_frame(
-                        entry.id(),
-                        index,
-                        actor,
-                        labels,
-                    )?));
-                };
-                let branch = options
-                    .get(usize::from(idx))
-                    .ok_or(EffectError::InconsistentProgram)?;
-                if let Some(cur) = self.resolution_cursor_mut() {
-                    cur.results.pending_option_players.pop_front();
-                    cur.chosen_opponent = Some(actor);
-                    cur.results.chosen_option_index = Some(idx);
-                }
-                if !branch.body.instructions.is_empty() {
-                    self.splice_before_current(entry.id(), index, &branch.body.instructions)?;
-                }
                 Ok(StepOutcome::Continue)
             }
             Instruction::Vote { options, secret: _ } => {
@@ -1977,134 +1925,6 @@ impl EffectWindow {
                                 ctx.append,
                             )?;
                         }
-                    }
-                }
-                self.advance_instruction()?;
-                Ok(StepOutcome::Continue)
-            }
-            Instruction::CopyStackObject {
-                target,
-                count,
-                may_choose_new_targets: _,
-            } => {
-                let copies = self
-                    .resolve_value_expr(entry.controller(), &count)?
-                    .max(0.into())
-                    .to_usize()
-                    .unwrap_or(0)
-                    .min(64);
-                let target_entry_id = match target {
-                    crate::program::StackCopyTarget::ResolvingSpell => Some(entry.id()),
-                    crate::program::StackCopyTarget::TargetSpell
-                    | crate::program::StackCopyTarget::TargetAbility
-                    | crate::program::StackCopyTarget::TargetSpellOrAbility => self
-                        .instruction_target(entry)
-                        .ok()
-                        .and_then(|bound| match bound.choice().target {
-                            TargetRef::Stack(id) => Some(id),
-                            _ => None,
-                        }),
-                    crate::program::StackCopyTarget::TriggeringSpell
-                    | crate::program::StackCopyTarget::TriggeringAbility => self
-                        .window
-                        .entries()
-                        .last()
-                        .map(crate::stack_window::StackEntry::id),
-                };
-                if copies > 0
-                    && let Some(target_id) = target_entry_id
-                    && let Some(target_entry) = self
-                        .window
-                        .entries()
-                        .iter()
-                        .chain(self.window.resolving())
-                        .find(|e| e.id() == target_id)
-                        .cloned()
-                {
-                    let is_spell = matches!(
-                        target_entry.kind(),
-                        StackKind::CardSpell(_) | StackKind::SpellCopy { .. }
-                    );
-                    let copy_prohibited = is_spell
-                        && self
-                            .window
-                            .spell_object(&target_entry)
-                            .and_then(|obj| self.copiable_program(obj))
-                            .is_some_and(|program| program.cannot_be_copied);
-                    if !copy_prohibited {
-                        for _ in 0..copies {
-                            let before = self.rules_snapshot(None)?;
-                            let occ = if is_spell {
-                                let Ok(copy_src) = self.capture_copy_source(target_id, 0.into())
-                                else {
-                                    break;
-                                };
-                                self.create_copy(&copy_src, entry.controller(), vec![])?
-                            } else if let Some(payload) = self.payloads.get(&target_id).cloned() {
-                                self.create_ability_copy(
-                                    &target_entry,
-                                    payload,
-                                    entry.controller(),
-                                    vec![],
-                                )?
-                            } else {
-                                break;
-                            };
-                            self.emit_from(
-                                EventCause::Instruction {
-                                    entry: entry.id(),
-                                    instruction: index,
-                                },
-                                &before,
-                                None,
-                                ctx.append,
-                                |_, _, _| Ok(vec![occ]),
-                            )?;
-                        }
-                    }
-                }
-                self.advance_instruction()?;
-                Ok(StepOutcome::Continue)
-            }
-            Instruction::CastLinkedFaceDownFree => {
-                let source_id = match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => Some(source.id()),
-                    StackKind::CardSpell(id) => Some(*id),
-                    _ => None,
-                };
-                if let Some(src) = source_id {
-                    let linked: Vec<ObjectId> = self
-                        .linked_exiles
-                        .get(&src)
-                        .cloned()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .chain(
-                            self.characteristics
-                                .imprinted_cards
-                                .get(&src)
-                                .cloned()
-                                .unwrap_or_default(),
-                        )
-                        .collect();
-                    if let Some(card_id) = linked.into_iter().find(|id| {
-                        self.window
-                            .cards()
-                            .get(*id)
-                            .is_some_and(|c| c.zone() == ObjectZone::Exile)
-                    }) {
-                        self.card_play_permissions
-                            .insert(super::CardPlayPermission {
-                                zone: super::CardPlayZone::Exile,
-                                object: card_id,
-                                player: entry.controller(),
-                                duration: super::CardPlayDuration::ThroughTurn,
-                                any_color: false,
-                                free: true,
-                                cast_only: false,
-                            });
-                        self.free_exiled_cards.insert((card_id, entry.controller()));
                     }
                 }
                 self.advance_instruction()?;

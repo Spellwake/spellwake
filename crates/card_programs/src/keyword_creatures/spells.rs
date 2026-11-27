@@ -69,7 +69,7 @@ pub(super) fn compile(
         && effect=="Counter target spell or ability that targets a permanent you control."
         && let Some((cost,power))=reduction.strip_prefix("This spell costs {").and_then(|line|line.strip_suffix(" or greater.")).and_then(|line|line.split_once("} less to cast if it targets a spell or ability that targets a creature you control with power "))
     {
-        let mut program=Program::instant(fixed_cost(face.mana_cost.as_deref()?)?,ExecutableBody::new(BodyTarget::StackEntryTargetingControlledPermanent,vec![Instruction::CounterSpell]));
+        let mut program=Program::instant(fixed_cost(face.mana_cost.as_deref()?)?,ExecutableBody::new(BodyTarget::StackEntryTargetingControlledPermanent,vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard)))]));
         program.card_types.insert(CardType::Kindred);
         program.creature_subtypes.insert(vocabulary.resolve_label(subtype)?);
         program.cast_reductions.push(spellwake_engine::program::CastReduction::StackTargetThreatensCreature {minimum_power:power.parse().ok()?,discount:cost.parse().ok()?});
@@ -513,7 +513,11 @@ pub(super) fn compile(
             let counter = |filter| {
                 ExecutableBody::new(
                     BodyTarget::SingleSpell(filter),
-                    vec![Instruction::CounterSpell],
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    ))],
                 )
             };
             if conditional
@@ -550,7 +554,11 @@ pub(super) fn compile(
         "Counter target spell." if !cascades.is_empty() || exile_action.is_some() => {
             ExecutableBody::new(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                vec![Instruction::CounterSpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))],
             )
         }
         "Scry 2, then draw two cards." if exile_action.is_some() => ExecutableBody::new(
@@ -651,7 +659,11 @@ pub(super) fn compile(
         }
         "Counter target spell." if madness.is_some() => ExecutableBody::new(
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-            vec![Instruction::CounterSpell],
+            vec![Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            ))],
         ),
         "Target creature gets +2/+2 and gains trample until end of turn." if madness.is_some() => {
             ExecutableBody::new(

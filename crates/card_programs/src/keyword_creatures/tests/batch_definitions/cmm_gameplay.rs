@@ -361,7 +361,11 @@ fn cmm_spell_games_counterspell_revalidates_the_targeted_stack_entry() {
         ObjectDestination::Hand,
         free_instant(
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            )),
         ),
     );
     let before = game(
@@ -1780,7 +1784,11 @@ fn cmm_exclude_counters_only_a_creature_spell_and_draws_only_on_resolution() {
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                    Instruction::CounterSpell,
+                    Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    )),
                 ),
             ),
             seed(

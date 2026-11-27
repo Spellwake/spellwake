@@ -26,6 +26,7 @@ pub(super) fn fixture(boundary: &str, actions: Value) -> packet::SelectedInput {
                     base_size: None,
                     enters_tapped: false,
                     recipients: TokenRecipients::Controller,
+                    attacking_defender: None,
                 }],
             }],
         ),

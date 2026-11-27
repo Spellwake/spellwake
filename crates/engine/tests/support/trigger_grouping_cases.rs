@@ -106,9 +106,14 @@ fn copied_grouping_uses_current_text_and_excludes_retained_removed_roster_entrie
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
                     BodyTarget::SinglePermanent,
-                    vec![Instruction::CopyTargetToSource {
+                    vec![Instruction::BecomeCopy {
+                        receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
+                        donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
                         duration: ResolvedDuration::UntilEndOfTurn,
-                        power_toughness: None,
+                        exceptions: Box::new(spellwake_engine::program::CopyExceptions {
+                            override_pt: None,
+                            ..Default::default()
+                        }),
                     }],
                 ),
             }],
@@ -294,6 +299,7 @@ fn matched_count_keeps_original_binding_across_nested_token_order_and_later_draw
                 base_size: None,
                 enters_tapped: false,
                 recipients: TokenRecipients::Controller,
+                attacking_defender: None,
             }]),
             draw_count(),
         ],

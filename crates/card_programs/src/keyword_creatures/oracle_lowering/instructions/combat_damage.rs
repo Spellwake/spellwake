@@ -2945,7 +2945,10 @@ pub(super) fn lower_combat_damage_instruction(
                     .push(Instruction::FixedTargetClause(Box::new(
                         ExecutableBody::new(bt_b, vec![Instruction::RememberPermanentTarget]),
                     )));
-                builder.instructions.push(Instruction::FightFixedTargets);
+                builder.instructions.push(Instruction::Fight {
+                    first: Box::new(MoveSubjectRef::RememberedFirst),
+                    second: Box::new(MoveSubjectRef::RememberedSecond),
+                });
                 return Ok(());
             }
             let second_fight_target = match (a.as_ref(), b.as_ref()) {
@@ -2985,7 +2988,10 @@ pub(super) fn lower_combat_damage_instruction(
                     .push(Instruction::FixedTargetClause(Box::new(
                         ExecutableBody::new(bt_b, vec![Instruction::RememberPermanentTarget]),
                     )));
-                builder.instructions.push(Instruction::FightFixedTargets);
+                builder.instructions.push(Instruction::Fight {
+                    first: Box::new(MoveSubjectRef::RememberedFirst),
+                    second: Box::new(MoveSubjectRef::RememberedSecond),
+                });
                 return Ok(());
             }
             let had_perm_target = matches!(
@@ -3156,7 +3162,19 @@ pub(super) fn lower_combat_damage_instruction(
                 {
                     builder
                         .instructions
-                        .push(Instruction::CreatePreventionShield { amount: n.clone() });
+                        .push(Instruction::ApplyContinuous(Box::new(
+                            spellwake_engine::toolbox::ApplyContinuousSpec {
+                                selector: None,
+                                payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                    amount: n.clone(),
+                                },
+                                duration: ResolvedDuration::UntilEndOfTurn,
+                                condition: None,
+                                one_shot: true,
+                                as_emblem: None,
+                                emblem_label: None,
+                            },
+                        )));
                     return Ok(());
                 }
                 let recipient = if is_permanent_body_target(bt) {
@@ -6312,7 +6330,10 @@ pub(super) fn lower_combat_damage_instruction(
                     } else {
                         builder
                             .instructions
-                            .push(Instruction::DivideDamageAmongTargets { total });
+                            .push(Instruction::DivideDamageExprAmongTargets {
+                                total: ValueExpr::Literal(i64::from(total).into()),
+                                max_targets: None,
+                            });
                     }
                 } else {
                     builder

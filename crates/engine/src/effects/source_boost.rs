@@ -112,6 +112,15 @@ impl EffectWindow {
                         .collect()
                 })
                 .unwrap_or_default()),
+            EffectSubject::LinkedFirst => Ok(self
+                .legal_linked_targets()?
+                .into_iter()
+                .map(|(first, _)| first)
+                .filter(|id| {
+                    view.get(*id)
+                        .is_some_and(|p| p.zone == ObjectZone::Battlefield)
+                })
+                .collect()),
             EffectSubject::LastMoved => Ok(self
                 .resolution_cursor()
                 .map(|cursor| {

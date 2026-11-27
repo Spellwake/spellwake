@@ -54,9 +54,14 @@ fn copier() -> Program {
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::CopyTargetToSource {
+                vec![Instruction::BecomeCopy {
+                    receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
+                    donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
                     duration: no_duration(),
-                    power_toughness: None,
+                    exceptions: Box::new(spellwake_engine::program::CopyExceptions {
+                        override_pt: None,
+                        ..Default::default()
+                    }),
                 }],
             ),
         }],

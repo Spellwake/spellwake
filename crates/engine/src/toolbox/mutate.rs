@@ -110,6 +110,10 @@ pub enum ObjectMutation {
     SkipNextUntap,
     /// Remove each selected permanent from combat (CR 506.4).
     RemoveFromCombat,
+    /// Copy all counters recorded on the triggering LKI snapshot onto each selected permanent.
+    TransferCountersFromTriggeringLki,
+    /// Grant flashback (equal to mana cost) until end of turn to each selected graveyard instant/sorcery.
+    GrantFlashback,
 }
 
 impl ObjectMutation {
@@ -139,7 +143,9 @@ impl ObjectMutation {
             | Self::Unattach
             | Self::ClearCounters { .. }
             | Self::DoubleCounters { .. }
-            | Self::AddOneOfEachCounterKind => false,
+            | Self::AddOneOfEachCounterKind
+            | Self::TransferCountersFromTriggeringLki
+            | Self::GrantFlashback => false,
         }
     }
 
@@ -176,7 +182,9 @@ impl ObjectMutation {
             | Self::Unattach
             | Self::ClearCounters { .. }
             | Self::DoubleCounters { .. }
-            | Self::AddOneOfEachCounterKind => Ok(()),
+            | Self::AddOneOfEachCounterKind
+            | Self::TransferCountersFromTriggeringLki
+            | Self::GrantFlashback => Ok(()),
         }
     }
 }

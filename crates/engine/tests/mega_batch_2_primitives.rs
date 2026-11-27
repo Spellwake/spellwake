@@ -289,12 +289,14 @@ fn look_top_exile_free_and_ability_activated_counter_trigger_validate() {
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::CounterTriggeringStackObject],
+            vec![Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_triggering(),
+            ))],
         ),
     });
     stifle_perm
         .validate(&v)
-        .expect("CounterTriggeringStackObject must validate on AbilityActivated triggers");
+        .expect("StackOp::counter_triggering must validate on AbilityActivated triggers");
 
     let spell = validated(
         Program::sorcery(
@@ -317,6 +319,9 @@ fn look_top_exile_free_and_ability_activated_counter_trigger_validate() {
                     },
                     rest_dest: LookTopRestDest::BottomRandom,
                     reveal_kept: true,
+                    reveal_all: false,
+                    reveal_only: false,
+                    secondary: None,
                 }],
             ),
         ),

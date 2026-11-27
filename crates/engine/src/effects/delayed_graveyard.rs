@@ -14,10 +14,4 @@ impl EffectWindow {
         (card.card_id().is_some() && self.copiable_program(object)?.permanent().is_some())
             .then_some(player)
     }
-
-    pub(super) fn delayed_transformed_return_player(&self, object: ObjectId) -> Option<SeatId> {
-        let player = self.delayed_graveyard_return_player(object)?;
-        self.copiable_program(object)?.transform_back.as_ref()?;
-        Some(player)
-    }
 }

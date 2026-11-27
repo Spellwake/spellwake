@@ -254,15 +254,11 @@ impl EffectWindow {
                     .resolution_cursor_mut()
                     .ok_or(EffectError::WrongResolutionFrame)?;
                 let effective_mana_yield = match current {
-                    Instruction::AddMana(
-                        crate::program::EffectManaYield::RetainedUntilCleanup(inner),
-                    )
-                    | Instruction::AddManaForPlayer {
+                    Instruction::AddManaForPlayer {
                         yield_kind: crate::program::EffectManaYield::RetainedUntilCleanup(inner),
                         ..
                     } => Some(inner.as_ref()),
-                    Instruction::AddMana(inner)
-                    | Instruction::AddManaForPlayer {
+                    Instruction::AddManaForPlayer {
                         yield_kind: inner, ..
                     } => Some(inner),
                     _ => None,
@@ -311,11 +307,9 @@ impl EffectWindow {
                                         | crate::program::EffectManaYield::DistinctColors { .. },
                                     ),
                                 ) => !bound.colors.is_empty(),
-                                (
-                                    Instruction::GrantProtectionChosenColor(_)
-                                    | Instruction::GrantChosenProtection { .. },
-                                    _,
-                                ) => bound.colors == mana_domains::colored_mana(),
+                                (Instruction::GrantChosenProtection { .. }, _) => {
+                                    bound.colors == mana_domains::colored_mana()
+                                }
                                 (Instruction::ApplyContinuous(spec), _)
                                     if matches!(
                                         &spec.payload,
@@ -1312,41 +1306,10 @@ impl EffectWindow {
                 if actor != bound.chooser() {
                     return Err(EffectError::WrongChooser);
                 }
-                let move_to =
-                    if let Ok(Instruction::MoveCounters { to, .. }) = self.current_instruction() {
-                        let entry = self
-                            .window
-                            .resolving()
-                            .ok_or(EffectError::WrongResolutionFrame)?;
-                        self.resolve_pass_c_move_subject(entry, *to)?
-                    } else {
-                        None
-                    };
                 let mut next = self.clone();
                 next.revision = revision;
                 let mut append = RulesJournal::default();
                 next.remove_counters(bound, &selected, &mut append)?;
-                if let Some(dest) = move_to
-                    && dest != bound.object()
-                    && next
-                        .window
-                        .cards()
-                        .get(dest)
-                        .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
-                {
-                    let moved: BTreeMap<CounterKind, RulesInteger> = selected
-                        .iter()
-                        .filter(|(_, count)| **count > 0)
-                        .map(|(&kind, &count)| (kind, RulesInteger::from(i64::from(count))))
-                        .collect();
-                    next.place_moved_counters(
-                        bound.entry(),
-                        bound.instruction(),
-                        dest,
-                        &moved,
-                        &mut append,
-                    )?;
-                }
                 next.advance_instruction()?;
                 next.progress_rules(
                     DamageJournal::default(),
@@ -1466,19 +1429,43 @@ impl EffectWindow {
                         append,
                     );
                 }
-                let selected = if instruction == Instruction::CopyAbility {
+                let is_copy_ability = matches!(
+                    &instruction,
+                    Instruction::StackOp(spec)
+                        if matches!(
+                            spec.op,
+                            crate::toolbox::StackOpKind::Copy {
+                                interactive_retarget: true,
+                                ability_mode: true,
+                                ..
+                            }
+                        )
+                );
+                let is_retarget = matches!(
+                    &instruction,
+                    Instruction::StackOp(spec)
+                        if matches!(spec.op, crate::toolbox::StackOpKind::Retarget { .. })
+                );
+                let is_change_only = matches!(
+                    &instruction,
+                    Instruction::StackOp(spec)
+                        if matches!(
+                            spec.op,
+                            crate::toolbox::StackOpKind::Retarget {
+                                single_target_only: true
+                            }
+                        )
+                );
+                let selected = if is_copy_ability {
                     let source =
                         next.capture_ability(bound.original, &next.evaluated_characteristics()?)?;
                     next.collect_delayed_target(entry.id(), &source, choice)?
-                } else if matches!(
-                    instruction,
-                    Instruction::ChooseNewTargets | Instruction::ChangeOnlyTarget
-                ) {
+                } else if is_retarget {
                     next.collect_existing_target(
                         entry.id(),
                         bound.original,
                         choice,
-                        instruction == Instruction::ChangeOnlyTarget,
+                        is_change_only,
                     )?
                 } else {
                     let source = next.capture_copy_source(bound.original, 0.into())?;

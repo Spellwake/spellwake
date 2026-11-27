@@ -170,7 +170,6 @@ fn try_append_fixed_first_target_counters(
                 | Instruction::Jump { .. }
                 | Instruction::OptionalEffect { .. }
                 | Instruction::OptionalSequence { .. }
-                | Instruction::OfferManaPayment { .. }
                 | Instruction::OfferDynamicManaPayment { .. }
         )
     };
@@ -868,9 +867,14 @@ pub(super) fn lower_counters_pt_instruction(
                         inner.zone = None;
                         let obj = lower_object_filter(&inner, vocabulary)?;
                         builder.bind_target(BodyTarget::FilteredOwnGraveyardCard(obj))?;
-                        builder.instructions.push(Instruction::GrantFlashback(
-                            spellwake_engine::program::FlashbackSubject::Target,
-                        ));
+                        builder
+                            .instructions
+                            .push(Instruction::MutateObject(Box::new(
+                                spellwake_engine::toolbox::MutateObjectSpec::all(
+                                    spellwake_engine::toolbox::ObjectQuery::Targets,
+                                    spellwake_engine::toolbox::ObjectMutation::GrantFlashback,
+                                ),
+                            )));
                         return Ok(());
                     }
                     SubjectRefAst::All(f) | SubjectRefAst::Each(f)
@@ -881,9 +885,24 @@ pub(super) fn lower_counters_pt_instruction(
                                     == AstCardTypeMask::INSTANT
                                         .union(AstCardTypeMask::SORCERY)) =>
                     {
-                        builder.instructions.push(Instruction::GrantFlashback(
-                            spellwake_engine::program::FlashbackSubject::ControllerGraveyard,
-                        ));
+                        builder
+                            .instructions
+                            .push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::all(
+                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                    zone: spellwake_engine::toolbox::QueryZone::Graveyard(
+                                        Box::new(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::Controller,
+                                            ),
+                                        ),
+                                    ),
+                                    filter: Box::new(ObjectFilter::any()),
+                                    slice: spellwake_engine::toolbox::QuerySlice::All,
+                                },
+                                spellwake_engine::toolbox::ObjectMutation::GrantFlashback,
+                            ),
+                        )));
                         return Ok(());
                     }
                     _ => {}
@@ -986,14 +1005,10 @@ pub(super) fn lower_counters_pt_instruction(
                     |ops: &mut Vec<Instruction>,
                      recipients: ProtectionRecipients,
                      dur: ResolvedDuration| {
-                        if dur == ResolvedDuration::UntilEndOfTurn {
-                            ops.push(Instruction::GrantProtectionChosenColor(recipients));
-                        } else {
-                            ops.push(Instruction::GrantChosenProtection {
-                                recipients,
-                                duration: dur,
-                            });
-                        }
+                        ops.push(Instruction::GrantChosenProtection {
+                            recipients,
+                            duration: dur,
+                        });
                     };
                 let mut handled_prot = false;
                 if matches!(chosen_kind, ChosenQualityGrant::ProtectionColor) {
@@ -2721,9 +2736,14 @@ pub(super) fn lower_counters_pt_instruction(
                 if let Some(eff_subj) = target_subj {
                     trial
                         .instructions
-                        .push(Instruction::TransferAllCountersFromTriggeringLki {
-                            to: Box::new(eff_subj),
-                        });
+                        .push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::all(
+                                spellwake_engine::toolbox::ObjectQuery::EffectSubject(Box::new(
+                                    eff_subj,
+                                )),
+                                spellwake_engine::toolbox::ObjectMutation::TransferCountersFromTriggeringLki,
+                            ),
+                        )));
                     *builder = trial;
                     return Ok(());
                 }
@@ -4459,6 +4479,7 @@ pub(super) fn lower_counters_pt_instruction(
                             amount: ValueExpr::literal(1),
                             base_size: Some(TokenSize::AtCreation(amt)),
                             recipients: TokenRecipients::Controller,
+                            attacking_defender: None,
                         }],
                     }],
                 ),
@@ -5328,25 +5349,14 @@ pub(super) fn lower_counters_pt_instruction(
                     .push(Instruction::FixedTargetClause(Box::new(
                         ExecutableBody::new(to_bt, vec![Instruction::RememberPermanentTarget]),
                     )));
-                if !effective_any_number && (effective_all || kind.is_some()) {
-                    trial.instructions.push(
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_counters(
-                            spellwake_engine::toolbox::ObjectQuery::LinkedTarget { index: 0 },
-                            spellwake_engine::toolbox::ObjectQuery::LinkedTarget { index: 1 },
-                            kind,
-                            amount,
-                        ),
-                    );
-                } else {
-                    trial.instructions.push(Instruction::MoveCounters {
-                        from: MoveSubjectRef::RememberedFirst,
-                        to: MoveSubjectRef::RememberedSecond,
+                trial.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::move_counters(
+                        spellwake_engine::toolbox::ObjectQuery::LinkedTarget { index: 0 },
+                        spellwake_engine::toolbox::ObjectQuery::LinkedTarget { index: 1 },
                         kind,
-                        all: effective_all,
-                        any_number: effective_any_number,
-                        amount,
-                    });
-                }
+                        if effective_all { None } else { amount },
+                    ),
+                );
                 *builder = trial;
                 return Ok(());
             }
@@ -5413,29 +5423,18 @@ pub(super) fn lower_counters_pt_instruction(
             };
             let from_ref = resolve_side(&eff_from, &mut trial)?;
             let to_ref = resolve_side(&eff_to, &mut trial)?;
-            if !effective_any_number && (effective_all || kind.is_some()) {
-                trial.instructions.push(
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::move_counters(
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject_to_query(
-                            from_ref,
-                        ),
-                        crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject_to_query(
-                            to_ref,
-                        ),
-                        kind,
-                        amount,
+            trial.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::move_counters(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject_to_query(
+                        from_ref,
                     ),
-                );
-            } else {
-                trial.instructions.push(Instruction::MoveCounters {
-                    from: from_ref,
-                    to: to_ref,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::move_subject_to_query(
+                        to_ref,
+                    ),
                     kind,
-                    all: effective_all,
-                    any_number: effective_any_number,
-                    amount,
-                });
-            }
+                    if effective_all { None } else { amount },
+                ),
+            );
             *builder = trial;
             Ok(())
         }

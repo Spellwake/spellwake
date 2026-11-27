@@ -26,7 +26,7 @@ pub(super) fn compile(
                         .union(spellwake_engine::program::CardTypeMask::ENCHANTMENT)
                         .union(spellwake_engine::program::CardTypeMask::LAND),
                 )),
-                vec![Instruction::CopyTargetToSource {duration:spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,power_toughness:None}])});
+                vec![Instruction::BecomeCopy { receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource), donor: spellwake_engine::program::MoveSubjectRef::TargetObject, duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn, exceptions: Box::new(spellwake_engine::program::CopyExceptions::default()) }])});
         return Some(program);
     }
     let (other, ability) = text.rsplit_once('\n').unwrap_or(("", text));

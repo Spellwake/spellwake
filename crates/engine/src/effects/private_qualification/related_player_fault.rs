@@ -23,8 +23,8 @@ impl EffectWindow {
         if work.cursor.entry != entry.id()
             || work.cursor.instruction != 0
             || work.payer != entry.controller()
-            || !matches!(payload.body.instructions.first(), Some(Instruction::OfferManaPayment {
-                payer: ResolvingPlayer::Controller, cost, ..
+            || !matches!(payload.body.instructions.first(), Some(Instruction::OfferDynamicManaPayment {
+                payer: ResolvingPlayer::Controller, fixed: cost, ..
             }) if cost == &ManaCost::free())
             || !matches!(self.pending_resolution_decision(), Some(EffectDecision::ResolutionPayment(frame)) if frame.cost() == &ManaCost::free())
         {

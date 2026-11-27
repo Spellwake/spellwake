@@ -142,7 +142,21 @@ fn direct_life_loss_is_not_damage_and_does_not_consume_a_prevention_shield() {
             spell(
                 2,
                 BodyTarget::SingleCreature,
-                vec![Instruction::CreatePreventionShield { amount: 7.into() }],
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload:
+                            spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: 7.into(),
+                            },
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))],
             ),
             spell(
                 3,

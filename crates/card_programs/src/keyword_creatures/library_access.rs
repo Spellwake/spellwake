@@ -308,8 +308,17 @@ pub(super) fn impulse(
                     condition: gate,
                     destination: 2,
                 },
-                Instruction::ExileTopForPlay {
-                    until_next_from_source: true,
+                Instruction::ExileTopPlay {
+                    count: spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    library_owner: spellwake_engine::program::AffectedPlayers::One(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    duration: spellwake_engine::program::ImpulsePlayDuration::UntilNextFromSource,
+                    cast_only: false,
+                    free: false,
+                    any_color: false,
+                    face_down: false,
+                    grant_play: true,
                 },
             ],
         ));

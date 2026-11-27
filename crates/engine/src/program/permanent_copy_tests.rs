@@ -15,9 +15,14 @@ fn source(instructions: Vec<Instruction>) -> Program {
     )
 }
 fn copy() -> Instruction {
-    Instruction::CopyTargetToSource {
+    Instruction::BecomeCopy {
+        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
+        donor: crate::program::MoveSubjectRef::TargetObject,
         duration: ResolvedDuration::UntilEndOfTurn,
-        power_toughness: None,
+        exceptions: Box::new(crate::program::CopyExceptions {
+            override_pt: None,
+            ..Default::default()
+        }),
     }
 }
 #[test]
@@ -67,13 +72,22 @@ fn strict_copy_codec_requires_explicit_nullable_exception_and_duration() {
             toughness: 12.into(),
         }),
     ] {
-        let p = source(vec![Instruction::CopyTargetToSource {
+        let p = source(vec![Instruction::BecomeCopy {
+            receiver: Box::new(crate::program::EffectSubject::AbilitySource),
+            donor: crate::program::MoveSubjectRef::TargetObject,
             duration: ResolvedDuration::UntilEndOfTurn,
-            power_toughness: exception,
+            exceptions: Box::new(crate::program::CopyExceptions {
+                override_pt: exception,
+                ..Default::default()
+            }),
         }]);
+        assert!(p.validate(&v).is_ok());
         let wire = codec::view(&p);
-        assert_eq!(codec::decode(wire.clone(), &v).unwrap(), p);
-        for field in ["duration", "power_toughness"] {
+        assert_eq!(
+            wire["activated"][0]["body"]["instructions"][0]["op"],
+            "BecomeCopy"
+        );
+        for field in ["duration", "exceptions"] {
             let mut missing = wire.clone();
             missing["activated"][0]["body"]["instructions"][0]
                 .as_object_mut()

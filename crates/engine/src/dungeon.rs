@@ -77,6 +77,7 @@ fn creature_token_creation(
         amount: ValueExpr::literal(amount),
         base_size: None,
         recipients: TokenRecipients::Controller,
+        attacking_defender: None,
     })
 }
 
@@ -463,20 +464,21 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::LookTopChoose {
-                        count: ValueExpr::literal(10),
+                    vec![Instruction::LookTopChooseExt {
                         library_owner: ResolvingPlayer::Controller,
+                        chooser: ResolvingPlayer::Controller,
+                        count: ValueExpr::literal(10),
                         filter: Some(Box::new(ObjectFilter::creature())),
-                        reveal: true,
-                        reveal_only: false,
-                        to_battlefield: true,
-                        enters_tapped: false,
-                        take_all_matching: false,
                         max_picks: 1,
-                        rest_to_graveyard: false,
-                        rest_to_exile: false,
-                        rest_to_top: false,
-                        random_rest_order: true,
+                        take_all_matching: false,
+                        keep_dest: crate::program::LookTopKeepDest::Battlefield {
+                            tapped: false,
+                            attacking: false,
+                        },
+                        rest_dest: crate::program::LookTopRestDest::BottomRandom,
+                        reveal_kept: false,
+                        reveal_all: true,
+                        reveal_only: false,
                         secondary: None,
                     }],
                 ),
@@ -538,5 +540,6 @@ pub fn incubator_token_creation(
         amount: ValueExpr::literal(1),
         base_size: None,
         recipients: TokenRecipients::Controller,
+        attacking_defender: None,
     })
 }

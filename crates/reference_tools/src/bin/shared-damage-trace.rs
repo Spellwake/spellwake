@@ -173,7 +173,21 @@ impl Fixture {
                 "Healing Salve",
                 A,
                 ManaType::White,
-                Instruction::CreatePreventionShield { amount: 3.into() },
+                Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload:
+                            spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: 3.into(),
+                            },
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                )),
             )),
             _ => None,
         };

@@ -293,17 +293,14 @@ native!(ExecutableBody, self, {
         return Err(ApplicabilityError);
     }
     self.instructions.iter().try_for_each(|value| match value {
-        Instruction::CopyAbility
-        | Instruction::OfferDynamicManaPayment { .. }
+        Instruction::OfferDynamicManaPayment { .. }
         | Instruction::CollectEvidence { .. }
         | Instruction::Blight { .. }
         | Instruction::Populate
         | Instruction::ChooseObjects { .. }
         | Instruction::ChooseOption { .. }
-        | Instruction::DivideDamageAmongTargets { .. }
         | Instruction::DivideDamageExprAmongTargets { .. }
         | Instruction::BecomeCopy { .. }
-        | Instruction::BecomeCopyFixedTargets { .. }
         | Instruction::DistributeCountersAmongTargets { .. }
         | Instruction::PromptChoice(_)
         | Instruction::BranchCondition { .. }
@@ -313,12 +310,10 @@ native!(ExecutableBody, self, {
         | Instruction::SetObjectTag { .. }
         | Instruction::UpdateStateTrack { .. }
         | Instruction::SideDeckOp(_)
-        | Instruction::CreateTokenCopy { .. }
         | Instruction::BindResolutionX(_)
         | Instruction::CreateAuraTokenAttached { .. }
         | Instruction::ExploreSubject(_)
         | Instruction::ScheduleDelayedEventTrigger { .. }
-        | Instruction::CounterSpellToExile
         | Instruction::AdvanceClassLevel(_)
         | Instruction::SolveSourceCase
         | Instruction::BecomePreparedSource
@@ -327,11 +322,7 @@ native!(ExecutableBody, self, {
         | Instruction::OptionalSequence { .. }
         | Instruction::ReturnExiledTargetCohort { .. }
         | Instruction::ReturnCardsDestroyedThisWay
-        | Instruction::ExileTopForPlay { .. }
-        | Instruction::ScheduleCreatedTokenExile(_)
-        | Instruction::ScheduleCreatedTokenSacrifice
         | Instruction::ExileDelayedObjects(_)
-        | Instruction::GrantFlashback(_)
         | Instruction::RequireCondition(_)
         | Instruction::Encore
         | Instruction::SetBlockDeclarations(_)
@@ -340,7 +331,6 @@ native!(ExecutableBody, self, {
         | Instruction::Ninjutsu
         | Instruction::Unearth
         | Instruction::Cascade
-        | Instruction::FlipCoin { .. }
         | Instruction::CascadeBottom
         | Instruction::Myriad
         | Instruction::WatchNextSpellOrLoyaltyTwice
@@ -355,7 +345,6 @@ native!(ExecutableBody, self, {
         | Instruction::SacrificeDelayedObjects(_)
         | Instruction::ScheduleArtifactReturn(_)
         | Instruction::ReturnDelayedGraveyardCard(_)
-        | Instruction::ReturnDelayedGraveyardCardTransformed(_)
         | Instruction::ReturnDelayedPermanentToHand(_)
         | Instruction::ReturnDelayedExileWithCounters(_)
         | Instruction::ReturnDelayedExile(_)
@@ -369,9 +358,7 @@ native!(ExecutableBody, self, {
         | Instruction::ResolveCounterKeyword(_)
         | Instruction::SacrificeEvoked
         | Instruction::SacrificeStateTriggerSource
-        | Instruction::CounterWardSource
         | Instruction::ResolveKeywordTrigger(_)
-        | Instruction::GrantProtectionChosenColor(_)
         | Instruction::ReturnGraveyardCreatureWithCorpse(_)
         | Instruction::PutHandPermanentsOntoBattlefield { .. }
         | Instruction::MayRevealLibraryTop
@@ -382,21 +369,14 @@ native!(ExecutableBody, self, {
         | Instruction::DivideThreeDamageAmongTargets
         | Instruction::DamageOrderedTargets { .. }
         | Instruction::FixedTargetClause(_)
-        | Instruction::FightFixedTargets
-        | Instruction::BindOrderedPermanents { .. }
         | Instruction::SearchLibrary { .. }
         | Instruction::CreateTokenAndAttach { .. }
-        | Instruction::AddMana(_)
         | Instruction::PairWithCreature { .. }
         | Instruction::ScheduleDelayedStepTrigger { .. }
         | Instruction::EmitReflexiveTrigger { .. }
         | Instruction::ChooseRevealedHandCard { .. }
         | Instruction::RememberPermanentTarget
-        | Instruction::GainControlOfSpell
-        | Instruction::ChangeOnlyTarget
-        | Instruction::ChooseNewTargets
         | Instruction::AdditionalCombat { .. }
-        | Instruction::GainCastCardAbilities { .. }
         | Instruction::Proliferate
         | Instruction::DamageTargetControllersCreatures { .. }
         | Instruction::ResolvePowerAbility(_)
@@ -413,17 +393,7 @@ native!(ExecutableBody, self, {
         | Instruction::Sacrifice { .. }
         | Instruction::SacrificeRandomUntilLand
         | Instruction::Discard { .. } => Err(ApplicabilityError),
-        Instruction::CreatePreventionShield { .. }
-            if matches!(
-                self.target,
-                spellwake_engine::program::BodyTarget::SinglePlayer
-                    | spellwake_engine::program::BodyTarget::SingleCreatureOrPlayer
-            ) =>
-        {
-            Err(ApplicabilityError)
-        }
-        Instruction::CreateTokens { creations }
-        | Instruction::CreateAttackingTokens { creations, .. } => creations
+        Instruction::CreateTokens { creations } => creations
             .iter()
             .try_for_each(|creation| creation.definition.program().check_current10()),
         Instruction::ZoneOp(spec) => {
@@ -464,6 +434,17 @@ native!(ExecutableBody, self, {
                 }
                 spellwake_engine::toolbox::ContinuousPayload::DoublePt { .. }
                 | spellwake_engine::toolbox::ContinuousPayload::PlayPermission { .. } => Ok(()),
+                spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield { .. } => {
+                    if matches!(
+                        self.target,
+                        spellwake_engine::program::BodyTarget::SinglePlayer
+                            | spellwake_engine::program::BodyTarget::SingleCreatureOrPlayer
+                    ) {
+                        Err(ApplicabilityError)
+                    } else {
+                        Ok(())
+                    }
+                }
                 _ => Err(ApplicabilityError),
             }
         }
@@ -484,21 +465,13 @@ native!(ExecutableBody, self, {
         Instruction::BranchIfFalse { .. }
         | Instruction::Jump { .. }
         | Instruction::OptionalEffect { .. }
-        | Instruction::OfferManaPayment { .. }
         | Instruction::ChooseCreatureType { .. }
-        | Instruction::CreatePreventionShield { .. }
         | Instruction::CreateDamageMultiplier { .. }
-        | Instruction::CounterSpell
-        | Instruction::CopySpell
-        | Instruction::CopyTargetToSource { .. }
         | Instruction::ExileTopPlay { .. }
-        | Instruction::LookTopChoose { .. }
         | Instruction::RepeatLoop { .. }
-        | Instruction::RevealUntilMatch { .. }
         | Instruction::RollDie { .. }
         | Instruction::FlipCoins { .. }
         | Instruction::ChooseValue { .. }
-        | Instruction::ChooseOptionForPlayers { .. }
         | Instruction::Vote { .. }
         | Instruction::Incubate { .. }
         | Instruction::Connive { .. }
@@ -514,14 +487,9 @@ native!(ExecutableBody, self, {
         | Instruction::Monstrosity { .. }
         | Instruction::Fight { .. }
         | Instruction::Exchange(_)
-        | Instruction::CopyStackObject { .. }
-        | Instruction::CastLinkedFaceDownFree
         | Instruction::Ripple(_)
         | Instruction::Demonstrate
         | Instruction::Enlist
-        | Instruction::CounterSpellToLibrary { .. }
-        | Instruction::CounterTriggeringStackObject
-        | Instruction::ForEachPlayer { .. }
         | Instruction::OfferAnyPlayer { .. }
         | Instruction::DealDamageToAnnouncedTargets { .. }
         | Instruction::GrantChosenProtection { .. }
@@ -529,9 +497,6 @@ native!(ExecutableBody, self, {
         | Instruction::RevealTopTwoPiles { .. }
         | Instruction::RevealUntilMatchExt { .. }
         | Instruction::CreateTokenCopyExt { .. }
-        | Instruction::MoveCounters { .. }
-        | Instruction::CounterMatchingStackObjects { .. }
-        | Instruction::TransferAllCountersFromTriggeringLki { .. }
         | Instruction::Earthbend { .. }
         | Instruction::ReturnEarthbentCard
         | Instruction::AddManaForPlayer { .. }
@@ -541,7 +506,8 @@ native!(ExecutableBody, self, {
         | Instruction::MutateObject(_)
         | Instruction::AdjustLife(_)
         | Instruction::DealDamage(_)
-        | Instruction::MutatePlayer(_) => Ok(()),
+        | Instruction::MutatePlayer(_)
+        | Instruction::StackOp(_) => Ok(()),
     })
 });
 native!(TriggeredAbility, self, {

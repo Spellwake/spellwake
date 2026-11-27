@@ -18,9 +18,10 @@ pub(super) fn spell_body(text: &str, name: &str) -> Option<ExecutableBody> {
     {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AddMana(
-                spellwake_engine::program::EffectManaYield::Fixed(mana.required),
-            )],
+            vec![Instruction::AddManaForPlayer {
+                player: ResolvingPlayer::Controller,
+                yield_kind: spellwake_engine::program::EffectManaYield::Fixed(mana.required),
+            }],
         ));
     }
     if let Some(amount) = rules
@@ -165,8 +166,12 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::noncreature()),
             vec![
-                Instruction::GainControlOfSpell,
-                Instruction::ChooseNewTargets,
+                Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::gain_control(),
+                )),
+                Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::retarget(
+                    false,
+                ))),
             ],
         ));
     }
@@ -326,13 +331,16 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
                         .with_mana_value(ManaValueFilter::AtMost(limit.parse().ok()?)),
                     true,
                 ),
-                Instruction::AddMana(spellwake_engine::program::EffectManaYield::Split {
-                    first,
-                    second,
-                    amount: spellwake_engine::program::ValueExpr::event(
-                        spellwake_engine::program::EventValueKind::DestroyedPermanents,
-                    ),
-                }),
+                Instruction::AddManaForPlayer {
+                    player: ResolvingPlayer::Controller,
+                    yield_kind: spellwake_engine::program::EffectManaYield::Split {
+                        first,
+                        second,
+                        amount: spellwake_engine::program::ValueExpr::event(
+                            spellwake_engine::program::EventValueKind::DestroyedPermanents,
+                        ),
+                    },
+                },
             ],
         ));
     }
@@ -1293,9 +1301,10 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
     {
         return Some((
             BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()),
-            Instruction::GrantProtectionChosenColor(
-                spellwake_engine::program::ProtectionRecipients::TargetPermanent,
-            ),
+            Instruction::GrantChosenProtection {
+                recipients: spellwake_engine::program::ProtectionRecipients::TargetPermanent,
+                duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+            },
         ));
     }
     if line == "put a +1/+1 counter on target creature" {
@@ -1381,7 +1390,12 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         ));
     }
     if line == "you may choose new targets for target spell or ability" {
-        return Some((BodyTarget::SingleStackEntry, Instruction::ChooseNewTargets));
+        return Some((
+            BodyTarget::SingleStackEntry,
+            Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::retarget(
+                false,
+            ))),
+        ));
     }
     if let Some((objects, destination)) = line
         .strip_prefix("destroy all ")
@@ -1731,21 +1745,37 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
     Some(match line {
         "counter target noncreature spell" => (
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::noncreature()),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            )),
         ),
         "counter target sorcery spell" => (
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::of_type(
                 spellwake_engine::program::CardType::Sorcery,
             )),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            )),
         ),
         "counter target creature spell" => (
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::creature()),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            )),
         ),
         "counter target spell" => (
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            )),
         ),
         "destroy target creature" => (
             SingleCreature,

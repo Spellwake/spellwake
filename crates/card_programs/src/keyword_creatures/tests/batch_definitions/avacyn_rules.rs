@@ -467,7 +467,11 @@ fn avacyn_rules_cavern_of_souls_protects_only_the_spell_that_used_its_mana() {
                     ObjectDestination::Hand,
                     free_instant(
                         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                        Instruction::CounterSpell,
+                        Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                spellwake_engine::toolbox::CounterDestination::Graveyard,
+                            ),
+                        )),
                     ),
                 ),
             ],

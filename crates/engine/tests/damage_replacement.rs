@@ -57,9 +57,17 @@ fn damage(amount: i64) -> Instruction {
 }
 
 fn prevention(amount: i64) -> Instruction {
-    Instruction::CreatePreventionShield {
-        amount: amount.into(),
-    }
+    Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec {
+        selector: None,
+        payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+            amount: amount.into(),
+        },
+        duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+        condition: None,
+        one_shot: true,
+        as_emblem: None,
+        emblem_label: None,
+    }))
 }
 
 fn context(labels: [&str; 5]) -> GameContext {
@@ -1170,7 +1178,9 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
                         BodyTarget::SingleSpell(
                             spellwake_engine::program::SpellFilter::copyable_instruction(),
                         ),
-                        vec![Instruction::CopySpell],
+                        vec![Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                        ))],
                     ),
                 ),
                 (
@@ -1178,7 +1188,11 @@ fn copied_multiplier_records_survive_copy_cessation_and_original_countering() {
                     A,
                     ExecutableBody::new(
                         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                        vec![Instruction::CounterSpell],
+                        vec![Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                spellwake_engine::toolbox::CounterDestination::Graveyard,
+                            ),
+                        ))],
                     ),
                 ),
                 (

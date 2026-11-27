@@ -242,7 +242,6 @@ impl NativeProgramOverlay {
             for instruction in bodies.iter().flat_map(|body| &body.instructions) {
                 let creations = match instruction {
                     Instruction::CreateTokens { creations } => creations.as_slice(),
-                    Instruction::CreateAttackingTokens { creations, .. } => creations.as_slice(),
                     _ => continue,
                 };
                 for creation in creations {

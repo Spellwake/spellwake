@@ -112,6 +112,7 @@ impl TokenKeyword {
                 base_size: None,
                 enters_tapped: false,
                 recipients: TokenRecipients::Controller,
+                attacking_defender: None,
             }],
         });
         Ok(TriggeredAbility {

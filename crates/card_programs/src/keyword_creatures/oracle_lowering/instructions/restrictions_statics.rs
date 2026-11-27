@@ -999,24 +999,30 @@ pub(super) fn lower_restrictions_statics_instruction(
                     if cost == "mana_cost" && matches!(delta.trim(), "{0}" | "0" | "") =>
                 {
                     let has_flashback_grant = builder.instructions.iter().any(|op| {
-                        matches!(op, Instruction::GrantFlashback(_))
-                            || matches!(
-                                op,
-                                Instruction::ApplyContinuous(spec)
-                                    if matches!(
-                                        &spec.payload,
-                                        spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(
-                                            rule,
-                                        ) if matches!(
-                                            rule.as_ref(),
-                                            TemporaryRuleKind::ZoneCastPermission {
-                                                zone: SourceZoneFilter::Graveyard,
-                                                free: false,
-                                                ..
-                                            }
-                                        )
+                        matches!(
+                            op,
+                            Instruction::MutateObject(spec)
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::ObjectMutation::GrantFlashback
+                                )
+                        ) || matches!(
+                            op,
+                            Instruction::ApplyContinuous(spec)
+                                if matches!(
+                                    &spec.payload,
+                                    spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(
+                                        rule,
+                                    ) if matches!(
+                                        rule.as_ref(),
+                                        TemporaryRuleKind::ZoneCastPermission {
+                                            zone: SourceZoneFilter::Graveyard,
+                                            free: false,
+                                            ..
+                                        }
                                     )
-                            )
+                                )
+                        )
                     });
                     if has_flashback_grant {
                         return Ok(());
@@ -3322,7 +3328,9 @@ pub(super) fn lower_restrictions_statics_instruction(
             || restriction.eq_ignore_ascii_case("you may choose new targets for it")
             || restriction.eq_ignore_ascii_case("you may choose new targets for the copy") =>
         {
-            builder.instructions.push(Instruction::ChooseNewTargets);
+            builder.instructions.push(Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::retarget(false),
+            )));
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3876,14 +3884,14 @@ pub(super) fn lower_restrictions_statics_instruction(
             let include_spells = r_low.contains("spell");
             let include_abilities = r_low.contains("abilit");
             let opponents_only = r_low.contains("opponent");
-            builder
-                .instructions
-                .push(Instruction::CounterMatchingStackObjects {
-                    filter: None,
+            builder.instructions.push(Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_matching(
+                    None,
                     include_spells,
                     include_abilities,
                     opponents_only,
-                });
+                ),
+            )));
             Ok(())
         }
         InstructionAst::AbilityRestriction {
@@ -3942,10 +3950,6 @@ pub(super) fn lower_restrictions_statics_instruction(
                     for creation in creations {
                         creation.enters_tapped = true;
                     }
-                    Ok(())
-                }
-                Some(Instruction::CreateTokenCopy { tapped, .. }) => {
-                    *tapped = true;
                     Ok(())
                 }
                 Some(Instruction::CreateTokenCopyExt { enters_tapped, .. }) => {
@@ -4201,23 +4205,29 @@ pub(super) fn lower_restrictions_statics_instruction(
             condition: None,
         } if restriction.eq_ignore_ascii_case("FlashbackEqualManaCost") => {
             let has_flashback_grant = builder.instructions.iter().any(|op| {
-                matches!(op, Instruction::GrantFlashback(_))
-                    || matches!(
-                        op,
-                        Instruction::ApplyContinuous(spec)
-                            if matches!(
-                                &spec.payload,
-                                spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule)
-                                    if matches!(
-                                        rule.as_ref(),
-                                        TemporaryRuleKind::ZoneCastPermission {
-                                            zone: SourceZoneFilter::Graveyard,
-                                            free: false,
-                                            ..
-                                        }
-                                    )
-                            )
-                    )
+                matches!(
+                    op,
+                    Instruction::MutateObject(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::ObjectMutation::GrantFlashback
+                        )
+                ) || matches!(
+                    op,
+                    Instruction::ApplyContinuous(spec)
+                        if matches!(
+                            &spec.payload,
+                            spellwake_engine::toolbox::ContinuousPayload::TemporaryRule(rule)
+                                if matches!(
+                                    rule.as_ref(),
+                                    TemporaryRuleKind::ZoneCastPermission {
+                                        zone: SourceZoneFilter::Graveyard,
+                                        free: false,
+                                        ..
+                                    }
+                                )
+                        )
+                )
             });
             if has_flashback_grant {
                 Ok(())
@@ -4462,16 +4472,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                         && creations[0].definition.program().has_type(CardType::Creature)
             );
             if can_upgrade
-                && let Some(Instruction::CreateTokens { mut creations }) =
-                    builder.instructions.pop()
+                && let Some(Instruction::CreateTokens { creations }) =
+                    builder.instructions.last_mut()
             {
                 creations[0].enters_tapped = true;
-                builder
-                    .instructions
-                    .push(Instruction::CreateAttackingTokens {
-                        creations,
-                        defender_scope,
-                    });
+                creations[0].attacking_defender = Some(defender_scope);
                 return Ok(());
             }
             if let Some(last) = builder.instructions.last_mut() {
@@ -4486,57 +4491,6 @@ pub(super) fn lower_restrictions_statics_instruction(
                         *enters_tapped = true;
                         *enters_attacking = true;
                         *ds = defender_scope;
-                        return Ok(());
-                    }
-                    Instruction::CreateTokenCopy {
-                        recipients,
-                        tapped,
-                        attacking,
-                        ..
-                    } if *recipients == TokenRecipients::Controller
-                        && defender_scope
-                            == spellwake_engine::token::AttackingDefenderScope::AnyLegal =>
-                    {
-                        *tapped = true;
-                        *attacking = true;
-                        return Ok(());
-                    }
-                    Instruction::CreateTokenCopy {
-                        source,
-                        count,
-                        sacrifice_at_end_step,
-                        exile_at_end_step,
-                        grant_keywords,
-                        nonlegendary,
-                        override_pt,
-                        override_colors: None,
-                        add_subtypes,
-                        add_card_types,
-                        strip_mana_cost: false,
-                        recipients,
-                        ..
-                    } if *recipients == TokenRecipients::Controller => {
-                        let mut extra_keywords = std::mem::take(grant_keywords);
-                        let haste = extra_keywords.remove(&KeywordAbility::Haste);
-                        let ext_pt =
-                            override_pt.map(|(p, t)| (i64::from(p).into(), i64::from(t).into()));
-                        *last = Instruction::CreateTokenCopyExt {
-                            source: *source,
-                            count: count.clone(),
-                            recipients: *recipients,
-                            enters_tapped: true,
-                            enters_attacking: true,
-                            haste,
-                            sacrifice_at_end_step: *sacrifice_at_end_step,
-                            exile_at_end_step: *exile_at_end_step,
-                            nonlegendary: *nonlegendary,
-                            extra_types: std::mem::take(add_card_types),
-                            extra_subtypes: std::mem::take(add_subtypes),
-                            extra_keywords,
-                            override_pt: ext_pt,
-                            extra_colors: BTreeSet::new(),
-                            defender_scope,
-                        };
                         return Ok(());
                     }
                     Instruction::ZoneOp(spec)
@@ -5941,9 +5895,18 @@ pub(super) fn lower_restrictions_statics_instruction(
                     || ev_low.contains("graveyard")
                     || subj_low.contains("spell"))
                 && let Some(last) = builder.instructions.last_mut()
-                && *last == Instruction::CounterSpell
+                && *last
+                    == Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    ))
             {
-                *last = Instruction::CounterSpellToExile;
+                *last = Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Exile,
+                    ),
+                ));
                 return Ok(());
             }
             let to_top_of_library =
@@ -5956,11 +5919,20 @@ pub(super) fn lower_restrictions_statics_instruction(
                     || ev_low.contains("graveyard")
                     || subj_low.contains("spell"))
                 && let Some(last) = builder.instructions.last_mut()
-                && *last == Instruction::CounterSpell
+                && *last
+                    == Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    ))
             {
-                *last = Instruction::CounterSpellToLibrary {
-                    top: to_top_of_library,
-                };
+                *last = Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Library {
+                            top: to_top_of_library,
+                        },
+                    ),
+                ));
                 return Ok(());
             }
             if is_exile
@@ -6005,11 +5977,9 @@ pub(super) fn lower_restrictions_statics_instruction(
                                     action: PermanentTargetAction::Damage(_),
                                     ..
                                 }
-                                | Instruction::DivideDamageAmongTargets { .. }
                                 | Instruction::DivideDamageExprAmongTargets { .. }
                                 | Instruction::CreatureDealsPowerDamageToOther { .. }
                                 | Instruction::Fight { .. }
-                                | Instruction::FightFixedTargets
                         )
                     });
                 if has_damage_op {
@@ -7173,7 +7143,12 @@ pub(super) fn lower_restrictions_statics_instruction(
             });
             if instead_ok
                 && matches!(builder.target, BodyTarget::SingleSpell(_))
-                && builder.instructions.last() == Some(&Instruction::CounterSpell)
+                && builder.instructions.last()
+                    == Some(&Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    )))
             {
                 let extract_lib_top_choice = |ins: &InstructionAst| -> Option<Option<bool>> {
                     let (subj, dest_raw) = match ins {
@@ -7228,7 +7203,11 @@ pub(super) fn lower_restrictions_statics_instruction(
                         },
                     ] if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_)) => {
                         if let Some(last) = builder.instructions.last_mut() {
-                            *last = Instruction::CounterSpellToExile;
+                            *last = Instruction::StackOp(Box::new(
+                                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                    spellwake_engine::toolbox::CounterDestination::Exile,
+                                ),
+                            ));
                             return Ok(());
                         }
                     }
@@ -7236,7 +7215,13 @@ pub(super) fn lower_restrictions_statics_instruction(
                         match extract_lib_top_choice(single) {
                             Some(Some(top)) => {
                                 if let Some(last) = builder.instructions.last_mut() {
-                                    *last = Instruction::CounterSpellToLibrary { top };
+                                    *last = Instruction::StackOp(Box::new(
+                                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                            spellwake_engine::toolbox::CounterDestination::Library {
+                                                top,
+                                            },
+                                        ),
+                                    ));
                                     return Ok(());
                                 }
                             }
@@ -7249,18 +7234,26 @@ pub(super) fn lower_restrictions_statics_instruction(
                                             label: "Top of owner's library".to_owned(),
                                             body: ExecutableBody::new(
                                                 BodyTarget::None,
-                                                vec![Instruction::CounterSpellToLibrary {
-                                                    top: true,
-                                                }],
+                                                vec![Instruction::StackOp(Box::new(
+                                                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                                        spellwake_engine::toolbox::CounterDestination::Library {
+                                                            top: true,
+                                                        },
+                                                    ),
+                                                ))],
                                             ),
                                         },
                                         ChooseOptionBranch {
                                             label: "Bottom of owner's library".to_owned(),
                                             body: ExecutableBody::new(
                                                 BodyTarget::None,
-                                                vec![Instruction::CounterSpellToLibrary {
-                                                    top: false,
-                                                }],
+                                                vec![Instruction::StackOp(Box::new(
+                                                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                                        spellwake_engine::toolbox::CounterDestination::Library {
+                                                            top: false,
+                                                        },
+                                                    ),
+                                                ))],
                                             ),
                                         },
                                     ],
@@ -7290,14 +7283,26 @@ pub(super) fn lower_restrictions_statics_instruction(
                                         label: "Top of owner's library".to_owned(),
                                         body: ExecutableBody::new(
                                             BodyTarget::None,
-                                            vec![Instruction::CounterSpellToLibrary { top: true }],
+                                            vec![Instruction::StackOp(Box::new(
+                                                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                                    spellwake_engine::toolbox::CounterDestination::Library {
+                                                        top: true,
+                                                    },
+                                                ),
+                                            ))],
                                         ),
                                     },
                                     ChooseOptionBranch {
                                         label: "Bottom of owner's library".to_owned(),
                                         body: ExecutableBody::new(
                                             BodyTarget::None,
-                                            vec![Instruction::CounterSpellToLibrary { top: false }],
+                                            vec![Instruction::StackOp(Box::new(
+                                                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                                    spellwake_engine::toolbox::CounterDestination::Library {
+                                                        top: false,
+                                                    },
+                                                ),
+                                            ))],
                                         ),
                                     },
                                 ],
@@ -7779,11 +7784,9 @@ fn try_lower_temp_exile_replacement(
                             action: PermanentTargetAction::Damage(_),
                             ..
                         }
-                        | Instruction::DivideDamageAmongTargets { .. }
                         | Instruction::DivideDamageExprAmongTargets { .. }
                         | Instruction::CreatureDealsPowerDamageToOther { .. }
                         | Instruction::Fight { .. }
-                        | Instruction::FightFixedTargets
                 )
             });
         if has_damage_op {
@@ -10509,12 +10512,15 @@ mod wave10_static_tests {
             duration: DurationAst::UntilEndOfTurn,
             body: vec![InstructionAst::RetainManaUntilEndOfTurn],
         };
-        let expected = vec![Instruction::AddMana(EffectManaYield::RetainedUntilCleanup(
-            Box::new(EffectManaYield::RestrictedFixed {
-                bundle: BTreeMap::from([(ManaType::White, 3.into())]),
-                restriction: ManaRestriction::CreatureSpell,
-            }),
-        ))];
+        let expected = vec![Instruction::AddManaForPlayer {
+            player: ResolvingPlayer::Controller,
+            yield_kind: EffectManaYield::RetainedUntilCleanup(Box::new(
+                EffectManaYield::RestrictedFixed {
+                    bundle: BTreeMap::from([(ManaType::White, 3.into())]),
+                    restriction: ManaRestriction::CreatureSpell,
+                },
+            )),
+        }];
         for clauses in [
             [restriction.clone(), retention.clone()],
             [retention, restriction],
@@ -10557,11 +10563,10 @@ mod wave10_static_tests {
             body: vec![InstructionAst::RetainManaUntilEndOfTurn],
         };
         let mut builder = BodyBuilder::new();
-        builder
-            .instructions
-            .push(Instruction::AddMana(EffectManaYield::Fixed(
-                BTreeMap::from([(ManaType::White, 3.into())]),
-            )));
+        builder.instructions.push(Instruction::AddManaForPlayer {
+            player: ResolvingPlayer::Controller,
+            yield_kind: EffectManaYield::Fixed(BTreeMap::from([(ManaType::White, 3.into())])),
+        });
         lower_restrictions_statics_instruction(
             &instruction,
             &mut builder,
@@ -10573,7 +10578,10 @@ mod wave10_static_tests {
         )
         .expect("scoped producer retention");
         assert!(matches!(builder.instructions.as_slice(),
-            [Instruction::AddMana(EffectManaYield::RetainedUntilCleanup(inner))]
+            [Instruction::AddManaForPlayer {
+                player: ResolvingPlayer::Controller,
+                yield_kind: EffectManaYield::RetainedUntilCleanup(inner),
+            }]
                 if matches!(inner.as_ref(), EffectManaYield::Fixed(amount)
                     if amount == &BTreeMap::from([(ManaType::White, 3.into())]))
         ));
@@ -10638,7 +10646,10 @@ mod wave10_static_tests {
                 .iter()
                 .any(|instruction| matches!(
                     instruction,
-                    Instruction::AddMana(EffectManaYield::RetainedUntilCleanup(_))
+                    Instruction::AddManaForPlayer {
+                        yield_kind: EffectManaYield::RetainedUntilCleanup(_),
+                        ..
+                    }
                 ))
         );
     }

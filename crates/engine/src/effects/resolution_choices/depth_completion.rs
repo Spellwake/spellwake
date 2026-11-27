@@ -25,9 +25,10 @@ fn payment_outcomes(result: &NativeCandidate) -> usize {
 #[test]
 fn every_wrong_reply_kind_variant_retains_the_latest_prefix_before_its_own_valid_continuation() {
     let opened = pending(vec![
-        Instruction::OfferManaPayment {
+        Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::Controller,
-            cost: ManaCost::generic(3.into()),
+            fixed: ManaCost::generic(3.into()),
+            extra_generic: crate::program::ValueExpr::Literal(0.into()),
             paid_destination: 4,
             declined_destination: 1,
         },
@@ -183,9 +184,10 @@ pub(super) fn exact_total_unavailable_amount_and_required_colorless_denials_keep
                 A,
                 BodyTarget::None,
                 vec![
-                    Instruction::OfferManaPayment {
+                    Instruction::OfferDynamicManaPayment {
                         payer: ResolvingPlayer::Controller,
-                        cost: ManaCost::specific(ManaType::Colourless, 1.into()),
+                        fixed: ManaCost::specific(ManaType::Colourless, 1.into()),
+                        extra_generic: crate::program::ValueExpr::Literal(0.into()),
                         paid_destination: 2,
                         declined_destination: 1,
                     },
@@ -266,9 +268,10 @@ fn record_choice(trace: &mut TypedTrace, choice: DecisionReply) {
 
 fn replay_body() -> Vec<Instruction> {
     vec![
-        Instruction::OfferManaPayment {
+        Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::Controller,
-            cost: ManaCost::generic(2.into()),
+            fixed: ManaCost::generic(2.into()),
+            extra_generic: crate::program::ValueExpr::Literal(0.into()),
             paid_destination: 1,
             declined_destination: 4,
         },
@@ -986,7 +989,17 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
                         into: CreatureTypeSlot::new(0),
                         excluding: BTreeSet::new(),
                     },
-                    Instruction::CreatePreventionShield { amount: 1.into() },
+                    Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload: crate::toolbox::ContinuousPayload::TargetPreventionShield {
+                            amount: 1.into(),
+                        },
+                        duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    })),
                     Instruction::CreateDamageMultiplier { factor: 2.into() },
                     Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,

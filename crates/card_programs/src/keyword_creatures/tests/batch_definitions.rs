@@ -334,7 +334,11 @@ fn lab_rats_uses_printed_buyback_and_only_successful_resolution_creates_a_rat() 
                     ObjectDestination::Hand,
                     free_instant(
                         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                        Instruction::CounterSpell,
+                        Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                spellwake_engine::toolbox::CounterDestination::Graveyard,
+                            ),
+                        )),
                     ),
                 ),
             ],
@@ -765,7 +769,21 @@ fn wurmcoil_larva_applies_deathtouch_and_lifelink_to_the_same_damage() {
         if prevented {
             let shield = free_instant(
                 BodyTarget::SingleCreature,
-                Instruction::CreatePreventionShield { amount: 3.into() },
+                Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload:
+                            spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: 3.into(),
+                            },
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                )),
             );
             cards.push(seed(3, A, ObjectDestination::Hand, shield));
         }

@@ -126,9 +126,10 @@ fn a_replacement_chooser_can_leave_before_answering_the_original_choice() {
 fn a_departed_payer_uses_the_unpaid_suffix_without_replaying_the_prefix() {
     let state = targeted_offer(vec![
         gain(2),
-        Instruction::OfferManaPayment {
+        Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::TargetPlayer,
-            cost: ManaCost::free(),
+            fixed: ManaCost::free(),
+            extra_generic: crate::program::ValueExpr::Literal(0.into()),
             paid_destination: 2,
             declined_destination: 4,
         },

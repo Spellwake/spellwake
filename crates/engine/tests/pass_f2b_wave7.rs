@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![allow(dead_code, unused_imports)]
 //! Runtime integration tests for Pass F2-B Wave 7 primitives:
-//! - `ForEachPlayer` + `ResolvingPlayer::LoopPlayer` (APNAP order)
+//! - `ForEachPlayerQuery` + `ResolvingPlayer::LoopPlayer` (APNAP order)
 //! - `OfferAnyPlayer` (accepting player runs `cost_body` + `paid_body`, or `declined_body` if all decline)
 //! - `DealDamageToAnnouncedTargets` (multi-target equal damage) and `PermanentTargetAction::Damage`
 //! - `UntapOrTapSelect` (non-targeted selection, exact count and `up_to: true`)
@@ -440,7 +440,7 @@ fn advance_to_p1_upkeep_p0_priority(game: &GameState) -> NativeCandidate {
 }
 
 // ============================================================================
-// 1. ForEachPlayer + ResolvingPlayer::LoopPlayer
+// 1. ForEachPlayerQuery + ResolvingPlayer::LoopPlayer
 // ============================================================================
 
 // ============================================================================
@@ -979,6 +979,9 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
                     keep_dest: LookTopKeepDest::LibraryTop,
                     rest_dest: LookTopRestDest::Graveyard,
                     reveal_kept: false,
+                    reveal_all: false,
+                    reveal_only: false,
+                    secondary: None,
                 }],
             ),
         ),
@@ -999,6 +1002,9 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
                     keep_dest: LookTopKeepDest::Graveyard,
                     rest_dest: LookTopRestDest::Hand,
                     reveal_kept: false,
+                    reveal_all: false,
+                    reveal_only: false,
+                    secondary: None,
                 }],
             ),
         ),
@@ -1020,6 +1026,8 @@ fn look_top_choose_ext_library_top_and_rest_to_hand_and_reveal_until_match_ext()
                     },
                     rest_dest: LookTopRestDest::BottomRandom,
                     keep_all_revealed: false,
+                    optional_keep: false,
+                    exile_instead_of_reveal: false,
                 }],
             ),
         ),
@@ -1170,6 +1178,8 @@ fn create_token_copy_ext_applies_nonlegendary_pt_keywords_and_colors() {
                     override_pt: Some((1.into(), 1.into())),
                     extra_colors: BTreeSet::from([Color::Blue]),
                     defender_scope: AttackingDefenderScope::AnyLegal,
+                    override_colors: None,
+                    strip_mana_cost: false,
                 }],
             ),
         ),

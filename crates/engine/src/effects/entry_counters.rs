@@ -166,8 +166,6 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
                 }
                 _ => false,
             },
-            Instruction::CounterMatchingStackObjects { .. }
-            | Instruction::TransferAllCountersFromTriggeringLki { .. } => false,
             Instruction::DealDamage(spec) => {
                 let amount_uses = matches!(
                     &spec.amount,
@@ -214,7 +212,7 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
             Instruction::ScheduleDelayedStepTrigger { body, .. }
             | Instruction::EmitReflexiveTrigger { body, .. }
             | Instruction::FixedTargetClause(body) => body_uses_damage_pairs(body),
-            Instruction::ForEachPlayer { body, .. } => body_uses_damage_pairs(body),
+            Instruction::ForEachPlayerQuery { body, .. } => body_uses_damage_pairs(body),
             Instruction::OfferAnyPlayer {
                 cost_body,
                 paid_body,
@@ -566,7 +564,7 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
     }
     body.instructions.iter().any(|op| match op {
         Instruction::BranchIfFalse { condition, .. } => condition_uses_damage_dealt_by(condition),
-        Instruction::ForEachPlayer { body, .. } => body_uses_damage_dealt_by(body),
+        Instruction::ForEachPlayerQuery { body, .. } => body_uses_damage_dealt_by(body),
         Instruction::ScheduleDelayedStepTrigger { body, .. }
         | Instruction::ScheduleDelayedEventTrigger { body, .. }
         | Instruction::EmitReflexiveTrigger { body, .. }
@@ -625,8 +623,7 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
         },
         Instruction::DealDamageToAnnouncedTargets { amount, .. }
         | Instruction::BindResolutionX(amount) => value_expr_uses_damage_dealt_by(amount),
-        Instruction::CreateTokens { creations }
-        | Instruction::CreateAttackingTokens { creations, .. } => creations
+        Instruction::CreateTokens { creations } => creations
             .iter()
             .any(|c| value_expr_uses_damage_dealt_by(&c.amount)),
         _ => false,
