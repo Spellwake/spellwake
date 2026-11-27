@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
+  ArrowLeftRight,
   Ban,
+  Bell,
+  CircleCheck,
   ChevronRight,
   EllipsisVertical,
   Plus,
   Repeat2,
   SendHorizontal,
+  Tag,
   UserPlus,
   UsersRound,
   X,
@@ -29,12 +33,17 @@ import {
   type PersonAction,
   type ThreadEvent,
 } from "../../messaging/messaging-sources";
+import type { UpdatesSource } from "../../messaging/updates-source";
+import type { Update, UpdateKind } from "../../messaging/updates";
 import { useCommand, useNotice } from "../account/operation";
 import * as s from "./messages.css";
 
-/** What the panel shows: one person's thread, Requests or Find People. */
+/** What the panel shows: one person's thread, Updates, Requests or Find People. */
 export type MessagesView =
-  { kind: "person"; id: string } | { kind: "requests" } | { kind: "find" };
+  | { kind: "person"; id: string }
+  | { kind: "updates" }
+  | { kind: "requests" }
+  | { kind: "find" };
 
 const timeOf = (iso: string): string =>
   new Date(iso).toLocaleTimeString(undefined, {
@@ -60,6 +69,7 @@ const dayOf = (iso: string): string => {
  */
 export function MessagesPanel({
   source,
+  updates,
   view,
   onView,
   onClose,
@@ -68,6 +78,8 @@ export function MessagesPanel({
   presentation,
 }: {
   source: MessagingSource;
+  /** Trade offers, accepted trades and sold listings, in their own thread. */
+  updates: UpdatesSource;
   view: MessagesView;
   onView: (view: MessagesView) => void;
   onClose: () => void;
@@ -112,6 +124,8 @@ export function MessagesPanel({
         )}
       </p>
     </div>
+  ) : view.kind === "updates" ? (
+    <UpdatesList updates={updates} close={close} />
   ) : view.kind === "requests" ? (
     <PeopleList
       title="Requests"
@@ -142,6 +156,23 @@ export function MessagesPanel({
       }}
     >
       <nav className={s.rail} aria-label="People">
+        {/* Updates stay pinned above every conversation. */}
+        {updates.status === "ready" && (
+          <button
+            type="button"
+            className={s.roundIcon}
+            aria-label={
+              updates.unread ? `Updates, ${updates.unread} new` : "Updates"
+            }
+            aria-current={view.kind === "updates"}
+            onClick={() => onView({ kind: "updates" })}
+          >
+            <Bell aria-hidden="true" />
+            {updates.unread > 0 && (
+              <span className={s.badge}>{updates.unread}</span>
+            )}
+          </button>
+        )}
         <div className={s.friends} role="list" aria-label="Friends">
           {ready?.friends.map((friend) => (
             <span key={friend.id} role="listitem">
@@ -208,6 +239,106 @@ export function MessagesPanel({
             ]}
           />
         </div>
+      )}
+    </div>
+  );
+}
+
+const UPDATE_ICON: Record<UpdateKind, ReactElement> = {
+  "trade-offer": <ArrowLeftRight aria-hidden="true" />,
+  "trade-accepted": <CircleCheck aria-hidden="true" />,
+  sold: <Tag aria-hidden="true" />,
+  other: <Bell aria-hidden="true" />,
+};
+const UPDATE_HINT: Partial<Record<UpdateKind, string>> = {
+  "trade-offer": "Open the trade",
+  "trade-accepted": "Open the trade",
+  sold: "Open your listings",
+};
+
+function UpdateRow({
+  update,
+  onOpen,
+}: {
+  update: Update;
+  onOpen: ((update: Update) => void) | null;
+}): ReactElement {
+  const hint = UPDATE_HINT[update.kind];
+  const content = (
+    <>
+      <span className={s.updateIcon} data-new={update.isNew}>
+        {UPDATE_ICON[update.kind]}
+      </span>
+      <span>
+        <span className={s.rowName}>{update.text}</span>
+        {hint && onOpen && <span className={s.rowLine}>{hint}</span>}
+      </span>
+      <span className={s.rowTrail}>
+        {update.isNew && <span className={s.dot} aria-label="New" />}
+        {hint && onOpen && <ChevronRight aria-hidden="true" />}
+      </span>
+    </>
+  );
+  return hint && onOpen ? (
+    <button type="button" className={s.row} onClick={() => onOpen(update)}>
+      {content}
+    </button>
+  ) : (
+    <div className={`${s.row} ${s.rowStill}`}>{content}</div>
+  );
+}
+
+/**
+ * Updates: trade offers, accepted trades and sold listings, newest unread
+ * first. Opening the thread marks what it shows as read; each stays marked
+ * new for this visit.
+ */
+function UpdatesList({
+  updates,
+  close,
+}: {
+  updates: UpdatesSource;
+  close: ReactElement;
+}): ReactElement {
+  const ready = updates.status === "ready" ? updates : null;
+  const markSeen = ready?.markSeen;
+  const unread = ready?.unread ?? 0;
+  useEffect(() => {
+    if (markSeen && unread > 0) markSeen();
+  }, [markSeen, unread]);
+  return (
+    <div className={s.main}>
+      <div className={s.head}>
+        <div className={s.headText}>
+          <h2 className={s.title} tabIndex={-1}>
+            Updates
+          </h2>
+        </div>
+        {close}
+      </div>
+      {!ready ? (
+        <p className={s.quiet} role="status">
+          {updates.status === "loading" ? (
+            <span className={s.spinner} aria-hidden="true" />
+          ) : (
+            "Couldn’t load updates."
+          )}
+        </p>
+      ) : ready.items.length === 0 ? (
+        <p className={s.quiet}>No updates</p>
+      ) : (
+        <ul className={s.list}>
+          {ready.items.map((update) => (
+            <li key={update.id}>
+              <UpdateRow update={update} onOpen={ready.open} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {ready?.notice && (
+        <p className={s.quiet} role="status">
+          {ready.notice}
+        </p>
       )}
     </div>
   );
