@@ -1212,22 +1212,21 @@ fn copied_shields_are_independent_effects_and_survive_copy_cessation() {
 #[test]
 fn zero_and_negative_literal_programs_reject_without_restricting_huge_positive_amounts() {
     for amount in [0, -1] {
-        for instruction in [shield(amount)] {
-            assert_eq!(
-                initialize(
-                    seeds(
-                        pt(2, 100),
-                        vec![(
-                            1,
-                            A,
-                            ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction])
-                        )]
-                    ),
-                    vec![]
+        let instruction = shield(amount);
+        assert_eq!(
+            initialize(
+                seeds(
+                    pt(2, 100),
+                    vec![(
+                        1,
+                        A,
+                        ExecutableBody::new(BodyTarget::SingleCreature, vec![instruction])
+                    )]
                 ),
-                Err(GameError::Effect(EffectError::InvalidSetup))
-            );
-        }
+                vec![]
+            ),
+            Err(GameError::Effect(EffectError::InvalidSetup))
+        );
     }
     let game = setup(
         pt(2, 100),
