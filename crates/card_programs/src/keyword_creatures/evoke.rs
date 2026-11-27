@@ -158,10 +158,10 @@ fn effect_body(text: &str, vocab: &CreatureTypeVocabulary) -> Option<ExecutableB
         ),
         "target player discards two cards." => (
             BodyTarget::SinglePlayer,
-            Instruction::Discard {
-                players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-            },
+            Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                spellwake_engine::program::ValueExpr::Literal(2.into()),
+            ))),
         ),
         "it deals 6 damage to target creature." => (
             BodyTarget::SingleCreature,

@@ -429,7 +429,10 @@ fn stage_a_and_b_fidelity_regressions() {
     assert!(
         matches!(
             sp.body.instructions.as_slice(),
-            [Instruction::Sacrifice { amount, .. }] if *amount == ValueExpr::literal(2)
+            [Instruction::ZoneOp(spec)]
+                if spec
+                    .as_group_sacrifice()
+                    .is_some_and(|(_, amount, _, _)| *amount == ValueExpr::literal(2))
         ),
         "expected Sacrifice amount=2, got {:?}",
         sp.body.instructions

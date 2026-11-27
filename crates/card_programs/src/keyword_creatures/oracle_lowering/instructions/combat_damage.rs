@@ -988,12 +988,17 @@ pub(super) fn lower_combat_damage_instruction(
                         SubjectRefAst::Player(
                             p @ (PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer),
                         ) => {
-                            builder.instructions.push(Instruction::ChooseValue {
-                                chooser: ResolvingPlayer::Controller,
-                                domain: ResolutionChoiceDomain::Player {
-                                    opponents_only: matches!(p, PlayerRefAst::AnyOpponent),
-                                },
-                            });
+                            builder
+                                .instructions
+                                .push(Instruction::PromptChoice(Box::new(
+                                    spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                                        ResolvingPlayer::Controller,
+                                        spellwake_engine::toolbox::PromptDomain::player(matches!(
+                                            p,
+                                            PlayerRefAst::AnyOpponent
+                                        )),
+                                    ),
+                                )));
                             Some(DamageRecipientsRef::Group(DamageGroup::AffectedPlayers(
                                 AffectedPlayers::One(ResolvingPlayer::ChosenPlayer),
                             )))
@@ -2729,12 +2734,17 @@ pub(super) fn lower_combat_damage_instruction(
                     p @ (PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer),
                 ) => {
                     let amt_expr = lower_amt(builder)?;
-                    builder.instructions.push(Instruction::ChooseValue {
-                        chooser: ResolvingPlayer::Controller,
-                        domain: ResolutionChoiceDomain::Player {
-                            opponents_only: matches!(p, PlayerRefAst::AnyOpponent),
-                        },
-                    });
+                    builder
+                        .instructions
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                                ResolvingPlayer::Controller,
+                                spellwake_engine::toolbox::PromptDomain::player(matches!(
+                                    p,
+                                    PlayerRefAst::AnyOpponent
+                                )),
+                            ),
+                        )));
                     push_damage_group(
                         &mut builder.instructions,
                         DamageGroup::AffectedPlayers(AffectedPlayers::One(

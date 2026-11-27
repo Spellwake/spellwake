@@ -7,8 +7,9 @@ use crate::{
     effects::CounterKind,
     object_identity::ObjectId,
     program::{
-        CardType, DefinitionError, DelayedReturnTiming, LibraryPlacement, LinkedExileGroup,
-        ObjectFilter, ResolvingPlayer, ValueExpr,
+        AffectedPlayers, CardType, CardTypeMask, DefinitionError, DelayedReturnTiming,
+        LibraryPlacement, LinkedExileGroup, ObjectClause, ObjectFilter, PermanentTypeFilter,
+        ResolvingPlayer, ValueExpr,
     },
     toolbox::{
         choice::ChoiceCategory,
@@ -369,6 +370,210 @@ impl ZoneOpSpec {
     #[must_use]
     pub fn move_all(source: ObjectQuery, destination: ZoneDest) -> Self {
         Self::simple(source, ZoneSelection::All, destination)
+    }
+
+    /// Convert a [`PermanentTypeFilter`] over `zone` into a composable [`ObjectQuery`].
+    #[must_use]
+    pub fn permanent_type_filter_query(
+        zone: QueryZone,
+        filter: PermanentTypeFilter,
+    ) -> ObjectQuery {
+        let mut clause = ObjectClause::any();
+        if !filter.any_types.is_empty() {
+            let mut mask = CardTypeMask::EMPTY;
+            for ct in &filter.any_types {
+                mask = mask.with(*ct);
+            }
+            clause = clause.any_types(mask);
+        }
+        if !filter.required_types.is_empty() {
+            let mut mask = CardTypeMask::EMPTY;
+            for ct in &filter.required_types {
+                mask = mask.with(*ct);
+            }
+            clause = clause.required_types(mask);
+        }
+        if !filter.forbidden_types.is_empty() {
+            let mut mask = CardTypeMask::EMPTY;
+            for ct in &filter.forbidden_types {
+                mask = mask.with(*ct);
+            }
+            clause = clause.forbid_types(mask);
+        }
+        let base = ObjectQuery::zone(zone, ObjectFilter::Clause(clause));
+        match filter.object_filter {
+            Some(obj) => ObjectQuery::filtered(base, obj),
+            None => base,
+        }
+    }
+
+    /// Construct a resolution-time group sacrifice prompt (`players` each sacrifice `amount` matching permanents).
+    #[must_use]
+    pub fn sacrifice(
+        players: AffectedPlayers,
+        amount: ValueExpr,
+        filter: PermanentTypeFilter,
+    ) -> Self {
+        Self {
+            source: Self::permanent_type_filter_query(
+                QueryZone::BattlefieldControlledBy(Box::new(PlayerSelector::Group(players))),
+                filter,
+            ),
+            selection: ZoneSelection::Prompt {
+                chooser: PlayerSelector::Group(players),
+                min: Box::new(amount.clone()),
+                max: Box::new(amount),
+                constraint: None,
+                category: ChoiceCategory::Generic,
+                hidden: false,
+            },
+            destination: ZoneDest::Graveyard {
+                semantics: GraveyardSemantics::Sacrifice,
+            },
+            bind_moved: None,
+            bind_snapshots: None,
+            bind_unchosen: None,
+            bind_succeeded: None,
+            tag_moved: None,
+            shuffle_library: None,
+        }
+    }
+
+    /// Construct a resolution-time group discard prompt (`players` each discard `amount` cards).
+    #[must_use]
+    pub fn discard(players: AffectedPlayers, amount: ValueExpr) -> Self {
+        Self {
+            source: ObjectQuery::ZoneScan {
+                zone: QueryZone::Hand(Box::new(PlayerSelector::Group(players))),
+                filter: Box::new(ObjectFilter::any()),
+                slice: QuerySlice::All,
+            },
+            selection: ZoneSelection::Prompt {
+                chooser: PlayerSelector::Group(players),
+                min: Box::new(amount.clone()),
+                max: Box::new(amount),
+                constraint: None,
+                category: ChoiceCategory::Generic,
+                hidden: true,
+            },
+            destination: ZoneDest::Graveyard {
+                semantics: GraveyardSemantics::Discard,
+            },
+            bind_moved: None,
+            bind_snapshots: None,
+            bind_unchosen: None,
+            bind_succeeded: None,
+            tag_moved: None,
+            shuffle_library: None,
+        }
+    }
+
+    /// Inspect whether this spec represents a plain group discard constructed by [`Self::discard`].
+    #[must_use]
+    pub fn as_group_discard(&self) -> Option<(AffectedPlayers, &ValueExpr)> {
+        if self.bind_moved.is_some()
+            || self.bind_snapshots.is_some()
+            || self.bind_unchosen.is_some()
+            || self.bind_succeeded.is_some()
+            || self.tag_moved.is_some()
+            || self.shuffle_library.is_some()
+        {
+            return None;
+        }
+        if !matches!(
+            self.destination,
+            ZoneDest::Graveyard {
+                semantics: GraveyardSemantics::Discard
+            }
+        ) {
+            return None;
+        }
+        let ZoneSelection::Prompt {
+            chooser: PlayerSelector::Group(players),
+            min,
+            max,
+            constraint: None,
+            ..
+        } = &self.selection
+        else {
+            return None;
+        };
+        if min != max {
+            return None;
+        }
+        if matches!(
+            &self.source,
+            ObjectQuery::ZoneScan {
+                zone: QueryZone::Hand(_),
+                filter,
+                slice: QuerySlice::All,
+            } if *filter.as_ref() == ObjectFilter::any()
+        ) {
+            Some((*players, max.as_ref()))
+        } else {
+            None
+        }
+    }
+
+    /// Inspect whether this spec represents a plain group sacrifice constructed by [`Self::sacrifice`].
+    #[must_use]
+    pub fn as_group_sacrifice(
+        &self,
+    ) -> Option<(
+        AffectedPlayers,
+        &ValueExpr,
+        ObjectFilter,
+        Option<ObjectFilter>,
+    )> {
+        if self.bind_moved.is_some()
+            || self.bind_snapshots.is_some()
+            || self.bind_unchosen.is_some()
+            || self.bind_succeeded.is_some()
+            || self.tag_moved.is_some()
+            || self.shuffle_library.is_some()
+        {
+            return None;
+        }
+        if !matches!(
+            self.destination,
+            ZoneDest::Graveyard {
+                semantics: GraveyardSemantics::Sacrifice
+            }
+        ) {
+            return None;
+        }
+        let ZoneSelection::Prompt {
+            chooser: PlayerSelector::Group(players),
+            min,
+            max,
+            constraint: None,
+            ..
+        } = &self.selection
+        else {
+            return None;
+        };
+        if min != max {
+            return None;
+        }
+        match &self.source {
+            ObjectQuery::ZoneScan {
+                zone: QueryZone::BattlefieldControlledBy(_),
+                filter,
+                slice: QuerySlice::All,
+            } => Some((*players, max.as_ref(), **filter, None)),
+            ObjectQuery::Filtered {
+                source,
+                filter: extra,
+            } => match source.as_ref() {
+                ObjectQuery::ZoneScan {
+                    zone: QueryZone::BattlefieldControlledBy(_),
+                    filter,
+                    slice: QuerySlice::All,
+                } => Some((*players, max.as_ref(), **filter, Some(**extra))),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// Exile the top `count` cards of each `owners` library, optionally face down.

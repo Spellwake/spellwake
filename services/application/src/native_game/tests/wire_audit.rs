@@ -234,9 +234,9 @@ fn collect_body_counter_kinds(body: &ExecutableBody, out: &mut Vec<CounterKind>)
             | Instruction::ForEachPlayerQuery { body: inner, .. } => {
                 collect_body_counter_kinds(inner, out);
             }
-            Instruction::ChooseOption { options, .. } => {
-                for branch in options {
-                    collect_body_counter_kinds(&branch.body, out);
+            Instruction::PromptChoice(spec) => {
+                for branch in &spec.option_branches {
+                    collect_body_counter_kinds(branch, out);
                 }
             }
             _ => {}

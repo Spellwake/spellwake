@@ -55,6 +55,7 @@ fn before_resolution() -> GameState {
             bind_unchosen: None,
             tag_partition: None,
             auto_resolve_trivial: false,
+            option_branches: Vec::new(),
         })),
         Instruction::Jump { destination: 4 },
         gain(99),

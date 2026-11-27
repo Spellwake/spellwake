@@ -3376,7 +3376,6 @@ pub fn zone_replacement_work(value: &spellwake_engine::effects::ZoneReplacementB
 pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value {
     let operation = match value.operation {
         ResolutionSelectionOperation::Populate => json!({"tag":"Populate"}),
-        ResolutionSelectionOperation::ChooseObjects { .. } => json!({"tag":"ChooseObjects"}),
         ResolutionSelectionOperation::ExileAnnouncedTargets { objects } => {
             json!({"tag":"ExileAnnouncedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>()})
         }
@@ -3396,11 +3395,40 @@ pub fn resolution_selection_state(value: ResolutionSelectionState<'_>) -> Value 
         } => {
             json!({"tag":"ExileSingle","object":opaque(object),"source":source.map(opaque),"monarch_controller":monarch_controller.map(|seat|seat.0)})
         }
-        ResolutionSelectionOperation::Sacrifice { filter } => json!({
-            "tag":"Sacrifice",
-            "filter":{"required_types":filter.required_types.iter().map(opaque).collect::<Vec<_>>(),
-                      "forbidden_types":filter.forbidden_types.iter().map(opaque).collect::<Vec<_>>()}
-        }),
+        ResolutionSelectionOperation::Sacrifice { primary, secondary } => {
+            let (req, forb) = match primary {
+                spellwake_engine::program::ObjectFilter::Clause(c) => {
+                    let all_types = [
+                        spellwake_engine::program::CardType::Artifact,
+                        spellwake_engine::program::CardType::Battle,
+                        spellwake_engine::program::CardType::Creature,
+                        spellwake_engine::program::CardType::Enchantment,
+                        spellwake_engine::program::CardType::Instant,
+                        spellwake_engine::program::CardType::Kindred,
+                        spellwake_engine::program::CardType::Land,
+                        spellwake_engine::program::CardType::Planeswalker,
+                        spellwake_engine::program::CardType::Sorcery,
+                    ];
+                    (
+                        all_types
+                            .iter()
+                            .filter(|&&t| c.required_types.contains(t))
+                            .map(opaque)
+                            .collect::<Vec<_>>(),
+                        all_types
+                            .iter()
+                            .filter(|&&t| c.forbidden_types.contains(t))
+                            .map(opaque)
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                _ => (Vec::new(), Vec::new()),
+            };
+            json!({
+                "tag":"Sacrifice",
+                "filter":{"required_types":req,"forbidden_types":forb,"has_secondary":secondary.is_some()}
+            })
+        }
         ResolutionSelectionOperation::ExileLinkedTargets { objects, source } => {
             json!({"tag":"ExileLinkedTargets","objects":objects.iter().map(opaque).collect::<Vec<_>>(),"source":opaque(source)})
         }

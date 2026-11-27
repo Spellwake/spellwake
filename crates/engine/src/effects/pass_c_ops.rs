@@ -1,5 +1,5 @@
 //! Execution handlers for Pass C orthogonal Comprehensive Rules instructions:
-//! RollDie, FlipCoins, ChooseValue, Vote, Incubate,
+//! RollDie, FlipCoins, Vote, Incubate,
 //! Connive / ConniveFinalize, Discover, Clash, RingTemptsYou,
 //! VentureIntoDungeon, TakeInitiative, UnlockDoor, Behold, and ManifestDread.
 use super::progress_rules::{RuleStepContext, StepOutcome};
@@ -7,7 +7,7 @@ use super::*;
 use crate::occurrence::{EventCause, RulesOccurrence, ZoneReason};
 use crate::program::{
     AffectedPlayers, DieRollMode, LibraryPlacement, MoveSubjectRef, PlayerTriggerAction,
-    ResolutionChoiceDomain, ResolvingPlayer, SplitHalf, SubjectDestination,
+    ResolvingPlayer, SplitHalf, SubjectDestination,
 };
 
 impl EffectWindow {
@@ -123,7 +123,10 @@ impl EffectWindow {
         Ok(())
     }
 
-    fn suspend_for_random_resolution(&mut self, chooser: SeatId) -> Result<(), EffectError> {
+    pub(super) fn suspend_for_random_resolution(
+        &mut self,
+        chooser: SeatId,
+    ) -> Result<(), EffectError> {
         let Some(PendingWork::Resolution(cursor)) = self.pending_work.take() else {
             return Err(EffectError::WrongResolutionFrame);
         };
@@ -429,10 +432,10 @@ impl EffectWindow {
                     };
                     let ops = vec![
                         draw_op,
-                        Instruction::Discard {
-                            players: AffectedPlayers::One(discard_role),
-                            amount: ValueExpr::Literal(amount),
-                        },
+                        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+                            AffectedPlayers::One(discard_role),
+                            ValueExpr::Literal(amount),
+                        ))),
                         Instruction::MutateObject(Box::new(
                             crate::toolbox::MutateObjectSpec::connive_finalize(spec.source.clone()),
                         )),
@@ -1418,241 +1421,6 @@ impl EffectWindow {
                     }
                     _ => Ok(StepOutcome::Next(Instruction::MutatePlayer(spec))),
                 }
-            }
-            Instruction::ChooseValue { chooser, domain } => {
-                let cursor_snap = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let actor = self.resolving_player_identity_at(chooser, Some(&cursor_snap))?;
-                match domain {
-                    ResolutionChoiceDomain::Color => {
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            let labels = ["White", "Blue", "Black", "Red", "Green"]
-                                .into_iter()
-                                .map(str::to_owned)
-                                .collect();
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        let mana = match idx {
-                            0 => ManaType::White,
-                            1 => ManaType::Blue,
-                            2 => ManaType::Black,
-                            3 => ManaType::Red,
-                            _ => ManaType::Green,
-                        };
-                        if let Some(cur) = self.resolution_cursor_mut() {
-                            cur.chosen_effect_color = Some(mana);
-                        }
-                    }
-                    ResolutionChoiceDomain::Player { opponents_only } => {
-                        let seats: Vec<SeatId> = if opponents_only {
-                            self.combat_rules
-                                .opponents(self.window.participants(), actor)?
-                        } else {
-                            self.window.participants().to_vec()
-                        };
-                        match seats.as_slice() {
-                            [] => {}
-                            [only] => {
-                                if let Some(cur) = self.resolution_cursor_mut() {
-                                    cur.chosen_opponent = Some(*only);
-                                }
-                            }
-                            _ => {
-                                let chosen = self
-                                    .resolution_cursor_mut()
-                                    .and_then(|c| c.chosen_option_index.take());
-                                let Some(idx) = chosen else {
-                                    let labels = (0..seats.len())
-                                        .map(|i| format!("Player {}", i + 1))
-                                        .collect();
-                                    return Ok(StepOutcome::Pending(self.option_frame(
-                                        entry.id(),
-                                        index,
-                                        actor,
-                                        labels,
-                                    )?));
-                                };
-                                if let Some(&seat) = seats.get(usize::from(idx))
-                                    && let Some(cur) = self.resolution_cursor_mut()
-                                {
-                                    cur.chosen_opponent = Some(seat);
-                                }
-                            }
-                        }
-                    }
-                    ResolutionChoiceDomain::RandomPlayer { opponents_only } => {
-                        let seats: Vec<SeatId> = if opponents_only {
-                            self.combat_rules
-                                .opponents(self.window.participants(), actor)?
-                        } else {
-                            self.window.participants().to_vec()
-                        };
-                        match seats.as_slice() {
-                            [] => {}
-                            [only] => {
-                                if let Some(cur) = self.resolution_cursor_mut() {
-                                    cur.chosen_opponent = Some(*only);
-                                }
-                            }
-                            _ => {
-                                if !cursor_snap.results.random_player_ready {
-                                    self.suspend_for_random_resolution(actor)?;
-                                    return Ok(StepOutcome::Continue);
-                                }
-                                if let Some(cur) = self.resolution_cursor_mut() {
-                                    cur.results.random_player_ready = false;
-                                }
-                            }
-                        }
-                    }
-                    ResolutionChoiceDomain::CardType(allowed) => {
-                        let types = if allowed.is_empty() {
-                            vec![
-                                CardType::Artifact,
-                                CardType::Creature,
-                                CardType::Enchantment,
-                                CardType::Instant,
-                                CardType::Land,
-                                CardType::Planeswalker,
-                                CardType::Sorcery,
-                            ]
-                        } else {
-                            allowed
-                        };
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            let labels = types.iter().map(|t| format!("{t:?}")).collect();
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        if let Some(&ct) = types.get(usize::from(idx))
-                            && let Some(cur) = self.resolution_cursor_mut()
-                        {
-                            cur.results.chosen_card_type = Some(ct);
-                        }
-                    }
-                    ResolutionChoiceDomain::BasicLandType => {
-                        let types = [
-                            crate::land::LandType::Plains,
-                            crate::land::LandType::Island,
-                            crate::land::LandType::Swamp,
-                            crate::land::LandType::Mountain,
-                            crate::land::LandType::Forest,
-                        ];
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            let labels = ["Plains", "Island", "Swamp", "Mountain", "Forest"]
-                                .into_iter()
-                                .map(str::to_owned)
-                                .collect();
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        if let Some(&lt) = types.get(usize::from(idx))
-                            && let Some(cur) = self.resolution_cursor_mut()
-                        {
-                            cur.results.chosen_basic_land_type = Some(lt);
-                        }
-                    }
-                    ResolutionChoiceDomain::Number { min, max } => {
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            let labels = (min..=max).map(|n| n.to_string()).collect();
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        let value = min.saturating_add(u16::from(idx)).min(max);
-                        if let Some(cur) = self.resolution_cursor_mut() {
-                            cur.results.chosen_number = Some(i64::from(value).into());
-                        }
-                    }
-                    ResolutionChoiceDomain::LabeledOption(labels) => {
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        if let Some(cur) = self.resolution_cursor_mut() {
-                            cur.results.chosen_option_index = Some(idx);
-                        }
-                    }
-                    ResolutionChoiceDomain::CardName { nonland_only } => {
-                        let mut names = BTreeSet::new();
-                        for obj in self.window.cards().iter() {
-                            if let Some(card_id) = obj.card_id()
-                                && let Some(program) = self.programs.get(&card_id)
-                            {
-                                if nonland_only && program.has_type(CardType::Land) {
-                                    continue;
-                                }
-                                for name in program.names.iter() {
-                                    names.insert(name.as_str().to_owned());
-                                }
-                            }
-                        }
-                        let mut labels: Vec<String> = names.into_iter().take(254).collect();
-                        labels.push("Other card name".to_owned());
-                        let chosen = self
-                            .resolution_cursor_mut()
-                            .and_then(|c| c.chosen_option_index.take());
-                        let Some(idx) = chosen else {
-                            return Ok(StepOutcome::Pending(self.option_frame(
-                                entry.id(),
-                                index,
-                                actor,
-                                labels,
-                            )?));
-                        };
-                        if let Some(selected_name) = labels.get(usize::from(idx)).cloned() {
-                            if let Some(cur) = self.resolution_cursor_mut() {
-                                cur.results.chosen_card_name = Some(selected_name.clone());
-                            }
-                            if let StackKind::ActivatedAbility { source }
-                            | StackKind::TriggeredAbility { source } = entry.kind()
-                            {
-                                self.characteristics
-                                    .named_cards
-                                    .insert(source.id(), selected_name);
-                            }
-                        }
-                    }
-                }
-                self.advance_instruction()?;
-                Ok(StepOutcome::Continue)
             }
             Instruction::StackOp(spec) => match &spec.op {
                 crate::toolbox::StackOpKind::Discover { value } => {

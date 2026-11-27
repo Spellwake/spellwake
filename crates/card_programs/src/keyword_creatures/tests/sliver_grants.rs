@@ -692,18 +692,20 @@ fn crystalline_sliver_grants_shroud_to_noncreature_slivers_and_both_players() {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::Sacrifice {
-                players: spellwake_engine::program::AffectedPlayers::One(
-                    spellwake_engine::program::ResolvingPlayer::Controller,
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                    spellwake_engine::program::AffectedPlayers::One(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                    ),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    spellwake_engine::program::PermanentTypeFilter {
+                        any_types: Default::default(),
+                        required_types: [CardType::Creature].into(),
+                        forbidden_types: BTreeSet::new(),
+                        object_filter: None,
+                    },
                 ),
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                filter: spellwake_engine::program::PermanentTypeFilter {
-                    any_types: Default::default(),
-                    required_types: [CardType::Creature].into(),
-                    forbidden_types: BTreeSet::new(),
-                    object_filter: None,
-                },
-            }],
+            ))],
         ),
     );
     let state = world(

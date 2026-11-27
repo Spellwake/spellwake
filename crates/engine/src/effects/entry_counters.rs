@@ -242,8 +242,8 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
                 }
                 _ => false,
             },
-            Instruction::ChooseOption { options, .. } => {
-                options.iter().any(|b| body_uses_damage_pairs(&b.body))
+            Instruction::PromptChoice(spec) => {
+                spec.option_branches.iter().any(body_uses_damage_pairs)
             }
             Instruction::ScheduleDelayedEventTrigger { trigger, body, .. } => {
                 trigger_event_uses_damage_pairs(&trigger.event)
@@ -604,8 +604,8 @@ fn body_uses_damage_dealt_by(body: &crate::program::ExecutableBody) -> bool {
         | Instruction::ScheduleDelayedEventTrigger { body, .. }
         | Instruction::EmitReflexiveTrigger { body, .. }
         | Instruction::FixedTargetClause(body) => body_uses_damage_dealt_by(body),
-        Instruction::ChooseOption { options, .. } => {
-            options.iter().any(|b| body_uses_damage_dealt_by(&b.body))
+        Instruction::PromptChoice(spec) => {
+            spec.option_branches.iter().any(body_uses_damage_dealt_by)
         }
         Instruction::DrawCards(spec) => value_expr_uses_damage_dealt_by(&spec.amount),
         Instruction::AdjustLife(spec) => match &spec.op {
@@ -1916,9 +1916,10 @@ fn body_grants_next_spell_storm(body: &crate::program::ExecutableBody) -> bool {
         | Instruction::FixedTargetClause(body)
         | Instruction::ForEach { body, .. }
         | Instruction::ForEachPlayerQuery { body, .. } => body_grants_next_spell_storm(body),
-        Instruction::ChooseOption { options, .. } => options
+        Instruction::PromptChoice(spec) => spec
+            .option_branches
             .iter()
-            .any(|b| body_grants_next_spell_storm(&b.body)),
+            .any(body_grants_next_spell_storm),
         Instruction::MutatePlayer(spec) => match &spec.op {
             crate::toolbox::PlayerMutation::OfferAnyPlayer {
                 cost_body,

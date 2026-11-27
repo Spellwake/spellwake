@@ -2081,12 +2081,14 @@ pub(super) fn body(
                         ),
                         min: 1,
                         max: 1,
+                        random: false,
                     },
                     category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                     bind_to: spellwake_engine::toolbox::BindingId(0),
                     bind_unchosen: None,
                     tag_partition: None,
                     auto_resolve_trivial: true,
+                    option_branches: Vec::new(),
                 })),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::Sub(
@@ -2624,10 +2626,10 @@ pub(super) fn body(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(cards(
                     draw,
                 )?),
-                Instruction::Discard {
-                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    amount: cards(discard)?,
-                },
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                    cards(discard)?,
+                ))),
             ],
         ));
     }
@@ -2853,10 +2855,10 @@ pub(super) fn body(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(cards(
                     cost,
                 )?),
-                Instruction::Discard {
-                    players: self_cards,
-                    amount: cards(discarded)?,
-                },
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    self_cards,
+                    cards(discarded)?,
+                ))),
             ],
         )
     } else if matches!(
@@ -2865,20 +2867,22 @@ pub(super) fn body(
     ) {
         (
             BodyTarget::None,
-            vec![Instruction::Sacrifice {
-                players: if raw.starts_with("each opponent") {
-                    AffectedPlayers::EachOpponent
-                } else {
-                    AffectedPlayers::EachPlayer
-                },
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                filter: PermanentTypeFilter {
-                    any_types: Default::default(),
-                    required_types: BTreeSet::from([CardType::Creature]),
-                    forbidden_types: BTreeSet::new(),
-                    object_filter: None,
-                },
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                    if raw.starts_with("each opponent") {
+                        AffectedPlayers::EachOpponent
+                    } else {
+                        AffectedPlayers::EachPlayer
+                    },
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    PermanentTypeFilter {
+                        any_types: Default::default(),
+                        required_types: BTreeSet::from([CardType::Creature]),
+                        forbidden_types: BTreeSet::new(),
+                        object_filter: None,
+                    },
+                ),
+            ))],
         )
     } else if let Some(n) = raw.strip_prefix("draw ") {
         (
@@ -2904,10 +2908,9 @@ pub(super) fn body(
     } else if let Some(n) = raw.strip_prefix("discard ") {
         (
             BodyTarget::None,
-            vec![Instruction::Discard {
-                players: self_cards,
-                amount: cards(n)?,
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::discard(self_cards, cards(n)?),
+            ))],
         )
     } else if let Some(n) = raw.strip_prefix("put ").and_then(|s| {
         s.strip_suffix(" +1/+1 counter on target creature")
@@ -2972,18 +2975,19 @@ fn modal_body(
         }
         "Each player discards a card." => (
             BodyTarget::None,
-            vec![Instruction::Discard {
-                players: AffectedPlayers::EachPlayer,
-                amount: one(),
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::discard(AffectedPlayers::EachPlayer, one()),
+            ))],
         ),
         "Each player sacrifices a creature of their choice." => (
             BodyTarget::None,
-            vec![Instruction::Sacrifice {
-                players: AffectedPlayers::EachPlayer,
-                amount: one(),
-                filter: creature(),
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                    AffectedPlayers::EachPlayer,
+                    one(),
+                    creature(),
+                ),
+            ))],
         ),
         "Each player loses 1 life and draws a card." => (
             BodyTarget::None,
@@ -2997,18 +3001,22 @@ fn modal_body(
         ),
         "Target opponent sacrifices a creature of their choice." => (
             BodyTarget::SingleOpponent,
-            vec![Instruction::Sacrifice {
-                players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                amount: one(),
-                filter: creature(),
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                    one(),
+                    creature(),
+                ),
+            ))],
         ),
         "Target opponent discards two cards." => (
             BodyTarget::SingleOpponent,
-            vec![Instruction::Discard {
-                players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                    spellwake_engine::program::ValueExpr::Literal(2.into()),
+                ),
+            ))],
         ),
         "Target opponent loses 5 life." => (
             BodyTarget::SingleOpponent,

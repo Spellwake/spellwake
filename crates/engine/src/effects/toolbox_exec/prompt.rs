@@ -179,6 +179,42 @@ impl EffectWindow {
         })
     }
 
+    pub(super) fn satisfies_max_total_power(
+        &self,
+        entry: &StackEntry,
+        ids: &[ObjectId],
+        max_total_power: &crate::program::ValueExpr,
+    ) -> Result<bool, EffectError> {
+        if ids.is_empty() {
+            return Ok(true);
+        }
+        let limit = self.resolve_value_expr_with_source(
+            entry.controller(),
+            max_total_power,
+            self.resolution_cursor(),
+            self.entry_source_object(Some(entry)),
+        )?;
+        let evaluated = self.evaluated_characteristics()?;
+        let mut total = RulesInteger::from(0);
+        for &id in ids {
+            let Some(power) = evaluated.get(id).and_then(|obj| {
+                obj.power_toughness
+                    .as_ref()
+                    .map(|pt| pt.derived.power.clone())
+                    .or_else(|| {
+                        obj.defined
+                            .printed_pt
+                            .as_ref()
+                            .map(|pt| pt.baseline().power)
+                    })
+            }) else {
+                return Ok(false);
+            };
+            total = total.plus(&power);
+        }
+        Ok(total <= limit)
+    }
+
     pub(super) fn record_choice_and_emit(
         &mut self,
         entry: &StackEntry,
@@ -251,7 +287,9 @@ impl EffectWindow {
                     hidden: *hidden,
                 }
             }
-            PromptDomain::Players { selector, min, max } => {
+            PromptDomain::Players {
+                selector, min, max, ..
+            } => {
                 let candidates =
                     self.eval_player_selector_at(controller, Some(entry), selector, cursor)?;
                 let cap = u8::try_from(candidates.len()).unwrap_or(u8::MAX);
@@ -402,14 +440,34 @@ impl EffectWindow {
         match reply {
             PromptChoiceReply::Objects(chosen) => {
                 if let PromptDomain::Objects {
-                    constraint: Some(constraint),
+                    constraint,
+                    max_total_power,
                     ..
                 } = &spec.domain
-                    && !self.satisfies_selection_constraint(&chosen, *constraint)?
                 {
-                    return Err(EffectError::SelectionOutsideDomain);
+                    if let Some(constraint) = constraint
+                        && !self.satisfies_selection_constraint(&chosen, *constraint)?
+                    {
+                        return Err(EffectError::SelectionOutsideDomain);
+                    }
+                    if let Some(expr) = max_total_power
+                        && !self.satisfies_max_total_power(entry, &chosen, expr)?
+                    {
+                        return Err(EffectError::SelectionOutsideDomain);
+                    }
                 }
                 chosen_count = chosen.len();
+                let mirror_lki = if spec.bind_to == crate::toolbox::BindingId(0) {
+                    let eval_lki = self.evaluated_characteristics()?;
+                    Some(
+                        chosen
+                            .iter()
+                            .filter_map(|id| eval_lki.get(*id).cloned())
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
                 if let Some(unchosen_slot) = spec.bind_unchosen
                     && let ResolvedPromptDomain::Objects { candidates, .. } = resolved_domain
                 {
@@ -424,6 +482,14 @@ impl EffectWindow {
                     }
                 }
                 if let Some(cur) = self.resolution_cursor_mut() {
+                    if let Some(lki) = mirror_lki {
+                        cur.vowed_creatures.extend(chosen.iter().copied());
+                        cur.results.last_action_lki = lki;
+                        cur.results.last_moved_objects = chosen.clone();
+                        cur.results.last_action_succeeded = !chosen.is_empty();
+                        cur.results.last_action_count =
+                            Some(RulesInteger::from_usize(chosen.len()));
+                    }
                     cur.env.bind(spec.bind_to, ExecValue::Objects(chosen));
                 }
             }
@@ -528,6 +594,13 @@ impl EffectWindow {
             }
             PromptChoiceReply::CardName(name) => {
                 chosen_count = 1;
+                if let crate::stack_window::StackKind::ActivatedAbility { source }
+                | crate::stack_window::StackKind::TriggeredAbility { source } = entry.kind()
+                {
+                    self.characteristics
+                        .named_cards
+                        .insert(source.id(), name.clone());
+                }
                 if let Some(cur) = self.resolution_cursor_mut() {
                     cur.results.chosen_card_name = Some(name.clone());
                     cur.env.bind(spec.bind_to, ExecValue::CardName(name));

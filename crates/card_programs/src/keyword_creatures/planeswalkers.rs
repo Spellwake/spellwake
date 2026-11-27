@@ -289,25 +289,29 @@ pub(super) fn compile(
         if let Some((target, instructions)) = match effect {
             "Each player discards a card." => Some((
                 BodyTarget::None,
-                vec![Instruction::Discard {
-                    players: spellwake_engine::program::AffectedPlayers::EachPlayer,
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        spellwake_engine::program::AffectedPlayers::EachPlayer,
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
+                ))],
             )),
             "Target player sacrifices a creature." => Some((
                 BodyTarget::SinglePlayer,
-                vec![Instruction::Sacrifice {
-                    players: spellwake_engine::program::AffectedPlayers::One(
-                        ResolvingPlayer::TargetPlayer,
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                        spellwake_engine::program::AffectedPlayers::One(
+                            ResolvingPlayer::TargetPlayer,
+                        ),
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        spellwake_engine::program::PermanentTypeFilter {
+                            any_types: BTreeSet::new(),
+                            required_types: BTreeSet::from([CardType::Creature]),
+                            forbidden_types: BTreeSet::new(),
+                            object_filter: None,
+                        },
                     ),
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    filter: spellwake_engine::program::PermanentTypeFilter {
-                        any_types: BTreeSet::new(),
-                        required_types: BTreeSet::from([CardType::Creature]),
-                        forbidden_types: BTreeSet::new(),
-                        object_filter: None,
-                    },
-                }],
+                ))],
             )),
             "Tap target permanent. It doesn't untap during its controller's next untap step." => {
                 Some((
@@ -568,12 +572,14 @@ pub(super) fn compile(
                             chooser: ResolvingPlayer::Controller,
                             instructions: 2,
                         },
-                        Instruction::Discard {
-                            players: spellwake_engine::program::AffectedPlayers::One(
-                                ResolvingPlayer::Controller,
+                        Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                                spellwake_engine::program::AffectedPlayers::One(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                spellwake_engine::program::ValueExpr::Literal(1.into()),
                             ),
-                            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
+                        )),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                             spellwake_engine::program::ValueExpr::event(
                                 spellwake_engine::program::EventValueKind::LargestDiscard,

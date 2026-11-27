@@ -2,9 +2,7 @@ use super::*;
 pub(super) use control_misc::lower_loop_player_sub_body;
 use spellwake_engine::characteristics::ActivationSuppression;
 use spellwake_engine::day_night::DayNight;
-use spellwake_engine::program::{
-    DynamicStatAnchor, LinkedExileGroup, ResolutionChoiceDomain, StackCopyTarget,
-};
+use spellwake_engine::program::{DynamicStatAnchor, LinkedExileGroup, StackCopyTarget};
 use spellwake_oracle_compiler::ast::ExchangeKind;
 
 mod combat_damage;
@@ -659,12 +657,6 @@ pub(super) fn lower_resolving_player_in_context(
             _ if builder.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::ChooseValue {
-                        domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
-                        ..
-                    }
-                ) || matches!(
-                    op,
                     Instruction::MutatePlayer(spec)
                         if matches!(
                             spec.op,
@@ -789,12 +781,6 @@ pub(super) fn lower_resolving_player_in_context(
             } else if builder.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::ChooseValue {
-                        domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
-                        ..
-                    }
-                ) || matches!(
-                    op,
                     Instruction::MutatePlayer(spec)
                         if matches!(
                             spec.op,
@@ -859,7 +845,6 @@ fn has_prior_non_attached_object_op(op: &Instruction) -> bool {
                 )
         }
         Instruction::CreateTokens { .. }
-        | Instruction::Sacrifice { .. }
         | Instruction::SearchLibrary { .. }
         | Instruction::LookTopChooseExt { .. }
         | Instruction::RevealUntilMatchExt { .. } => true,
@@ -1196,13 +1181,27 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
                     _ => false,
                 }
         }
-        Instruction::PromptChoice(spec) => match &spec.domain {
-            spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
-            | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
-                value_expr_uses_chosen_x(min) || value_expr_uses_chosen_x(max)
-            }
-            _ => false,
-        },
+        Instruction::PromptChoice(spec) => {
+            let domain_x = match &spec.domain {
+                spellwake_engine::toolbox::PromptDomain::Objects {
+                    min,
+                    max,
+                    max_total_power,
+                    ..
+                } => {
+                    value_expr_uses_chosen_x(min)
+                        || value_expr_uses_chosen_x(max)
+                        || max_total_power
+                            .as_deref()
+                            .is_some_and(value_expr_uses_chosen_x)
+                }
+                spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                    value_expr_uses_chosen_x(min) || value_expr_uses_chosen_x(max)
+                }
+                _ => false,
+            };
+            domain_x || spec.option_branches.iter().any(body_uses_chosen_x)
+        }
         Instruction::ApplyContinuous(spec) => match &spec.payload {
             spellwake_engine::toolbox::ContinuousPayload::DynamicBoost {
                 power, toughness, ..
@@ -1258,22 +1257,7 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             spellwake_engine::toolbox::StackOpKind::Discover { value: amount }
                 if value_expr_uses_chosen_x(amount)
         ),
-        Instruction::Discard { amount, .. }
-        | Instruction::Sacrifice { amount, .. }
-        | Instruction::LookTopChooseExt { count: amount, .. } => value_expr_uses_chosen_x(amount),
-
-        Instruction::ChooseObjects {
-            min,
-            max,
-            max_total_power,
-            ..
-        } => {
-            value_expr_uses_chosen_x(min)
-                || value_expr_uses_chosen_x(max)
-                || max_total_power
-                    .as_ref()
-                    .is_some_and(value_expr_uses_chosen_x)
-        }
+        Instruction::LookTopChooseExt { count: amount, .. } => value_expr_uses_chosen_x(amount),
         Instruction::CreateTokens { creations } => creations
             .iter()
             .any(|c| value_expr_uses_chosen_x(&c.amount)),
@@ -1286,9 +1270,6 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             value_expr_uses_chosen_x(count) || body_uses_chosen_x(body.as_ref())
         }
         Instruction::FixedTargetClause(body) => body_uses_chosen_x(body.as_ref()),
-        Instruction::ChooseOption { options, .. } => {
-            options.iter().any(|b| body_uses_chosen_x(&b.body))
-        }
         _ => false,
     })
 }

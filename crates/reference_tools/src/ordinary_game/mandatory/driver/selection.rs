@@ -11,12 +11,9 @@ use crate::ordinary_game::selection::{
     },
     probes::{self, AcceptedSelectionReceipt, ConsumedPlan, ProbeAuthorities, ReachedSelection},
 };
-use spellwake_engine::{
-    effects::{
-        ResolutionAcceptedGraveyardOrder, ResolutionAcceptedSelection,
-        ResolutionSelectionOperation, ResolutionSelectionStage,
-    },
-    program::CardType,
+use spellwake_engine::effects::{
+    ResolutionAcceptedGraveyardOrder, ResolutionAcceptedSelection, ResolutionSelectionOperation,
+    ResolutionSelectionStage,
 };
 impl FinitePolicy {
     pub(in crate::ordinary_game) fn bind_selection_initializer(
@@ -197,10 +194,15 @@ impl FinitePolicy {
         match (operation, actual) {
             (
                 SelectionOperation::SacrificeCreature,
-                ResolutionSelectionOperation::Sacrifice { filter },
+                ResolutionSelectionOperation::Sacrifice { primary, secondary },
             ) => {
-                filter.required_types == BTreeSet::from([CardType::Creature])
-                    && filter.forbidden_types.is_empty()
+                secondary.is_none()
+                    && matches!(
+                        primary,
+                        spellwake_engine::program::ObjectFilter::Clause(c)
+                            if c.required_types == spellwake_engine::program::CardTypeMask::CREATURE
+                                && c.forbidden_types.is_empty()
+                    )
             }
             (SelectionOperation::DiscardCards, ResolutionSelectionOperation::Discard) => true,
             _ => false,

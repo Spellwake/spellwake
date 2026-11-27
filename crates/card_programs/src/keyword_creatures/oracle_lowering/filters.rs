@@ -7826,22 +7826,21 @@ fn has_prior_exile_non_target(context: Option<(&BodyBuilder, bool)>) -> bool {
 fn has_prior_single_sacrifice(context: Option<(&BodyBuilder, bool)>) -> bool {
     context.is_some_and(|(b, _)| {
         b.instructions.iter().any(|op| {
-            matches!(
-                op,
-                Instruction::Sacrifice {
-                    players: AffectedPlayers::One(_),
-                    amount,
-                    ..
-                } if *amount == ValueExpr::literal(1)
-            ) || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                .is_some_and(|spec| {
-                    matches!(
-                        spec.destination,
-                        spellwake_engine::toolbox::ZoneDest::Graveyard {
-                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
-                        }
-                    )
-                })
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op).is_some_and(
+                |spec| {
+                    if let Some((players, amount, _, _)) = spec.as_group_sacrifice() {
+                        matches!(players, AffectedPlayers::One(_))
+                            && *amount == ValueExpr::literal(1)
+                    } else {
+                        matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                            }
+                        )
+                    }
+                },
+            )
         })
     })
 }
@@ -7882,12 +7881,6 @@ fn resolve_that_player_for_value_expr(
         | BodyTarget::AnyGraveyardCreatureOrPlaneswalker => Ok(ResolvingPlayer::TargetOwner),
         _ if builder.instructions.iter().any(|op| {
             matches!(
-                op,
-                Instruction::ChooseValue {
-                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
-                    ..
-                }
-            ) || matches!(
                 op,
                 Instruction::MutatePlayer(spec)
                     if matches!(
@@ -8872,12 +8865,6 @@ fn lower_value_expr_inner(
                 };
                 let action_matches = matches!(
                     (kind, last_ins),
-                    (
-                        PriorActionRefKind::SacrificedThisWay,
-                        Instruction::Sacrifice { .. },
-                    )
-                ) || matches!(
-                    (kind, last_ins),
                     (PriorActionRefKind::TappedThisWay, Instruction::MutateObject(spec))
                         if matches!(
                             spec.op,
@@ -9395,16 +9382,18 @@ fn lower_value_expr_inner(
                     });
                     let prior_discard = context.is_some_and(|(b, _)| {
                         b.instructions.iter().any(|op| {
-                            matches!(op, Instruction::Discard { .. })
-                                || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                                    .is_some_and(|spec| {
-                                        matches!(
-                                            spec.destination,
-                                            spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard
-                                            }
-                                        )
-                                    })
+                            crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(
+                                op,
+                            )
+                            .is_some_and(|spec| {
+                                matches!(
+                                    spec.destination,
+                                    spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                        semantics:
+                                            spellwake_engine::toolbox::GraveyardSemantics::Discard
+                                    }
+                                )
+                            })
                         })
                     });
                     let no_target = context.is_none_or(|(b, _)| b.target == BodyTarget::None);

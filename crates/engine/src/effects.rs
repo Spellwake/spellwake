@@ -10513,9 +10513,6 @@ impl EffectWindow {
     ) -> Result<bool, EffectError> {
         let evaluated = self.evaluated_characteristics()?;
         Ok(match instruction {
-            Instruction::Sacrifice { .. } | Instruction::Discard { .. } => {
-                return Err(EffectError::InconsistentProgram);
-            }
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
@@ -10534,7 +10531,8 @@ impl EffectWindow {
                     crate::toolbox::ZoneDest::Delayed(
                         crate::toolbox::DelayedZoneAction::ReturnGraveyardToHand(_)
                     )
-                ) =>
+                ) || spec.as_group_sacrifice().is_some()
+                    || spec.as_group_discard().is_some() =>
             {
                 return Err(EffectError::InconsistentProgram);
             }
@@ -10645,9 +10643,6 @@ impl EffectWindow {
             // The iterative driver owns these paths before target availability.
             Instruction::OptionalSequence { .. }
             | Instruction::Jump { .. }
-            | Instruction::ChooseObjects { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::ChooseValue { .. }
             | Instruction::ZoneOp(_)
             | Instruction::AdjustLife(_)
             | Instruction::MutatePlayer(_)

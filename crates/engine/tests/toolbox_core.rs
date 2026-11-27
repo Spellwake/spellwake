@@ -525,6 +525,7 @@ fn instant_custom_card_partition_sectors_dilemma_trigger_and_atomic_rejection() 
                 bind_unchosen: None,
                 tag_partition: Some(TagKey::Partition(7)),
                 auto_resolve_trivial: false,
+                option_branches: Vec::new(),
             })),
             Instruction::ZoneOp(Box::new(ZoneOpSpec {
                 source: ObjectQuery::Tagged {
@@ -746,6 +747,7 @@ fn for_each_suspends_and_resumes_prompt_choice_per_item() {
                         bind_unchosen: None,
                         tag_partition: None,
                         auto_resolve_trivial: false,
+                        option_branches: Vec::new(),
                     })),
                     Instruction::UpdateStateTrack {
                         key: Box::new(StateTrackKeySpec {
@@ -4102,5 +4104,251 @@ fn phase16_surveil_populates_last_moved_objects_when_milled_to_graveyard() {
         moved.zone(),
         ObjectZone::Hand(P0),
         "Surveil into graveyard must populate last_moved_objects for follow-up LastMoved move"
+    );
+}
+
+#[test]
+fn prompt_choice_choose_option_splices_selected_branch_body() {
+    let vocab = vocabulary();
+    let modal = sorcery(
+        vec![
+            Instruction::PromptChoice(Box::new(PromptChoiceSpec::choose_option(
+                ResolvingPlayer::Controller,
+                vec![
+                    (
+                        "Gain 4 life".into(),
+                        ExecutableBody::new(
+                            BodyTarget::None,
+                            vec![Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                                ValueExpr::literal(4),
+                            )))],
+                        ),
+                    ),
+                    (
+                        "Draw 2 cards".into(),
+                        ExecutableBody::new(
+                            BodyTarget::None,
+                            vec![Instruction::DrawCards(Box::new(DrawCardsSpec::simple(
+                                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                                ValueExpr::literal(2),
+                            )))],
+                        ),
+                    ),
+                ],
+            ))),
+            Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                ValueExpr::literal(1),
+            ))),
+        ],
+        &vocab,
+    );
+
+    let game = init_world(
+        vocab.clone(),
+        vec![
+            in_hand(1, P0, modal),
+            in_library(2, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+            in_library(3, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+        ],
+    );
+
+    let paused = cast_untargeted(&game, 1);
+    let decision = paused
+        .state()
+        .pending_decision()
+        .expect("choose_option prompt pending");
+    assert_eq!(decision.chooser(), P0);
+    match decision.frame() {
+        RuleFrame::PromptChoice(frame) => match &frame.domain {
+            ResolvedPromptDomain::Options {
+                labels,
+                min,
+                max,
+                allow_repeat,
+            } => {
+                assert_eq!(labels, &["Gain 4 life", "Draw 2 cards"]);
+                assert_eq!(*min, 1);
+                assert_eq!(*max, 1);
+                assert!(!allow_repeat);
+            }
+            other => panic!("expected Options prompt domain, got {other:?}"),
+        },
+        other => panic!("expected PromptChoice frame, got {other:?}"),
+    }
+
+    // Branch 0: gain 4 life, then trailing +1 life = 25; library cards stay untouched.
+    let branch0 = submit(
+        paused.state(),
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Options(vec![0])),
+        },
+    )
+    .into_state();
+    assert!(branch0.pending_decision().is_none());
+    assert_eq!(branch0.execution().life_total(P0), Some(&25.into()));
+    assert_eq!(
+        branch0
+            .execution()
+            .window()
+            .cards()
+            .get(object(&branch0, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Library(P0)
+    );
+
+    // Branch 1: draw 2 cards, then trailing +1 life = 21.
+    let branch1 = submit(
+        paused.state(),
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Options(vec![1])),
+        },
+    )
+    .into_state();
+    assert!(branch1.pending_decision().is_none());
+    assert_eq!(branch1.execution().life_total(P0), Some(&21.into()));
+    assert_eq!(
+        branch1
+            .execution()
+            .window()
+            .cards()
+            .get(object(&branch1, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Hand(P0)
+    );
+    assert_eq!(
+        branch1
+            .execution()
+            .window()
+            .cards()
+            .get(object(&branch1, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Hand(P0)
+    );
+}
+
+#[test]
+fn prompt_choice_choose_objects_enforces_max_total_power_and_binds_unchosen() {
+    let vocab = vocabulary();
+    let unchosen = PromptChoiceSpec::unchosen_binding();
+    let spell = sorcery(
+        vec![
+            Instruction::PromptChoice(Box::new(PromptChoiceSpec::choose_objects(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                ObjectQuery::zone(QueryZone::Battlefield, ObjectFilter::creature()),
+                ValueExpr::literal(0),
+                ValueExpr::literal(99),
+                false,
+                Some(ValueExpr::literal(4)),
+                Some(unchosen),
+            ))),
+            Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                ObjectQuery::Bound(unchosen),
+                ZoneDest::Graveyard {
+                    semantics: GraveyardSemantics::Destroy {
+                        allow_regenerate: true,
+                    },
+                },
+            ))),
+        ],
+        &vocab,
+    );
+
+    let game = init_world(
+        vocab.clone(),
+        vec![
+            in_hand(1, P0, spell),
+            bf(2, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+            bf(3, P0, bear(2, 2, BTreeSet::new(), &vocab)),
+            bf(4, P1, bear(3, 3, BTreeSet::new(), &vocab)),
+        ],
+    );
+    let b2 = object(&game, 2);
+    let b3 = object(&game, 3);
+    let b4 = object(&game, 4);
+
+    let paused = cast_untargeted(&game, 1);
+    let decision = paused
+        .state()
+        .pending_decision()
+        .expect("choose_objects prompt pending");
+    assert_eq!(decision.chooser(), P0);
+    match decision.frame() {
+        RuleFrame::PromptChoice(frame) => match &frame.domain {
+            ResolvedPromptDomain::Objects {
+                candidates,
+                min,
+                max,
+                hidden,
+            } => {
+                assert_eq!(candidates.len(), 3);
+                assert_eq!(*min, 0);
+                assert_eq!(*max, 3);
+                assert!(!hidden);
+            }
+            other => panic!("expected Objects prompt domain, got {other:?}"),
+        },
+        other => panic!("expected PromptChoice frame, got {other:?}"),
+    }
+
+    // Total power 2 + 3 = 5 exceeds max_total_power = 4; must reject atomically.
+    let rejected = attempt(
+        paused.state(),
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Objects(vec![b2, b4])),
+        },
+    );
+    assert!(
+        rejected.is_err(),
+        "selection exceeding max_total_power must be rejected"
+    );
+
+    // Legal reply: choose b2 and b3 (total power 4 <= 4); unchosen b4 is destroyed.
+    let done = submit(
+        paused.state(),
+        P0,
+        GameCommand::Reply {
+            decision: decision.id(),
+            choice: DecisionReply::PromptChoice(PromptChoiceReply::Objects(vec![b2, b3])),
+        },
+    )
+    .into_state();
+    assert!(done.pending_decision().is_none());
+    assert_eq!(
+        done.execution()
+            .window()
+            .cards()
+            .get(object(&done, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Battlefield
+    );
+    assert_eq!(
+        done.execution()
+            .window()
+            .cards()
+            .get(object(&done, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Battlefield
+    );
+    assert_eq!(
+        done.execution()
+            .window()
+            .cards()
+            .get(object(&done, 4))
+            .unwrap()
+            .zone(),
+        ObjectZone::Graveyard(P1)
     );
 }

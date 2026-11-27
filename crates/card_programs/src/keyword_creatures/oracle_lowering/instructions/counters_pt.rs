@@ -496,16 +496,18 @@ pub(super) fn lower_counters_pt_instruction(
                     if obj.has_target_player() {
                         None
                     } else {
-                        trial.instructions.push(Instruction::ChooseObjects {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            source_zone,
-                            filter: Box::new(obj),
-                            min: ValueExpr::literal(1),
-                            max: ValueExpr::literal(1),
-                            distinct_powers: false,
-                            max_total_power: None,
-                            unchosen_action: None,
-                        });
+                        trial.instructions.extend(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                                AffectedPlayers::One(ResolvingPlayer::Controller),
+                                source_zone,
+                                obj,
+                                ValueExpr::literal(1),
+                                ValueExpr::literal(1),
+                                false,
+                                None,
+                                None,
+                            ),
+                        );
                         Some(EffectSubject::LastMoved)
                     }
                 }
@@ -1869,15 +1871,16 @@ pub(super) fn lower_counters_pt_instruction(
                                     ),
                                 ],
                             };
-                            branches.push(ChooseOptionBranch {
-                                label: label.to_string(),
-                                body: ExecutableBody::new(BodyTarget::None, ops),
-                            });
+                            branches.push((
+                                label.to_string(),
+                                ExecutableBody::new(BodyTarget::None, ops),
+                            ));
                         }
-                        trial.instructions.push(Instruction::ChooseOption {
-                            chooser,
-                            options: branches,
-                        });
+                        trial.instructions.push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                                chooser, branches,
+                            ),
+                        )));
                         *builder = trial;
                         bound_subject_already = trial_bound;
                         handled_prot = true;
@@ -3453,13 +3456,13 @@ pub(super) fn lower_counters_pt_instruction(
                                 branches_ok = false;
                                 break;
                             };
-                            branches.push(ChooseOptionBranch {
-                                label: format!("{opt_name} counter"),
-                                body: ExecutableBody::new(
+                            branches.push((
+                                format!("{opt_name} counter"),
+                                ExecutableBody::new(
                                     BodyTarget::None,
                                     vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(*direct_subj, *opt_ck, amt_expr)],
                                 ),
-                            });
+                            ));
                             continue;
                         }
                         let mut sub = BodyBuilder::with_trigger_hint(trial.trigger_hint);
@@ -3486,16 +3489,18 @@ pub(super) fn lower_counters_pt_instruction(
                             branches_ok = false;
                             break;
                         }
-                        branches.push(ChooseOptionBranch {
-                            label: format!("{opt_name} counter"),
-                            body: ExecutableBody::new(BodyTarget::None, sub.instructions),
-                        });
+                        branches.push((
+                            format!("{opt_name} counter"),
+                            ExecutableBody::new(BodyTarget::None, sub.instructions),
+                        ));
                     }
                     if branches_ok && branches.len() >= 2 {
-                        trial.instructions.push(Instruction::ChooseOption {
-                            chooser: ResolvingPlayer::Controller,
-                            options: branches,
-                        });
+                        trial.instructions.push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                                ResolvingPlayer::Controller,
+                                branches,
+                            ),
+                        )));
                         *builder = trial;
                         return Ok(());
                     }
@@ -4914,13 +4919,13 @@ pub(super) fn lower_counters_pt_instruction(
                 vocabulary,
             )
             .map_err(|_| "oracle:token-def-invalid")?;
-            let counter_branch = ChooseOptionBranch {
-                label: "Put +1/+1 counters on this creature".to_owned(),
-                body: ExecutableBody::new(BodyTarget::None, vec![counter_op]),
-            };
-            let token_branch = ChooseOptionBranch {
-                label: "Create a white Spirit creature token".to_owned(),
-                body: ExecutableBody::new(
+            let counter_branch = (
+                "Put +1/+1 counters on this creature".to_owned(),
+                ExecutableBody::new(BodyTarget::None, vec![counter_op]),
+            );
+            let token_branch = (
+                "Create a white Spirit creature token".to_owned(),
+                ExecutableBody::new(
                     BodyTarget::None,
                     vec![Instruction::CreateTokens {
                         creations: vec![TokenCreation {
@@ -4933,11 +4938,15 @@ pub(super) fn lower_counters_pt_instruction(
                         }],
                     }],
                 ),
-            };
-            builder.instructions.push(Instruction::ChooseOption {
-                chooser: ResolvingPlayer::Controller,
-                options: vec![counter_branch, token_branch],
-            });
+            );
+            builder
+                .instructions
+                .push(Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                        ResolvingPlayer::Controller,
+                        vec![counter_branch, token_branch],
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::DoubleStatOrCounters {
@@ -5370,10 +5379,12 @@ pub(super) fn lower_counters_pt_instruction(
                     },
                 })
             } else if kind_low.contains("basic land type") || kind_low.contains("basic_land_type") {
-                trial.instructions.push(Instruction::ChooseValue {
-                    chooser: ResolvingPlayer::Controller,
-                    domain: ResolutionChoiceDomain::BasicLandType,
-                });
+                trial.instructions.push(Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::toolbox::PromptDomain::basic_land_type(),
+                    ),
+                )));
                 ResolvedPartSpec::ChosenBasicLandType { add }
             } else if kind_low == "color"
                 || kind_low == "a color"
@@ -5382,10 +5393,12 @@ pub(super) fn lower_counters_pt_instruction(
                     && !kind_low.contains("colors")
                     && !kind_low.contains("colorless"))
             {
-                trial.instructions.push(Instruction::ChooseValue {
-                    chooser: ResolvingPlayer::Controller,
-                    domain: ResolutionChoiceDomain::Color,
-                });
+                trial.instructions.push(Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::toolbox::PromptDomain::color(),
+                    ),
+                )));
                 ResolvedPartSpec::ChosenColor { add }
             } else {
                 return Err("oracle:unsupported-become-chosen");
@@ -5546,15 +5559,17 @@ pub(super) fn lower_counters_pt_instruction(
                 if sub.target != trial.target || sub.instructions.is_empty() {
                     return Err("oracle:unsupported-grant-kw-choice");
                 }
-                options.push(ChooseOptionBranch {
-                    label: choice.trim().to_owned(),
-                    body: ExecutableBody::new(BodyTarget::None, sub.instructions),
-                });
+                options.push((
+                    choice.trim().to_owned(),
+                    ExecutableBody::new(BodyTarget::None, sub.instructions),
+                ));
             }
-            trial.instructions.push(Instruction::ChooseOption {
-                chooser: ResolvingPlayer::Controller,
-                options,
-            });
+            trial.instructions.push(Instruction::PromptChoice(Box::new(
+                spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                    ResolvingPlayer::Controller,
+                    options,
+                ),
+            )));
             *builder = trial;
             Ok(())
         }
@@ -5611,15 +5626,17 @@ pub(super) fn lower_counters_pt_instruction(
                 if sub.target != trial.target || sub.instructions.is_empty() {
                     return Err("oracle:unsupported-modify-pt-choice");
                 }
-                options.push(ChooseOptionBranch {
-                    label: format!("{dx}/{dy}"),
-                    body: ExecutableBody::new(BodyTarget::None, sub.instructions),
-                });
+                options.push((
+                    format!("{dx}/{dy}"),
+                    ExecutableBody::new(BodyTarget::None, sub.instructions),
+                ));
             }
-            trial.instructions.push(Instruction::ChooseOption {
-                chooser: ResolvingPlayer::Controller,
-                options,
-            });
+            trial.instructions.push(Instruction::PromptChoice(Box::new(
+                spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                    ResolvingPlayer::Controller,
+                    options,
+                ),
+            )));
             *builder = trial;
             Ok(())
         }
@@ -6778,11 +6795,11 @@ fn lower_animate_or_set_pt_extended(
             "that type" | "the chosen type" | "that basic land type" | "the chosen basic land type"
         ) {
             let prior_part = builder.instructions.iter().rev().find_map(|op| match op {
-                Instruction::ChooseValue {
-                    domain: ResolutionChoiceDomain::BasicLandType,
-                    ..
-                } => Some(ResolvedPartSpec::ChosenBasicLandType { add: false }),
                 Instruction::PromptChoice(spec) => match &spec.domain {
+                    spellwake_engine::toolbox::PromptDomain::Subtype {
+                        kind: spellwake_engine::toolbox::SubtypeChoiceKind::BasicLand,
+                        ..
+                    } => Some(ResolvedPartSpec::ChosenBasicLandType { add: false }),
                     spellwake_engine::toolbox::PromptDomain::Subtype {
                         legacy_slot: Some(into),
                         ..
@@ -6815,10 +6832,8 @@ fn lower_animate_or_set_pt_extended(
             && builder.instructions.iter().rev().any(|op| {
                 matches!(
                     op,
-                    Instruction::ChooseValue {
-                        domain: ResolutionChoiceDomain::Color,
-                        ..
-                    }
+                    Instruction::PromptChoice(spec)
+                        if matches!(spec.domain, spellwake_engine::toolbox::PromptDomain::Color { .. })
                 )
             })
         {
@@ -6874,7 +6889,7 @@ fn lower_animate_or_set_pt_extended(
                         let bt = lower_battlefield_body_target(&inner, vocabulary)?;
                         trial.bind_target(bt)?;
                     }
-                    let branches: Vec<ChooseOptionBranch> = land_opts
+                    let branches: Vec<(String, ExecutableBody)> = land_opts
                         .into_iter()
                         .map(|(lt, label)| {
                             let parts =
@@ -6893,16 +6908,18 @@ fn lower_animate_or_set_pt_extended(
                             } else {
                                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets, parts, dur)
                             };
-                            ChooseOptionBranch {
-                                label: label.to_string(),
-                                body: ExecutableBody::new(BodyTarget::None, vec![op]),
-                            }
+                            (
+                                label.to_string(),
+                                ExecutableBody::new(BodyTarget::None, vec![op]),
+                            )
                         })
                         .collect();
-                    trial.instructions.push(Instruction::ChooseOption {
-                        chooser: ResolvingPlayer::Controller,
-                        options: branches,
-                    });
+                    trial.instructions.push(Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                            ResolvingPlayer::Controller,
+                            branches,
+                        ),
+                    )));
                     *builder = trial;
                     return Ok(());
                 }

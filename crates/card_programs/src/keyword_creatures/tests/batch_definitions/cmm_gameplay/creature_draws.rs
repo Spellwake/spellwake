@@ -382,10 +382,10 @@ fn cmm_zones_ghost_of_ramirez_depietro_evades_large_blockers_and_returns_recentl
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::None,
-                    Instruction::Discard {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::Controller),
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ))),
                 ),
             ),
             seed(

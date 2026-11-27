@@ -69,15 +69,16 @@ fn selected_body() -> ExecutableBody {
                 bind_unchosen: None,
                 tag_partition: None,
                 auto_resolve_trivial: false,
+                option_branches: Vec::new(),
             })),
-            Instruction::Discard {
-                players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                amount: crate::program::ValueExpr::count_battlefield(
+            Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                crate::program::ValueExpr::count_battlefield(
                     crate::program::ObjectFilter::any()
                         .controlled()
                         .of_chosen_slot(slot()),
                 ),
-            },
+            ))),
             gain(4),
         ],
     )
@@ -118,6 +119,7 @@ fn setup() -> GameState {
                             bind_unchosen: None,
                             tag_partition: None,
                             auto_resolve_trivial: false,
+                            option_branches: Vec::new(),
                         })),
                         Instruction::StackOp(Box::new(
                             crate::toolbox::StackOpSpec::copy_targeted_spell(),

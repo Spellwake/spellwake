@@ -14,23 +14,23 @@ fn gain() -> Instruction {
 }
 
 fn discard(player: ResolvingPlayer, amount: i64) -> Instruction {
-    Instruction::Discard {
-        players: AffectedPlayers::One(player),
-        amount: crate::program::ValueExpr::Literal(amount.into()),
-    }
+    Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+        AffectedPlayers::One(player),
+        crate::program::ValueExpr::Literal(amount.into()),
+    )))
 }
 
 fn sacrifice(player: ResolvingPlayer, amount: i64) -> Instruction {
-    Instruction::Sacrifice {
-        players: AffectedPlayers::One(player),
-        amount: crate::program::ValueExpr::Literal(amount.into()),
-        filter: PermanentTypeFilter {
+    Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+        AffectedPlayers::One(player),
+        crate::program::ValueExpr::Literal(amount.into()),
+        PermanentTypeFilter {
             any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Creature]),
             forbidden_types: BTreeSet::new(),
             object_filter: None,
         },
-    }
+    )))
 }
 
 fn optional(player: ResolvingPlayer) -> Instruction {

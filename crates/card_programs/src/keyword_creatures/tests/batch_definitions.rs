@@ -562,16 +562,16 @@ fn merciless_executioner_collects_apnap_choices_before_one_sacrifice_batch() {
 }
 
 fn sacrifice_each() -> Instruction {
-    Instruction::Sacrifice {
-        players: AffectedPlayers::EachPlayer,
-        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        filter: PermanentTypeFilter {
+    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+        AffectedPlayers::EachPlayer,
+        spellwake_engine::program::ValueExpr::Literal(1.into()),
+        PermanentTypeFilter {
             any_types: Default::default(),
             required_types: [CardType::Creature].into(),
             forbidden_types: BTreeSet::new(),
             object_filter: None,
         },
-    }
+    )))
 }
 
 #[test]

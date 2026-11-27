@@ -44,6 +44,7 @@ impl PlayerSelector {
                     | ResolvingPlayer::TargetSpellController
                     | ResolvingPlayer::TargetController
                     | ResolvingPlayer::TargetOwner
+                    | ResolvingPlayer::ExiledTargetController
             ),
             Self::Group(_) | Self::Bound(_) | Self::Fixed(_) => false,
             Self::OwnersOf(q) | Self::ControllersOf(q) => q.uses_target(),
@@ -136,7 +137,7 @@ impl QuerySlice {
             Self::All => false,
             Self::Top(expr) | Self::Bottom(expr) => expr.uses_target(),
             Self::UntilMatch { filter, count, .. } => {
-                filter.uses_target_permanent() || count.uses_target()
+                filter_uses_target(filter) || count.uses_target()
             }
         }
     }
@@ -303,27 +304,25 @@ impl ObjectQuery {
             | Self::CreatedTokens
             | Self::Revealed
             | Self::LinkedExile { .. } => false,
-            Self::BoundFiltered { filter, .. } => filter.uses_target_permanent(),
-            Self::Filtered { source, filter } => {
-                source.uses_target() || filter.uses_target_permanent()
-            }
+            Self::BoundFiltered { filter, .. } => filter_uses_target(filter),
+            Self::Filtered { source, filter } => source.uses_target() || filter_uses_target(filter),
             Self::Take { source, count } => source.uses_target() || count.uses_target(),
             Self::EffectSubject(subject) => match **subject {
                 EffectSubject::TargetObject
                 | EffectSubject::TargetAndSameNameMatching(_)
                 | EffectSubject::MatchingOtherThanTarget(_)
                 | EffectSubject::TargetAndSharingColorMatching(_) => true,
-                EffectSubject::Matching(filter) => filter.uses_target_permanent(),
+                EffectSubject::Matching(filter) => filter_uses_target(&filter),
                 _ => false,
             },
             Self::ZoneScan {
                 zone,
                 filter,
                 slice,
-            } => zone.uses_target() || filter.uses_target_permanent() || slice.uses_target(),
+            } => zone.uses_target() || filter_uses_target(filter) || slice.uses_target(),
             Self::Tagged { zone, filter, .. } => {
                 zone.as_ref().is_some_and(QueryZone::uses_target)
-                    || filter.as_ref().is_some_and(|f| f.uses_target_permanent())
+                    || filter.as_deref().is_some_and(filter_uses_target)
             }
             Self::Union(qs) => qs.iter().any(Self::uses_target),
             Self::Difference(a, b) | Self::Intersect(a, b) => a.uses_target() || b.uses_target(),

@@ -450,6 +450,7 @@ fn taking_optional_type_choice_preserves_the_actual_child_and_tail() {
             bind_unchosen: None,
             tag_partition: None,
             auto_resolve_trivial: false,
+            option_branches: Vec::new(),
         })),
         gain(1),
     ]);

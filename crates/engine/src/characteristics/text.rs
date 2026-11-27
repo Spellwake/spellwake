@@ -391,21 +391,7 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
                 extra_generic: amount,
                 ..
             }
-            | Instruction::Discard { amount, .. }
             | Instruction::RepeatLoop { count: amount, .. } => rewrite_amount(amount),
-            Instruction::ChooseObjects {
-                min,
-                max,
-                max_total_power,
-                ..
-            } => {
-                rewrite_amount(min);
-                rewrite_amount(max);
-                if let Some(limit) = max_total_power {
-                    rewrite_amount(limit);
-                }
-            }
-            Instruction::Sacrifice { amount, .. } => rewrite_amount(amount),
             Instruction::CreateTokens { creations } => {
                 for spec in creations {
                     rewrite_amount(&mut spec.amount);
@@ -414,21 +400,8 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             _ => {}
         }
         match instruction {
-            Instruction::Sacrifice { filter, .. } => {
-                if let Some(obj) = &mut filter.object_filter {
-                    obj.rewrite_creature_type(change.from, change.to);
-                }
-            }
-            Instruction::ChooseObjects { filter, .. } => {
-                filter.rewrite_creature_type(change.from, change.to);
-            }
             Instruction::RepeatLoop { body: inner, .. } => {
                 body(change, inner);
-            }
-            Instruction::ChooseOption { options, .. } => {
-                for branch in options {
-                    body(change, &mut branch.body);
-                }
             }
             Instruction::DrawCards(spec) => {
                 rewrite_amount(&mut spec.amount);
@@ -664,16 +637,63 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             }
             Instruction::ZoneOp(spec) => {
                 rewrite_object_query(change, &mut spec.source);
-            }
-            Instruction::PromptChoice(spec) => {
-                if let crate::toolbox::PromptDomain::Subtype { excluding, .. } = &mut spec.domain {
-                    words(change, excluding);
+                match &mut spec.selection {
+                    crate::toolbox::ZoneSelection::All => {}
+                    crate::toolbox::ZoneSelection::Random { count, .. } => {
+                        rewrite_amount(count);
+                    }
+                    crate::toolbox::ZoneSelection::Prompt { min, max, .. } => {
+                        rewrite_amount(min);
+                        rewrite_amount(max);
+                    }
                 }
             }
-            Instruction::ChooseValue { .. }
-            | Instruction::ForEach { .. }
-            | Instruction::ForEachPlayerQuery { .. }
-            | Instruction::BindEnv { .. }
+            Instruction::PromptChoice(spec) => {
+                match &mut spec.domain {
+                    crate::toolbox::PromptDomain::Subtype { excluding, .. } => {
+                        words(change, excluding);
+                    }
+                    crate::toolbox::PromptDomain::Objects {
+                        query,
+                        min,
+                        max,
+                        max_total_power,
+                        ..
+                    } => {
+                        rewrite_object_query(change, query);
+                        rewrite_amount(min);
+                        rewrite_amount(max);
+                        if let Some(limit) = max_total_power {
+                            rewrite_amount(limit);
+                        }
+                    }
+                    crate::toolbox::PromptDomain::Number { min, max } => {
+                        rewrite_amount(min);
+                        rewrite_amount(max);
+                    }
+                    crate::toolbox::PromptDomain::Partition { query, .. } => {
+                        rewrite_object_query(change, query);
+                    }
+                    crate::toolbox::PromptDomain::Players { .. }
+                    | crate::toolbox::PromptDomain::Options { .. }
+                    | crate::toolbox::PromptDomain::Color { .. }
+                    | crate::toolbox::PromptDomain::CardType { .. }
+                    | crate::toolbox::PromptDomain::CardName { .. } => {}
+                }
+                for branch in &mut spec.option_branches {
+                    body(change, branch);
+                }
+            }
+            Instruction::ForEach {
+                query, body: inner, ..
+            } => {
+                rewrite_object_query(change, query);
+                body(change, inner);
+            }
+            Instruction::ForEachPlayerQuery { body: inner, .. } => {
+                body(change, inner);
+            }
+            Instruction::BindEnv { .. }
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
@@ -735,7 +755,6 @@ fn body(change: CreatureTypeTextChange, value: &mut ExecutableBody) {
             // These admitted instructions contain no literal creature-type words.
             // Draw's chosen-type reference remains a runtime local value.
             Instruction::OptionalSequence { .. }
-            | Instruction::Discard { .. }
             | Instruction::Jump { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }

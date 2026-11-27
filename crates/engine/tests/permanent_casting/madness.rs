@@ -15,10 +15,12 @@ fn setup_discard(target: bool, competing: bool) -> GameState {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::Discard {
-                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
         ),
     );
     let source = cards.iter_mut().find(|c| c.card == CardId(10)).unwrap();

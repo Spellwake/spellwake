@@ -96,16 +96,16 @@ pub(super) fn selected(oracle_id: &str) -> bool {
 }
 
 fn sacrifice(players: AffectedPlayers) -> Instruction {
-    Instruction::Sacrifice {
+    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
         players,
-        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        filter: PermanentTypeFilter {
+        spellwake_engine::program::ValueExpr::Literal(1.into()),
+        PermanentTypeFilter {
             any_types: Default::default(),
             required_types: BTreeSet::from([CardType::Creature]),
             forbidden_types: BTreeSet::new(),
             object_filter: None,
         },
-    }
+    )))
 }
 fn cost(generic: i64, black: i64) -> ManaCost {
     let mut cost = ManaCost::specific(ManaType::Black, black.into());
@@ -204,10 +204,12 @@ pub(super) fn definition(
                 cost(2, 1),
                 ExecutableBody::new(
                     BodyTarget::SinglePlayer,
-                    vec![Instruction::Discard {
-                        players: targeted,
-                        amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                    }],
+                    vec![Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::discard(
+                            targeted,
+                            spellwake_engine::program::ValueExpr::Literal(2.into()),
+                        ),
+                    ))],
                 ),
             ),
         ),
@@ -223,10 +225,12 @@ pub(super) fn definition(
                 cost(2, 1),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Discard {
-                        players: AffectedPlayers::EachPlayer,
-                        amount: spellwake_engine::program::ValueExpr::Literal(3.into()),
-                    }],
+                    vec![Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::discard(
+                            AffectedPlayers::EachPlayer,
+                            spellwake_engine::program::ValueExpr::Literal(3.into()),
+                        ),
+                    ))],
                 ),
             ),
         ),
@@ -423,15 +427,17 @@ mod tests {
             generic: generic.into(),
             required: std::collections::BTreeMap::from([(ManaType::Black, black.into())]),
         };
-        let expected_sacrifice = |players| Instruction::Sacrifice {
-            players,
-            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            filter: PermanentTypeFilter {
-                any_types: Default::default(),
-                required_types: BTreeSet::from([CardType::Creature]),
-                forbidden_types: BTreeSet::new(),
-                object_filter: None,
-            },
+        let expected_sacrifice = |players| {
+            Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                players,
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+                PermanentTypeFilter {
+                    any_types: Default::default(),
+                    required_types: BTreeSet::from([CardType::Creature]),
+                    forbidden_types: BTreeSet::new(),
+                    object_filter: None,
+                },
+            )))
         };
         let mut fleshbag = Program::creature(
             Some(exact_cost(2, 1)),
@@ -500,10 +506,12 @@ mod tests {
                     exact_cost(2, 1),
                     ExecutableBody::new(
                         BodyTarget::SinglePlayer,
-                        vec![Instruction::Discard {
-                            players: targeted,
-                            amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                        }],
+                        vec![Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                                targeted,
+                                spellwake_engine::program::ValueExpr::Literal(2.into()),
+                            ),
+                        ))],
                     ),
                 ),
             ),
@@ -513,10 +521,12 @@ mod tests {
                     exact_cost(2, 1),
                     ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::Discard {
-                            players: AffectedPlayers::EachPlayer,
-                            amount: spellwake_engine::program::ValueExpr::Literal(3.into()),
-                        }],
+                        vec![Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                                AffectedPlayers::EachPlayer,
+                                spellwake_engine::program::ValueExpr::Literal(3.into()),
+                            ),
+                        ))],
                     ),
                 ),
             ),
@@ -609,16 +619,11 @@ mod tests {
                         matches!(card.kind, Kind::Edict | Kind::MindRot)
                     );
                     match (&spell.body.instructions[0], card.kind) {
-                        (
-                            Instruction::Sacrifice {
-                                players,
-                                amount,
-                                filter,
-                            },
-                            Kind::Edict | Kind::Blood,
-                        ) => {
+                        (Instruction::ZoneOp(spec), Kind::Edict | Kind::Blood) => {
+                            let (players, amount, base_filter, extra_filter) =
+                                spec.as_group_sacrifice().expect("group sacrifice expected");
                             assert_eq!(
-                                *players,
+                                players,
                                 if matches!(card.kind, Kind::Edict) {
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 } else {
@@ -629,15 +634,21 @@ mod tests {
                                 *amount,
                                 spellwake_engine::program::ValueExpr::Literal(1.into())
                             );
-                            assert_eq!(filter.required_types, BTreeSet::from([CardType::Creature]));
-                            assert!(filter.forbidden_types.is_empty());
-                        }
-                        (
-                            Instruction::Discard { players, amount },
-                            Kind::MindRot | Kind::Skeins,
-                        ) => {
                             assert_eq!(
-                                *players,
+                                base_filter,
+                                spellwake_engine::program::ObjectFilter::from_clause(
+                                    spellwake_engine::program::ObjectClause::any().required_types(
+                                        spellwake_engine::program::CardTypeMask::CREATURE
+                                    )
+                                )
+                            );
+                            assert!(extra_filter.is_none());
+                        }
+                        (Instruction::ZoneOp(spec), Kind::MindRot | Kind::Skeins) => {
+                            let (players, amount) =
+                                spec.as_group_discard().expect("group discard expected");
+                            assert_eq!(
+                                players,
                                 if matches!(card.kind, Kind::MindRot) {
                                     AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                                 } else {
@@ -874,20 +885,63 @@ mod tests {
                     panic!("spell expected")
                 };
                 match (&mut spell.body.instructions[0], variant) {
-                    (
-                        Instruction::Sacrifice { amount, .. } | Instruction::Discard { amount, .. },
-                        0,
-                    ) => *amount = spellwake_engine::program::ValueExpr::Literal(7.into()),
-                    (
-                        Instruction::Sacrifice { players, .. }
-                        | Instruction::Discard { players, .. },
-                        1,
-                    ) => *players = AffectedPlayers::EachPlayer,
-                    (Instruction::Sacrifice { filter, .. }, 2) => {
-                        filter.forbidden_types.insert(CardType::Land);
+                    (Instruction::ZoneOp(spec), v) if spec.as_group_sacrifice().is_some() => {
+                        let (players, amount, _, _) = spec.as_group_sacrifice().unwrap();
+                        let amount = amount.clone();
+                        let mut filter = PermanentTypeFilter {
+                            any_types: Default::default(),
+                            required_types: BTreeSet::from([CardType::Creature]),
+                            forbidden_types: BTreeSet::new(),
+                            object_filter: None,
+                        };
+                        match v {
+                            0 => {
+                                **spec = spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                                    players,
+                                    spellwake_engine::program::ValueExpr::Literal(7.into()),
+                                    filter,
+                                );
+                            }
+                            1 => {
+                                **spec = spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                                    AffectedPlayers::EachPlayer,
+                                    amount,
+                                    filter,
+                                );
+                            }
+                            2 => {
+                                filter.forbidden_types.insert(CardType::Land);
+                                **spec = spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                                    players, amount, filter,
+                                );
+                            }
+                            _ => panic!("distinct represented operand expected"),
+                        }
                     }
-                    (Instruction::Discard { players, .. }, 2) => {
-                        *players = AffectedPlayers::One(ResolvingPlayer::Controller)
+                    (Instruction::ZoneOp(spec), v) if spec.as_group_discard().is_some() => {
+                        let (players, amount) = spec.as_group_discard().unwrap();
+                        let amount = amount.clone();
+                        match v {
+                            0 => {
+                                **spec = spellwake_engine::toolbox::ZoneOpSpec::discard(
+                                    players,
+                                    spellwake_engine::program::ValueExpr::Literal(7.into()),
+                                );
+                            }
+                            1 => {
+                                **spec = spellwake_engine::toolbox::ZoneOpSpec::discard(
+                                    AffectedPlayers::EachPlayer,
+                                    amount,
+                                );
+                            }
+                            2 => {
+                                **spec = spellwake_engine::toolbox::ZoneOpSpec::discard(
+                                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                                    amount,
+                                );
+                            }
+                            _ => panic!("distinct represented operand expected"),
+                        }
                     }
                     _ => panic!("distinct represented operand expected"),
                 }

@@ -2305,8 +2305,7 @@ pub(super) fn lower_modify_pt_target(
 pub(super) fn lower_sacrifice_selection(
     f: &ObjectFilterAst,
     vocabulary: &CreatureTypeVocabulary,
-) -> Option<spellwake_engine::program::SacrificeSelection> {
-    use spellwake_engine::program::SacrificeSelection;
+) -> Option<()> {
     if !f.forbidden_types.is_empty()
         || !f.required_supertypes.is_empty()
         || !f.forbidden_supertypes.is_empty()
@@ -2339,8 +2338,8 @@ pub(super) fn lower_sacrifice_selection(
         {
             return None;
         }
-        let ct = vocabulary.resolve_label(&f.subtypes[0])?;
-        return Some(SacrificeSelection::Subtype(ct));
+        vocabulary.resolve_label(&f.subtypes[0])?;
+        return Some(());
     }
     if !f.subtypes.is_empty() {
         return None;
@@ -2352,39 +2351,16 @@ pub(super) fn lower_sacrifice_selection(
     };
     let art_or_cre = AstCardTypeMask::ARTIFACT.union(AstCardTypeMask::CREATURE);
     if nontoken {
-        if !exclude_self && f.any_types == AstCardTypeMask::CREATURE {
-            return Some(SacrificeSelection::NontokenCreature);
-        }
-        return None;
+        return (!exclude_self && f.any_types == AstCardTypeMask::CREATURE).then_some(());
     }
-    if f.any_types == AstCardTypeMask::CREATURE {
-        Some(if exclude_self {
-            SacrificeSelection::OtherCreature
-        } else {
-            SacrificeSelection::Creature
-        })
-    } else if f.any_types == AstCardTypeMask::ARTIFACT {
-        Some(if exclude_self {
-            SacrificeSelection::OtherArtifact
-        } else {
-            SacrificeSelection::Artifact
-        })
-    } else if f.any_types == AstCardTypeMask::ENCHANTMENT && !exclude_self {
-        Some(SacrificeSelection::Enchantment)
-    } else if f.any_types == AstCardTypeMask::LAND && !exclude_self {
-        Some(SacrificeSelection::Land)
-    } else if f.any_types == art_or_cre {
-        Some(if exclude_self {
-            SacrificeSelection::OtherArtifactOrCreature
-        } else {
-            SacrificeSelection::ArtifactOrCreature
-        })
-    } else if f.any_types.is_empty() && f.any_permanent {
-        Some(if exclude_self {
-            SacrificeSelection::OtherPermanent
-        } else {
-            SacrificeSelection::Permanent
-        })
+    if f.any_types == AstCardTypeMask::CREATURE
+        || f.any_types == AstCardTypeMask::ARTIFACT
+        || (f.any_types == AstCardTypeMask::ENCHANTMENT && !exclude_self)
+        || (f.any_types == AstCardTypeMask::LAND && !exclude_self)
+        || f.any_types == art_or_cre
+        || (f.any_types.is_empty() && f.any_permanent)
+    {
+        Some(())
     } else {
         None
     }
@@ -2529,10 +2505,12 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 ),
             ))])
         }
-        CostAtomAst::DiscardHand => Ok(vec![Instruction::Discard {
-            players: AffectedPlayers::One(player),
-            amount: ValueExpr::count_hand(player),
-        }]),
+        CostAtomAst::DiscardHand => Ok(vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(player),
+                ValueExpr::count_hand(player),
+            ),
+        ))]),
         CostAtomAst::Discard {
             count,
             filter,
@@ -2550,10 +2528,12 @@ pub(super) fn lower_resolution_pay_cost_ops(
                 return Err("oracle:unsupported-pay-cost");
             }
             if plain_any {
-                Ok(vec![Instruction::Discard {
-                    players: AffectedPlayers::One(player),
-                    amount: amt,
-                }])
+                Ok(vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(player),
+                        amt,
+                    ),
+                ))])
             } else {
                 let obj = lower_object_filter(filter, vocabulary)?;
                 Ok(vec![
@@ -2573,11 +2553,13 @@ pub(super) fn lower_resolution_pay_cost_ops(
         } => {
             let amt = lower_value_expr(resolve_x(count, bound_x), vocabulary)?;
             let ptf = lower_permanent_type_filter(filter, vocabulary)?;
-            Ok(vec![Instruction::Sacrifice {
-                players: AffectedPlayers::One(player),
-                amount: amt,
-                filter: ptf,
-            }])
+            Ok(vec![Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                    AffectedPlayers::One(player),
+                    amt,
+                    ptf,
+                ),
+            ))])
         }
         CostAtomAst::SacrificeAll(filter) => {
             if !matches!(filter.zone, None | Some(ZoneFilter::Battlefield))

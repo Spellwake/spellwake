@@ -1435,9 +1435,6 @@ fn rewrite_instructions_unique_related_player(
                     }
                 }
             }
-            Instruction::Discard { players, .. } | Instruction::Sacrifice { players, .. } => {
-                rewrite_affected_players_if_unique(players, replacement);
-            }
             Instruction::AdjustLife(spec) => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                     &mut spec.players,
@@ -1703,6 +1700,12 @@ fn rewrite_instructions_unique_related_player(
                         );
                     }
                     _ => {}
+                }
+                for branch in &mut spec.option_branches {
+                    rewrite_instructions_unique_related_player(
+                        &mut branch.instructions,
+                        replacement,
+                    );
                 }
             }
             Instruction::SetObjectTag { query, .. } => {

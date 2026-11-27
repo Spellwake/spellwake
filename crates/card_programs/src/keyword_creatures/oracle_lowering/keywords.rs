@@ -166,16 +166,18 @@ pub(super) fn lower_keyword(
                             chooser: ResolvingPlayer::Controller,
                             instructions: 1,
                         },
-                        Instruction::Sacrifice {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: ValueExpr::literal(1),
-                            filter: PermanentTypeFilter {
-                                any_types: BTreeSet::new(),
-                                required_types: BTreeSet::from([CardType::Creature]),
-                                forbidden_types: BTreeSet::new(),
-                                object_filter: None,
-                            },
-                        },
+                        Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                                AffectedPlayers::One(ResolvingPlayer::Controller),
+                                ValueExpr::literal(1),
+                                PermanentTypeFilter {
+                                    any_types: BTreeSet::new(),
+                                    required_types: BTreeSet::from([CardType::Creature]),
+                                    forbidden_types: BTreeSet::new(),
+                                    object_filter: None,
+                                },
+                            ),
+                        )),
                     ],
                 ),
             });
@@ -3920,23 +3922,27 @@ fn lower_non_mana_cumulative_upkeep(
             "sacrifice an enchantment" => BTreeSet::from([CardType::Enchantment]),
             _ => BTreeSet::new(),
         };
-        vec![Instruction::Sacrifice {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: age_count,
-            filter: PermanentTypeFilter {
-                any_types: BTreeSet::new(),
-                required_types,
-                forbidden_types: BTreeSet::new(),
-                object_filter: None,
-            },
-        }]
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                age_count,
+                PermanentTypeFilter {
+                    any_types: BTreeSet::new(),
+                    required_types,
+                    forbidden_types: BTreeSet::new(),
+                    object_filter: None,
+                },
+            ),
+        ))]
     } else if low == "draw a card" {
         vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(age_count)]
     } else if low == "discard a card" {
-        vec![Instruction::Discard {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: age_count,
-        }]
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                age_count,
+            ),
+        ))]
     } else if low == "flip a coin" {
         vec![Instruction::MutatePlayer(Box::new(
             spellwake_engine::toolbox::MutatePlayerSpec::flip_coins(
@@ -3972,12 +3978,12 @@ fn lower_non_mana_cumulative_upkeep(
         let loop_body = ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::ChooseValue {
-                    chooser: ResolvingPlayer::Controller,
-                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
-                        opponents_only: true,
-                    },
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::toolbox::PromptDomain::player(true),
+                    ),
+                )),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::ChosenPlayer,
@@ -4007,12 +4013,12 @@ fn lower_non_mana_cumulative_upkeep(
         let loop_body = ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::ChooseValue {
-                    chooser: ResolvingPlayer::Controller,
-                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
-                        opponents_only: true,
-                    },
-                },
+                Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::toolbox::PromptDomain::player(true),
+                    ),
+                )),
                 Instruction::CreateTokens {
                     creations: vec![TokenCreation {
                         enters_tapped: false,
@@ -4036,26 +4042,24 @@ fn lower_non_mana_cumulative_upkeep(
             comparison: Comparison::GreaterOrEqual,
             right: ValueExpr::literal(1),
         });
-        let loop_body = ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::ChooseObjects {
-                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    source_zone: SourceZoneFilter::AnyBattlefield,
-                    filter: Box::new(opp_creature),
-                    min: ValueExpr::literal(1),
-                    max: ValueExpr::literal(1),
-                    distinct_powers: false,
-                    max_total_power: None,
-                    unchosen_action: None,
-                },
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(
-                    EffectSubject::LastMoved,
-                    CounterKind::PlusOne,
-                    ValueExpr::literal(1),
-                ),
-            ],
+        let mut ops = spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+            AffectedPlayers::One(ResolvingPlayer::Controller),
+            SourceZoneFilter::AnyBattlefield,
+            opp_creature,
+            ValueExpr::literal(1),
+            ValueExpr::literal(1),
+            false,
+            None,
+            None,
         );
+        ops.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_subject(
+                EffectSubject::LastMoved,
+                CounterKind::PlusOne,
+                ValueExpr::literal(1),
+            ),
+        );
+        let loop_body = ExecutableBody::new(BodyTarget::None, ops);
         vec![Instruction::RepeatLoop {
             count: age_count,
             body: Box::new(loop_body),
@@ -4067,28 +4071,24 @@ fn lower_non_mana_cumulative_upkeep(
             comparison: Comparison::GreaterOrEqual,
             right: age_count.clone(),
         });
-        let loop_body = ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::ChooseObjects {
-                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    source_zone: SourceZoneFilter::AnyBattlefield,
-                    filter: Box::new(other_land),
-                    min: ValueExpr::literal(1),
-                    max: ValueExpr::literal(1),
-                    distinct_powers: false,
-                    max_total_power: None,
-                    unchosen_action: None,
-                },
-                crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_control_of_subject(
-                    EffectSubject::LastMoved,
-                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                        ResolvingPlayer::Controller,
-                    ),
-                    ResolvedDuration::NoStatedDuration,
-                ),
-            ],
+        let mut ops = spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+            AffectedPlayers::One(ResolvingPlayer::Controller),
+            SourceZoneFilter::AnyBattlefield,
+            other_land,
+            ValueExpr::literal(1),
+            ValueExpr::literal(1),
+            false,
+            None,
+            None,
         );
+        ops.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_control_of_subject(
+                EffectSubject::LastMoved,
+                spellwake_engine::toolbox::PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                ResolvedDuration::NoStatedDuration,
+            ),
+        );
+        let loop_body = ExecutableBody::new(BodyTarget::None, ops);
         vec![Instruction::RepeatLoop {
             count: age_count,
             body: Box::new(loop_body),

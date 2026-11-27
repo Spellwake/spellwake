@@ -3208,6 +3208,7 @@ pub(super) fn lower_search_library_group(
                                     min: Box::new(ValueExpr::literal(1)),
                                     max: Box::new(ValueExpr::literal(1)),
                                     constraint: None,
+                                    max_total_power: None,
                                     hidden: false,
                                 },
                                 category: spellwake_engine::toolbox::ChoiceCategory::Generic,
@@ -3215,6 +3216,7 @@ pub(super) fn lower_search_library_group(
                                 bind_unchosen: None,
                                 tag_partition: None,
                                 auto_resolve_trivial: true,
+                                option_branches: Vec::new(),
                             },
                         )));
                         trial
@@ -3851,16 +3853,18 @@ pub(super) fn lower_search_library_group(
                         } else {
                             lower_object_filter(&inner, vocabulary)?
                         };
-                        builder.instructions.push(Instruction::ChooseObjects {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            source_zone: src_zone,
-                            filter: Box::new(obj_filter),
-                            min: ValueExpr::literal(0),
-                            max: ValueExpr::literal(1),
-                            distinct_powers: false,
-                            max_total_power: None,
-                            unchosen_action: None,
-                        });
+                        builder.instructions.extend(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                                AffectedPlayers::One(ResolvingPlayer::Controller),
+                                src_zone,
+                                obj_filter,
+                                ValueExpr::literal(0),
+                                ValueExpr::literal(1),
+                                false,
+                                None,
+                                None,
+                            ),
+                        );
                         builder.instructions.push(
                             super::super::toolbox_emit::grant_play_permission(
                                 spellwake_engine::toolbox::ObjectQuery::LastMoved,
@@ -4202,15 +4206,16 @@ pub(super) fn lower_search_library_group(
                         .iter()
                         .any(|spec| matches!(spec, ManaSpecAst::ChosenColor))
                 {
-                    let mut options: Vec<ChooseOptionBranch> = Vec::with_capacity(qm.choices.len());
+                    let mut options: Vec<(String, ExecutableBody)> =
+                        Vec::with_capacity(qm.choices.len());
                     for spec in &qm.choices {
                         match spec {
                             ManaSpecAst::Fixed(raw) => {
                                 let bundle = parse_mana_bundle(raw)
                                     .ok_or("oracle:unsupported-qualified-mana")?;
-                                options.push(ChooseOptionBranch {
-                                    label: format!("Add {raw}"),
-                                    body: ExecutableBody::new(
+                                options.push((
+                                    format!("Add {raw}"),
+                                    ExecutableBody::new(
                                         BodyTarget::None,
                                         vec![Instruction::MutatePlayer(Box::new(
                                             spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
@@ -4219,12 +4224,12 @@ pub(super) fn lower_search_library_group(
                                             ),
                                         ))],
                                     ),
-                                });
+                                ));
                             }
                             ManaSpecAst::ChosenColor => {
-                                options.push(ChooseOptionBranch {
-                                    label: "Add one mana of the chosen color".to_owned(),
-                                    body: ExecutableBody::new(
+                                options.push((
+                                    "Add one mana of the chosen color".to_owned(),
+                                    ExecutableBody::new(
                                         BodyTarget::None,
                                         vec![Instruction::MutatePlayer(Box::new(
                                             spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
@@ -4235,15 +4240,19 @@ pub(super) fn lower_search_library_group(
                                             ),
                                         ))],
                                     ),
-                                });
+                                ));
                             }
                             _ => return Err("oracle:unsupported-qualified-mana"),
                         }
                     }
-                    builder.instructions.push(Instruction::ChooseOption {
-                        chooser: ResolvingPlayer::Controller,
-                        options,
-                    });
+                    builder
+                        .instructions
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                                ResolvingPlayer::Controller,
+                                options,
+                            ),
+                        )));
                     return Ok(());
                 }
                 return Err("oracle:unsupported-qualified-mana");
@@ -4824,13 +4833,19 @@ fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool
                         | spellwake_engine::program::LookTopKeepDest::ExileLinked { .. }
                 )
         }
-        Instruction::ChooseObjects { .. } => !expected_exile_only,
+        Instruction::PromptChoice(spec)
+            if matches!(
+                spec.domain,
+                spellwake_engine::toolbox::PromptDomain::Objects { .. }
+            ) =>
+        {
+            !expected_exile_only
+        }
         Instruction::ForEachPlayerQuery { body, .. } => body
             .instructions
             .iter()
             .rev()
             .any(|inner| is_grant_play_last_moved_producer(inner, expected_exile_only)),
-        Instruction::Discard { .. } => !expected_exile_only,
         Instruction::MutatePlayer(spec)
             if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_)) =>
         {
@@ -5479,12 +5494,6 @@ fn lower_toolbox_search_filter(
 
     let has_prior_card_name_choice = trial.instructions.iter().any(|op| {
         matches!(
-            op,
-            Instruction::ChooseValue {
-                domain: ResolutionChoiceDomain::CardName { .. },
-                ..
-            }
-        ) || matches!(
             op,
             Instruction::PromptChoice(spec)
                 if matches!(

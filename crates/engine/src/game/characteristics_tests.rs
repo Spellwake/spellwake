@@ -140,6 +140,7 @@ fn accepted_first_choice() -> GameState {
                     bind_unchosen: None,
                     tag_partition: None,
                     auto_resolve_trivial: false,
+                    option_branches: Vec::new(),
                 })),
                 Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
                     chooser: crate::toolbox::PlayerSelector::Resolving(
@@ -155,6 +156,7 @@ fn accepted_first_choice() -> GameState {
                     bind_unchosen: None,
                     tag_partition: None,
                     auto_resolve_trivial: false,
+                    option_branches: Vec::new(),
                 })),
                 {
                     struct _Tmp {

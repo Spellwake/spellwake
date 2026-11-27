@@ -119,9 +119,6 @@ impl EffectWindow {
             }
             Instruction::OptionalSequence { .. }
             | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::ChooseObjects { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::ChooseValue { .. }
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -136,8 +133,6 @@ impl EffectWindow {
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::Sacrifice { .. }
-            | Instruction::Discard { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }
@@ -209,6 +204,7 @@ mod tests {
                         bind_unchosen: None,
                         tag_partition: None,
                         auto_resolve_trivial: false,
+                        option_branches: Vec::new(),
                     })),
                     Instruction::BranchCondition {
                         condition: Box::new(crate::toolbox::ConditionExpr::Resolution(Box::new(

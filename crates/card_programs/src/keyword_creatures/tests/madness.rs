@@ -70,10 +70,12 @@ fn all_real_madness_cards_discard_then_pay_the_printed_price_and_resolve() {
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Discard {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    }],
+                    vec![Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::discard(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
+                    ))],
                 ),
             ),
         );

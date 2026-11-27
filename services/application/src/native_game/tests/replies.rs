@@ -241,9 +241,9 @@ fn optional_and_creature_type_use_actual_chooser_options_and_exclusions() {
                 options: vec![view.issue(NativeReference::CreatureType(allowed)).unwrap()],
             },
         },
-        DecisionReply::PromptChoice(
-            spellwake_engine::toolbox::PromptChoiceReply::CreatureType(allowed),
-        ),
+        DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::CreatureType(
+            allowed,
+        )),
     );
     assert_eq!(result.execution().life_total(A), Some(&22.into()));
 }
@@ -252,16 +252,18 @@ fn optional_and_creature_type_use_actual_chooser_options_and_exclusions() {
 #[ignore = "requires explicitly supplied source-qualified vocabulary; native adapter composition, not card qualification"]
 fn sacrifice_selection_and_resolution_graveyard_order_keep_native_identity_and_order() {
     let source = start(
-        vec![Instruction::Sacrifice {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-            filter: PermanentTypeFilter {
-                any_types: Default::default(),
-                required_types: BTreeSet::from([CardType::Creature]),
-                forbidden_types: BTreeSet::new(),
-                object_filter: None,
-            },
-        }],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::Literal(2.into()),
+                PermanentTypeFilter {
+                    any_types: Default::default(),
+                    required_types: BTreeSet::from([CardType::Creature]),
+                    forbidden_types: BTreeSet::new(),
+                    object_filter: None,
+                },
+            ),
+        ))],
         (2..=4)
             .map(|id| {
                 card(
@@ -2093,13 +2095,13 @@ fn reveal_top_two_piles_fact_or_fiction_and_steam_augury_round_trip_and_reject_i
 #[test]
 #[ignore = "requires explicitly supplied genuine vocabulary"]
 fn choose_objects_distinct_powers_keep_vs_rest_and_random_player_reject_invalid_atomically() {
-    use crate::player_wire::DecisionKind;
+    use crate::player_wire::{DecisionKind, PlayerPromptReply};
     use spellwake_engine::{
-        effects::ResolutionSelectionKind,
         object_identity::ObjectZone,
-        program::{
-            CardTypeMask, ObjectClause, ObjectFilter, ResolutionChoiceDomain, SourceZoneFilter,
-            UnchosenObjectsAction, ValueExpr,
+        program::{CardTypeMask, ObjectClause, ObjectFilter, ValueExpr},
+        toolbox::{
+            GraveyardSemantics, ObjectQuery, PlayerSelector, PromptChoiceReply, PromptChoiceSpec,
+            PromptDomain, QueryZone, ResolvedPromptDomain, ZoneDest, ZoneOpSpec,
         },
     };
 
@@ -2109,22 +2111,32 @@ fn choose_objects_distinct_powers_keep_vs_rest_and_random_player_reject_invalid_
         ObjectFilter::Clause(clause)
     };
 
-    // 1. ChooseObjects with distinct_powers = true + unchosen_action = Some(Destroy):
+    // 1. PromptChoiceSpec::choose_objects with distinct_powers = true + unchosen destroy followup:
     // 3 creatures on battlefield with powers 2, 2, and 3.
     // Choosing both power-2 creatures must be atomically rejected; choosing one power-2 and one
     // power-3 creature must succeed and destroy the remaining power-2 creature.
+    let unchosen = PromptChoiceSpec::unchosen_binding();
     let spell = instant(
         BodyTarget::None,
-        vec![Instruction::ChooseObjects {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            source_zone: SourceZoneFilter::AnyBattlefield,
-            filter: Box::new(creature_filter()),
-            min: ValueExpr::Literal(0.into()),
-            max: ValueExpr::Literal(99.into()),
-            distinct_powers: true,
-            max_total_power: None,
-            unchosen_action: Some(UnchosenObjectsAction::Destroy),
-        }],
+        vec![
+            Instruction::PromptChoice(Box::new(PromptChoiceSpec::choose_objects(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                ObjectQuery::zone(QueryZone::Battlefield, creature_filter()),
+                ValueExpr::Literal(0.into()),
+                ValueExpr::Literal(99.into()),
+                true,
+                None,
+                Some(unchosen),
+            ))),
+            Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                ObjectQuery::Bound(unchosen),
+                ZoneDest::Graveyard {
+                    semantics: GraveyardSemantics::Destroy {
+                        allow_regenerate: true,
+                    },
+                },
+            ))),
+        ],
     );
     let source = main_state(vec![
         card(1, A, ObjectDestination::Hand, spell),
@@ -2155,11 +2167,13 @@ fn choose_objects_distinct_powers_keep_vs_rest_and_random_player_reject_invalid_
     });
     let pending = resolve(&cast);
     let dec = pending.pending_decision().expect("choose objects decision");
-    let RuleFrame::ResolutionSelect(frame) = dec.frame() else {
-        panic!("expected ResolutionSelect frame");
+    let RuleFrame::PromptChoice(frame) = dec.frame() else {
+        panic!("expected PromptChoice frame");
     };
-    assert_eq!(frame.operation(), ResolutionSelectionKind::ChooseObjects);
-    assert_eq!(frame.domain().len(), 3);
+    let ResolvedPromptDomain::Objects { candidates, .. } = &frame.domain else {
+        panic!("expected Objects prompt domain");
+    };
+    assert_eq!(candidates.len(), 3);
 
     let c2 = object(&pending, 2);
     let c3 = object(&pending, 3);
@@ -2169,7 +2183,7 @@ fn choose_objects_distinct_powers_keep_vs_rest_and_random_player_reject_invalid_
     let mut view = scope(&pending, viewer_a());
     let snap = super::projection::project_test(&mut view).unwrap();
     assert_eq!(snap.decisions.len(), 1);
-    assert_eq!(snap.decisions[0].kind, DecisionKind::SelectResolution);
+    assert_eq!(snap.decisions[0].kind, DecisionKind::PromptChoice);
     let dec_handle = view.issue(NativeReference::Decision(dec.id())).unwrap();
     let h2 = view.issue(NativeReference::Object(c2)).unwrap();
     let h3 = view.issue(NativeReference::Object(c3)).unwrap();
@@ -2177,8 +2191,10 @@ fn choose_objects_distinct_powers_keep_vs_rest_and_random_player_reject_invalid_
         &view,
         PlayerAction::Choose {
             decision: dec_handle,
-            response: PlayerChoice::Objects {
-                objects: vec![h2, h3],
+            response: PlayerChoice::PromptChoice {
+                reply: PlayerPromptReply::Objects {
+                    objects: vec![h2, h3],
+                },
             },
         },
     );
@@ -2187,13 +2203,15 @@ fn choose_objects_distinct_powers_keep_vs_rest_and_random_player_reject_invalid_
     // Legal reply: pick c2 (power 2) and c4 (power 3) -> c3 (unchosen power 2) is destroyed!
     let done = reply(
         &pending,
-        |v| PlayerChoice::Objects {
-            objects: vec![
-                v.issue(NativeReference::Object(c2)).unwrap(),
-                v.issue(NativeReference::Object(c4)).unwrap(),
-            ],
+        |v| PlayerChoice::PromptChoice {
+            reply: PlayerPromptReply::Objects {
+                objects: vec![
+                    v.issue(NativeReference::Object(c2)).unwrap(),
+                    v.issue(NativeReference::Object(c4)).unwrap(),
+                ],
+            },
         },
-        DecisionReply::SelectResolution(vec![c2, c4]),
+        DecisionReply::PromptChoice(PromptChoiceReply::Objects(vec![c2, c4])),
     );
     assert!(done.pending_decision().is_none());
     assert_eq!(
@@ -2215,16 +2233,14 @@ fn choose_objects_distinct_powers_keep_vs_rest_and_random_player_reject_invalid_
         ObjectZone::Graveyard(A)
     );
 
-    // 2. RandomPlayer { opponents_only: true } in 2-player game deterministically binds singleton opponent B.
+    // 2. PromptDomain::random_player(true) in 2-player game deterministically binds singleton opponent B.
     let rand_spell = instant(
         BodyTarget::None,
         vec![
-            Instruction::ChooseValue {
-                chooser: ResolvingPlayer::Controller,
-                domain: ResolutionChoiceDomain::RandomPlayer {
-                    opponents_only: true,
-                },
-            },
+            Instruction::PromptChoice(Box::new(PromptChoiceSpec::choose_value(
+                ResolvingPlayer::Controller,
+                PromptDomain::random_player(true),
+            ))),
             Instruction::AdjustLife(Box::new(spellwake_engine::toolbox::AdjustLifeSpec::lose(
                 spellwake_engine::toolbox::PlayerSelector::Group(AffectedPlayers::One(
                     ResolvingPlayer::ChosenPlayer,
@@ -2474,6 +2490,7 @@ fn prompt_choice_single_wire_packet_round_trips_and_rejects_invalid_atomically()
             bind_unchosen: None,
             tag_partition: Some(TagKey::Partition(3)),
             auto_resolve_trivial: false,
+            option_branches: Vec::new(),
         }))],
         vec![
             card(

@@ -534,13 +534,6 @@ fn rewrite_offer_chosen_to_loop_cond(cond: &mut spellwake_engine::toolbox::Condi
 pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
     for op in ops {
         match op {
-            Instruction::Discard { players, amount }
-            | Instruction::Sacrifice {
-                players, amount, ..
-            } => {
-                rewrite_offer_chosen_to_loop_ap(players);
-                rewrite_offer_chosen_to_loop_ve(amount);
-            }
             Instruction::AdjustLife(spec) => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                     &mut spec.players,
@@ -728,7 +721,11 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 );
                 match &mut spec.domain {
                     spellwake_engine::toolbox::PromptDomain::Objects {
-                        query, min, max, ..
+                        query,
+                        min,
+                        max,
+                        max_total_power,
+                        ..
                     } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
                             query,
@@ -738,6 +735,9 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                         );
                         rewrite_offer_chosen_to_loop_ve(min);
                         rewrite_offer_chosen_to_loop_ve(max);
+                        if let Some(mtp) = max_total_power {
+                            rewrite_offer_chosen_to_loop_ve(mtp);
+                        }
                     }
                     spellwake_engine::toolbox::PromptDomain::Players { selector, .. } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
@@ -760,6 +760,9 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                         );
                     }
                     _ => {}
+                }
+                for br in &mut spec.option_branches {
+                    rewrite_offer_chosen_to_loop_ops(&mut br.instructions);
                 }
             }
             Instruction::SetObjectTag { query, .. } => {
@@ -794,15 +797,8 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_offer_chosen_to_loop_rp(payer);
                 rewrite_offer_chosen_to_loop_ve(extra_generic);
             }
-            Instruction::OptionalSequence { chooser, .. }
-            | Instruction::ChooseValue { chooser, .. } => {
+            Instruction::OptionalSequence { chooser, .. } => {
                 rewrite_offer_chosen_to_loop_rp(chooser);
-            }
-            Instruction::ChooseOption { chooser, options } => {
-                rewrite_offer_chosen_to_loop_rp(chooser);
-                for br in options {
-                    rewrite_offer_chosen_to_loop_ops(&mut br.body.instructions);
-                }
             }
             Instruction::CreateTokens { creations } => {
                 for c in creations {
@@ -1022,12 +1018,12 @@ pub(super) fn lower_offer_loop_player_sub_body(
     let mut sub = BodyBuilder::with_trigger_hint(outer_builder.trigger_hint);
     sub.has_source = outer_builder.has_source;
     sub.last_group_filter = outer_builder.last_group_filter;
-    sub.instructions.push(Instruction::ChooseValue {
-        chooser: ResolvingPlayer::Controller,
-        domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
-            opponents_only: false,
-        },
-    });
+    sub.instructions.push(Instruction::PromptChoice(Box::new(
+        spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+            ResolvingPlayer::Controller,
+            spellwake_engine::toolbox::PromptDomain::player(false),
+        ),
+    )));
     lower_instruction_seq(
         body,
         &mut sub,
@@ -1047,10 +1043,8 @@ pub(super) fn lower_offer_loop_player_sub_body(
     if sub.instructions.iter().any(|op| {
         matches!(
             op,
-            Instruction::ChooseValue {
-                domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
-                ..
-            }
+            Instruction::PromptChoice(spec)
+                if matches!(spec.domain, spellwake_engine::toolbox::PromptDomain::Players { .. })
         ) || matches!(
             op,
             Instruction::MutatePlayer(spec)
@@ -1576,10 +1570,8 @@ pub(in super::super) fn lower_animate_or_set_pt(
                 && builder.instructions.iter().any(|op| {
                     matches!(
                         op,
-                        Instruction::ChooseValue {
-                            domain: spellwake_engine::program::ResolutionChoiceDomain::Color,
-                            ..
-                        }
+                        Instruction::PromptChoice(spec)
+                            if matches!(spec.domain, spellwake_engine::toolbox::PromptDomain::Color { .. })
                     )
                 })
             {
@@ -1591,10 +1583,14 @@ pub(in super::super) fn lower_animate_or_set_pt(
             ) && builder.instructions.iter().any(|op| {
                 matches!(
                     op,
-                    Instruction::ChooseValue {
-                        domain: spellwake_engine::program::ResolutionChoiceDomain::BasicLandType,
-                        ..
-                    }
+                    Instruction::PromptChoice(spec)
+                        if matches!(
+                            spec.domain,
+                            spellwake_engine::toolbox::PromptDomain::Subtype {
+                                kind: spellwake_engine::toolbox::SubtypeChoiceKind::BasicLand,
+                                ..
+                            }
+                        )
                 )
             }) {
                 chosen_basic_land_type = true;

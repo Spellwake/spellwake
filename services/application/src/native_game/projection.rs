@@ -1725,7 +1725,8 @@ impl Projection<'_, '_> {
                                     } else if a.body.instructions.iter().any(|op| {
                                         matches!(
                                             op,
-                                            spellwake_engine::program::Instruction::Sacrifice { .. }
+                                            spellwake_engine::program::Instruction::ZoneOp(spec)
+                                                if spec.as_group_sacrifice().is_some()
                                         )
                                     }) {
                                         Some(PlayerKeyword::Annihilator)

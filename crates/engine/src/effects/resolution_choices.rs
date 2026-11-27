@@ -1272,58 +1272,8 @@ impl EffectWindow {
                 }
                 _ => Ok(true),
             },
-            Instruction::Discard {
-                players: crate::program::AffectedPlayers::One(role),
-                amount,
-            } => {
-                let controller = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                let player = self.resolving_player_identity_at(*role, None)?;
-                let requested = self.resolve_value_expr(controller, amount)?;
-                let hand_count = self
-                    .window
-                    .cards()
-                    .iter()
-                    .filter(|card| {
-                        card.zone() == ObjectZone::Hand(player) && card.card_id().is_some()
-                    })
-                    .count();
-                Ok(!requested.is_positive() || RulesInteger::from_usize(hand_count) >= requested)
-            }
             Instruction::OfferDynamicManaPayment { .. } | Instruction::FixedTargetClause(_) => {
                 Ok(true)
-            }
-            Instruction::Sacrifice {
-                players: crate::program::AffectedPlayers::One(role),
-                amount,
-                filter,
-            } => {
-                let controller = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                let player = self.resolving_player_identity_at(*role, None)?;
-                let requested = self.resolve_value_expr(controller, amount)?;
-                let evaluated = self.evaluated_characteristics()?;
-                let excluded = BTreeSet::new();
-                let matching_count = evaluated
-                    .objects
-                    .values()
-                    .filter(|view| {
-                        view.zone == ObjectZone::Battlefield
-                            && view.controller == Some(player)
-                            && self.window.cards().phased_out_under(view.object).is_none()
-                            && filter.matches_view(view, &excluded, || {
-                                self.permanent_mana_value(view.object)
-                            })
-                    })
-                    .count();
-                Ok(!requested.is_positive()
-                    || RulesInteger::from_usize(matching_count) >= requested)
             }
             Instruction::PromptChoice(spec) => match &spec.domain {
                 crate::toolbox::PromptDomain::Subtype {
@@ -1333,10 +1283,7 @@ impl EffectWindow {
                 } => Ok(excluding.len() < self.creature_vocabulary.len()),
                 _ => Ok(true),
             },
-            Instruction::ChooseObjects { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::ChooseValue { .. }
-            | Instruction::DrawCards(_)
+            Instruction::DrawCards(_)
             | Instruction::BranchCondition { .. }
             | Instruction::ForEach { .. }
             | Instruction::ForEachPlayerQuery { .. }
@@ -1431,6 +1378,61 @@ impl EffectWindow {
                 }
             }
             Instruction::ZoneOp(spec) => {
+                if let Some((players, amount)) = spec.as_group_discard() {
+                    let crate::program::AffectedPlayers::One(role) = players else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let controller = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .controller();
+                    let player = self.resolving_player_identity_at(role, None)?;
+                    let requested = self.resolve_value_expr(controller, amount)?;
+                    let hand_count = self
+                        .window
+                        .cards()
+                        .iter()
+                        .filter(|card| {
+                            card.zone() == ObjectZone::Hand(player) && card.card_id().is_some()
+                        })
+                        .count();
+                    return Ok(!requested.is_positive()
+                        || RulesInteger::from_usize(hand_count) >= requested);
+                }
+                if let Some((players, amount, primary, secondary)) = spec.as_group_sacrifice() {
+                    let crate::program::AffectedPlayers::One(role) = players else {
+                        return Err(EffectError::InconsistentProgram);
+                    };
+                    let controller = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::WrongResolutionFrame)?
+                        .controller();
+                    let player = self.resolving_player_identity_at(role, None)?;
+                    let requested = self.resolve_value_expr(controller, amount)?;
+                    let evaluated = self.evaluated_characteristics()?;
+                    let excluded = BTreeSet::new();
+                    let matching_count = evaluated
+                        .objects
+                        .values()
+                        .filter(|view| {
+                            view.zone == ObjectZone::Battlefield
+                                && view.controller == Some(player)
+                                && self.window.cards().phased_out_under(view.object).is_none()
+                                && primary.matches_static_characteristics(view, &excluded, || {
+                                    self.permanent_mana_value(view.object)
+                                })
+                                && secondary.as_ref().is_none_or(|f| {
+                                    f.matches_static_characteristics(view, &excluded, || {
+                                        self.permanent_mana_value(view.object)
+                                    })
+                                })
+                        })
+                        .count();
+                    return Ok(!requested.is_positive()
+                        || RulesInteger::from_usize(matching_count) >= requested);
+                }
                 if let crate::toolbox::ZoneDest::Delayed(action) = &spec.destination {
                     return match action {
                         crate::toolbox::DelayedZoneAction::ReturnGraveyardToHand(_)
@@ -1661,9 +1663,6 @@ impl EffectWindow {
             | Instruction::CreateTokens { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. } => Ok(true),
-            Instruction::Sacrifice { .. } | Instruction::Discard { .. } => {
-                Err(EffectError::InconsistentProgram)
-            }
             Instruction::SearchLibrary { filter } => {
                 if let Some(host) = filter.curse_host() {
                     Ok(self.searched_curse_host(host)?.is_some())
@@ -1931,11 +1930,6 @@ impl EffectWindow {
                 )?;
             }
             Instruction::Jump { .. }
-            | Instruction::Sacrifice { .. }
-            | Instruction::Discard { .. }
-            | Instruction::ChooseObjects { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::ChooseValue { .. }
             | Instruction::ZoneOp(_)
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)

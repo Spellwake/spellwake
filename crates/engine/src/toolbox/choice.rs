@@ -15,7 +15,7 @@ use crate::{
     stack_window::StackEntryId,
     toolbox::{
         env::BindingId,
-        query::{ObjectQuery, PlayerSelector},
+        query::{ObjectQuery, PlayerSelector, QueryZone},
         tags::TagKey,
         zone_op::SelectionConstraint,
     },
@@ -60,6 +60,7 @@ pub enum PromptDomain {
         min: Box<ValueExpr>,
         max: Box<ValueExpr>,
         constraint: Option<SelectionConstraint>,
+        max_total_power: Option<Box<ValueExpr>>,
         hidden: bool,
     },
     /// Choose `min..=max` players from `selector`.
@@ -67,6 +68,7 @@ pub enum PromptDomain {
         selector: PlayerSelector,
         min: u8,
         max: u8,
+        random: bool,
     },
     /// Choose `min..=max` labeled options.
     Options {
@@ -101,6 +103,184 @@ pub enum PromptDomain {
     },
 }
 
+impl PromptDomain {
+    /// Choose one of the five MTG colors.
+    #[must_use]
+    pub const fn color() -> Self {
+        Self::Color {
+            allowed: ColorMask::ALL,
+        }
+    }
+
+    /// Choose a single player (or opponent when `opponents_only` is true).
+    #[must_use]
+    pub fn player(opponents_only: bool) -> Self {
+        Self::Players {
+            selector: PlayerSelector::Group(if opponents_only {
+                crate::program::AffectedPlayers::EachOpponent
+            } else {
+                crate::program::AffectedPlayers::EachPlayer
+            }),
+            min: 1,
+            max: 1,
+            random: false,
+        }
+    }
+
+    /// Choose a single player (or opponent when `opponents_only` is true) at random.
+    #[must_use]
+    pub fn random_player(opponents_only: bool) -> Self {
+        Self::Players {
+            selector: PlayerSelector::Group(if opponents_only {
+                crate::program::AffectedPlayers::EachOpponent
+            } else {
+                crate::program::AffectedPlayers::EachPlayer
+            }),
+            min: 1,
+            max: 1,
+            random: true,
+        }
+    }
+
+    /// Choose one card type from `allowed` (or the 7 standard types when empty).
+    #[must_use]
+    pub const fn card_type(allowed: Vec<CardType>) -> Self {
+        Self::CardType { allowed }
+    }
+
+    /// Choose one of the five basic land types.
+    #[must_use]
+    pub fn basic_land_type() -> Self {
+        Self::Subtype {
+            kind: SubtypeChoiceKind::BasicLand,
+            excluding: BTreeSet::new(),
+            legacy_slot: None,
+        }
+    }
+
+    /// Choose an integer in `min..=max`.
+    #[must_use]
+    pub fn number_range(min: u16, max: u16) -> Self {
+        Self::Number {
+            min: Box::new(ValueExpr::Literal(RulesInteger::from(i64::from(min)))),
+            max: Box::new(ValueExpr::Literal(RulesInteger::from(i64::from(max)))),
+        }
+    }
+
+    /// Choose one labeled option from `labels`.
+    #[must_use]
+    pub fn labeled_option(labels: Vec<String>) -> Self {
+        Self::Options {
+            labels,
+            min: 1,
+            max: 1,
+            allow_repeat: false,
+        }
+    }
+
+    /// Choose a card name (optionally restricted to nonland cards).
+    #[must_use]
+    pub const fn card_name(nonland_only: bool) -> Self {
+        Self::CardName { nonland_only }
+    }
+
+    /// Whether any part of this domain depends on an announced target.
+    #[must_use]
+    pub fn uses_target(&self) -> bool {
+        match self {
+            Self::Objects {
+                query,
+                min,
+                max,
+                max_total_power,
+                ..
+            } => {
+                query.uses_target()
+                    || min.uses_target()
+                    || max.uses_target()
+                    || max_total_power
+                        .as_deref()
+                        .is_some_and(ValueExpr::uses_target)
+            }
+            Self::Players { selector, .. } => selector.uses_target(),
+            Self::Number { min, max } => min.uses_target() || max.uses_target(),
+            Self::Partition { query, .. } => query.uses_target(),
+            Self::Options { .. }
+            | Self::Color { .. }
+            | Self::CardType { .. }
+            | Self::Subtype { .. }
+            | Self::CardName { .. } => false,
+        }
+    }
+
+    pub(crate) fn validate_vocabulary(
+        &self,
+        vocabulary: &CreatureTypeVocabulary,
+    ) -> Result<(), DefinitionError> {
+        match self {
+            Self::Objects {
+                query,
+                min,
+                max,
+                max_total_power,
+                ..
+            } => {
+                query.validate_vocabulary(vocabulary)?;
+                min.validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+                max.validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+                if let Some(limit) = max_total_power {
+                    limit
+                        .validate_vocabulary(vocabulary)
+                        .map_err(|_| DefinitionError::InvalidInstruction)?;
+                }
+            }
+            Self::Players {
+                selector, min, max, ..
+            } => {
+                if min > max {
+                    return Err(DefinitionError::InvalidInstruction);
+                }
+                selector.validate_vocabulary(vocabulary)?;
+            }
+            Self::Options {
+                labels, min, max, ..
+            } => {
+                if labels.is_empty() || labels.len() > usize::from(u8::MAX) || min > max {
+                    return Err(DefinitionError::InvalidInstruction);
+                }
+            }
+            Self::Number { min, max } => {
+                min.validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+                max.validate_vocabulary(vocabulary)
+                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+            }
+            Self::Partition {
+                query, pile_count, ..
+            } => {
+                if *pile_count < 2 {
+                    return Err(DefinitionError::InvalidInstruction);
+                }
+                query.validate_vocabulary(vocabulary)?;
+            }
+            Self::Subtype {
+                kind, excluding, ..
+            } => {
+                if excluding.iter().any(|id| vocabulary.label(*id).is_none()) {
+                    return Err(DefinitionError::ForeignCreatureType);
+                }
+                if *kind == SubtypeChoiceKind::Creature && excluding.len() == vocabulary.len() {
+                    return Err(DefinitionError::EmptyCreatureTypeDomain);
+                }
+            }
+            Self::Color { .. } | Self::CardType { .. } | Self::CardName { .. } => {}
+        }
+        Ok(())
+    }
+}
+
 /// Complete program specification for `Instruction::PromptChoice`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptChoiceSpec {
@@ -115,9 +295,17 @@ pub struct PromptChoiceSpec {
     pub tag_partition: Option<TagKey>,
     /// When true, skip prompting if there is at most one legal answer (e.g. 0 candidates with min 0).
     pub auto_resolve_trivial: bool,
+    /// Optional per-option executable branches spliced at resolution time for `PromptDomain::Options`.
+    pub option_branches: Vec<crate::program::ExecutableBody>,
 }
 
 impl PromptChoiceSpec {
+    /// Binding slot populated with unchosen objects by [`Self::choose_objects_instructions`].
+    #[must_use]
+    pub const fn unchosen_binding() -> BindingId {
+        BindingId(1)
+    }
+
     /// Construct a creature-type choice spec bound to a legacy [`crate::program::CreatureTypeSlot`].
     #[must_use]
     pub fn choose_creature_type(
@@ -136,27 +324,214 @@ impl PromptChoiceSpec {
             bind_unchosen: None,
             tag_partition: None,
             auto_resolve_trivial: false,
+            option_branches: Vec::new(),
+        }
+    }
+
+    /// Construct a resolution-time non-object value choice prompt for `chooser`.
+    #[must_use]
+    pub fn choose_value(chooser: crate::program::ResolvingPlayer, domain: PromptDomain) -> Self {
+        Self {
+            chooser: PlayerSelector::Resolving(chooser),
+            domain,
+            category: ChoiceCategory::Generic,
+            bind_to: BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: true,
+            option_branches: Vec::new(),
+        }
+    }
+
+    /// Construct a resolution-time modal branch choice prompt for `chooser`.
+    #[must_use]
+    pub fn choose_option(
+        chooser: crate::program::ResolvingPlayer,
+        options: Vec<(String, crate::program::ExecutableBody)>,
+    ) -> Self {
+        let (labels, option_branches): (Vec<_>, Vec<_>) = options.into_iter().unzip();
+        Self {
+            chooser: PlayerSelector::Resolving(chooser),
+            domain: PromptDomain::Options {
+                labels,
+                min: 1,
+                max: 1,
+                allow_repeat: false,
+            },
+            category: ChoiceCategory::Modal,
+            bind_to: BindingId(0),
+            bind_unchosen: None,
+            tag_partition: None,
+            auto_resolve_trivial: false,
+            option_branches,
+        }
+    }
+
+    /// Translate a legacy [`crate::program::SourceZoneFilter`] and actor into an [`ObjectQuery`].
+    #[must_use]
+    pub fn objects_query_for_source_zone(
+        source_zone: crate::program::SourceZoneFilter,
+        actor: PlayerSelector,
+        filter: crate::program::ObjectFilter,
+    ) -> ObjectQuery {
+        use crate::program::{AffectedPlayers, ResolvingPlayer, SourceZoneFilter};
+        match source_zone {
+            SourceZoneFilter::Hand => ObjectQuery::zone(QueryZone::Hand(Box::new(actor)), filter),
+            SourceZoneFilter::Graveyard => {
+                ObjectQuery::zone(QueryZone::Graveyard(Box::new(actor)), filter)
+            }
+            SourceZoneFilter::HandOrGraveyard => ObjectQuery::Union(vec![
+                ObjectQuery::zone(QueryZone::Hand(Box::new(actor.clone())), filter),
+                ObjectQuery::zone(QueryZone::Graveyard(Box::new(actor)), filter),
+            ]),
+            SourceZoneFilter::Battlefield => {
+                ObjectQuery::zone(QueryZone::BattlefieldControlledBy(Box::new(actor)), filter)
+            }
+            SourceZoneFilter::AnyBattlefield => ObjectQuery::zone(QueryZone::Battlefield, filter),
+            SourceZoneFilter::Exile => ObjectQuery::zone(QueryZone::Exile, filter),
+            SourceZoneFilter::OpponentGraveyard => ObjectQuery::zone(
+                QueryZone::Graveyard(Box::new(PlayerSelector::Group(
+                    AffectedPlayers::EachOpponent,
+                ))),
+                filter,
+            ),
+            SourceZoneFilter::AnyGraveyard => ObjectQuery::zone(
+                QueryZone::Graveyard(Box::new(PlayerSelector::Group(AffectedPlayers::EachPlayer))),
+                filter,
+            ),
+            SourceZoneFilter::YourLibrary => {
+                ObjectQuery::zone(QueryZone::Library(Box::new(actor)), filter)
+            }
+            SourceZoneFilter::OpponentExile => ObjectQuery::zone(
+                QueryZone::ExileOwnedBy(Box::new(PlayerSelector::Group(
+                    AffectedPlayers::EachOpponent,
+                ))),
+                filter,
+            ),
+            SourceZoneFilter::LinkedExile => {
+                ObjectQuery::filtered(ObjectQuery::LinkedExile { group: None }, filter)
+            }
+            SourceZoneFilter::LastMoved => ObjectQuery::filtered(ObjectQuery::LastMoved, filter),
+            SourceZoneFilter::TargetPlayerHand => ObjectQuery::zone(
+                QueryZone::Hand(Box::new(PlayerSelector::Resolving(
+                    ResolvingPlayer::TargetPlayer,
+                ))),
+                filter,
+            ),
+            SourceZoneFilter::TargetPlayerGraveyard => ObjectQuery::zone(
+                QueryZone::Graveyard(Box::new(PlayerSelector::Resolving(
+                    ResolvingPlayer::TargetPlayer,
+                ))),
+                filter,
+            ),
+            SourceZoneFilter::OpponentHand => ObjectQuery::zone(
+                QueryZone::Hand(Box::new(PlayerSelector::Group(
+                    AffectedPlayers::EachOpponent,
+                ))),
+                filter,
+            ),
+            SourceZoneFilter::CommandZone => ObjectQuery::zone(QueryZone::Command, filter),
+        }
+    }
+
+    /// Construct a resolution-time object selection prompt over `query`.
+    #[must_use]
+    pub fn choose_objects(
+        chooser: PlayerSelector,
+        query: ObjectQuery,
+        min: ValueExpr,
+        max: ValueExpr,
+        distinct_powers: bool,
+        max_total_power: Option<ValueExpr>,
+        bind_unchosen: Option<BindingId>,
+    ) -> Self {
+        Self {
+            chooser,
+            domain: PromptDomain::Objects {
+                query,
+                min: Box::new(min),
+                max: Box::new(max),
+                constraint: distinct_powers.then_some(SelectionConstraint::DistinctPowers),
+                max_total_power: max_total_power.map(Box::new),
+                hidden: false,
+            },
+            category: ChoiceCategory::Generic,
+            bind_to: BindingId(0),
+            bind_unchosen,
+            tag_partition: None,
+            auto_resolve_trivial: true,
+            option_branches: Vec::new(),
+        }
+    }
+
+    /// Lower a single- or multi-player object selection (with optional unchosen follow-up bound in
+    /// [`Self::unchosen_binding`]) into toolbox instructions.
+    // All 8 parameters correspond directly to the orthogonal object-selection specification fields.
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn choose_objects_instructions(
+        players: crate::program::AffectedPlayers,
+        source_zone: crate::program::SourceZoneFilter,
+        filter: crate::program::ObjectFilter,
+        min: ValueExpr,
+        max: ValueExpr,
+        distinct_powers: bool,
+        max_total_power: Option<ValueExpr>,
+        unchosen_followup: Option<crate::program::Instruction>,
+    ) -> Vec<crate::program::Instruction> {
+        use crate::program::{AffectedPlayers, BodyTarget, ExecutableBody, Instruction};
+        let bind_unchosen = unchosen_followup.as_ref().map(|_| Self::unchosen_binding());
+        if let AffectedPlayers::One(rp) = players {
+            let actor = PlayerSelector::Resolving(rp);
+            let query = Self::objects_query_for_source_zone(source_zone, actor.clone(), filter);
+            let prompt = Instruction::PromptChoice(Box::new(Self::choose_objects(
+                actor,
+                query,
+                min,
+                max,
+                distinct_powers,
+                max_total_power,
+                bind_unchosen,
+            )));
+            let mut ops = vec![prompt];
+            if let Some(followup) = unchosen_followup {
+                ops.push(followup);
+            }
+            ops
+        } else {
+            let actor = PlayerSelector::Bound(BindingId(2));
+            let query = Self::objects_query_for_source_zone(source_zone, actor.clone(), filter);
+            let prompt = Instruction::PromptChoice(Box::new(Self::choose_objects(
+                actor,
+                query,
+                min,
+                max,
+                distinct_powers,
+                max_total_power,
+                bind_unchosen,
+            )));
+            let mut body_ops = vec![prompt];
+            if let Some(followup) = unchosen_followup {
+                body_ops.push(followup);
+            }
+            vec![Instruction::ForEachPlayerQuery {
+                selector: Box::new(PlayerSelector::Group(players)),
+                bind_player: BindingId(2),
+                body: Box::new(ExecutableBody::new(BodyTarget::None, body_ops)),
+            }]
         }
     }
 
     #[must_use]
     pub fn uses_target(&self) -> bool {
-        if self.chooser.uses_target() {
-            return true;
-        }
-        match &self.domain {
-            PromptDomain::Objects {
-                query, min, max, ..
-            } => query.uses_target() || min.uses_target() || max.uses_target(),
-            PromptDomain::Players { selector, .. } => selector.uses_target(),
-            PromptDomain::Number { min, max } => min.uses_target() || max.uses_target(),
-            PromptDomain::Partition { query, .. } => query.uses_target(),
-            PromptDomain::Options { .. }
-            | PromptDomain::Color { .. }
-            | PromptDomain::CardType { .. }
-            | PromptDomain::Subtype { .. }
-            | PromptDomain::CardName { .. } => false,
-        }
+        self.chooser.uses_target()
+            || self.domain.uses_target()
+            || self.option_branches.iter().any(|branch| {
+                branch
+                    .instructions
+                    .iter()
+                    .any(crate::program::Instruction::uses_mode_target)
+            })
     }
 
     pub(crate) fn validate_vocabulary(
@@ -164,56 +539,18 @@ impl PromptChoiceSpec {
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
         self.chooser.validate_vocabulary(vocabulary)?;
-        match &self.domain {
-            PromptDomain::Objects {
-                query, min, max, ..
-            } => {
-                query.validate_vocabulary(vocabulary)?;
-                min.validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
-                max.validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
+        self.domain.validate_vocabulary(vocabulary)?;
+        if !self.option_branches.is_empty() {
+            let matches_labels = matches!(
+                &self.domain,
+                PromptDomain::Options { labels, .. } if labels.len() == self.option_branches.len()
+            );
+            if !matches_labels
+                || self.option_branches.len() < 2
+                || self.option_branches.len() > usize::from(u8::MAX)
+            {
+                return Err(DefinitionError::InvalidInstruction);
             }
-            PromptDomain::Players { selector, min, max } => {
-                if min > max {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                selector.validate_vocabulary(vocabulary)?;
-            }
-            PromptDomain::Options {
-                labels, min, max, ..
-            } => {
-                if labels.is_empty() || min > max {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-            }
-            PromptDomain::Number { min, max } => {
-                min.validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
-                max.validate_vocabulary(vocabulary)
-                    .map_err(|_| DefinitionError::InvalidInstruction)?;
-            }
-            PromptDomain::Partition {
-                query, pile_count, ..
-            } => {
-                if *pile_count < 2 {
-                    return Err(DefinitionError::InvalidInstruction);
-                }
-                query.validate_vocabulary(vocabulary)?;
-            }
-            PromptDomain::Subtype {
-                kind, excluding, ..
-            } => {
-                if excluding.iter().any(|id| vocabulary.label(*id).is_none()) {
-                    return Err(DefinitionError::ForeignCreatureType);
-                }
-                if *kind == SubtypeChoiceKind::Creature && excluding.len() == vocabulary.len() {
-                    return Err(DefinitionError::EmptyCreatureTypeDomain);
-                }
-            }
-            PromptDomain::Color { .. }
-            | PromptDomain::CardType { .. }
-            | PromptDomain::CardName { .. } => {}
         }
         Ok(())
     }

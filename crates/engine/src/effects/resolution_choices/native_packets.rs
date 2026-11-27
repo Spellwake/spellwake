@@ -300,6 +300,7 @@ fn skipped_local_definition() {
                         bind_unchosen: None,
                         tag_partition: None,
                         auto_resolve_trivial: false,
+                        option_branches: Vec::new(),
                     })),
                     Instruction::CreateTokens {
                         creations: vec![creation.clone()],
@@ -348,6 +349,7 @@ fn skipped_local_definition() {
                             bind_unchosen: None,
                             tag_partition: None,
                             auto_resolve_trivial: false,
+                            option_branches: Vec::new(),
                         })),
                         Instruction::Jump { destination: 4 },
                         Instruction::PromptChoice(Box::new(crate::toolbox::PromptChoiceSpec {
@@ -364,6 +366,7 @@ fn skipped_local_definition() {
                             bind_unchosen: None,
                             tag_partition: None,
                             auto_resolve_trivial: false,
+                            option_branches: Vec::new(),
                         })),
                         Instruction::CreateTokens {
                             creations: vec![creation.clone()],

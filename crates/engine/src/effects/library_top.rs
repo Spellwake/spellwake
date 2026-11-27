@@ -489,9 +489,6 @@ impl EffectWindow {
             }
             Instruction::Jump { .. }
             | Instruction::OptionalSequence { .. }
-            | Instruction::ChooseObjects { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::ChooseValue { .. }
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -511,8 +508,6 @@ impl EffectWindow {
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::SearchLibrary { .. }
-            | Instruction::Sacrifice { .. }
-            | Instruction::Discard { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::DrawCards(_)

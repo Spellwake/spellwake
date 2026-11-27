@@ -995,59 +995,6 @@ impl EffectWindow {
             StepOutcome::Next(rest) => rest,
             other => return Ok(other),
         };
-        if let Instruction::ChooseOption {
-            chooser,
-            ref options,
-        } = instruction
-        {
-            let chosen = self
-                .resolution_cursor_mut()
-                .and_then(|cursor| cursor.chosen_option_index.take());
-            let Some(chosen_idx) = chosen else {
-                let cursor_snap = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let actor = self.resolving_player_identity_at(chooser, Some(&cursor_snap))?;
-                let count =
-                    u8::try_from(options.len()).map_err(|_| EffectError::InconsistentProgram)?;
-                let labels = options.iter().map(|b| b.label.clone()).collect();
-                let frame = EffectDecision::OptionIndex(OptionIndexFrame {
-                    revision: self.revision,
-                    entry: entry.id(),
-                    instruction: index,
-                    chooser: actor,
-                    count,
-                    labels,
-                });
-                return Ok(StepOutcome::Pending(frame));
-            };
-            let branch = options
-                .get(usize::from(chosen_idx))
-                .ok_or(EffectError::InconsistentProgram)?;
-            let inserted = branch.body.instructions.len();
-            let base = isize::try_from(index).map_err(|_| EffectError::InconsistentProgram)?;
-            let mut spliced = Vec::with_capacity(inserted);
-            for op in &branch.body.instructions {
-                let mut cloned = op.clone();
-                cloned.shift_jumps(base, 0);
-                spliced.push(cloned);
-            }
-            let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry.id())
-            else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let delta =
-                isize::try_from(inserted).map_err(|_| EffectError::InconsistentProgram)? - 1;
-            for op in &mut payload.body.instructions {
-                op.shift_jumps(delta, index + 1);
-            }
-            payload.body.instructions.splice(index..=index, spliced);
-            for mode in &mut payload.modes {
-                mode.shift_for_splice(index, inserted);
-            }
-            return Ok(StepOutcome::Continue);
-        }
         if matches!(
             &instruction,
             Instruction::MutatePlayer(spec)

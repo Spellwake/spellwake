@@ -16002,16 +16002,18 @@ pub(super) fn lower_ability_change(
                                 chooser: ResolvingPlayer::Controller,
                                 instructions: 1,
                             },
-                            Instruction::Sacrifice {
-                                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                                amount: ValueExpr::literal(1),
-                                filter: PermanentTypeFilter {
-                                    any_types: BTreeSet::new(),
-                                    required_types: BTreeSet::from([CardType::Creature]),
-                                    forbidden_types: BTreeSet::new(),
-                                    object_filter: None,
-                                },
-                            },
+                            Instruction::ZoneOp(Box::new(
+                                spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                                    ValueExpr::literal(1),
+                                    PermanentTypeFilter {
+                                        any_types: BTreeSet::new(),
+                                        required_types: BTreeSet::from([CardType::Creature]),
+                                        forbidden_types: BTreeSet::new(),
+                                        object_filter: None,
+                                    },
+                                ),
+                            )),
                         ],
                     ),
                 });
@@ -16172,16 +16174,18 @@ pub(super) fn lower_ability_change(
                         grouping: TriggerGrouping::EachOccurrence,
                         body: ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::Sacrifice {
-                                players: AffectedPlayers::One(ResolvingPlayer::DefendingPlayer),
-                                amount: ValueExpr::literal(n),
-                                filter: PermanentTypeFilter {
-                                    any_types: BTreeSet::new(),
-                                    required_types: BTreeSet::new(),
-                                    forbidden_types: BTreeSet::new(),
-                                    object_filter: None,
-                                },
-                            }],
+                            vec![Instruction::ZoneOp(Box::new(
+                                spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                                    AffectedPlayers::One(ResolvingPlayer::DefendingPlayer),
+                                    ValueExpr::literal(n),
+                                    PermanentTypeFilter {
+                                        any_types: BTreeSet::new(),
+                                        required_types: BTreeSet::new(),
+                                        forbidden_types: BTreeSet::new(),
+                                        object_filter: None,
+                                    },
+                                ),
+                            ))],
                         ),
                     });
                 } else if let Some(n_str) = low.strip_prefix("afterlife ")

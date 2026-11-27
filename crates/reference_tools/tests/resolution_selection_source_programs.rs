@@ -16,8 +16,8 @@ use spellwake_engine::{
     object_identity::{CardId, ObjectDestination},
     priority::SeatId,
     program::{
-        AffectedPlayers, BodyTarget, CardType, Instruction, Program, ProgramKind, TriggerGrouping,
-        ValueExpr,
+        AffectedPlayers, BodyTarget, CardTypeMask, Instruction, ObjectFilter, Program, ProgramKind,
+        TriggerGrouping, ValueExpr,
     },
     token::{TokenName, TokenRecipients, TokenSubtype},
 };
@@ -256,20 +256,18 @@ fn resolution_selection_source9_programs_roundtrip_and_export() -> Result<(), St
                 )
             );
             assert_eq!(trigger.body.target, BodyTarget::None);
-            let [
-                Instruction::Sacrifice {
-                    players,
-                    amount,
-                    filter,
-                },
-            ] = trigger.body.instructions.as_slice()
+            let [Instruction::ZoneOp(spec)] = trigger.body.instructions.as_slice() else {
+                return Err("Fleshbag lacks its full selected sacrifice trigger body".into());
+            };
+            let Some((players, amount, ObjectFilter::Clause(clause), _)) =
+                spec.as_group_sacrifice()
             else {
                 return Err("Fleshbag lacks its full selected sacrifice trigger body".into());
             };
-            assert_eq!(*players, AffectedPlayers::EachPlayer);
+            assert_eq!(players, AffectedPlayers::EachPlayer);
             assert_eq!(*amount, ValueExpr::Literal(1.into()));
-            assert_eq!(filter.required_types, BTreeSet::from([CardType::Creature]));
-            assert!(filter.forbidden_types.is_empty());
+            assert_eq!(clause.required_types, CardTypeMask::CREATURE);
+            assert!(clause.forbidden_types.is_empty());
             trigger_rows.push(json!({"source_oracle_id": oracle, "triggered_body": program::body(&trigger.body), "runtime_trigger_capture_executed": false}));
         }
         if rows.insert(oracle.to_owned(), json!({

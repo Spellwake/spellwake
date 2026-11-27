@@ -338,10 +338,10 @@ pub(super) fn spell(
                         spellwake_engine::program::ChosenHandAction::Discard,
                     ),
                 )),
-                Discard {
-                    players: spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                    amount: amount(2),
-                },
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                    amount(2),
+                ))),
             ),
         ),
         "Transform all Humans. Prevent all combat damage that would be dealt this turn by creatures other than Werewolves and Wolves." => (
@@ -564,12 +564,12 @@ pub(super) fn spell(
         "Discard all the cards in your hand, then draw that many cards." => (
             NoTarget,
             vec![
-                Discard {
-                    players: spellwake_engine::program::AffectedPlayers::One(
-                        ResolvingPlayer::Controller,
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::Controller),
+                    spellwake_engine::program::ValueExpr::PlayerStat(
+                        spellwake_engine::program::PlayerStatExpr::LargestHandSize,
                     ),
-                    amount: spellwake_engine::program::ValueExpr::PlayerStat(spellwake_engine::program::PlayerStatExpr::LargestHandSize),
-                },
+                ))),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                     spellwake_engine::program::ValueExpr::event(spellwake_engine::program::EventValueKind::LargestDiscard),
                 ),
@@ -654,14 +654,16 @@ pub(super) fn spell(
         "Target opponent sacrifices a creature of their choice. You gain life equal to that creature's toughness." => (
             SingleOpponent,
             vec![
-                Sacrifice {
-                    players: spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                    amount: amount(1),
-                    filter: spellwake_engine::program::PermanentTypeFilter {
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                    spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                    amount(1),
+                    spellwake_engine::program::PermanentTypeFilter {
                         any_types: Default::default(),
                         required_types: [spellwake_engine::program::CardType::Creature].into(),
-                        forbidden_types: Default::default(), object_filter: None },
-                },
+                        forbidden_types: Default::default(),
+                        object_filter: None,
+                    },
+                ))),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::gain_life(
                     spellwake_engine::toolbox::PlayerSelector::Resolving(
                         ResolvingPlayer::Controller,
@@ -688,10 +690,12 @@ pub(super) fn spell(
                     declined_destination: 1,
                 },
                 Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::counter_targeted(spellwake_engine::toolbox::CounterDestination::Graveyard))),
-                Discard {
-                    players: spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::TargetSpellController),
-                    amount: amount(1),
-                },
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    spellwake_engine::program::AffectedPlayers::One(
+                        ResolvingPlayer::TargetSpellController,
+                    ),
+                    amount(1),
+                ))),
             ],
         ),
         "Copy target instant or sorcery spell you control. If this spell was cast from a graveyard, copy that spell twice instead. You may choose new targets for the copies." => (

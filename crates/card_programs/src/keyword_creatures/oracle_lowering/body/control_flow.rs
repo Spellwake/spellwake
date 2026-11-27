@@ -2299,7 +2299,6 @@ pub(super) fn lower_bound_x_for_resolution(
             {
                 Some(ValueObjectRef::LastAmassedArmy)
             }
-            Instruction::Sacrifice { .. } => Some(ValueObjectRef::LastSacrificedCreature),
             Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
                 if super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
                     matches!(
@@ -3190,10 +3189,8 @@ pub(super) fn resolve_their_library_owner(
         _ if builder.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::ChooseValue {
-                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
-                    ..
-                }
+                Instruction::PromptChoice(spec)
+                    if matches!(spec.domain, spellwake_engine::toolbox::PromptDomain::Players { .. })
             ) || matches!(
                 op,
                 Instruction::MutatePlayer(spec)
@@ -4661,7 +4658,7 @@ pub(super) fn try_fuse_choose_keyword_grant(
         }
         br.target = BodyTarget::None;
         let body = br.finish().ok()?;
-        branches.push(ChooseOptionBranch { label: kw, body });
+        branches.push((kw, body));
     }
     if let Some(st) = shared_target
         && st != probe.target
@@ -4669,10 +4666,11 @@ pub(super) fn try_fuse_choose_keyword_grant(
         probe.bind_target(st).ok()?;
     }
     *builder = probe;
-    builder.instructions.push(Instruction::ChooseOption {
-        chooser,
-        options: branches,
-    });
+    builder
+        .instructions
+        .push(Instruction::PromptChoice(Box::new(
+            spellwake_engine::toolbox::PromptChoiceSpec::choose_option(chooser, branches),
+        )));
     Some(i + 2)
 }
 
@@ -6261,37 +6259,39 @@ pub(in super::super) fn lower_instruction_seq(
                         ),
                     )),
                     CounterSpellDestOverride::ChoiceLibraryTopOrBottom => {
-                        Instruction::ChooseOption {
-                            chooser: ResolvingPlayer::Controller,
-                            options: vec![
-                                ChooseOptionBranch {
-                                    label: "Top of owner's library".to_owned(),
-                                    body: ExecutableBody::new(
-                                        BodyTarget::None,
-                                        vec![Instruction::StackOp(Box::new(
-                                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
-                                                spellwake_engine::toolbox::CounterDestination::Library {
-                                                    top: true,
-                                                },
-                                            ),
-                                        ))],
+                        Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                                ResolvingPlayer::Controller,
+                                vec![
+                                    (
+                                        "Top of owner's library".to_owned(),
+                                        ExecutableBody::new(
+                                            BodyTarget::None,
+                                            vec![Instruction::StackOp(Box::new(
+                                                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                                    spellwake_engine::toolbox::CounterDestination::Library {
+                                                        top: true,
+                                                    },
+                                                ),
+                                            ))],
+                                        ),
                                     ),
-                                },
-                                ChooseOptionBranch {
-                                    label: "Bottom of owner's library".to_owned(),
-                                    body: ExecutableBody::new(
-                                        BodyTarget::None,
-                                        vec![Instruction::StackOp(Box::new(
-                                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
-                                                spellwake_engine::toolbox::CounterDestination::Library {
-                                                    top: false,
-                                                },
-                                            ),
-                                        ))],
+                                    (
+                                        "Bottom of owner's library".to_owned(),
+                                        ExecutableBody::new(
+                                            BodyTarget::None,
+                                            vec![Instruction::StackOp(Box::new(
+                                                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                                    spellwake_engine::toolbox::CounterDestination::Library {
+                                                        top: false,
+                                                    },
+                                                ),
+                                            ))],
+                                        ),
                                     ),
-                                },
-                            ],
-                        }
+                                ],
+                            ),
+                        ))
                     }
                 };
                 *builder = probe;
@@ -7661,10 +7661,10 @@ pub(in super::super) fn lower_instruction_seq(
             } else {
                 else_ops.to_vec()
             };
-            options.push(ChooseOptionBranch {
-                label: "Decline".to_owned(),
-                body: ExecutableBody::new(BodyTarget::None, decline_body),
-            });
+            options.push((
+                "Decline".to_owned(),
+                ExecutableBody::new(BodyTarget::None, decline_body),
+            ));
             for cost in mana_costs {
                 let label = format!("Pay {}", format_mana_cost_label(&cost));
                 let mut branch_ops = Vec::new();
@@ -7728,10 +7728,7 @@ pub(in super::super) fn lower_instruction_seq(
                         branch_ops.push(cloned);
                     }
                 }
-                options.push(ChooseOptionBranch {
-                    label,
-                    body: ExecutableBody::new(BodyTarget::None, branch_ops),
-                });
+                options.push((label, ExecutableBody::new(BodyTarget::None, branch_ops)));
             }
             if let Some(life_amt) = life_opt {
                 let mut branch_ops = Vec::new();
@@ -7802,15 +7799,14 @@ pub(in super::super) fn lower_instruction_seq(
                         branch_ops.push(cloned);
                     }
                 }
-                options.push(ChooseOptionBranch {
-                    label: "Pay life".to_owned(),
-                    body: ExecutableBody::new(BodyTarget::None, branch_ops),
-                });
+                options.push((
+                    "Pay life".to_owned(),
+                    ExecutableBody::new(BodyTarget::None, branch_ops),
+                ));
             }
-            Ok(Instruction::ChooseOption {
-                chooser: payer,
-                options,
-            })
+            Ok(Instruction::PromptChoice(Box::new(
+                spellwake_engine::toolbox::PromptChoiceSpec::choose_option(payer, options),
+            )))
         }
         fn extract_opt_mana_spec<'a>(
             default_player: PlayerRefAst,
@@ -8891,8 +8887,6 @@ pub(in super::super) fn lower_instruction_seq(
                     op,
                     Instruction::ZoneOp(_)
                         | Instruction::ForEachPlayerQuery { .. }
-                        | Instruction::Sacrifice { .. }
-                        | Instruction::Discard { .. }
                         | Instruction::LookTopChooseExt { .. }
                         | Instruction::RevealUntilMatchExt { .. }
                         | Instruction::SearchLibrary { .. }
@@ -8981,11 +8975,11 @@ pub(in super::super) fn lower_instruction_seq(
                 let is_single_sacrifice = !prev_was_optional
                     && matches!(
                         builder.instructions.last(),
-                        Some(Instruction::Sacrifice {
-                            players: AffectedPlayers::One(_),
-                            amount: ValueExpr::Literal(v),
-                            ..
-                        }) if *v == 1.into()
+                        Some(Instruction::ZoneOp(spec))
+                            if spec.as_group_sacrifice().is_some_and(|(players, amount, _, _)| {
+                                matches!(players, AffectedPlayers::One(_))
+                                    && matches!(amount, ValueExpr::Literal(v) if *v == 1.into())
+                            })
                     );
                 let kind = if succeeded && is_single_sacrifice {
                     EventValueKind::LastSacrificeSucceeded
@@ -9795,10 +9789,6 @@ pub(in super::super) fn lower_instruction_seq(
                                 found = Some(single);
                                 break;
                             }
-                            Instruction::Discard { .. } => {
-                                found = Some(false);
-                                break;
-                            }
                             Instruction::LookTopChooseExt { keep_dest, .. }
                             | Instruction::RevealUntilMatchExt {
                                 match_dest: keep_dest,
@@ -9832,8 +9822,15 @@ pub(in super::super) fn lower_instruction_seq(
                             Instruction::OptionalSequence { .. }
                             | Instruction::BranchCondition { .. }
                             | Instruction::Jump { .. }
-                            | Instruction::ChooseValue { .. }
                             | Instruction::AdjustLife(_) => continue,
+                            Instruction::PromptChoice(spec)
+                                if !matches!(
+                                    spec.domain,
+                                    spellwake_engine::toolbox::PromptDomain::Objects { .. }
+                                ) && spec.option_branches.is_empty() =>
+                            {
+                                continue;
+                            }
                             Instruction::ApplyContinuous(spec)
                                 if matches!(
                                     spec.payload,
@@ -13543,22 +13540,26 @@ pub(in super::super) fn lower_instruction_seq(
                             });
                             take_ops.push(super::super::toolbox_emit::draw_target_player(draw_amt));
                         }
-                        builder.instructions.push(Instruction::ChooseOption {
-                            chooser: ResolvingPlayer::Controller,
-                            options: vec![
-                                ChooseOptionBranch {
-                                    label: "Choose card from revealed hand".to_owned(),
-                                    body: ExecutableBody::new(BodyTarget::None, take_ops),
-                                },
-                                ChooseOptionBranch {
-                                    label: "Decline".to_owned(),
-                                    body: ExecutableBody::new(
-                                        BodyTarget::None,
-                                        vec![Instruction::Jump { destination: 1 }],
-                                    ),
-                                },
-                            ],
-                        });
+                        builder
+                            .instructions
+                            .push(Instruction::PromptChoice(Box::new(
+                                spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                                    ResolvingPlayer::Controller,
+                                    vec![
+                                        (
+                                            "Choose card from revealed hand".to_owned(),
+                                            ExecutableBody::new(BodyTarget::None, take_ops),
+                                        ),
+                                        (
+                                            "Decline".to_owned(),
+                                            ExecutableBody::new(
+                                                BodyTarget::None,
+                                                vec![Instruction::Jump { destination: 1 }],
+                                            ),
+                                        ),
+                                    ],
+                                ),
+                            )));
                     } else {
                         builder
                             .instructions
@@ -14723,12 +14724,14 @@ pub(in super::super) fn lower_instruction_seq(
                 return Err("oracle:unsupported-extreme-life-tie");
             }
             let sentinel_idx = builder.instructions.len();
-            builder.instructions.push(Instruction::ChooseValue {
-                chooser: ResolvingPlayer::Controller,
-                domain: spellwake_engine::program::ResolutionChoiceDomain::Player {
-                    opponents_only: false,
-                },
-            });
+            builder
+                .instructions
+                .push(Instruction::PromptChoice(Box::new(
+                    spellwake_engine::toolbox::PromptChoiceSpec::choose_value(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::toolbox::PromptDomain::player(false),
+                    ),
+                )));
             lower_instruction(
                 action,
                 builder,
@@ -14906,6 +14909,7 @@ fn emit_prompt_choice_for_player(
                         bind_unchosen: None,
                         tag_partition: None,
                         auto_resolve_trivial,
+                        option_branches: Vec::new(),
                     }))],
                 )),
             });
@@ -14925,12 +14929,14 @@ fn emit_prompt_choice_for_player(
                         selector: sel,
                         min: 1,
                         max: 1,
+                        random: false,
                     },
                     category: spellwake_engine::toolbox::ChoiceCategory::Generic,
                     bind_to: BindingId(0),
                     bind_unchosen: None,
                     tag_partition: None,
                     auto_resolve_trivial: true,
+                    option_branches: Vec::new(),
                 })));
             builder
                 .instructions
@@ -14942,6 +14948,7 @@ fn emit_prompt_choice_for_player(
                     bind_unchosen: None,
                     tag_partition: None,
                     auto_resolve_trivial,
+                    option_branches: Vec::new(),
                 })));
             Ok(())
         }
@@ -14957,6 +14964,7 @@ fn emit_prompt_choice_for_player(
                     bind_unchosen: None,
                     tag_partition: None,
                     auto_resolve_trivial,
+                    option_branches: Vec::new(),
                 })));
             Ok(())
         }
@@ -15169,6 +15177,7 @@ fn try_lower_interactive_choice_prompt(
                         selector,
                         min: 1,
                         max: 1,
+                        random: false,
                     },
                     ChoiceCategory::Generic,
                     true,
@@ -15233,6 +15242,7 @@ fn try_lower_interactive_choice_prompt(
                         min: Box::new(ValueExpr::literal(1)),
                         max: Box::new(ValueExpr::literal(1)),
                         constraint: None,
+                        max_total_power: None,
                         hidden: false,
                     },
                     ChoiceCategory::Generic,
@@ -15258,6 +15268,7 @@ fn try_lower_interactive_choice_prompt(
                         min: Box::new(ValueExpr::literal(min_c)),
                         max: Box::new(ValueExpr::literal(max_c)),
                         constraint: None,
+                        max_total_power: None,
                         hidden: false,
                     },
                     ChoiceCategory::Generic,

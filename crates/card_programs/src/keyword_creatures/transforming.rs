@@ -513,10 +513,14 @@ fn compile_face(
                     NoTarget,
                     vec![
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(spellwake_engine::program::ValueExpr::Literal(1.into())),
-                        Discard {
-                            players: spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                        },
+                        Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                                spellwake_engine::program::AffectedPlayers::One(
+                                    ResolvingPlayer::Controller,
+                                ),
+                                spellwake_engine::program::ValueExpr::Literal(1.into()),
+                            ),
+                        )),
                         BranchCondition { condition: Box::new(spellwake_engine::toolbox::ConditionExpr::Resolution(Box::new(ResolutionCondition {
                                 left: spellwake_engine::program::ValueExpr::object_matches(spellwake_engine::program::MatchObjectRef::DiscardedCard, spellwake_engine::program::ObjectFilter::any_types(spellwake_engine::program::CardTypeMask::from_card_type(CardType::Creature))),
                                 comparison: Comparison::Equal,

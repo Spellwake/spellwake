@@ -74,20 +74,20 @@ fn target_player_role_uses_the_bound_player_for_optional_and_payment_choices() {
 #[test]
 fn empty_selection_continues_the_same_body_without_prompts_or_selected_moves() {
     for operation in [
-        Instruction::Sacrifice {
-            players: AffectedPlayers::EachPlayer,
-            amount: crate::program::ValueExpr::Literal(1.into()),
-            filter: PermanentTypeFilter {
+        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+            AffectedPlayers::EachPlayer,
+            crate::program::ValueExpr::Literal(1.into()),
+            PermanentTypeFilter {
                 any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::new(),
                 object_filter: None,
             },
-        },
-        Instruction::Discard {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: crate::program::ValueExpr::Literal(0.into()),
-        },
+        ))),
+        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+            AffectedPlayers::One(ResolvingPlayer::Controller),
+            crate::program::ValueExpr::Literal(0.into()),
+        ))),
     ] {
         let mut state = initialize(vec![gain(1), operation, gain(2)]).into_state();
         state = candidate(

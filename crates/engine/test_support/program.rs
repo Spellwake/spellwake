@@ -4601,21 +4601,25 @@ impl Body {
                         players,
                         amount,
                         filter,
-                    } => Instruction::Sacrifice {
-                        players: players.into(),
-                        amount: amount.native(vocabulary)?,
-                        filter: filter.native()?,
-                    },
+                    } => Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                            players.into(),
+                            amount.native(vocabulary)?,
+                            filter.native()?,
+                        ),
+                    )),
                     Op::DiscardOneAtRandom { player } => { let p: ResolvingPlayer = player.map_or(ResolvingPlayer::Controller, Into::into); Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::simple(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Hand(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(p))), spellwake_engine::program::ObjectFilter::any()), spellwake_engine::toolbox::ZoneSelection::Random { count: Box::new(spellwake_engine::program::ValueExpr::literal(1)), chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(p) }, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard }))) }
                     Op::SacrificeRandomUntilLand {} => Instruction::MutatePlayer(Box::new(
                         spellwake_engine::toolbox::MutatePlayerSpec::sacrifice_random_until_land(),
                     )),
                     Op::DiscardUpTo {maximum} => Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::simple(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Hand(Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller))), spellwake_engine::program::ObjectFilter::any()), spellwake_engine::toolbox::ZoneSelection::Prompt { chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller), min: Box::new(spellwake_engine::program::ValueExpr::literal(0)), max: Box::new(spellwake_engine::program::ValueExpr::literal(i64::from(maximum))), constraint: None, category: spellwake_engine::toolbox::ChoiceCategory::Generic, hidden: true }, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard }))),
                     Op::SacrificeMatching { subtype } => { let f = match subtype { Some(s) => spellwake_engine::program::ObjectFilter::creature().with_subtype(creature_types::id(s, vocabulary)?).controlled(), None => spellwake_engine::program::ObjectFilter::creature().nontoken().controlled() }; Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::simple(spellwake_engine::toolbox::ObjectQuery::zone(spellwake_engine::toolbox::QueryZone::Battlefield, f), spellwake_engine::toolbox::ZoneSelection::Prompt { chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(spellwake_engine::program::ResolvingPlayer::Controller), min: Box::new(spellwake_engine::program::ValueExpr::literal(1)), max: Box::new(spellwake_engine::program::ValueExpr::literal(1)), constraint: None, category: spellwake_engine::toolbox::ChoiceCategory::Generic, hidden: false }, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice }))) },
-                    Op::Discard { players, amount } => Instruction::Discard {
-                        players: players.into(),
-                        amount: amount.native(vocabulary)?,
-                    },
+                    Op::Discard { players, amount } => Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::discard(
+                            players.into(),
+                            amount.native(vocabulary)?,
+                        ),
+                    )),
                     Op::ChooseCreatureType { into, excluding } => Instruction::PromptChoice(
                         Box::new(
                             spellwake_engine::toolbox::PromptChoiceSpec::choose_creature_type(
@@ -10728,7 +10732,37 @@ pub fn body(value: &ExecutableBody) -> Value {
             }
             Instruction::Jump { destination } => json!({"op":"Jump","destination":destination.to_string()}),
             Instruction::ZoneOp(spec) => {
-                if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
+                if let Some((players, amount, filter, object_filter)) = spec.as_group_sacrifice()
+                    && let spellwake_engine::program::ObjectFilter::Clause(clause) = filter
+                {
+                    const ALL_TYPES: [CardType; 9] = [
+                        CardType::Battle,
+                        CardType::Planeswalker,
+                        CardType::Land,
+                        CardType::Artifact,
+                        CardType::Creature,
+                        CardType::Enchantment,
+                        CardType::Kindred,
+                        CardType::Instant,
+                        CardType::Sorcery,
+                    ];
+                    let mask_to_set =
+                        |mask: spellwake_engine::program::CardTypeMask| -> BTreeSet<CardType> {
+                            ALL_TYPES
+                                .into_iter()
+                                .filter(|&kind| mask.contains(kind))
+                                .collect()
+                        };
+                    let ptf = PermanentTypeFilter {
+                        any_types: mask_to_set(clause.any_types),
+                        required_types: mask_to_set(clause.required_types),
+                        forbidden_types: mask_to_set(clause.forbidden_types),
+                        object_filter,
+                    };
+                    json!({"op":"Sacrifice","players":affected_players(players),"amount":instruction_amount(amount),"filter":permanent_type_filter(&ptf)})
+                } else if let Some((players, amount)) = spec.as_group_discard() {
+                    json!({"op":"Discard","players":affected_players(players),"amount":instruction_amount(amount)})
+                } else if matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Targets)
                     && matches!(spec.selection, spellwake_engine::toolbox::ZoneSelection::All)
                     && matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::Hand)
                 {
@@ -11102,8 +11136,6 @@ pub fn body(value: &ExecutableBody) -> Value {
             }
             Instruction::CreateTokens { creations } =>
                 json!({"op":"CreateTokens","creations":creations.iter().map(token_creation).collect::<Vec<_>>()}),
-            Instruction::Sacrifice { players, amount, filter } => json!({"op":"Sacrifice","players":affected_players(*players),"amount":instruction_amount(amount),"filter":permanent_type_filter(filter)}),
-            Instruction::Discard { players, amount } => json!({"op":"Discard","players":affected_players(*players),"amount":instruction_amount(amount)}),
             Instruction::SearchLibrary { filter } => {
                 use spellwake_engine::program::{
                     SearchBattlefieldPostEntry, SearchCardMatcher, SearchCount, SearchDestination,
@@ -11255,17 +11287,8 @@ pub fn body(value: &ExecutableBody) -> Value {
             Instruction::EmitReflexiveTrigger { body: reflexive } => {
                 json!({"op":"EmitReflexiveTrigger","body":body(reflexive)})
             }
-            Instruction::ChooseObjects { players, source_zone, filter, min, max, distinct_powers, max_total_power, unchosen_action } => {
-                json!({"op":"ChooseObjects","players":format!("{players:?}"),"source_zone":format!("{source_zone:?}"),"filter":format!("{filter:?}"),"min":instruction_amount(min),"max":instruction_amount(max),"distinct_powers":distinct_powers,"max_total_power":max_total_power.as_ref().map(instruction_amount),"unchosen_action":format!("{unchosen_action:?}")})
-            }
-            Instruction::ChooseOption { chooser, options } => {
-                json!({"op":"ChooseOption","chooser":format!("{chooser:?}"),"options":options.len()})
-            }
             Instruction::ScheduleDelayedEventTrigger { trigger, body: inner, expires, once } => {
                 json!({"op":"ScheduleDelayedEventTrigger","trigger":format!("{trigger:?}"),"body":body(inner),"expires":format!("{expires:?}"),"once":once})
-            }
-            Instruction::ChooseValue { chooser, domain } => {
-                json!({"op":"ChooseValue","chooser":format!("{chooser:?}"),"domain":format!("{domain:?}")})
             }
             Instruction::LookTopChooseExt { library_owner, chooser, count, filter, max_picks, take_all_matching, keep_dest, rest_dest, reveal_kept, .. } => json!({"op":"LookTopChooseExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"count":instruction_amount(count),"filter":format!("{filter:?}"),"max_picks":max_picks,"take_all_matching":take_all_matching,"keep_dest":format!("{keep_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"reveal_kept":reveal_kept}),
             Instruction::RevealUntilMatchExt { library_owner, chooser, filter, count, match_dest, rest_dest, keep_all_revealed, .. } => json!({"op":"RevealUntilMatchExt","library_owner":format!("{library_owner:?}"),"chooser":format!("{chooser:?}"),"filter":format!("{filter:?}"),"count":instruction_amount(count),"match_dest":format!("{match_dest:?}"),"rest_dest":format!("{rest_dest:?}"),"keep_all_revealed":keep_all_revealed}),
@@ -14295,26 +14318,28 @@ mod tests {
                     )));
                 }
                 instructions.extend([
-                    Instruction::Sacrifice {
+                    Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                            players,
+                            amount.clone(),
+                            PermanentTypeFilter {
+                                any_types: Default::default(),
+                                required_types: BTreeSet::from([
+                                    CardType::Artifact,
+                                    CardType::Creature,
+                                ]),
+                                forbidden_types: BTreeSet::from([
+                                    CardType::Land,
+                                    CardType::Enchantment,
+                                ]),
+                                object_filter: None,
+                            },
+                        ),
+                    )),
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
                         players,
-                        amount: amount.clone(),
-                        filter: PermanentTypeFilter {
-                            any_types: Default::default(),
-                            required_types: BTreeSet::from([
-                                CardType::Artifact,
-                                CardType::Creature,
-                            ]),
-                            forbidden_types: BTreeSet::from([
-                                CardType::Land,
-                                CardType::Enchantment,
-                            ]),
-                            object_filter: None,
-                        },
-                    },
-                    Instruction::Discard {
-                        players,
-                        amount: amount.clone(),
-                    },
+                        amount.clone(),
+                    ))),
                 ]);
                 let mut program = Program::artifact(None, vec![]);
                 program.triggered.push(TriggeredAbility {
@@ -14359,10 +14384,12 @@ mod tests {
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
                 BodyTarget::SinglePlayer,
-                vec![Instruction::Discard {
-                    players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                    amount: ValueExpr::Literal(2.into()),
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                        ValueExpr::Literal(2.into()),
+                    ),
+                ))],
             ),
         });
         leaf.triggered.push(TriggeredAbility {
@@ -14371,16 +14398,18 @@ mod tests {
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::Sacrifice {
-                    players: AffectedPlayers::EachPlayer,
-                    amount: ValueExpr::event(EventValueKind::MatchedOccurrences),
-                    filter: PermanentTypeFilter {
-                        any_types: Default::default(),
-                        required_types: BTreeSet::from([CardType::Creature]),
-                        forbidden_types: BTreeSet::new(),
-                        object_filter: None,
-                    },
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                        AffectedPlayers::EachPlayer,
+                        ValueExpr::event(EventValueKind::MatchedOccurrences),
+                        PermanentTypeFilter {
+                            any_types: Default::default(),
+                            required_types: BTreeSet::from([CardType::Creature]),
+                            forbidden_types: BTreeSet::new(),
+                            object_filter: None,
+                        },
+                    ),
+                ))],
             ),
         });
         let token = TokenDefinition::new(

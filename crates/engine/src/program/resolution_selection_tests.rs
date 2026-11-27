@@ -12,17 +12,19 @@ fn creature_filter() -> PermanentTypeFilter {
 }
 
 fn sacrifice(players: AffectedPlayers, amount: ValueExpr) -> Instruction {
-    Instruction::Sacrifice {
+    Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
         players,
         amount,
-        filter: creature_filter(),
-    }
+        creature_filter(),
+    )))
 }
 
 fn selected_effects(players: AffectedPlayers, amount: ValueExpr) -> [Instruction; 2] {
     [
         sacrifice(players, amount.clone()),
-        Instruction::Discard { players, amount },
+        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+            players, amount,
+        ))),
     ]
 }
 
@@ -227,11 +229,13 @@ fn selection_type_filters_admit_empty_and_disjoint_sets_but_reject_overlap() {
         assert_eq!(
             check(
                 BodyTarget::None,
-                vec![Instruction::Sacrifice {
-                    players: AffectedPlayers::EachPlayer,
-                    amount: crate::program::ValueExpr::Literal(1.into()),
-                    filter
-                }]
+                vec![Instruction::ZoneOp(Box::new(
+                    crate::toolbox::ZoneOpSpec::sacrifice(
+                        AffectedPlayers::EachPlayer,
+                        crate::program::ValueExpr::Literal(1.into()),
+                        filter,
+                    ),
+                ))]
             ),
             Ok(())
         );
@@ -239,16 +243,18 @@ fn selection_type_filters_admit_empty_and_disjoint_sets_but_reject_overlap() {
     assert_eq!(
         check(
             BodyTarget::None,
-            vec![Instruction::Sacrifice {
-                players: AffectedPlayers::EachPlayer,
-                amount: crate::program::ValueExpr::Literal(0.into()),
-                filter: PermanentTypeFilter {
-                    any_types: Default::default(),
-                    required_types: BTreeSet::from([CardType::Artifact, CardType::Creature]),
-                    forbidden_types: BTreeSet::from([CardType::Creature]),
-                    object_filter: None
-                }
-            }]
+            vec![Instruction::ZoneOp(Box::new(
+                crate::toolbox::ZoneOpSpec::sacrifice(
+                    AffectedPlayers::EachPlayer,
+                    crate::program::ValueExpr::Literal(0.into()),
+                    PermanentTypeFilter {
+                        any_types: Default::default(),
+                        required_types: BTreeSet::from([CardType::Artifact, CardType::Creature]),
+                        forbidden_types: BTreeSet::from([CardType::Creature]),
+                        object_filter: None,
+                    },
+                ),
+            ))]
         ),
         Err(DefinitionError::InvalidInstruction)
     );
@@ -349,10 +355,10 @@ fn selected_effects_are_not_admitted_as_optional_single_primitives() {
 #[test]
 fn unreachable_selection_still_validates_roles_amounts_and_filter() {
     let invalid_effects = [
-        Instruction::Discard {
-            players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-            amount: crate::program::ValueExpr::Literal(1.into()),
-        },
+        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+            AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+            crate::program::ValueExpr::Literal(1.into()),
+        ))),
         sacrifice(
             AffectedPlayers::EachPlayer,
             crate::program::ValueExpr::Literal((-1).into()),
@@ -361,16 +367,16 @@ fn unreachable_selection_still_validates_roles_amounts_and_filter() {
             AffectedPlayers::EachPlayer,
             crate::program::ValueExpr::event(crate::program::EventValueKind::MatchedOccurrences),
         ),
-        Instruction::Sacrifice {
-            players: AffectedPlayers::EachPlayer,
-            amount: crate::program::ValueExpr::Literal(1.into()),
-            filter: PermanentTypeFilter {
+        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+            AffectedPlayers::EachPlayer,
+            crate::program::ValueExpr::Literal(1.into()),
+            PermanentTypeFilter {
                 any_types: Default::default(),
                 required_types: BTreeSet::from([CardType::Creature]),
                 forbidden_types: BTreeSet::from([CardType::Creature]),
                 object_filter: None,
             },
-        },
+        ))),
     ];
     for (effect, error) in invalid_effects.into_iter().zip([
         DefinitionError::ResolvingPlayerTarget,
@@ -391,10 +397,10 @@ fn unreachable_selection_still_validates_roles_amounts_and_filter() {
             BodyTarget::SinglePlayer,
             vec![
                 Instruction::Jump { destination: 2 },
-                Instruction::Discard {
-                    players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                    amount: crate::program::ValueExpr::Literal(1.into()),
-                }
+                Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ))),
             ]
         ),
         Err(DefinitionError::PhantomTarget)
@@ -536,10 +542,10 @@ fn discard_does_not_invalidate_a_battlefield_copy_donor() {
         check(
             BodyTarget::SinglePermanent,
             vec![
-                Instruction::Discard {
-                    players: AffectedPlayers::EachPlayer,
-                    amount: crate::program::ValueExpr::Literal(3.into()),
-                },
+                Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::EachPlayer,
+                    crate::program::ValueExpr::Literal(3.into()),
+                ))),
                 copy()
             ]
         ),

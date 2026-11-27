@@ -37,14 +37,8 @@ impl EffectWindow {
             instruction: index,
         };
         let receipt = match instruction {
-            Instruction::Sacrifice { .. } | Instruction::Discard { .. } => {
-                return Err(EffectError::InconsistentProgram);
-            }
             Instruction::OptionalSequence { .. }
             | Instruction::Jump { .. }
-            | Instruction::ChooseObjects { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::ChooseValue { .. }
             | Instruction::ZoneOp(_)
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)

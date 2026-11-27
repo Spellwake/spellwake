@@ -23,10 +23,12 @@ fn madness_projects_private_replacement_choices_and_replays_the_paid_exile_cast(
     madness.madness = Some(ManaCost::one(ManaType::Green));
     let discard = instant(
         BodyTarget::None,
-        vec![Instruction::Discard {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        }],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            ),
+        ))],
     );
     let mut competitor = Program::artifact(None, vec![]);
     competitor.zone_replacements.push(ZoneReplacementAbility {

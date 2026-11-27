@@ -681,37 +681,6 @@ pub(crate) fn rewrite_zone_op(
 }
 
 #[must_use]
-fn permanent_type_filter_query(zone: QueryZone, filter: PermanentTypeFilter) -> ObjectQuery {
-    let mut clause = ObjectClause::any();
-    if !filter.any_types.is_empty() {
-        let mut mask = CardTypeMask::EMPTY;
-        for ct in &filter.any_types {
-            mask = mask.with(*ct);
-        }
-        clause = clause.any_types(mask);
-    }
-    if !filter.required_types.is_empty() {
-        let mut mask = CardTypeMask::EMPTY;
-        for ct in &filter.required_types {
-            mask = mask.with(*ct);
-        }
-        clause = clause.required_types(mask);
-    }
-    if !filter.forbidden_types.is_empty() {
-        let mut mask = CardTypeMask::EMPTY;
-        for ct in &filter.forbidden_types {
-            mask = mask.with(*ct);
-        }
-        clause = clause.forbid_types(mask);
-    }
-    let base = ObjectQuery::zone(zone, ObjectFilter::from_clause(clause));
-    match filter.object_filter {
-        Some(obj) => ObjectQuery::filtered(base, obj),
-        None => base,
-    }
-}
-
-#[must_use]
 pub(crate) fn exile_target() -> Instruction {
     zone_op(ZoneOpSpec::move_all(
         ObjectQuery::Targets,
@@ -888,7 +857,7 @@ pub(crate) fn exile_chosen_permanents(
 ) -> Instruction {
     const SEAT_BIND: BindingId = BindingId(902);
     let inner = zone_op(ZoneOpSpec::simple(
-        permanent_type_filter_query(
+        ZoneOpSpec::permanent_type_filter_query(
             QueryZone::BattlefieldControlledBy(Box::new(PlayerSelector::Bound(SEAT_BIND))),
             filter,
         ),
@@ -917,7 +886,7 @@ pub(crate) fn return_controlled_permanents(
 ) -> Instruction {
     const SEAT_BIND: BindingId = BindingId(903);
     let inner = zone_op(ZoneOpSpec::simple(
-        permanent_type_filter_query(
+        ZoneOpSpec::permanent_type_filter_query(
             QueryZone::BattlefieldControlledBy(Box::new(PlayerSelector::Bound(SEAT_BIND))),
             filter,
         ),
@@ -1054,7 +1023,7 @@ pub(crate) fn sacrifice_up_to(
 ) -> Instruction {
     const SEAT_BIND: BindingId = BindingId(905);
     let inner = zone_op(ZoneOpSpec::simple(
-        permanent_type_filter_query(
+        ZoneOpSpec::permanent_type_filter_query(
             QueryZone::BattlefieldControlledBy(Box::new(PlayerSelector::Bound(SEAT_BIND))),
             filter,
         ),

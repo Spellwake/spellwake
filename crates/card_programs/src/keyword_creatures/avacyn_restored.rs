@@ -92,9 +92,11 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
     use Instruction::*;
     let draw =
         |n| crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(literal(n));
-    let discard = |player, amount| Discard {
-        players: AffectedPlayers::One(player),
-        amount,
+    let discard = |player, amount| {
+        Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+            AffectedPlayers::One(player),
+            amount,
+        )))
     };
     let (target, instructions) = match rules {
         "Until end of turn, target creature gets +6/+6 and gains trample, and all creatures able to block it this turn do so." => {
@@ -156,16 +158,18 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
                     ),
                     clause(
                         SinglePlayer,
-                        Sacrifice {
-                            players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                            amount: literal(1),
-                            filter: PermanentTypeFilter {
-                                any_types: BTreeSet::new(),
-                                required_types: [CardType::Creature].into(),
-                                forbidden_types: BTreeSet::new(),
-                                object_filter: None,
-                            },
-                        },
+                        Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                                AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                                literal(1),
+                                PermanentTypeFilter {
+                                    any_types: BTreeSet::new(),
+                                    required_types: [CardType::Creature].into(),
+                                    forbidden_types: BTreeSet::new(),
+                                    object_filter: None,
+                                },
+                            ),
+                        )),
                     ),
                 ],
             )
@@ -431,12 +435,12 @@ fn spell(name: &str, rules: &str, vocabulary: &CreatureTypeVocabulary) -> Option
         "Each player discards their hand, then draws seven cards." => (
             NoTarget,
             vec![
-                Discard {
-                    players: AffectedPlayers::EachPlayer,
-                    amount: spellwake_engine::program::ValueExpr::PlayerStat(
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::EachPlayer,
+                    spellwake_engine::program::ValueExpr::PlayerStat(
                         spellwake_engine::program::PlayerStatExpr::LargestHandSize,
                     ),
-                },
+                ))),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(literal(7)),
             ],
         ),
@@ -862,10 +866,10 @@ fn enchantment(
                         ),
                         2,
                     ),
-                    Instruction::Discard {
-                        players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                        amount: literal(1),
-                    },
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                        literal(1),
+                    ))),
                 ],
             );
         }
@@ -1120,10 +1124,10 @@ fn artifact(cost: ManaCost, rules: &str, vocabulary: &CreatureTypeVocabulary) ->
             Some((
                 BodyTarget::SingleOpponent,
                 vec![
-                    Instruction::Discard {
-                        players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                        amount: literal(1),
-                    },
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                        literal(1),
+                    ))),
                     single_subtype("Demon")?,
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::lose_life(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(

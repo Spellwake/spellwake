@@ -351,25 +351,25 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::Discard {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: ValueExpr::literal(1),
-                        },
-                        Instruction::Sacrifice {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: ValueExpr::literal(1),
-                            filter: single_type_filter(CardType::Creature),
-                        },
-                        Instruction::Sacrifice {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: ValueExpr::literal(1),
-                            filter: single_type_filter(CardType::Artifact),
-                        },
-                        Instruction::Sacrifice {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            amount: ValueExpr::literal(1),
-                            filter: single_type_filter(CardType::Land),
-                        },
+                        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::discard(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            ValueExpr::literal(1),
+                        ))),
+                        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            ValueExpr::literal(1),
+                            single_type_filter(CardType::Creature),
+                        ))),
+                        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            ValueExpr::literal(1),
+                            single_type_filter(CardType::Artifact),
+                        ))),
+                        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            ValueExpr::literal(1),
+                            single_type_filter(CardType::Land),
+                        ))),
                     ],
                 ),
             },

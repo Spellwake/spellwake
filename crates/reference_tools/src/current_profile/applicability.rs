@@ -295,8 +295,6 @@ native!(ExecutableBody, self, {
     }
     self.instructions.iter().try_for_each(|value| match value {
         Instruction::OfferDynamicManaPayment { .. }
-        | Instruction::ChooseObjects { .. }
-        | Instruction::ChooseOption { .. }
         | Instruction::ForEach { .. }
         | Instruction::ForEachPlayerQuery { .. }
         | Instruction::BindEnv { .. }
@@ -307,9 +305,7 @@ native!(ExecutableBody, self, {
         | Instruction::FixedTargetClause(_)
         | Instruction::SearchLibrary { .. }
         | Instruction::ScheduleDelayedStepTrigger { .. }
-        | Instruction::EmitReflexiveTrigger { .. }
-        | Instruction::Sacrifice { .. }
-        | Instruction::Discard { .. } => Err(ApplicabilityError),
+        | Instruction::EmitReflexiveTrigger { .. } => Err(ApplicabilityError),
         Instruction::PromptChoice(spec) => {
             if matches!(
                 &spec.domain,
@@ -331,6 +327,11 @@ native!(ExecutableBody, self, {
         Instruction::CreateTokens { creations } => creations
             .iter()
             .try_for_each(|creation| creation.definition.program().check_current10()),
+        Instruction::ZoneOp(spec)
+            if spec.as_group_sacrifice().is_some() || spec.as_group_discard().is_some() =>
+        {
+            Err(ApplicabilityError)
+        }
         Instruction::ZoneOp(spec) => {
             if matches!(
                 spec.destination,
@@ -519,7 +520,6 @@ native!(ExecutableBody, self, {
         }
         Instruction::Jump { .. }
         | Instruction::RepeatLoop { .. }
-        | Instruction::ChooseValue { .. }
         | Instruction::LookTopChooseExt { .. }
         | Instruction::RevealUntilMatchExt { .. }
         | Instruction::DrawCards(_)

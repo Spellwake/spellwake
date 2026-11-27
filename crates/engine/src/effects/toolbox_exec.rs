@@ -817,6 +817,66 @@ impl EffectWindow {
         Ok(StepOutcome::Continue)
     }
 
+    // Applies a validated prompt reply and splices option branches when present.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_prompt_choice_reply(
+        &mut self,
+        ctx: &mut RuleStepContext<'_>,
+        entry: &StackEntry,
+        index: usize,
+        actor: SeatId,
+        spec: &crate::toolbox::PromptChoiceSpec,
+        resolved_domain: &crate::toolbox::ResolvedPromptDomain,
+        reply: crate::toolbox::PromptChoiceReply,
+    ) -> Result<StepOutcome, EffectError> {
+        let chosen_option_for_splice = if !spec.option_branches.is_empty()
+            && let crate::toolbox::PromptChoiceReply::Options(ref idxs) = reply
+        {
+            Some(idxs.first().copied().unwrap_or(0))
+        } else {
+            None
+        };
+        self.apply_prompt_reply(
+            entry,
+            index,
+            actor,
+            spec,
+            resolved_domain,
+            reply,
+            ctx.append,
+        )?;
+        if let Some(chosen_idx) = chosen_option_for_splice {
+            let branch = spec
+                .option_branches
+                .get(usize::from(chosen_idx))
+                .ok_or(EffectError::InconsistentProgram)?;
+            let inserted = branch.instructions.len();
+            let base = isize::try_from(index).map_err(|_| EffectError::InconsistentProgram)?;
+            let mut spliced = Vec::with_capacity(inserted);
+            for op in &branch.instructions {
+                let mut cloned = op.clone();
+                cloned.shift_jumps(base, 0);
+                spliced.push(cloned);
+            }
+            let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry.id())
+            else {
+                return Err(EffectError::InconsistentProgram);
+            };
+            let delta =
+                isize::try_from(inserted).map_err(|_| EffectError::InconsistentProgram)? - 1;
+            for op in &mut payload.body.instructions {
+                op.shift_jumps(delta, index + 1);
+            }
+            payload.body.instructions.splice(index..=index, spliced);
+            for mode in &mut payload.modes {
+                mode.shift_for_splice(index, inserted);
+            }
+            return Ok(StepOutcome::Continue);
+        }
+        self.advance_instruction()?;
+        Ok(StepOutcome::Continue)
+    }
+
     /// Execute any Universal Toolbox [`Instruction`].
     #[inline(never)]
     pub(super) fn progress_toolbox_instruction(
@@ -1128,22 +1188,105 @@ impl EffectWindow {
                     .into_iter()
                     .next()
                     .unwrap_or(controller);
+                if let crate::toolbox::PromptDomain::Players {
+                    selector,
+                    random: true,
+                    ..
+                } = &spec.domain
+                {
+                    let candidates = self.eval_player_selector_at(
+                        controller,
+                        Some(entry),
+                        selector,
+                        self.resolution_cursor(),
+                    )?;
+                    match candidates.as_slice() {
+                        [] => {
+                            if let Some(cur) = self.resolution_cursor_mut() {
+                                cur.env.bind(spec.bind_to, ExecValue::Players(Vec::new()));
+                            }
+                            self.record_choice_and_emit(
+                                entry,
+                                index,
+                                prompt::ChoiceEventMeta {
+                                    chooser: actor,
+                                    category: spec.category,
+                                    option_indices: Vec::new(),
+                                    chosen_count: 0,
+                                },
+                                ctx.append,
+                            )?;
+                            self.advance_instruction()?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                        [only] => {
+                            if let Some(cur) = self.resolution_cursor_mut() {
+                                cur.chosen_opponent = Some(*only);
+                                cur.env.bind(spec.bind_to, ExecValue::Players(vec![*only]));
+                            }
+                            self.record_choice_and_emit(
+                                entry,
+                                index,
+                                prompt::ChoiceEventMeta {
+                                    chooser: actor,
+                                    category: spec.category,
+                                    option_indices: Vec::new(),
+                                    chosen_count: 1,
+                                },
+                                ctx.append,
+                            )?;
+                            self.advance_instruction()?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                        _ => {
+                            let ready = self
+                                .resolution_cursor()
+                                .is_some_and(|c| c.results.random_player_ready);
+                            if !ready {
+                                self.suspend_for_random_resolution(actor)?;
+                                return Ok(StepOutcome::Continue);
+                            }
+                            let chosen_seats: Vec<SeatId> = if let Some(cur) =
+                                self.resolution_cursor_mut()
+                            {
+                                cur.results.random_player_ready = false;
+                                let seats: Vec<SeatId> = cur.chosen_opponent.into_iter().collect();
+                                cur.env
+                                    .bind(spec.bind_to, ExecValue::Players(seats.clone()));
+                                seats
+                            } else {
+                                Vec::new()
+                            };
+                            self.record_choice_and_emit(
+                                entry,
+                                index,
+                                prompt::ChoiceEventMeta {
+                                    chooser: actor,
+                                    category: spec.category,
+                                    option_indices: Vec::new(),
+                                    chosen_count: chosen_seats.len(),
+                                },
+                                ctx.append,
+                            )?;
+                            self.advance_instruction()?;
+                            return Ok(StepOutcome::Continue);
+                        }
+                    }
+                }
                 let resolved_domain = self.resolve_prompt_domain(entry, &spec.domain)?;
                 if let Some(reply) = self
                     .resolution_cursor_mut()
                     .and_then(|c| c.pending_prompt_reply.take())
                 {
-                    self.apply_prompt_reply(
+                    return self.finish_prompt_choice_reply(
+                        ctx,
                         entry,
                         index,
                         actor,
                         &spec,
                         &resolved_domain,
                         reply,
-                        ctx.append,
-                    )?;
-                    self.advance_instruction()?;
-                    return Ok(StepOutcome::Continue);
+                    );
                 }
                 if spec.auto_resolve_trivial
                     && let Some(auto_reply) = Self::trivial_prompt_reply(&resolved_domain)
@@ -1151,25 +1294,36 @@ impl EffectWindow {
                     let constraint_ok = match (&spec.domain, &auto_reply) {
                         (
                             crate::toolbox::PromptDomain::Objects {
-                                constraint: Some(constraint),
+                                constraint,
+                                max_total_power,
                                 ..
                             },
                             crate::toolbox::PromptChoiceReply::Objects(ids),
-                        ) => self.satisfies_selection_constraint(ids, *constraint)?,
+                        ) => {
+                            let c_ok = match constraint {
+                                Some(constraint) => {
+                                    self.satisfies_selection_constraint(ids, *constraint)?
+                                }
+                                None => true,
+                            };
+                            let p_ok = match max_total_power {
+                                Some(expr) => self.satisfies_max_total_power(entry, ids, expr)?,
+                                None => true,
+                            };
+                            c_ok && p_ok
+                        }
                         _ => true,
                     };
                     if constraint_ok {
-                        self.apply_prompt_reply(
+                        return self.finish_prompt_choice_reply(
+                            ctx,
                             entry,
                             index,
                             actor,
                             &spec,
                             &resolved_domain,
                             auto_reply,
-                            ctx.append,
-                        )?;
-                        self.advance_instruction()?;
-                        return Ok(StepOutcome::Continue);
+                        );
                     }
                 }
                 let frame = PromptChoiceFrame {
@@ -1185,7 +1339,11 @@ impl EffectWindow {
                 }
                 Ok(StepOutcome::Pending(EffectDecision::PromptChoice(frame)))
             }
-            Instruction::ZoneOp(spec) if spec.is_delayed_special_op() => {
+            Instruction::ZoneOp(spec)
+                if spec.is_delayed_special_op()
+                    || spec.as_group_sacrifice().is_some()
+                    || spec.as_group_discard().is_some() =>
+            {
                 Ok(StepOutcome::Next(Instruction::ZoneOp(spec)))
             }
             Instruction::ZoneOp(spec) => self.execute_zone_op(ctx, entry, index, &spec),

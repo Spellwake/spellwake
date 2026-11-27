@@ -7545,37 +7545,39 @@ pub(super) fn lower_restrictions_statics_instruction(
                             }
                             Some(None) => {
                                 builder.instructions.pop();
-                                builder.instructions.push(Instruction::ChooseOption {
-                                    chooser: ResolvingPlayer::Controller,
-                                    options: vec![
-                                        ChooseOptionBranch {
-                                            label: "Top of owner's library".to_owned(),
-                                            body: ExecutableBody::new(
-                                                BodyTarget::None,
-                                                vec![Instruction::StackOp(Box::new(
-                                                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
-                                                        spellwake_engine::toolbox::CounterDestination::Library {
-                                                            top: true,
-                                                        },
-                                                    ),
-                                                ))],
+                                builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                    spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                                        ResolvingPlayer::Controller,
+                                        vec![
+                                            (
+                                                "Top of owner's library".to_owned(),
+                                                ExecutableBody::new(
+                                                    BodyTarget::None,
+                                                    vec![Instruction::StackOp(Box::new(
+                                                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                                            spellwake_engine::toolbox::CounterDestination::Library {
+                                                                top: true,
+                                                            },
+                                                        ),
+                                                    ))],
+                                                ),
                                             ),
-                                        },
-                                        ChooseOptionBranch {
-                                            label: "Bottom of owner's library".to_owned(),
-                                            body: ExecutableBody::new(
-                                                BodyTarget::None,
-                                                vec![Instruction::StackOp(Box::new(
-                                                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
-                                                        spellwake_engine::toolbox::CounterDestination::Library {
-                                                            top: false,
-                                                        },
-                                                    ),
-                                                ))],
+                                            (
+                                                "Bottom of owner's library".to_owned(),
+                                                ExecutableBody::new(
+                                                    BodyTarget::None,
+                                                    vec![Instruction::StackOp(Box::new(
+                                                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                                            spellwake_engine::toolbox::CounterDestination::Library {
+                                                                top: false,
+                                                            },
+                                                        ),
+                                                    ))],
+                                                ),
                                             ),
-                                        },
-                                    ],
-                                });
+                                        ],
+                                    ),
+                                )));
                                 return Ok(());
                             }
                             None => {}
@@ -7594,37 +7596,39 @@ pub(super) fn lower_restrictions_statics_instruction(
                         ) && a != b
                         {
                             builder.instructions.pop();
-                            builder.instructions.push(Instruction::ChooseOption {
-                                chooser: ResolvingPlayer::Controller,
-                                options: vec![
-                                    ChooseOptionBranch {
-                                        label: "Top of owner's library".to_owned(),
-                                        body: ExecutableBody::new(
-                                            BodyTarget::None,
-                                            vec![Instruction::StackOp(Box::new(
-                                                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
-                                                    spellwake_engine::toolbox::CounterDestination::Library {
-                                                        top: true,
-                                                    },
-                                                ),
-                                            ))],
+                            builder.instructions.push(Instruction::PromptChoice(Box::new(
+                                spellwake_engine::toolbox::PromptChoiceSpec::choose_option(
+                                    ResolvingPlayer::Controller,
+                                    vec![
+                                        (
+                                            "Top of owner's library".to_owned(),
+                                            ExecutableBody::new(
+                                                BodyTarget::None,
+                                                vec![Instruction::StackOp(Box::new(
+                                                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                                        spellwake_engine::toolbox::CounterDestination::Library {
+                                                            top: true,
+                                                        },
+                                                    ),
+                                                ))],
+                                            ),
                                         ),
-                                    },
-                                    ChooseOptionBranch {
-                                        label: "Bottom of owner's library".to_owned(),
-                                        body: ExecutableBody::new(
-                                            BodyTarget::None,
-                                            vec![Instruction::StackOp(Box::new(
-                                                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
-                                                    spellwake_engine::toolbox::CounterDestination::Library {
-                                                        top: false,
-                                                    },
-                                                ),
-                                            ))],
+                                        (
+                                            "Bottom of owner's library".to_owned(),
+                                            ExecutableBody::new(
+                                                BodyTarget::None,
+                                                vec![Instruction::StackOp(Box::new(
+                                                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                                        spellwake_engine::toolbox::CounterDestination::Library {
+                                                            top: false,
+                                                        },
+                                                    ),
+                                                ))],
+                                            ),
                                         ),
-                                    },
-                                ],
-                            });
+                                    ],
+                                ),
+                            )));
                             return Ok(());
                         }
                     }

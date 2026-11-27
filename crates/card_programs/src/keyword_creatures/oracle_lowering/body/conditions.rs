@@ -218,7 +218,6 @@ pub(super) fn resolve_prev_anaphora_ref(
         {
             Some(MatchObjectRef::RevealedTop)
         }
-        Instruction::Discard { .. } => Some(MatchObjectRef::DiscardedCard),
         Instruction::MutatePlayer(spec)
             if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_)) =>
         {
@@ -281,7 +280,6 @@ pub(super) fn resolve_prev_anaphora_ref(
                 },
             }
         }
-        Instruction::Sacrifice { .. } => Some(MatchObjectRef::LastMovedToGraveyard),
         Instruction::SearchLibrary { .. } => Some(MatchObjectRef::LastAffected),
         _ => None,
     })
@@ -444,10 +442,7 @@ pub(super) fn resolve_match_object_ref(
                     | "that sacrificed enchantment"
                     | "that sacrificed land"
             ) {
-                if matches!(
-                    builder.instructions.last(),
-                    Some(Instruction::Sacrifice { .. })
-                ) || builder
+                if builder
                     .instructions
                     .last()
                     .and_then(super::super::toolbox_emit::unwrap_zone_op)
@@ -3989,10 +3984,11 @@ pub(in super::super) fn lower_resolution_condition(
                             Instruction::ZoneOp(_)
                                 | Instruction::ForEachPlayerQuery { .. }
                                 | Instruction::MutateObject(_)
-                                | Instruction::Discard { .. }
-                                | Instruction::Sacrifice { .. }
-                                | Instruction::ChooseObjects { .. }
                         )
+                    ) || matches!(
+                        builder.instructions.last(),
+                        Some(Instruction::PromptChoice(spec))
+                            if matches!(spec.domain, spellwake_engine::toolbox::PromptDomain::Objects { .. })
                     );
                     let lki_action = matches!(
                         act_low.as_str(),
@@ -4747,8 +4743,6 @@ pub(super) fn lower_subject_to_object_query(
                         op,
                         Instruction::ZoneOp(_)
                             | Instruction::ForEachPlayerQuery { .. }
-                            | Instruction::Sacrifice { .. }
-                            | Instruction::Discard { .. }
                             | Instruction::LookTopChooseExt { .. }
                     ) || matches!(
                         op,

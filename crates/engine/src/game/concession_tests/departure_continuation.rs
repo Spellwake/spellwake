@@ -59,10 +59,12 @@ fn grouped_discard_keeps_accepted_selections_and_skips_the_departed_hand() {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::Discard {
-                players: AffectedPlayers::EachPlayer,
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                crate::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::EachPlayer,
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
         ),
     );
     let mut cards = vec![card(1, A, ObjectDestination::Hand, spell)];

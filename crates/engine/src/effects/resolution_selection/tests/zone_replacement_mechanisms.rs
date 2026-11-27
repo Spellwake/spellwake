@@ -252,10 +252,12 @@ fn optional_singleton_discard_apply_and_decline_remain_discard_actions() {
             body: ExecutableBody::new(BodyTarget::None, vec![gain(1)]),
         });
         let mut t = start(
-            vec![Instruction::Discard {
-                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                crate::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
             vec![
                 bf(50, B, p),
                 seed(10, A, ObjectDestination::Hand, creature()),

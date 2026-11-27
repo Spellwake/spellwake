@@ -425,16 +425,18 @@ fn cannot_be_sacrificed_protects_noncreature_permanent_from_effect_and_cost() {
     let force_sac_artifact = spell(
         4,
         BodyTarget::None,
-        vec![Instruction::Sacrifice {
-            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-            amount: ValueExpr::literal(1),
-            filter: PermanentTypeFilter {
-                any_types: BTreeSet::from([CardType::Artifact]),
-                required_types: BTreeSet::new(),
-                forbidden_types: BTreeSet::new(),
-                object_filter: None,
-            },
-        }],
+        vec![Instruction::ZoneOp(Box::new(
+            spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                ValueExpr::literal(1),
+                PermanentTypeFilter {
+                    any_types: BTreeSet::from([CardType::Artifact]),
+                    required_types: BTreeSet::new(),
+                    forbidden_types: BTreeSet::new(),
+                    object_filter: None,
+                },
+            ),
+        ))],
     );
 
     let mut sac_cost_spell = gain_life_instant(3);

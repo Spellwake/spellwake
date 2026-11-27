@@ -18,10 +18,10 @@ pub(super) fn body(text: &str, vocabulary: &CreatureTypeVocabulary) -> Option<Ex
         "Discard a card, then draw a card." => (
             BodyTarget::None,
             vec![
-                Instruction::Discard {
-                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ))),
                 draw(1),
             ],
         ),

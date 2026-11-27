@@ -805,6 +805,7 @@ fn real_chosen_type_and_captured_trigger_counts_reauthorize_the_owned_library_cu
                     bind_unchosen: None,
                     tag_partition: None,
                     auto_resolve_trivial: false,
+                    option_branches: Vec::new(),
                 },
             ))];
             main.extend(body);

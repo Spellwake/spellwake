@@ -483,9 +483,9 @@ pub enum EventValueKind {
     CoinFlipsWon,
     /// `1` if the most recent coin flip was won, else `0`.
     LastCoinFlipWon,
-    /// Number chosen by `Instruction::ChooseValue(Number)`.
+    /// Number chosen by `Instruction::PromptChoice` with `PromptDomain::Number`.
     ChosenNumber,
-    /// 0-based option index chosen by `Instruction::ChooseValue(LabeledOption)`.
+    /// 0-based option index chosen by `Instruction::PromptChoice` with `PromptDomain::Options`.
     ChosenOptionIndex,
     /// Vote count received by option `u8` in the most recent `PlayerMutation::Vote`.
     VoteCount(u8),

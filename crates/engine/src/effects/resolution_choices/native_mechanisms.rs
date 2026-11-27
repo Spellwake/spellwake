@@ -1027,6 +1027,7 @@ fn optional_type_child_retains_cursor_rejects_reused_offer_and_excluded_type_the
                 bind_unchosen: None,
                 tag_partition: None,
                 auto_resolve_trivial: false,
+                option_branches: Vec::new(),
             },
         ))));
         let old = command_reply(&state, DecisionReply::OptionalEffect(choice));
@@ -2699,6 +2700,7 @@ fn optional_type_literal_zero_draw_continuation_assigns_only_on_take() {
                 bind_unchosen: None,
                 tag_partition: None,
                 auto_resolve_trivial: false,
+                option_branches: Vec::new(),
             })),
             crate::program::Instruction::DrawCards(Box::new(
                 crate::toolbox::DrawCardsSpec::simple(
@@ -3005,6 +3007,7 @@ fn nonempty_resolution_locals_survive_each_mana_prefix_and_both_optional_outcome
             bind_unchosen: None,
             tag_partition: None,
             auto_resolve_trivial: false,
+            option_branches: Vec::new(),
         })),
         Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::Controller,

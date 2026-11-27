@@ -81,11 +81,11 @@ use spellwake_engine::{
         LinkedExileGroup, LookTopKeepDest, LookTopRestDest, MatchObjectRef, MoveSubjectRef,
         ObjectColorFilter, ObjectFilter, ObjectStatKind, PlayerRelation, PlayerStatExpr,
         PowerFilter, Program, ProgramKind, ProtectionRecipients, PublicZoneDestination,
-        ResolutionChoiceDomain, ResolutionCondition, ResolvingPlayer, SourceStateExpr,
-        SourceZoneFilter, SpellFilter, Supertype, TemporaryRuleKind, TriggerEvent, TriggerGrouping,
-        TriggerSpec, TriggeredAbility, TriggeredAbilityId, ValueExpr, ZoneActionKind,
-        ZoneActionPredicate, ZoneObjectKind, ZoneReplacementAbility, ZoneReplacementAbilityId,
-        ZoneReplacementChoice, ZoneReplacementExtra, ZoneReplacementSubject,
+        ResolutionCondition, ResolvingPlayer, SourceStateExpr, SourceZoneFilter, SpellFilter,
+        Supertype, TemporaryRuleKind, TriggerEvent, TriggerGrouping, TriggerSpec, TriggeredAbility,
+        TriggeredAbilityId, ValueExpr, ZoneActionKind, ZoneActionPredicate, ZoneObjectKind,
+        ZoneReplacementAbility, ZoneReplacementAbilityId, ZoneReplacementChoice,
+        ZoneReplacementExtra, ZoneReplacementSubject,
     },
     targets::TargetRef,
     token::{
@@ -331,6 +331,35 @@ fn answer_yes_no_offer(
                 .unwrap_or(0);
             DecisionReply::OptionIndex(if accept { accept_idx } else { decline_idx })
         }
+        RuleFrame::PromptChoice(frame) => {
+            let spellwake_engine::toolbox::ResolvedPromptDomain::Options { labels, .. } =
+                &frame.domain
+            else {
+                panic!("unexpected PromptChoice offer domain: {:?}", frame.domain);
+            };
+            let decline_idx = labels
+                .iter()
+                .position(|l| {
+                    let lower = l.to_ascii_lowercase();
+                    lower.contains("decline") || lower == "no" || lower.contains("pass")
+                })
+                .and_then(|i| u8::try_from(i).ok())
+                .unwrap_or(1);
+            let accept_idx = labels
+                .iter()
+                .position(|l| {
+                    let lower = l.to_ascii_lowercase();
+                    lower.contains("accept")
+                        || lower.contains("pay")
+                        || lower == "yes"
+                        || lower.contains("take")
+                })
+                .and_then(|i| u8::try_from(i).ok())
+                .unwrap_or(0);
+            DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Options(
+                vec![if accept { accept_idx } else { decline_idx }],
+            ))
+        }
         other => panic!("unexpected offer decision frame: {other:?}"),
     };
     reply(game, expected_chooser, choice)
@@ -355,6 +384,19 @@ fn answer_color_choice(
     let choice = match decision.frame() {
         RuleFrame::ResolutionManaColor(_) => DecisionReply::ManaColor(mana_type),
         RuleFrame::OptionIndex(_) => DecisionReply::OptionIndex(option_idx),
+        RuleFrame::PromptChoice(frame) => match &frame.domain {
+            spellwake_engine::toolbox::ResolvedPromptDomain::Color { .. } => {
+                DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Color(
+                    mana_type,
+                ))
+            }
+            spellwake_engine::toolbox::ResolvedPromptDomain::Options { .. } => {
+                DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Options(
+                    vec![option_idx],
+                ))
+            }
+            other => panic!("unexpected PromptChoice color choice domain: {other:?}"),
+        },
         other => panic!("unexpected color choice frame: {other:?}"),
     };
     reply(game, expected_chooser, choice)
@@ -1481,10 +1523,12 @@ fn zone_replacement_source_self_discard_by_opponent_matching_not_cast_and_exile_
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::Discard {
-                    players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                    amount: ValueExpr::literal(1),
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::Controller),
+                        ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -1494,10 +1538,12 @@ fn zone_replacement_source_self_discard_by_opponent_matching_not_cast_and_exile_
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleOpponent,
-                vec![Instruction::Discard {
-                    players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                    amount: ValueExpr::literal(1),
-                }],
+                vec![Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::discard(
+                        AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                        ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         ),
         &vocab,

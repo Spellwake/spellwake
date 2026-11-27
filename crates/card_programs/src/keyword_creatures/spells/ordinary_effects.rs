@@ -687,12 +687,12 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
         return Some(ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::Discard {
-                    players: spellwake_engine::program::AffectedPlayers::EachPlayer,
-                    amount: spellwake_engine::program::ValueExpr::PlayerStat(
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    spellwake_engine::program::AffectedPlayers::EachPlayer,
+                    spellwake_engine::program::ValueExpr::PlayerStat(
                         spellwake_engine::program::PlayerStatExpr::LargestHandSize,
                     ),
-                },
+                ))),
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(amount),
             ],
         ));
@@ -704,10 +704,10 @@ Morbid — That creature gets -13/-13 until end of turn instead if a creature di
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(
                     spellwake_engine::program::ValueExpr::Literal(1.into()),
                 ),
-                Instruction::Discard {
-                    players: spellwake_engine::program::AffectedPlayers::EachPlayer,
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                },
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    spellwake_engine::program::AffectedPlayers::EachPlayer,
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ))),
             ],
         ));
     }
@@ -1221,10 +1221,10 @@ fn player_selection(clause: &str) -> Option<(BodyTarget, Instruction)> {
             .or_else(|| cards.strip_suffix(" card"))?;
         return Some((
             target,
-            Instruction::Discard {
+            Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
                 players,
-                amount: spellwake_engine::program::ValueExpr::Literal(number(count)?.into()),
-            },
+                spellwake_engine::program::ValueExpr::Literal(number(count)?.into()),
+            ))),
         ));
     }
     let chosen = action
@@ -1252,16 +1252,16 @@ fn player_selection(clause: &str) -> Option<(BodyTarget, Instruction)> {
     };
     Some((
         target,
-        Instruction::Sacrifice {
+        Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
             players,
-            amount: spellwake_engine::program::ValueExpr::Literal(amount.into()),
-            filter: PermanentTypeFilter {
+            spellwake_engine::program::ValueExpr::Literal(amount.into()),
+            PermanentTypeFilter {
                 any_types,
                 required_types,
                 forbidden_types: BTreeSet::new(),
                 object_filter: None,
             },
-        },
+        ))),
     ))
 }
 
@@ -1736,12 +1736,10 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         )?;
         return Some((
             NoTarget,
-            Instruction::Discard {
-                players: spellwake_engine::program::AffectedPlayers::One(
-                    ResolvingPlayer::Controller,
-                ),
-                amount: spellwake_engine::program::ValueExpr::Literal(count.into()),
-            },
+            Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                spellwake_engine::program::AffectedPlayers::One(ResolvingPlayer::Controller),
+                spellwake_engine::program::ValueExpr::Literal(count.into()),
+            ))),
         ));
     }
     if let Some(rest) = line

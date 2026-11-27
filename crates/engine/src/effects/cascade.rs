@@ -562,25 +562,29 @@ impl EffectWindow {
                 entropy,
             ));
         }
-        if let Some(Instruction::ChooseValue {
-            chooser,
-            domain: crate::program::ResolutionChoiceDomain::RandomPlayer { opponents_only },
-        }) = self
+        if let Some(Instruction::PromptChoice(spec)) = self
             .payloads
             .get(&work.cursor.entry)
             .and_then(StackPayload::instructions)
             .and_then(|ops| ops.get(work.cursor.instruction))
             .cloned()
+            && let crate::toolbox::PromptDomain::Players {
+                selector,
+                random: true,
+                ..
+            } = &spec.domain
         {
             let cursor = work.cursor;
-            let actor = self.resolving_player_identity_at(chooser, Some(&cursor))?;
-            let seats: Vec<SeatId> = if opponents_only {
-                self.combat_rules
-                    .opponents(self.window.participants(), actor)
-                    .map_err(EffectError::from)?
-            } else {
-                self.window.participants().to_vec()
-            };
+            let entry = self
+                .window
+                .resolving()
+                .ok_or(EffectError::WrongResolutionFrame)?;
+            let seats = self.eval_player_selector_at(
+                entry.controller(),
+                Some(entry),
+                selector,
+                Some(&cursor),
+            )?;
             self.pending_work = Some(PendingWork::Resolution(cursor));
             let (chosen_seat, entropy) = if seats.is_empty() {
                 (None, tape.clone())

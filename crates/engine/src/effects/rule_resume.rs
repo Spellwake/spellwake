@@ -117,19 +117,19 @@ impl EffectWindow {
                 if actor != bound.chooser || actor != entry.controller() {
                     return Err(EffectError::WrongChooser);
                 }
+                let current_instruction = self.current_instruction()?;
                 if bound.revision != self.revision
                     || bound.entry != entry.id()
                     || bound.instruction != cursor.instruction
                     || cursor.chosen_opponent.is_some()
-                    || !matches!(
-                        self.current_instruction()?,
-                        Instruction::ChooseValue {
-                            domain: crate::program::ResolutionChoiceDomain::Player {
-                                opponents_only: true,
-                            },
-                            ..
-                        } | Instruction::MutatePlayer(_)
-                    )
+                    || !(matches!(
+                        current_instruction,
+                        Instruction::PromptChoice(spec)
+                            if matches!(
+                                spec.domain,
+                                crate::toolbox::PromptDomain::Players { .. }
+                            )
+                    ) || matches!(current_instruction, Instruction::MutatePlayer(_)))
                     || self
                         .combat_rules
                         .opponents(self.window.participants(), actor)?

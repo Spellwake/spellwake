@@ -896,10 +896,12 @@ fn concession_other_player_selection_retains_accepted_prefix() {
         .collect();
     let state = resolve(
         fixture(
-            vec![Instruction::Discard {
-                players: AffectedPlayers::EachPlayer,
-                amount: crate::program::ValueExpr::Literal(1.into()),
-            }],
+            vec![Instruction::ZoneOp(Box::new(
+                crate::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::EachPlayer,
+                    crate::program::ValueExpr::Literal(1.into()),
+                ),
+            ))],
             BodyTarget::None,
             cards,
         ),
@@ -1146,6 +1148,7 @@ fn concession_keeps_actual_cast_payment_and_tap_at_a_later_choice() {
                     bind_unchosen: None,
                     tag_partition: None,
                     auto_resolve_trivial: false,
+                    option_branches: Vec::new(),
                 },
             ))],
         ),

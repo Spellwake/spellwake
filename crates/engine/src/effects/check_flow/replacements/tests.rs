@@ -852,16 +852,16 @@ fn complete_pass_run() -> Run {
             Instruction::CreateTokens {
                 creations: vec![TokenCreation::one(token)],
             },
-            Instruction::Sacrifice {
-                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                amount: crate::program::ValueExpr::Literal(1.into()),
-                filter: PermanentTypeFilter {
+            Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+                AffectedPlayers::One(ResolvingPlayer::Controller),
+                crate::program::ValueExpr::Literal(1.into()),
+                PermanentTypeFilter {
                     any_types: Default::default(),
                     required_types: BTreeSet::from([crate::program::CardType::Creature]),
                     forbidden_types: BTreeSet::new(),
                     object_filter: None,
                 },
-            },
+            ))),
             crate::program::Instruction::MutateObject(Box::new(
                 crate::toolbox::MutateObjectSpec::all(
                     crate::toolbox::ObjectQuery::Targets,
@@ -1521,16 +1521,16 @@ fn already_departed_token_cessation_only_pass_does_not_construct_empty_replaceme
                     Instruction::CreateTokens {
                         creations: vec![TokenCreation::one(token)],
                     },
-                    Instruction::Sacrifice {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        amount: crate::program::ValueExpr::Literal(1.into()),
-                        filter: PermanentTypeFilter {
+                    Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::sacrifice(
+                        AffectedPlayers::One(ResolvingPlayer::Controller),
+                        crate::program::ValueExpr::Literal(1.into()),
+                        PermanentTypeFilter {
                             any_types: Default::default(),
                             required_types: BTreeSet::from([crate::program::CardType::Creature]),
                             forbidden_types: BTreeSet::new(),
                             object_filter: None,
                         },
-                    },
+                    ))),
                     gain(1),
                 ],
             ),

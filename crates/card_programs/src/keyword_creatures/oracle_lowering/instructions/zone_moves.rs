@@ -8803,11 +8803,12 @@ pub(super) fn lower_zone_moves_instruction(
                 divisor: two,
                 round_up: matches!(rounding, Some(spellwake_oracle_compiler::ast::Rounding::Up)),
             };
-            let sac_op = Instruction::Sacrifice {
-                players: AffectedPlayers::One(rp),
-                amount: half_expr,
-                filter: ptf,
-            };
+            let sac_op =
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                    AffectedPlayers::One(rp),
+                    half_expr,
+                    ptf,
+                )));
             if let Some(players) = group_players {
                 push_for_each_player(players, vec![sac_op], builder);
             } else {
@@ -9057,11 +9058,9 @@ pub(super) fn lower_zone_moves_instruction(
                     None => ValueExpr::literal(1),
                 };
                 let ptf = lower_permanent_type_filter(&f, vocabulary)?;
-                builder.instructions.push(Instruction::Sacrifice {
-                    players,
-                    amount,
-                    filter: ptf,
-                });
+                builder.instructions.push(Instruction::ZoneOp(Box::new(
+                    spellwake_engine::toolbox::ZoneOpSpec::sacrifice(players, amount, ptf),
+                )));
                 Ok(())
             }
             SubjectRefAst::All(_) => Err("oracle:sacrifice-all-unsupported"),
@@ -9198,10 +9197,12 @@ pub(super) fn lower_zone_moves_instruction(
                             ),
                             destination: 4,
                         },
-                        Instruction::Discard {
-                            players: AffectedPlayers::One(rp),
-                            amount: amt,
-                        },
+                        Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                                AffectedPlayers::One(rp),
+                                amt,
+                            ),
+                        )),
                     ],
                     builder,
                 );
@@ -9230,10 +9231,9 @@ pub(super) fn lower_zone_moves_instruction(
                 )),
                 destination: branch_idx + 2,
             });
-            builder.instructions.push(Instruction::Discard {
-                players: AffectedPlayers::One(rp),
-                amount: amt,
-            });
+            builder.instructions.push(Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::discard(AffectedPlayers::One(rp), amt),
+            )));
             Ok(())
         }
         InstructionAst::Discard {
@@ -9262,10 +9262,9 @@ pub(super) fn lower_zone_moves_instruction(
                 return Ok(());
             }
             let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::Discard {
-                players,
-                amount: amt,
-            });
+            builder.instructions.push(Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::discard(players, amt),
+            )));
             Ok(())
         }
         InstructionAst::Discard {
@@ -9539,29 +9538,32 @@ pub(super) fn lower_zone_moves_instruction(
                 return Ok(());
             }
             let players = lower_affected_players_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::Discard {
-                players,
-                amount: amt,
-            });
+            builder.instructions.push(Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::discard(players, amt),
+            )));
             Ok(())
         }
         InstructionAst::DiscardHand { player } => {
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::Discard {
-                        players: AffectedPlayers::One(ResolvingPlayer::LoopPlayer),
-                        amount: ValueExpr::count_hand(ResolvingPlayer::LoopPlayer),
-                    }],
+                    vec![Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::discard(
+                            AffectedPlayers::One(ResolvingPlayer::LoopPlayer),
+                            ValueExpr::count_hand(ResolvingPlayer::LoopPlayer),
+                        ),
+                    ))],
                     builder,
                 );
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::Discard {
-                players: AffectedPlayers::One(rp),
-                amount: ValueExpr::count_hand(rp),
-            });
+            builder.instructions.push(Instruction::ZoneOp(Box::new(
+                spellwake_engine::toolbox::ZoneOpSpec::discard(
+                    AffectedPlayers::One(rp),
+                    ValueExpr::count_hand(rp),
+                ),
+            )));
             Ok(())
         }
         InstructionAst::DiscardUpTo {
@@ -9602,12 +9604,14 @@ pub(super) fn lower_zone_moves_instruction(
             if *all {
                 if let Some(players) = try_group_affected_players(*player) {
                     let op = match lowered_filter {
-                        None => Instruction::Discard {
-                            players: AffectedPlayers::One(ResolvingPlayer::LoopPlayer),
-                            amount: ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(
-                                ResolvingPlayer::LoopPlayer,
-                            )),
-                        },
+                        None => Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                                AffectedPlayers::One(ResolvingPlayer::LoopPlayer),
+                                ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(
+                                    ResolvingPlayer::LoopPlayer,
+                                )),
+                            ),
+                        )),
                         Some(obj_filter) => crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_filtered(AffectedPlayers::One(ResolvingPlayer::LoopPlayer), ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(
                                 ResolvingPlayer::LoopPlayer,
                             )), *(obj_filter)),
@@ -9616,10 +9620,12 @@ pub(super) fn lower_zone_moves_instruction(
                 } else {
                     let rp = lower_resolving_player_in_context(*player, &mut trial, in_trigger)?;
                     let op = match lowered_filter {
-                        None => Instruction::Discard {
-                            players: AffectedPlayers::One(rp),
-                            amount: ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(rp)),
-                        },
+                        None => Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::discard(
+                                AffectedPlayers::One(rp),
+                                ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(rp)),
+                            ),
+                        )),
                         Some(obj_filter) => crate::keyword_creatures::oracle_lowering::toolbox_emit::discard_filtered(AffectedPlayers::One(rp), ValueExpr::PlayerStat(PlayerStatExpr::PlayerHandSize(rp)), *(obj_filter)),
                     };
                     trial.instructions.push(op);
@@ -9753,13 +9759,12 @@ pub(super) fn lower_zone_moves_instruction(
                             }
                             _ => None,
                         },
-                        Instruction::Sacrifice { players, .. }
-                        | Instruction::Discard { players, .. }
-                            if !matches!(players, AffectedPlayers::One(_)) =>
-                        {
-                            Some(*players)
-                        }
-                        Instruction::ZoneOp(spec) => extract_zone_op_group_players(&spec.source),
+                        Instruction::ZoneOp(spec) => spec
+                            .as_group_sacrifice()
+                            .map(|(p, _, _, _)| p)
+                            .or_else(|| spec.as_group_discard().map(|(p, _)| p))
+                            .filter(|p| !matches!(p, AffectedPlayers::One(_)))
+                            .or_else(|| extract_zone_op_group_players(&spec.source)),
                         _ => None,
                     })
                 {
@@ -11175,8 +11180,7 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             | Instruction::PromptChoice(_)
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::ScheduleDelayedEventTrigger { .. }
-            | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::ChooseValue { .. } => continue,
+            | Instruction::EmitReflexiveTrigger { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(
                     spec.payload,
@@ -11310,22 +11314,6 @@ pub(super) fn has_live_last_moved_producer(
                         | LastMovedProducerKind::Graveyard
                 );
             }
-            Instruction::Discard { .. } => {
-                return matches!(
-                    expected,
-                    LastMovedProducerKind::Any
-                        | LastMovedProducerKind::Discard
-                        | LastMovedProducerKind::Graveyard
-                );
-            }
-            Instruction::Sacrifice { .. } => {
-                return matches!(
-                    expected,
-                    LastMovedProducerKind::Any
-                        | LastMovedProducerKind::Sacrifice
-                        | LastMovedProducerKind::Graveyard
-                );
-            }
             Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
                 if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
                     .is_some() =>
@@ -11404,7 +11392,12 @@ pub(super) fn has_live_last_moved_producer(
                     _ => matches!(expected, LastMovedProducerKind::Any),
                 };
             }
-            Instruction::ChooseObjects { .. } => {
+            Instruction::PromptChoice(spec)
+                if matches!(
+                    spec.domain,
+                    spellwake_engine::toolbox::PromptDomain::Objects { .. }
+                ) =>
+            {
                 return matches!(expected, LastMovedProducerKind::Any);
             }
 
@@ -11438,8 +11431,7 @@ pub(super) fn has_live_last_moved_producer(
             | Instruction::PromptChoice(_)
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::ScheduleDelayedEventTrigger { .. }
-            | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::ChooseValue { .. } => continue,
+            | Instruction::EmitReflexiveTrigger { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(
                     spec.payload,
@@ -11905,16 +11897,14 @@ fn can_upgrade_destroy_no_regen(op: &Instruction) -> bool {
             .iter()
             .rev()
             .any(can_upgrade_destroy_no_regen),
-        Instruction::ChooseOption { options, .. } => {
-            !options.is_empty()
-                && options.iter().any(|branch| {
-                    branch
-                        .body
-                        .instructions
-                        .iter()
-                        .rev()
-                        .any(can_upgrade_destroy_no_regen)
-                })
+        Instruction::PromptChoice(spec) if !spec.option_branches.is_empty() => {
+            spec.option_branches.iter().any(|branch| {
+                branch
+                    .instructions
+                    .iter()
+                    .rev()
+                    .any(can_upgrade_destroy_no_regen)
+            })
         }
         _ => false,
     }
@@ -11954,23 +11944,19 @@ fn try_upgrade_destroy_no_regen(op: &mut Instruction) -> bool {
             .iter_mut()
             .rev()
             .any(try_upgrade_destroy_no_regen),
-        Instruction::ChooseOption { options, .. } => {
-            if options.is_empty()
-                || !options.iter().any(|branch| {
-                    branch
-                        .body
-                        .instructions
-                        .iter()
-                        .rev()
-                        .any(can_upgrade_destroy_no_regen)
-                })
-            {
+        Instruction::PromptChoice(spec) if !spec.option_branches.is_empty() => {
+            if !spec.option_branches.iter().any(|branch| {
+                branch
+                    .instructions
+                    .iter()
+                    .rev()
+                    .any(can_upgrade_destroy_no_regen)
+            }) {
                 return false;
             }
             let mut upgraded = false;
-            for branch in options {
+            for branch in &mut spec.option_branches {
                 if branch
-                    .body
                     .instructions
                     .iter_mut()
                     .rev()
@@ -12009,14 +11995,15 @@ fn find_damage_instruction_for_no_regen(op: &Instruction) -> Option<&Instruction
             .iter()
             .rev()
             .find_map(find_damage_instruction_for_no_regen),
-        Instruction::ChooseOption { options, .. } => options.iter().find_map(|branch| {
-            branch
-                .body
-                .instructions
-                .iter()
-                .rev()
-                .find_map(find_damage_instruction_for_no_regen)
-        }),
+        Instruction::PromptChoice(spec) if !spec.option_branches.is_empty() => {
+            spec.option_branches.iter().find_map(|branch| {
+                branch
+                    .instructions
+                    .iter()
+                    .rev()
+                    .find_map(find_damage_instruction_for_no_regen)
+            })
+        }
         _ => None,
     }
 }
@@ -12198,6 +12185,15 @@ fn extract_prior_resolving_player_for_shuffle(
                     from_sel(chooser)
                 }
                 _ => None,
+            })
+            .or_else(|| {
+                spec.as_group_sacrifice()
+                    .map(|(ap, _, _, _)| ap)
+                    .or_else(|| spec.as_group_discard().map(|(ap, _)| ap))
+                    .and_then(|ap| match ap {
+                        AffectedPlayers::One(p) if valid(p) => Some(p),
+                        _ => None,
+                    })
             }),
         Instruction::DrawCards(spec) => from_sel(&spec.players),
         Instruction::AdjustLife(spec) => from_sel(&spec.players),
@@ -12218,14 +12214,6 @@ fn extract_prior_resolving_player_for_shuffle(
         }
         | Instruction::LookTopChooseExt {
             library_owner: p, ..
-        }
-        | Instruction::Sacrifice {
-            players: AffectedPlayers::One(p),
-            ..
-        }
-        | Instruction::Discard {
-            players: AffectedPlayers::One(p),
-            ..
         } if valid(*p) => Some(*p),
         _ => None,
     })
@@ -12322,11 +12310,16 @@ fn is_moved_object_instruction(op: &Instruction) -> bool {
         Instruction::ZoneOp(_)
             | Instruction::ForEachPlayerQuery { .. }
             | Instruction::DrawCards(_)
-            | Instruction::ChooseObjects { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::LookTopChooseExt { .. }
-            | Instruction::Discard { .. }
             | Instruction::SearchLibrary { .. }
+    ) || matches!(
+        op,
+        Instruction::PromptChoice(spec)
+            if matches!(
+                spec.domain,
+                spellwake_engine::toolbox::PromptDomain::Objects { .. }
+            )
     ) || matches!(
         op,
         Instruction::MutatePlayer(spec)
@@ -12511,8 +12504,7 @@ pub(super) fn has_prior_moved_object(ops: &[Instruction]) -> bool {
             | Instruction::PromptChoice(_)
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::ScheduleDelayedEventTrigger { .. }
-            | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::ChooseValue { .. } => continue,
+            | Instruction::EmitReflexiveTrigger { .. } => continue,
             Instruction::MutateObject(spec)
                 if matches!(
                     spec.op,

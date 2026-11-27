@@ -537,6 +537,7 @@ fn optional_token_two_apnap_order_children_keep_locals_and_reject_each_bad_reply
             bind_unchosen: None,
             tag_partition: None,
             auto_resolve_trivial: false,
+            option_branches: Vec::new(),
         })),
         Instruction::OptionalSequence {
             chooser: ResolvingPlayer::Controller,
@@ -1016,6 +1017,7 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
                         bind_unchosen: None,
                         tag_partition: None,
                         auto_resolve_trivial: false,
+                        option_branches: Vec::new(),
                     })),
                     Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec {
                         selector: None,
@@ -1187,6 +1189,7 @@ fn optional_type_child_rejects_an_unexcluded_member_of_a_foreign_vocabulary_then
             bind_unchosen: None,
             tag_partition: None,
             auto_resolve_trivial: false,
+            option_branches: Vec::new(),
         },
     ))));
     let taken = reply(

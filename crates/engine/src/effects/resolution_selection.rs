@@ -3,8 +3,7 @@
 use super::*;
 use crate::occurrence::{EventCause, RulesOccurrence, ZoneReason};
 use crate::program::{
-    AffectedPlayers, ChosenHandAction, ObjectFilter, PermanentTypeFilter, PublicZoneDestination,
-    ResolvingPlayer,
+    AffectedPlayers, ChosenHandAction, ObjectFilter, PublicZoneDestination, ResolvingPlayer,
 };
 use crate::stack_window::ResolutionSelectionMove;
 use crate::stack_window::StackEntry;
@@ -67,8 +66,6 @@ pub enum ResolutionSelectionKind {
     CollectEvidence,
     /// Interactive SelectZoneCardsToZone: choose filtered cards from a zone to move to a destination.
     SelectZoneCards,
-    /// Universal non-target object selection with optional power constraints and keep-vs-rest action.
-    ChooseObjects,
 }
 
 /// The original operation retained by the sole work owner.
@@ -114,7 +111,8 @@ pub enum ResolutionSelectionOperation {
     },
     /// Evaluated types filter a separately checked physical permanent domain.
     Sacrifice {
-        filter: PermanentTypeFilter,
+        primary: ObjectFilter,
+        secondary: Option<ObjectFilter>,
     },
     /// The domain and commit both require physical-card origin and exact Hand.
     Discard,
@@ -126,15 +124,6 @@ pub enum ResolutionSelectionOperation {
     },
     CollectEvidence {
         minimum: RulesInteger,
-    },
-    ChooseObjects {
-        source_zone: crate::program::SourceZoneFilter,
-        filter: Box<ObjectFilter>,
-        min: usize,
-        distinct_powers: bool,
-        max_total_power: Option<RulesInteger>,
-        unchosen_action: Option<crate::program::UnchosenObjectsAction>,
-        last_moved: BTreeSet<ObjectId>,
     },
 }
 impl ResolutionSelectionOperation {
@@ -166,7 +155,6 @@ impl ResolutionSelectionOperation {
             Self::Discard => ResolutionSelectionKind::Discard,
             Self::Blight { .. } => ResolutionSelectionKind::BlightCreature,
             Self::CollectEvidence { .. } => ResolutionSelectionKind::CollectEvidence,
-            Self::ChooseObjects { .. } => ResolutionSelectionKind::ChooseObjects,
         }
     }
     fn movement(
@@ -179,8 +167,7 @@ impl ResolutionSelectionOperation {
             | Self::Bolster { .. }
             | Self::Amass { .. }
             | Self::Blight { .. }
-            | Self::CollectEvidence { .. }
-            | Self::ChooseObjects { .. } => {
+            | Self::CollectEvidence { .. } => {
                 return Err(EffectError::InconsistentSelectionWork);
             }
             Self::ExileAnnouncedTargets { .. }
@@ -211,8 +198,7 @@ impl ResolutionSelectionOperation {
             | Self::Bolster { .. }
             | Self::Amass { .. }
             | Self::Blight { .. }
-            | Self::CollectEvidence { .. }
-            | Self::ChooseObjects { .. } => {
+            | Self::CollectEvidence { .. } => {
                 return Err(EffectError::InconsistentSelectionWork);
             }
             Self::ReturnSingle { .. } => ZoneReason::ReturnToOwnersHand,
@@ -552,10 +538,7 @@ impl ResolutionSelectionWork {
                         operation: self.operation.kind(),
                         domain: requirement.domain.clone(),
                         required: requirement.required,
-                        custom_minimum: match &self.operation {
-                            ResolutionSelectionOperation::ChooseObjects { min, .. } => Some(*min),
-                            _ => None,
-                        },
+                        custom_minimum: None,
                     })
                 })
             }
@@ -836,12 +819,8 @@ impl EffectWindow {
             ResolutionSelectionWork {
                 cursor,
                 operation: ResolutionSelectionOperation::Sacrifice {
-                    filter: PermanentTypeFilter {
-                        any_types: Default::default(),
-                        required_types: BTreeSet::new(),
-                        forbidden_types: BTreeSet::new(),
-                        object_filter: None,
-                    },
+                    primary: ObjectFilter::any(),
+                    secondary: None,
                 },
                 stage: ResolutionSelectionStage::Choosing {
                     requirements: vec![ResolutionSelectionRequirement {
@@ -1203,17 +1182,16 @@ impl EffectWindow {
                     _ => unreachable!(),
                 }
             }
-            Instruction::Sacrifice {
-                players,
-                amount,
-                filter,
-            } => (
-                *players,
-                amount,
-                ResolutionSelectionOperation::Sacrifice {
-                    filter: filter.clone(),
-                },
-            ),
+            Instruction::ZoneOp(spec) if spec.as_group_sacrifice().is_some() => {
+                let Some((players, amount, primary, secondary)) = spec.as_group_sacrifice() else {
+                    return Err(EffectError::InconsistentSelectionWork);
+                };
+                (
+                    players,
+                    amount,
+                    ResolutionSelectionOperation::Sacrifice { primary, secondary },
+                )
+            }
             Instruction::MutatePlayer(spec)
                 if matches!(
                     spec.op,
@@ -1231,58 +1209,15 @@ impl EffectWindow {
                 all = ValueExpr::Literal(1.into());
                 (AffectedPlayers::One(role), &all, operation)
             }
-            Instruction::Discard { players, amount } => {
-                (*players, amount, ResolutionSelectionOperation::Discard)
-            }
-            Instruction::ChooseObjects {
-                players,
-                source_zone,
-                filter,
-                min,
-                max,
-                distinct_powers,
-                max_total_power,
-                unchosen_action,
-            } => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let min_val = self
-                    .resolve_value_expr(entry.controller(), min)?
-                    .max(0.into())
-                    .to_usize()
-                    .unwrap_or(0);
-                let max_power = match max_total_power {
-                    Some(expr) => Some(self.resolve_value_expr(entry.controller(), expr)?),
-                    None => None,
+            Instruction::ZoneOp(spec) if spec.as_group_discard().is_some() => {
+                let Some((players, amount)) = spec.as_group_discard() else {
+                    return Err(EffectError::InconsistentSelectionWork);
                 };
-                let last_moved = if *source_zone == crate::program::SourceZoneFilter::LastMoved {
-                    self.resolution_cursor()
-                        .map(|cursor| cursor.results.last_moved_objects.iter().copied().collect())
-                        .unwrap_or_default()
-                } else {
-                    BTreeSet::new()
-                };
-                (
-                    *players,
-                    max,
-                    ResolutionSelectionOperation::ChooseObjects {
-                        source_zone: *source_zone,
-                        filter: filter.clone(),
-                        min: min_val,
-                        distinct_powers: *distinct_powers,
-                        max_total_power: max_power,
-                        unchosen_action: *unchosen_action,
-                        last_moved,
-                    },
-                )
+                (players, amount, ResolutionSelectionOperation::Discard)
             }
             Instruction::Jump { .. }
             | Instruction::OptionalSequence { .. }
             | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::ChooseOption { .. }
-            | Instruction::ChooseValue { .. }
             | Instruction::ZoneOp(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::PromptChoice(_)
@@ -1344,19 +1279,13 @@ impl EffectWindow {
             let mut required = std::cmp::min(&amount, &bound)
                 .to_usize()
                 .ok_or(EffectError::InconsistentSelectionWork)?;
-            match &operation {
-                ResolutionSelectionOperation::CollectEvidence { minimum } => {
-                    let total_mv = domain.iter().fold(RulesInteger::from(0), |acc, id| {
-                        acc.plus(&self.permanent_mana_value(*id).unwrap_or_else(|| 0.into()))
-                    });
-                    if !minimum.is_positive() || total_mv < *minimum {
-                        required = 0;
-                    }
-                }
-                ResolutionSelectionOperation::ChooseObjects { .. } if domain.is_empty() => {
+            if let ResolutionSelectionOperation::CollectEvidence { minimum } = &operation {
+                let total_mv = domain.iter().fold(RulesInteger::from(0), |acc, id| {
+                    acc.plus(&self.permanent_mana_value(*id).unwrap_or_else(|| 0.into()))
+                });
+                if !minimum.is_positive() || total_mv < *minimum {
                     required = 0;
                 }
-                _ => {}
             }
             requirements.push(ResolutionSelectionRequirement {
                 player,
@@ -1777,16 +1706,26 @@ impl EffectWindow {
             operation,
             mut stage,
         } = *work;
-        let discard_entire_hand = matches!(
-            self.payloads
-                .get(&cursor.entry)
-                .and_then(StackPayload::instructions)
-                .and_then(|ops| ops.get(cursor.instruction)),
-            Some(Instruction::Discard {
-                amount: ValueExpr::PlayerStat(crate::program::PlayerStatExpr::LargestHandSize),
-                ..
-            })
-        );
+        let discard_entire_hand = self
+            .payloads
+            .get(&cursor.entry)
+            .and_then(StackPayload::instructions)
+            .and_then(|ops| ops.get(cursor.instruction))
+            .is_some_and(|op| {
+                matches!(
+                    op,
+                    Instruction::ZoneOp(spec)
+                        if matches!(
+                            spec.as_group_discard(),
+                            Some((
+                                _,
+                                ValueExpr::PlayerStat(
+                                    crate::program::PlayerStatExpr::LargestHandSize
+                                )
+                            ))
+                        )
+                )
+            });
         loop {
             stage = match stage {
                 ResolutionSelectionStage::Choosing {
@@ -1804,18 +1743,8 @@ impl EffectWindow {
                                 | ResolutionSelectionOperation::Blight { .. }
                                 | ResolutionSelectionOperation::Populate
                         ) && requirement.domain.len() == 1;
-                        let forced_select_all = matches!(
-                            operation,
-                            ResolutionSelectionOperation::ChooseObjects {
-                                min,
-                                distinct_powers: false,
-                                max_total_power: None,
-                                ..
-                            } if min == requirement.required && requirement.required == requirement.domain.len()
-                        );
                         if discard_entire_hand
                             || forced_army
-                            || forced_select_all
                             || matches!(
                                 operation,
                                 ResolutionSelectionOperation::RandomSacrifice { .. }
@@ -2036,174 +1965,6 @@ impl EffectWindow {
                         cursor.results.last_action_succeeded = succeeded;
                         cursor.results.last_action_count =
                             Some(RulesInteger::from_usize(selection.objects.len()));
-                        self.pending_work = Some(PendingWork::Resolution(cursor));
-                        self.advance_instruction()?;
-                        return Ok(None);
-                    }
-
-                    if let ResolutionSelectionOperation::ChooseObjects {
-                        source_zone,
-                        ref filter,
-                        unchosen_action,
-                        ref last_moved,
-                        ..
-                    } = operation
-                    {
-                        let entry = self
-                            .window
-                            .resolving()
-                            .cloned()
-                            .ok_or(EffectError::WrongResolutionFrame)?;
-                        let chosen_ids: Vec<ObjectId> = accepted
-                            .iter()
-                            .flat_map(|row| row.objects.iter().copied())
-                            .collect();
-                        let chosen_set: BTreeSet<ObjectId> = chosen_ids.iter().copied().collect();
-                        cursor.vowed_creatures.extend(chosen_ids.iter().copied());
-                        let eval_lki = self.evaluated_characteristics()?;
-                        cursor.results.last_action_lki = chosen_ids
-                            .iter()
-                            .filter_map(|id| eval_lki.get(*id).cloned())
-                            .collect();
-                        cursor.results.last_moved_objects = chosen_ids.clone();
-                        cursor.results.last_action_succeeded = !chosen_ids.is_empty();
-                        cursor.results.last_action_count =
-                            Some(RulesInteger::from_usize(chosen_ids.len()));
-                        if let Some(action) = unchosen_action {
-                            let evaluated = self.evaluated_characteristics()?;
-                            let ability_source = match entry.kind() {
-                                StackKind::ActivatedAbility { source }
-                                | StackKind::TriggeredAbility { source } => Some(source.id()),
-                                StackKind::CardSpell(id) => Some(*id),
-                                _ => None,
-                            };
-                            let mut unchosen = Vec::new();
-                            let mut seen = BTreeSet::new();
-                            let probe_op = ResolutionSelectionOperation::ChooseObjects {
-                                source_zone,
-                                filter: filter.clone(),
-                                min: 0,
-                                distinct_powers: false,
-                                max_total_power: None,
-                                unchosen_action: None,
-                                last_moved: last_moved.clone(),
-                            };
-                            for row in &accepted {
-                                for object in self.window.cards().iter() {
-                                    let oid = object.id();
-                                    if chosen_set.contains(&oid) || !seen.insert(oid) {
-                                        continue;
-                                    }
-                                    if self.selection_eligible(
-                                        &probe_op,
-                                        row.player,
-                                        object,
-                                        ability_source,
-                                        &evaluated,
-                                    ) {
-                                        unchosen.push((row.player, oid));
-                                    }
-                                }
-                            }
-                            if !unchosen.is_empty() {
-                                match action {
-                                    crate::program::UnchosenObjectsAction::Tap => {
-                                        let to_tap: Vec<ObjectId> = unchosen
-                                            .iter()
-                                            .map(|(_, id)| *id)
-                                            .filter(|id| {
-                                                self.window
-                                                    .cards()
-                                                    .get(*id)
-                                                    .and_then(GameObject::tapped)
-                                                    == Some(false)
-                                            })
-                                            .collect();
-                                        if !to_tap.is_empty() {
-                                            let before = self.rules_snapshot(None)?;
-                                            let (window, changes) = self
-                                                .window
-                                                .tap_for_effect(cursor.entry, &to_tap)?;
-                                            self.window = window;
-                                            let occs = occurrence_flow::status_occurrences(
-                                                changes,
-                                                crate::occurrence::StatusReason::Effect,
-                                            );
-                                            self.emit_from(
-                                                EventCause::Instruction {
-                                                    entry: cursor.entry,
-                                                    instruction: cursor.instruction,
-                                                },
-                                                &before,
-                                                None,
-                                                append,
-                                                |_, _, _| Ok(occs),
-                                            )?;
-                                        }
-                                    }
-                                    crate::program::UnchosenObjectsAction::Destroy => {
-                                        let dest_ids: Vec<ObjectId> = unchosen
-                                            .iter()
-                                            .map(|(_, id)| *id)
-                                            .filter(|id| {
-                                                evaluated.get(*id).is_some_and(|v| {
-                                                    !v.has_keyword(KeywordAbility::Indestructible)
-                                                })
-                                            })
-                                            .collect();
-                                        if !dest_ids.is_empty() {
-                                            let _ = self.move_objects_to_subject_destination_ids(
-                                                &entry,
-                                                cursor.instruction,
-                                                entry.controller(),
-                                                &dest_ids,
-                                                crate::program::SubjectDestination::Graveyard,
-                                                append,
-                                            )?;
-                                        }
-                                    }
-                                    crate::program::UnchosenObjectsAction::Exile => {
-                                        let ids: Vec<ObjectId> =
-                                            unchosen.iter().map(|(_, id)| *id).collect();
-                                        let _ = self.move_objects_to_subject_destination_ids(
-                                            &entry,
-                                            cursor.instruction,
-                                            entry.controller(),
-                                            &ids,
-                                            crate::program::SubjectDestination::Exile {
-                                                delayed_return: None,
-                                            },
-                                            append,
-                                        )?;
-                                    }
-                                    crate::program::UnchosenObjectsAction::ReturnToHand => {
-                                        let ids: Vec<ObjectId> =
-                                            unchosen.iter().map(|(_, id)| *id).collect();
-                                        let _ = self.move_objects_to_subject_destination_ids(
-                                            &entry,
-                                            cursor.instruction,
-                                            entry.controller(),
-                                            &ids,
-                                            crate::program::SubjectDestination::Hand,
-                                            append,
-                                        )?;
-                                    }
-                                    crate::program::UnchosenObjectsAction::Sacrifice
-                                    | crate::program::UnchosenObjectsAction::Discard => {
-                                        let ids: Vec<ObjectId> =
-                                            unchosen.iter().map(|(_, id)| *id).collect();
-                                        let _ = self.move_objects_to_subject_destination_ids(
-                                            &entry,
-                                            cursor.instruction,
-                                            entry.controller(),
-                                            &ids,
-                                            crate::program::SubjectDestination::Graveyard,
-                                            append,
-                                        )?;
-                                    }
-                                }
-                            }
-                        }
                         self.pending_work = Some(PendingWork::Resolution(cursor));
                         self.advance_instruction()?;
                         return Ok(None);
@@ -2462,26 +2223,15 @@ impl EffectWindow {
                 if objects.len() > requirement.required {
                     return Err(EffectError::InvalidSelectionCount);
                 }
-                match &work.operation {
-                    ResolutionSelectionOperation::CollectEvidence { minimum } => {
-                        let chosen_mv = objects.iter().fold(RulesInteger::from(0), |acc, id| {
-                            acc.plus(&self.permanent_mana_value(*id).unwrap_or_else(|| 0.into()))
-                        });
-                        if objects.is_empty() || chosen_mv < *minimum {
-                            return Err(EffectError::InvalidSelectionCount);
-                        }
+                if let ResolutionSelectionOperation::CollectEvidence { minimum } = &work.operation {
+                    let chosen_mv = objects.iter().fold(RulesInteger::from(0), |acc, id| {
+                        acc.plus(&self.permanent_mana_value(*id).unwrap_or_else(|| 0.into()))
+                    });
+                    if objects.is_empty() || chosen_mv < *minimum {
+                        return Err(EffectError::InvalidSelectionCount);
                     }
-                    ResolutionSelectionOperation::ChooseObjects { min, .. } => {
-                        let eff_min = (*min).min(requirement.required);
-                        if objects.len() < eff_min {
-                            return Err(EffectError::InvalidSelectionCount);
-                        }
-                    }
-                    _ => {
-                        if objects.len() != requirement.required {
-                            return Err(EffectError::InvalidSelectionCount);
-                        }
-                    }
+                } else if objects.len() != requirement.required {
+                    return Err(EffectError::InvalidSelectionCount);
                 }
                 let unique: BTreeSet<_> = objects.iter().copied().collect();
                 if unique.len() != objects.len() {
@@ -2492,36 +2242,6 @@ impl EffectWindow {
                     .all(|object| requirement.domain.contains(object))
                 {
                     return Err(EffectError::SelectionOutsideDomain);
-                }
-                if let ResolutionSelectionOperation::ChooseObjects {
-                    distinct_powers,
-                    max_total_power,
-                    ..
-                } = &work.operation
-                    && (*distinct_powers || max_total_power.is_some())
-                    && !objects.is_empty()
-                {
-                    let current = self.evaluated_characteristics()?;
-                    let mut seen_powers = BTreeSet::new();
-                    let mut total_power = RulesInteger::from(0);
-                    for id in &objects {
-                        let Some(power) = current
-                            .get(*id)
-                            .and_then(|view| view.power_toughness.as_ref())
-                            .map(|pt| pt.derived.power.clone())
-                        else {
-                            return Err(EffectError::SelectionOutsideDomain);
-                        };
-                        if *distinct_powers && !seen_powers.insert(power.clone()) {
-                            return Err(EffectError::SelectionOutsideDomain);
-                        }
-                        total_power = total_power.plus(&power);
-                    }
-                    if let Some(limit) = max_total_power
-                        && total_power > *limit
-                    {
-                        return Err(EffectError::SelectionOutsideDomain);
-                    }
                 }
 
                 accepted.push(ResolutionAcceptedSelection {
@@ -2744,47 +2464,50 @@ impl EffectWindow {
             {
                 AffectedPlayers::EachPlayer
             }
-            (ResolutionSelectionOperation::Sacrifice { filter }, Instruction::ZoneOp(spec))
-                if filter.any_types.is_empty()
-                    && filter.required_types.is_empty()
-                    && filter.forbidden_types.is_empty()
-                    && matches!(
-                        &spec.destination,
-                        crate::toolbox::ZoneDest::Delayed(
-                            crate::toolbox::DelayedZoneAction::SacrificeObjects(objects)
-                        ) if batch
-                            .logical
-                            .iter()
-                            .all(|selection| objects.contains(&selection.object))
-                    ) =>
-            {
-                AffectedPlayers::One(crate::program::ResolvingPlayer::Controller)
-            }
-            (ResolutionSelectionOperation::Sacrifice { filter }, Instruction::StackOp(spec))
-                if filter.required_types.is_empty()
-                    && filter.forbidden_types.is_empty()
-                    && matches!(
-                        spec.op,
-                        crate::toolbox::StackOpKind::EndStepCast {
-                            kind: crate::program::EndStepCast::Blitz,
-                            permanent,
-                            ..
-                        } if matches!(
-                            entry.kind(),
-                            StackKind::TriggeredAbility { .. } | StackKind::ActivatedAbility { .. }
-                        ) && batch
-                            .logical
-                            .iter()
-                            .all(|selection| selection.object == permanent)
-                    ) =>
+            (
+                ResolutionSelectionOperation::Sacrifice { primary, secondary },
+                Instruction::ZoneOp(spec),
+            ) if *primary == ObjectFilter::any()
+                && secondary.is_none()
+                && matches!(
+                    &spec.destination,
+                    crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::SacrificeObjects(objects)
+                    ) if batch
+                        .logical
+                        .iter()
+                        .all(|selection| objects.contains(&selection.object))
+                ) =>
             {
                 AffectedPlayers::One(crate::program::ResolvingPlayer::Controller)
             }
             (
-                ResolutionSelectionOperation::Sacrifice { filter },
+                ResolutionSelectionOperation::Sacrifice { primary, secondary },
+                Instruction::StackOp(spec),
+            ) if *primary == ObjectFilter::any()
+                && secondary.is_none()
+                && matches!(
+                    spec.op,
+                    crate::toolbox::StackOpKind::EndStepCast {
+                        kind: crate::program::EndStepCast::Blitz,
+                        permanent,
+                        ..
+                    } if matches!(
+                        entry.kind(),
+                        StackKind::TriggeredAbility { .. } | StackKind::ActivatedAbility { .. }
+                    ) && batch
+                        .logical
+                        .iter()
+                        .all(|selection| selection.object == permanent)
+                ) =>
+            {
+                AffectedPlayers::One(crate::program::ResolvingPlayer::Controller)
+            }
+            (
+                ResolutionSelectionOperation::Sacrifice { primary, secondary },
                 Instruction::MutateObject(spec),
-            ) if filter.required_types.is_empty()
-                && filter.forbidden_types.is_empty()
+            ) if *primary == ObjectFilter::any()
+                && secondary.is_none()
                 && matches!(
                     spec.op,
                     crate::toolbox::ObjectMutation::SacrificeEvoked
@@ -2816,8 +2539,13 @@ impl EffectWindow {
             {
                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
             }
-            (ResolutionSelectionOperation::Discard, Instruction::Discard { players, .. }) => {
-                *players
+            (ResolutionSelectionOperation::Discard, Instruction::ZoneOp(spec))
+                if spec.as_group_discard().is_some() =>
+            {
+                let Some((players, _)) = spec.as_group_discard() else {
+                    return Err(EffectError::InconsistentSelectionWork);
+                };
+                players
             }
             (
                 ResolutionSelectionOperation::ExileSingle {
@@ -2837,13 +2565,19 @@ impl EffectWindow {
                 AffectedPlayers::EachPlayer
             }
             (
-                ResolutionSelectionOperation::Sacrifice { filter },
-                Instruction::Sacrifice {
-                    players,
-                    filter: actual,
-                    ..
+                ResolutionSelectionOperation::Sacrifice { primary, secondary },
+                Instruction::ZoneOp(spec),
+            ) if spec.as_group_sacrifice().is_some_and(
+                |(_, _, actual_primary, actual_secondary)| {
+                    *primary == actual_primary && *secondary == actual_secondary
                 },
-            ) if filter == actual => *players,
+            ) =>
+            {
+                let Some((players, _, _, _)) = spec.as_group_sacrifice() else {
+                    return Err(EffectError::InconsistentSelectionWork);
+                };
+                players
+            }
             _ => return Err(EffectError::InconsistentSelectionWork),
         };
         let players: BTreeSet<_> = match players {
@@ -3193,7 +2927,7 @@ impl EffectWindow {
         operation: &ResolutionSelectionOperation,
         player: SeatId,
         object: &GameObject,
-        ability_source: Option<ObjectId>,
+        _ability_source: Option<ObjectId>,
         evaluated: &EvaluatedCharacteristics,
     ) -> bool {
         let mana_value = || {
@@ -3275,103 +3009,21 @@ impl EffectWindow {
             ResolutionSelectionOperation::CollectEvidence { .. } => {
                 object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
             }
-            ResolutionSelectionOperation::ChooseObjects {
-                source_zone,
-                filter,
-                last_moved,
-                ..
-            } => {
-                let zone_ok = match source_zone {
-                    crate::program::SourceZoneFilter::Hand => {
-                        object.card_id().is_some() && object.zone() == ObjectZone::Hand(player)
-                    }
-                    crate::program::SourceZoneFilter::Graveyard => {
-                        object.card_id().is_some() && object.zone() == ObjectZone::Graveyard(player)
-                    }
-                    crate::program::SourceZoneFilter::HandOrGraveyard => {
-                        object.card_id().is_some()
-                            && matches!(
-                                object.zone(),
-                                ObjectZone::Hand(owner) | ObjectZone::Graveyard(owner) if owner == player
-                            )
-                    }
-                    crate::program::SourceZoneFilter::Battlefield => {
-                        object.zone() == ObjectZone::Battlefield
-                            && self.window.cards().phased_out_under(object.id()).is_none()
-                            && evaluated
-                                .get(object.id())
-                                .is_some_and(|card| card.controller == Some(player))
-                    }
-                    crate::program::SourceZoneFilter::AnyBattlefield => {
-                        object.zone() == ObjectZone::Battlefield
-                            && self.window.cards().phased_out_under(object.id()).is_none()
-                    }
-                    crate::program::SourceZoneFilter::Exile => {
-                        object.card_id().is_some() && object.zone() == ObjectZone::Exile
-                    }
-                    crate::program::SourceZoneFilter::OpponentGraveyard => {
-                        object.card_id().is_some()
-                            && matches!(object.zone(), ObjectZone::Graveyard(owner) if owner != player)
-                    }
-                    crate::program::SourceZoneFilter::AnyGraveyard => {
-                        object.card_id().is_some()
-                            && matches!(object.zone(), ObjectZone::Graveyard(_))
-                    }
-                    crate::program::SourceZoneFilter::YourLibrary => {
-                        object.card_id().is_some() && object.zone() == ObjectZone::Library(player)
-                    }
-                    crate::program::SourceZoneFilter::OpponentExile => {
-                        object.card_id().is_some()
-                            && object.zone() == ObjectZone::Exile
-                            && object.owner() != player
-                    }
-                    crate::program::SourceZoneFilter::LinkedExile => {
-                        object.card_id().is_some() && object.zone() == ObjectZone::Exile
-                    }
-                    crate::program::SourceZoneFilter::LastMoved => {
-                        last_moved.contains(&object.id())
-                    }
-                    crate::program::SourceZoneFilter::TargetPlayerHand => {
-                        object.card_id().is_some()
-                            && self
-                                .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
-                                .is_ok_and(|seat| object.zone() == ObjectZone::Hand(seat))
-                    }
-                    crate::program::SourceZoneFilter::TargetPlayerGraveyard => {
-                        object.card_id().is_some()
-                            && self
-                                .resolving_player(crate::program::ResolvingPlayer::TargetPlayer)
-                                .is_ok_and(|seat| object.zone() == ObjectZone::Graveyard(seat))
-                    }
-                    crate::program::SourceZoneFilter::OpponentHand => {
-                        object.card_id().is_some()
-                            && matches!(object.zone(), ObjectZone::Hand(owner) if owner != player)
-                    }
-                    crate::program::SourceZoneFilter::CommandZone => {
-                        object.card_id().is_some()
-                            && object.zone() == ObjectZone::Command
-                            && object.owner() == player
-                    }
-                };
-                let empty_excluded = BTreeSet::new();
-                zone_ok
-                    && evaluated.get(object.id()).is_some_and(|card| {
-                        self.matches_object_filter(
-                            **filter,
-                            card,
-                            player,
-                            ability_source,
-                            &empty_excluded,
-                            evaluated,
-                        )
-                    })
-            }
-            ResolutionSelectionOperation::Sacrifice { filter } => {
+            ResolutionSelectionOperation::Sacrifice { primary, secondary } => {
                 let empty_excluded = BTreeSet::new();
                 object.zone() == ObjectZone::Battlefield
                     && evaluated.get(object.id()).is_some_and(|value| {
                         value.controller == Some(player)
-                            && filter.matches_view(value, &empty_excluded, mana_value)
+                            && primary.matches_static_characteristics(
+                                value,
+                                &empty_excluded,
+                                mana_value,
+                            )
+                            && secondary.as_ref().is_none_or(|f| {
+                                f.matches_static_characteristics(value, &empty_excluded, || {
+                                    mana_value()
+                                })
+                            })
                     })
             }
             ResolutionSelectionOperation::RandomSacrifice { object: chosen } => {

@@ -678,17 +678,15 @@ fn try_lower_exact_plus_upto_modes_core(
         }
         if !in_trigger {
             let saw_sacrifice = lowered.instructions.iter().any(|op| {
-                matches!(op, Instruction::Sacrifice { .. })
-                    || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                        .is_some_and(|spec| {
-                            matches!(
-                                spec.destination,
-                                spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                    semantics:
-                                        spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
-                                }
-                            )
-                        })
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                    .is_some_and(|spec| {
+                        matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                            }
+                        )
+                    })
             });
             if saw_sacrifice {
                 rewrite_body_anaphora_stats(&mut lowered, ValueObjectRef::LastSacrificedCreature);
@@ -866,17 +864,15 @@ fn try_lower_independent_multi_clause_modes_core(
         }
         if !in_trigger {
             let saw_sacrifice = body.instructions.iter().any(|op| {
-                matches!(op, Instruction::Sacrifice { .. })
-                    || crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
-                        .is_some_and(|spec| {
-                            matches!(
-                                spec.destination,
-                                spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                    semantics:
-                                        spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
-                                }
-                            )
-                        })
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
+                    .is_some_and(|spec| {
+                        matches!(
+                            spec.destination,
+                            spellwake_engine::toolbox::ZoneDest::Graveyard {
+                                semantics: spellwake_engine::toolbox::GraveyardSemantics::Sacrifice
+                            }
+                        )
+                    })
             });
             if saw_sacrifice {
                 rewrite_body_anaphora_stats(&mut body, ValueObjectRef::LastSacrificedCreature);
@@ -1442,9 +1438,7 @@ pub(in super::super) fn rewrite_instruction_anaphora(
     replacement: ValueObjectRef,
 ) {
     match op {
-        Instruction::Discard { amount, .. }
-        | Instruction::Sacrifice { amount, .. }
-        | Instruction::LookTopChooseExt { count: amount, .. }
+        Instruction::LookTopChooseExt { count: amount, .. }
         | Instruction::RevealUntilMatchExt { count: amount, .. }
         | Instruction::OfferDynamicManaPayment {
             extra_generic: amount,
@@ -1515,14 +1509,32 @@ pub(in super::super) fn rewrite_instruction_anaphora(
                 rewrite_instruction_anaphora(inner, replacement);
             }
         }
-        Instruction::PromptChoice(spec) => match &mut spec.domain {
-            spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
-            | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
-                rewrite_value_expr_anaphora(min, replacement);
-                rewrite_value_expr_anaphora(max, replacement);
+        Instruction::PromptChoice(spec) => {
+            match &mut spec.domain {
+                spellwake_engine::toolbox::PromptDomain::Objects {
+                    min,
+                    max,
+                    max_total_power,
+                    ..
+                } => {
+                    rewrite_value_expr_anaphora(min, replacement);
+                    rewrite_value_expr_anaphora(max, replacement);
+                    if let Some(mtp) = max_total_power {
+                        rewrite_value_expr_anaphora(mtp, replacement);
+                    }
+                }
+                spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                    rewrite_value_expr_anaphora(min, replacement);
+                    rewrite_value_expr_anaphora(max, replacement);
+                }
+                _ => {}
             }
-            _ => {}
-        },
+            for branch in &mut spec.option_branches {
+                for inner in &mut branch.instructions {
+                    rewrite_instruction_anaphora(inner, replacement);
+                }
+            }
+        }
         Instruction::StackOp(spec) => {
             if let spellwake_engine::toolbox::StackOpKind::Discover { value: amount } = &mut spec.op
             {
@@ -1669,9 +1681,7 @@ pub(in super::super) fn rewrite_body_prior_result(
     for op in &mut body.instructions {
         if !saw_count_action {
             match op {
-                Instruction::Discard { amount, .. }
-                | Instruction::Sacrifice { amount, .. }
-                | Instruction::LookTopChooseExt { count: amount, .. }
+                Instruction::LookTopChooseExt { count: amount, .. }
                 | Instruction::RevealUntilMatchExt { count: amount, .. } => {
                     rewrite_value_expr_prior_result(amount, replacement);
                 }
@@ -1745,14 +1755,30 @@ pub(in super::super) fn rewrite_body_prior_result(
                         &|v| rewrite_value_expr_prior_result(v, replacement),
                     );
                 }
-                Instruction::PromptChoice(spec) => match &mut spec.domain {
-                    spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
-                    | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
-                        rewrite_value_expr_prior_result(min, replacement);
-                        rewrite_value_expr_prior_result(max, replacement);
+                Instruction::PromptChoice(spec) => {
+                    match &mut spec.domain {
+                        spellwake_engine::toolbox::PromptDomain::Objects {
+                            min,
+                            max,
+                            max_total_power,
+                            ..
+                        } => {
+                            rewrite_value_expr_prior_result(min, replacement);
+                            rewrite_value_expr_prior_result(max, replacement);
+                            if let Some(mtp) = max_total_power {
+                                rewrite_value_expr_prior_result(mtp, replacement);
+                            }
+                        }
+                        spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                            rewrite_value_expr_prior_result(min, replacement);
+                            rewrite_value_expr_prior_result(max, replacement);
+                        }
+                        _ => {}
                     }
-                    _ => {}
-                },
+                    for branch in &mut spec.option_branches {
+                        rewrite_body_prior_result(branch, replacement);
+                    }
+                }
                 Instruction::DrawCards(spec) => {
                     rewrite_value_expr_prior_result(&mut spec.amount, replacement);
                 }
@@ -1826,10 +1852,7 @@ pub(in super::super) fn rewrite_body_prior_result(
         }
         if matches!(
             op,
-            Instruction::ZoneOp(_)
-                | Instruction::ForEachPlayerQuery { .. }
-                | Instruction::Discard { .. }
-                | Instruction::Sacrifice { .. }
+            Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
         ) || matches!(
             op,
             Instruction::MutatePlayer(spec)
@@ -2800,9 +2823,7 @@ pub(super) fn rewrite_body_trigger_subject_stats(
 ) {
     for op in &mut body.instructions {
         match op {
-            Instruction::Discard { amount, .. }
-            | Instruction::Sacrifice { amount, .. }
-            | Instruction::LookTopChooseExt { count: amount, .. }
+            Instruction::LookTopChooseExt { count: amount, .. }
             | Instruction::OfferDynamicManaPayment {
                 extra_generic: amount,
                 ..
@@ -2871,14 +2892,30 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             Instruction::ForEachPlayerQuery { body, .. } | Instruction::ForEach { body, .. } => {
                 rewrite_body_trigger_subject_stats(body, replacement);
             }
-            Instruction::PromptChoice(spec) => match &mut spec.domain {
-                spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
-                | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
-                    rewrite_value_expr_trigger_subject(min, replacement);
-                    rewrite_value_expr_trigger_subject(max, replacement);
+            Instruction::PromptChoice(spec) => {
+                match &mut spec.domain {
+                    spellwake_engine::toolbox::PromptDomain::Objects {
+                        min,
+                        max,
+                        max_total_power,
+                        ..
+                    } => {
+                        rewrite_value_expr_trigger_subject(min, replacement);
+                        rewrite_value_expr_trigger_subject(max, replacement);
+                        if let Some(mtp) = max_total_power {
+                            rewrite_value_expr_trigger_subject(mtp, replacement);
+                        }
+                    }
+                    spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                        rewrite_value_expr_trigger_subject(min, replacement);
+                        rewrite_value_expr_trigger_subject(max, replacement);
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+                for branch in &mut spec.option_branches {
+                    rewrite_body_trigger_subject_stats(branch, replacement);
+                }
+            }
             Instruction::StackOp(spec) => {
                 if let spellwake_engine::toolbox::StackOpKind::Discover { value: amount } =
                     &mut spec.op

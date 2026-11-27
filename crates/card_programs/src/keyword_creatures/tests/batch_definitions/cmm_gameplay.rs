@@ -1350,18 +1350,16 @@ fn cmm_darksteel_ingot_survives_destroy_but_can_be_sacrificed_and_adds_each_colo
             ObjectDestination::Hand,
             free_instant(
                 BodyTarget::None,
-                Instruction::Sacrifice {
-                    players: AffectedPlayers::One(
-                        spellwake_engine::program::ResolvingPlayer::Controller,
-                    ),
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    filter: PermanentTypeFilter {
+                Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::sacrifice(
+                    AffectedPlayers::One(spellwake_engine::program::ResolvingPlayer::Controller),
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    PermanentTypeFilter {
                         any_types: Default::default(),
                         required_types: [CardType::Artifact].into(),
                         forbidden_types: BTreeSet::new(),
                         object_filter: None,
                     },
-                },
+                ))),
             ),
         ),
     ];

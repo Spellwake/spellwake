@@ -41,10 +41,12 @@ fn seed() -> (GameContext, GameSeed) {
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Discard {
-                        players: AffectedPlayers::EachPlayer,
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    }],
+                    vec![Instruction::ZoneOp(Box::new(
+                        spellwake_engine::toolbox::ZoneOpSpec::discard(
+                            AffectedPlayers::EachPlayer,
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
+                    ))],
                 ),
             ),
         },

@@ -128,16 +128,18 @@ pub(super) fn lower_tokens_copies_instruction(
                                 "the exiled card" | "that exiled card" | "the card exiled with ~"
                             ) =>
                     {
-                        trial.instructions.push(Instruction::ChooseObjects {
-                            players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                            source_zone: SourceZoneFilter::LinkedExile,
-                            filter: Box::new(ObjectFilter::any()),
-                            min: ValueExpr::literal(1),
-                            max: ValueExpr::literal(1),
-                            distinct_powers: false,
-                            max_total_power: None,
-                            unchosen_action: None,
-                        });
+                        trial.instructions.extend(
+                            spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                                AffectedPlayers::One(ResolvingPlayer::Controller),
+                                SourceZoneFilter::LinkedExile,
+                                ObjectFilter::any(),
+                                ValueExpr::literal(1),
+                                ValueExpr::literal(1),
+                                false,
+                                None,
+                                None,
+                            ),
+                        );
                         Some(MoveSubjectRef::LastMoved)
                     }
                     SubjectRefAst::Anaphora(raw)
@@ -167,16 +169,18 @@ pub(super) fn lower_tokens_copies_instruction(
                         if obj.has_target_player() {
                             None
                         } else {
-                            trial.instructions.push(Instruction::ChooseObjects {
-                                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                                source_zone: SourceZoneFilter::LinkedExile,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                distinct_powers: false,
-                                max_total_power: None,
-                                unchosen_action: None,
-                            });
+                            trial.instructions.extend(
+                                spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                                    SourceZoneFilter::LinkedExile,
+                                    obj,
+                                    ValueExpr::literal(1),
+                                    ValueExpr::literal(1),
+                                    false,
+                                    None,
+                                    None,
+                                ),
+                            );
                             Some(MoveSubjectRef::LastMoved)
                         }
                     }
@@ -215,16 +219,18 @@ pub(super) fn lower_tokens_copies_instruction(
                         if obj.has_target_player() {
                             None
                         } else {
-                            trial.instructions.push(Instruction::ChooseObjects {
-                                players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                                source_zone,
-                                filter: Box::new(obj),
-                                min: ValueExpr::literal(1),
-                                max: ValueExpr::literal(1),
-                                distinct_powers: false,
-                                max_total_power: None,
-                                unchosen_action: None,
-                            });
+                            trial.instructions.extend(
+                                spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                                    AffectedPlayers::One(ResolvingPlayer::Controller),
+                                    source_zone,
+                                    obj,
+                                    ValueExpr::literal(1),
+                                    ValueExpr::literal(1),
+                                    false,
+                                    None,
+                                    None,
+                                ),
+                            );
                             Some(MoveSubjectRef::LastMoved)
                         }
                     }
@@ -508,7 +514,6 @@ pub(super) fn lower_tokens_copies_instruction(
                                         op,
                                         Instruction::ZoneOp(_)
                                             | Instruction::ForEachPlayerQuery { .. }
-                                            | Instruction::Sacrifice { .. }
                                     )
                                 });
                             if after_group_removal {
@@ -554,9 +559,7 @@ pub(super) fn lower_tokens_copies_instruction(
                         if builder.instructions.iter().any(|op| {
                             matches!(
                                 op,
-                                Instruction::ZoneOp(_)
-                                    | Instruction::ForEachPlayerQuery { .. }
-                                    | Instruction::Sacrifice { .. }
+                                Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
                             )
                         }) =>
                     {
@@ -1598,16 +1601,18 @@ pub(super) fn lower_tokens_copies_instruction(
                             "the exiled card" | "that exiled card" | "the card exiled with ~"
                         ) =>
                 {
-                    builder.instructions.push(Instruction::ChooseObjects {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        source_zone: SourceZoneFilter::LinkedExile,
-                        filter: Box::new(ObjectFilter::any()),
-                        min: ValueExpr::literal(1),
-                        max: ValueExpr::literal(1),
-                        distinct_powers: false,
-                        max_total_power: None,
-                        unchosen_action: None,
-                    });
+                    builder.instructions.extend(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            SourceZoneFilter::LinkedExile,
+                            ObjectFilter::any(),
+                            ValueExpr::literal(1),
+                            ValueExpr::literal(1),
+                            false,
+                            None,
+                            None,
+                        ),
+                    );
                     MoveSubjectRef::LastMoved
                 }
                 SubjectRefAst::Anaphora(raw)
@@ -1636,16 +1641,18 @@ pub(super) fn lower_tokens_copies_instruction(
                     if obj.has_target_player() {
                         return Err("oracle:unsupported-become-copy");
                     }
-                    builder.instructions.push(Instruction::ChooseObjects {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        source_zone: SourceZoneFilter::LinkedExile,
-                        filter: Box::new(obj),
-                        min: ValueExpr::literal(1),
-                        max: ValueExpr::literal(1),
-                        distinct_powers: false,
-                        max_total_power: None,
-                        unchosen_action: None,
-                    });
+                    builder.instructions.extend(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            SourceZoneFilter::LinkedExile,
+                            obj,
+                            ValueExpr::literal(1),
+                            ValueExpr::literal(1),
+                            false,
+                            None,
+                            None,
+                        ),
+                    );
                     MoveSubjectRef::LastMoved
                 }
                 SubjectRefAst::Group(f)
@@ -1681,16 +1688,18 @@ pub(super) fn lower_tokens_copies_instruction(
                     if obj.has_target_player() {
                         return Err("oracle:unsupported-become-copy");
                     }
-                    builder.instructions.push(Instruction::ChooseObjects {
-                        players: AffectedPlayers::One(ResolvingPlayer::Controller),
-                        source_zone,
-                        filter: Box::new(obj),
-                        min: ValueExpr::literal(1),
-                        max: ValueExpr::literal(1),
-                        distinct_powers: false,
-                        max_total_power: None,
-                        unchosen_action: None,
-                    });
+                    builder.instructions.extend(
+                        spellwake_engine::toolbox::PromptChoiceSpec::choose_objects_instructions(
+                            AffectedPlayers::One(ResolvingPlayer::Controller),
+                            source_zone,
+                            obj,
+                            ValueExpr::literal(1),
+                            ValueExpr::literal(1),
+                            false,
+                            None,
+                            None,
+                        ),
+                    );
                     MoveSubjectRef::LastMoved
                 }
                 _ => return Err("oracle:unsupported-become-copy"),
@@ -2297,9 +2306,9 @@ fn set_last_copy_may_choose_new_targets(ops: &mut [Instruction]) -> bool {
                     return true;
                 }
             }
-            Instruction::ChooseOption { options, .. } => {
-                for opt in options.iter_mut().rev() {
-                    if set_last_copy_may_choose_new_targets(&mut opt.body.instructions) {
+            Instruction::PromptChoice(spec) if !spec.option_branches.is_empty() => {
+                for opt in spec.option_branches.iter_mut().rev() {
+                    if set_last_copy_may_choose_new_targets(&mut opt.instructions) {
                         return true;
                     }
                 }

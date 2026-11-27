@@ -1647,10 +1647,10 @@ fn hand_reveal_tracks_remaining_cards_and_invalidates_discarded_and_played_cards
                 ),
                 spellwake_engine::toolbox::ZoneDest::RevealOnly,
             ))),
-            Instruction::Discard {
-                players: AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
-                amount: ValueExpr::literal(1),
-            },
+            Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::discard(
+                AffectedPlayers::One(ResolvingPlayer::TargetPlayer),
+                ValueExpr::literal(1),
+            ))),
         ],
     );
     let mut h = Harness::scheduled(

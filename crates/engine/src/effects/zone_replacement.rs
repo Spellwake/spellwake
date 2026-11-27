@@ -1627,8 +1627,7 @@ impl EffectWindow {
             | ResolutionSelectionOperation::Bolster { .. }
             | ResolutionSelectionOperation::Amass { .. }
             | ResolutionSelectionOperation::Blight { .. }
-            | ResolutionSelectionOperation::CollectEvidence { .. }
-            | ResolutionSelectionOperation::ChooseObjects { .. } => {
+            | ResolutionSelectionOperation::CollectEvidence { .. } => {
                 return Err(EffectError::InconsistentSelectionWork);
             }
             ResolutionSelectionOperation::ExileAnnouncedTargets { .. }
