@@ -1679,9 +1679,41 @@ fn parse_interactive_choose_objects(
             return None;
         }
         let filter = super::filters::lower_object_filter(&parsed, vocabulary).ok()?;
+        let is_partial_reveal = matches!(
+            builder.instructions.last(),
+            Some(Instruction::ZoneOp(spec))
+                if !matches!(spec.selection, spellwake_engine::toolbox::ZoneSelection::All)
+        );
         return Some(ChooseObjectsSpec {
             players,
-            source_zone: SourceZoneFilter::TargetPlayerHand,
+            source_zone: if is_partial_reveal {
+                SourceZoneFilter::LastMoved
+            } else {
+                SourceZoneFilter::TargetPlayerHand
+            },
+            filter,
+            min: ValueExpr::literal(min_val),
+            max: ValueExpr::literal(max_val),
+            distinct_powers: false,
+            max_total_power: None,
+        });
+    }
+    if let Some(core) = strip_revealed_hand_ref(&raw)
+        && has_live_interactive_last_moved(&builder.instructions, InteractiveLastMovedKind::Any)
+        && let Some((min_val, max_val, flt_phrase)) = parse_choose_objects_count_prefix(&core)
+        && let Ok(parsed) = spellwake_oracle_compiler::filter::parse_object_filter(
+            flt_phrase,
+            &cached_compiler_vocab(vocabulary),
+        )
+        && parsed.zone.is_none()
+        && parsed.controller.is_none()
+        && parsed.owner.is_none()
+        && parsed.named.is_none()
+        && let Ok(filter) = super::filters::lower_object_filter(&parsed, vocabulary)
+    {
+        return Some(ChooseObjectsSpec {
+            players,
+            source_zone: SourceZoneFilter::LastMoved,
             filter,
             min: ValueExpr::literal(min_val),
             max: ValueExpr::literal(max_val),
@@ -1772,11 +1804,18 @@ fn parse_interactive_choose_objects(
     } else if let Some(p) = body_phrase
         .strip_suffix(" from among them")
         .or_else(|| body_phrase.strip_suffix(" from among those cards"))
+        .or_else(|| body_phrase.strip_suffix(" revealed this way"))
+        .or_else(|| body_phrase.strip_suffix(" of those cards"))
+        .or_else(|| body_phrase.strip_suffix(" of the revealed cards"))
+        .or_else(|| body_phrase.strip_suffix(" of the exiled cards"))
+        .or_else(|| body_phrase.strip_suffix(" of them"))
         .filter(|_| {
             has_live_interactive_last_moved(&builder.instructions, InteractiveLastMovedKind::Any)
         })
     {
-        (SourceZoneFilter::LastMoved, p.trim())
+        let trimmed = p.trim();
+        let eff = if trimmed.is_empty() { "card" } else { trimmed };
+        (SourceZoneFilter::LastMoved, eff)
     } else if let Some(p) = body_phrase
         .strip_suffix(" exiled with ~")
         .or_else(|| body_phrase.strip_suffix(" exiled with this creature"))
@@ -2084,9 +2123,21 @@ fn has_live_interactive_last_moved(
                         InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Mill
                     ),
                     spellwake_engine::toolbox::ZoneDest::RevealOnly
-                    | spellwake_engine::toolbox::ZoneDest::None => continue,
+                    | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                    | spellwake_engine::toolbox::ZoneDest::None => {
+                        if !matches!(spec.source, spellwake_engine::toolbox::ObjectQuery::Empty)
+                            && matches!(expected, InteractiveLastMovedKind::Any)
+                        {
+                            true
+                        } else {
+                            continue;
+                        }
+                    }
                     _ => matches!(expected, InteractiveLastMovedKind::Any),
                 };
+            }
+            Instruction::DrawCards(_) => {
+                return matches!(expected, InteractiveLastMovedKind::Any);
             }
             Instruction::LookTopChooseExt { keep_dest, .. }
             | Instruction::RevealUntilMatchExt {
@@ -2274,24 +2325,76 @@ pub(super) fn try_lower_choose_option_ext(
     }
     if matches!(
         eff_cleaned,
-        "one of them" | "one of those cards" | "a card from among them"
-    ) && matches!(
-        builder.instructions.last(),
-        Some(
-            Instruction::ZoneOp(_)
-                | Instruction::ForEachPlayerQuery { .. }
-                | Instruction::ExileTopPlay { .. }
-                | Instruction::LookTopChooseExt { .. }
-                | Instruction::RevealUntilMatchExt { .. }
-                | Instruction::ChooseObjects { .. }
-                | Instruction::Mill { .. }
-        )
-    ) && let Ok(chooser_rp) = lower_resolving_player_in_context(chooser, builder, in_trigger)
+        "one of them"
+            | "one of those cards"
+            | "a card from among them"
+            | "one of the cards"
+            | "one of the revealed cards"
+            | "one of the exiled cards"
+            | "a card revealed this way"
+            | "two of them"
+            | "two of those cards"
+            | "three of them"
+            | "three of those cards"
+            | "up to one of them"
+            | "up to one of those cards"
+            | "up to two of them"
+            | "up to two of those cards"
+    ) && has_live_interactive_last_moved(&builder.instructions, InteractiveLastMovedKind::Any)
     {
-        builder.instructions.push(Instruction::ChooseOneLastMoved {
-            chooser: chooser_rp,
-        });
-        return Ok(());
+        let (min_pick, max_pick) = if eff_cleaned.starts_with("up to two ") {
+            (0i64, 2i64)
+        } else if eff_cleaned.starts_with("up to one ") {
+            (0i64, 1i64)
+        } else if eff_cleaned.starts_with("three ") {
+            (3i64, 3i64)
+        } else if eff_cleaned.starts_with("two ") {
+            (2i64, 2i64)
+        } else {
+            (1i64, 1i64)
+        };
+        if min_pick == 1
+            && max_pick == 1
+            && matches!(
+                eff_cleaned,
+                "one of them" | "one of those cards" | "a card from among them"
+            )
+            && let Ok(chooser_rp) = lower_resolving_player_in_context(chooser, builder, in_trigger)
+        {
+            builder.instructions.push(Instruction::ChooseOneLastMoved {
+                chooser: chooser_rp,
+            });
+            return Ok(());
+        }
+        let chooser_rp_opt = match chooser {
+            PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer => {
+                builder.instructions.push(Instruction::ChooseValue {
+                    chooser: ResolvingPlayer::Controller,
+                    domain: ResolutionChoiceDomain::Player {
+                        opponents_only: chooser == PlayerRefAst::AnyOpponent,
+                    },
+                });
+                Some(ResolvingPlayer::ChosenPlayer)
+            }
+            other => lower_resolving_player_in_context(other, builder, in_trigger).ok(),
+        };
+        if let Some(chooser_rp) = chooser_rp_opt {
+            builder
+                .instructions
+                .push(super::toolbox_emit::zone_op(ZoneOpSpec::simple(
+                    spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                    ZoneSelection::Prompt {
+                        chooser: PlayerSelector::Resolving(chooser_rp),
+                        min: Box::new(ValueExpr::literal(min_pick)),
+                        max: Box::new(ValueExpr::literal(max_pick)),
+                        constraint: None,
+                        category: ChoiceCategory::Generic,
+                        hidden: false,
+                    },
+                    ZoneDest::None,
+                )));
+            return Ok(());
+        }
     }
 
     // Universal PromptChoice paths for subtype/multi-color/per-player creature type choices.
@@ -2393,8 +2496,13 @@ pub(super) fn try_lower_choose_option_ext(
         "a number greater than 0" | "a positive number" | "a number 1 or greater" => {
             ResolutionChoiceDomain::Number { min: 1, max: 20 }
         }
+        "1 or 2" => ResolutionChoiceDomain::Number { min: 1, max: 2 },
+        "0, 1, or 2" => ResolutionChoiceDomain::Number { min: 0, max: 2 },
         "1, 2, or 3" => ResolutionChoiceDomain::Number { min: 1, max: 3 },
-        "a color of mana" | "any one color" | "one color" => ResolutionChoiceDomain::Color,
+        "1, 2, 3, or 4" => ResolutionChoiceDomain::Number { min: 1, max: 4 },
+        "a color of mana" | "any one color" | "one color" | "a color" | "any color" => {
+            ResolutionChoiceDomain::Color
+        }
         "a permanent type" => ResolutionChoiceDomain::CardType(vec![
             CardType::Artifact,
             CardType::Battle,
@@ -2435,6 +2543,18 @@ pub(super) fn try_lower_choose_option_ext(
         "land or nonland" => {
             ResolutionChoiceDomain::LabeledOption(vec!["land".to_owned(), "nonland".to_owned()])
         }
+        "odd or even" | "even or odd" => {
+            ResolutionChoiceDomain::LabeledOption(vec!["odd".to_owned(), "even".to_owned()])
+        }
+        "khans or dragons" | "dragons or khans" => {
+            ResolutionChoiceDomain::LabeledOption(vec!["Khans".to_owned(), "Dragons".to_owned()])
+        }
+        "mirran or phyrexian" | "phyrexian or mirran" => {
+            ResolutionChoiceDomain::LabeledOption(vec!["Mirran".to_owned(), "Phyrexian".to_owned()])
+        }
+        "heads or tails" => {
+            ResolutionChoiceDomain::LabeledOption(vec!["heads".to_owned(), "tails".to_owned()])
+        }
         "friend or foe" => {
             ResolutionChoiceDomain::LabeledOption(vec!["friend".to_owned(), "foe".to_owned()])
         }
@@ -2443,29 +2563,9 @@ pub(super) fn try_lower_choose_option_ext(
         }
         other => {
             if chooser == PlayerRefAst::You
-                && (other.starts_with("target ")
-                    || other
-                        .strip_prefix("another ")
-                        .is_some_and(|rest| rest.starts_with("target ")))
+                && try_bind_choose_target_phrase(other, builder, vocabulary, in_trigger)
             {
-                let (is_another, target_raw) = match other.strip_prefix("another ") {
-                    Some(rest) => (true, rest),
-                    None => (false, other),
-                };
-                if let Ok(mut subj) = spellwake_oracle_compiler::filter::parse_subject_or_target(
-                    target_raw,
-                    &cached_compiler_vocab(vocabulary),
-                ) {
-                    if is_another && let SubjectRefAst::TargetObject { filter, .. } = &mut subj {
-                        filter.flags = filter
-                            .flags
-                            .union(spellwake_oracle_compiler::ast::ObjectFilterFlags::EXCLUDE_SELF);
-                    }
-                    if let Ok(bt) = lower_target_subject(&subj, vocabulary) {
-                        builder.bind_target(bt)?;
-                        return Ok(());
-                    }
-                }
+                return Ok(());
             }
             if let Some(spec) =
                 parse_interactive_choose_objects(chooser, other, builder, vocabulary, in_trigger)
@@ -2581,6 +2681,152 @@ pub(super) fn try_lower_choose_option_ext(
     emit_domain_for_player_ref(chooser, domain, builder, in_trigger)
 }
 
+fn try_bind_choose_target_phrase(
+    cleaned: &str,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+) -> bool {
+    let trimmed = cleaned.trim();
+    if !(trimmed.starts_with("target ")
+        || trimmed.starts_with("another target ")
+        || trimmed.starts_with("any number of target ")
+        || trimmed.starts_with("up to one target ")
+        || trimmed.starts_with("up to two target ")
+        || trimmed.starts_with("up to three target ")
+        || trimmed.starts_with("up to four target ")
+        || trimmed.starts_with("up to five target ")
+        || trimmed.starts_with("up to x target ")
+        || trimmed.starts_with("x target ")
+        || trimmed.starts_with("two target ")
+        || trimmed.starts_with("three target ")
+        || trimmed.starts_with("four target "))
+    {
+        return false;
+    }
+    let (is_another, target_raw) = match trimmed.strip_prefix("another ") {
+        Some(rest) => (true, rest),
+        None => (false, trimmed),
+    };
+    let Ok(mut subj) = spellwake_oracle_compiler::filter::parse_subject_or_target(
+        target_raw,
+        &cached_compiler_vocab(vocabulary),
+    ) else {
+        return false;
+    };
+    if is_another && let SubjectRefAst::TargetObject { filter, .. } = &mut subj {
+        filter.flags = filter
+            .flags
+            .union(spellwake_oracle_compiler::ast::ObjectFilterFlags::EXCLUDE_SELF);
+    }
+    if let Ok(bt) = lower_target_subject(&subj, vocabulary) {
+        return builder.bind_target(bt).is_ok();
+    }
+    match &subj {
+        SubjectRefAst::TargetObject { filter, count } => {
+            let (min_t, max_t, is_x, is_up_to_x, is_up_to_one) = match *count {
+                TargetCountAst::Exact(n) if n >= 2 => {
+                    (usize::from(n), usize::from(n), false, false, false)
+                }
+                TargetCountAst::UpTo(1) => (0, 1, false, false, true),
+                TargetCountAst::UpTo(max) if max >= 2 => (0, usize::from(max), false, false, false),
+                TargetCountAst::AnyNumber => (0, usize::MAX, false, false, false),
+                TargetCountAst::ChosenX if !in_trigger => (0, usize::MAX, true, false, false),
+                TargetCountAst::UpToX if !in_trigger => (0, usize::MAX, false, true, false),
+                _ => return false,
+            };
+            let single = SubjectRefAst::TargetObject {
+                filter: filter.clone(),
+                count: TargetCountAst::Exact(1),
+            };
+            let Ok(bt) = lower_target_subject(&single, vocabulary) else {
+                return false;
+            };
+            let is_gy = matches!(
+                bt,
+                BodyTarget::SingleOwnGraveyardCard
+                    | BodyTarget::FilteredOwnGraveyardCard(_)
+                    | BodyTarget::AnyGraveyardCard
+                    | BodyTarget::AnyGraveyardCreature
+                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                    | BodyTarget::FilteredAnyGraveyardCard { .. }
+            );
+            let is_perm = matches!(
+                bt,
+                BodyTarget::SingleCreature
+                    | BodyTarget::SinglePermanent
+                    | BodyTarget::SinglePlaneswalker
+                    | BodyTarget::FilteredPermanent(_)
+            );
+            if !is_gy && !is_perm {
+                return false;
+            }
+            if builder.bind_target(bt).is_err() {
+                return false;
+            }
+            if is_gy {
+                builder.graveyard_target_bounds = Some((min_t, max_t));
+            } else if is_up_to_one {
+                builder.up_to_one_target = true;
+            }
+            if is_x {
+                builder.x_target_count = true;
+            }
+            if is_up_to_x {
+                builder.up_to_x_target_count = true;
+            }
+            true
+        }
+        SubjectRefAst::TargetOneOf { options, count } => {
+            let (is_up_to_one, is_gy_bounds) = match *count {
+                TargetCountAst::UpTo(1) => (true, Some((0usize, 1usize))),
+                TargetCountAst::Exact(n) if n >= 2 => {
+                    (false, Some((usize::from(n), usize::from(n))))
+                }
+                TargetCountAst::UpTo(max) if max >= 2 => (false, Some((0usize, usize::from(max)))),
+                TargetCountAst::AnyNumber => (false, Some((0usize, usize::MAX))),
+                _ => return false,
+            };
+            let single = SubjectRefAst::TargetOneOf {
+                options: options.clone(),
+                count: TargetCountAst::Exact(1),
+            };
+            let Ok(bt) = lower_target_subject(&single, vocabulary) else {
+                return false;
+            };
+            let is_gy = matches!(
+                bt,
+                BodyTarget::SingleOwnGraveyardCard
+                    | BodyTarget::FilteredOwnGraveyardCard(_)
+                    | BodyTarget::AnyGraveyardCard
+                    | BodyTarget::AnyGraveyardCreature
+                    | BodyTarget::AnyGraveyardCreatureOrPlaneswalker
+                    | BodyTarget::FilteredAnyGraveyardCard { .. }
+            );
+            let is_perm = matches!(
+                bt,
+                BodyTarget::SingleCreature
+                    | BodyTarget::SinglePermanent
+                    | BodyTarget::SinglePlaneswalker
+                    | BodyTarget::FilteredPermanent(_)
+            );
+            if !is_gy && !is_perm {
+                return false;
+            }
+            if builder.bind_target(bt).is_err() {
+                return false;
+            }
+            if is_gy {
+                builder.graveyard_target_bounds = is_gy_bounds;
+            } else if is_up_to_one {
+                builder.up_to_one_target = true;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Extended fallback for `InstructionAst::InteractiveChoice(ChooseFromGroup { chooser, description })`.
 pub(super) fn try_lower_interactive_choose_from_group(
     chooser: PlayerRefAst,
@@ -2591,31 +2837,9 @@ pub(super) fn try_lower_interactive_choose_from_group(
     in_trigger: bool,
 ) -> Result<(), &'static str> {
     if chooser == PlayerRefAst::You
-        && (cleaned.starts_with("target ")
-            || cleaned.starts_with("another target ")
-            || cleaned.starts_with("any number of target ")
-            || cleaned.starts_with("two target ")
-            || cleaned.starts_with("up to two target ")
-            || cleaned.starts_with("up to three target "))
+        && try_bind_choose_target_phrase(cleaned, builder, vocabulary, in_trigger)
     {
-        let (is_another, target_raw) = match cleaned.strip_prefix("another ") {
-            Some(rest) => (true, rest),
-            None => (false, cleaned),
-        };
-        if let Ok(mut subj) = spellwake_oracle_compiler::filter::parse_subject_or_target(
-            target_raw,
-            &cached_compiler_vocab(vocabulary),
-        ) {
-            if is_another && let SubjectRefAst::TargetObject { filter, .. } = &mut subj {
-                filter.flags = filter
-                    .flags
-                    .union(spellwake_oracle_compiler::ast::ObjectFilterFlags::EXCLUDE_SELF);
-            }
-            if let Ok(bt) = lower_target_subject(&subj, vocabulary) {
-                builder.bind_target(bt)?;
-                return Ok(());
-            }
-        }
+        return Ok(());
     }
     if let Some(spec) =
         parse_interactive_choose_objects(chooser, cleaned, builder, vocabulary, in_trigger)
@@ -2686,7 +2910,7 @@ fn prevention_filter_base_clean(f: &ObjectFilterAst) -> bool {
         && f.required_supertypes.is_empty()
         && f.forbidden_supertypes.is_empty()
         && f.subtypes.is_empty()
-        && f.forbidden_subtypes.is_empty()
+        && f.forbidden_subtypes.len() <= 2
         && f.owner.is_none()
         && f.tapped.is_none()
         && f.token.is_none()
@@ -2744,6 +2968,7 @@ fn parse_color_sources_anaphora(raw: &str) -> Option<spellwake_engine::program::
 
 fn lower_prevention_source_filter_single(
     f: &ObjectFilterAst,
+    vocabulary: &CreatureTypeVocabulary,
 ) -> Option<spellwake_engine::damage::PreventionSourceFilter> {
     use spellwake_engine::damage::PreventionSourceFilter;
     if !prevention_filter_base_clean(f)
@@ -2761,6 +2986,11 @@ fn lower_prevention_source_filter_single(
     } else {
         return None;
     };
+    let mut forbidden_subtypes = [None, None];
+    for (idx, label) in f.forbidden_subtypes.iter().enumerate() {
+        let resolved = vocabulary.resolve_label(label)?;
+        forbidden_subtypes[idx] = Some(resolved);
+    }
     let colorless_only = match f.color_arity {
         None => false,
         Some(ColorArity::Colorless) => true,
@@ -2789,6 +3019,7 @@ fn lower_prevention_source_filter_single(
         Some(_) => return None,
     };
     Some(PreventionSourceFilter {
+        forbidden_subtypes,
         creatures_only,
         attacking_only,
         blocking_only,
@@ -3037,31 +3268,7 @@ pub(super) fn lower_prevent_all_damage_from(
         lower_prevention_recipient(recipient, builder, vocabulary, self_pronoun_valid)?
     };
 
-    // 2. Fast-path CombatFromCreaturesWithoutSubtype (not yet representable in PreventionSourceFilter).
-    if resolved_recipient == PreventionRecipientSpec::Any
-        && combat_only
-        && !both_directions
-        && let SubjectRefAst::Group(group) = source
-        && matches!(group.zone, None | Some(ZoneFilter::Battlefield))
-        && group.predicates.is_empty()
-        && group.flags.is_empty()
-        && group.forbidden_subtypes.len() == 1
-        && let Ok(lowered) = lower_object_filter(group, vocabulary)
-    {
-        let subtype = vocabulary
-            .resolve_label(&group.forbidden_subtypes[0])
-            .ok_or("oracle:unsupported-prevention-source")?;
-        if lowered == ObjectFilter::creature().without_subtype(subtype) {
-            builder
-                .instructions
-                .push(Instruction::PreventDamageThisTurn(
-                    TurnPreventionFilter::CombatFromCreaturesWithoutSubtype(subtype),
-                ));
-            return Ok(());
-        }
-    }
-
-    // 3. Multi-target permanent sources (`Soul Parry`, `Serene Sunset`, `Energy Arc`).
+    // 2. Multi-target permanent sources (`Soul Parry`, `Serene Sunset`, `Energy Arc`).
     if resolved_recipient == PreventionRecipientSpec::Any {
         if let SubjectRefAst::TargetObject { filter, count } = source
             && !filter.any_spell
@@ -3185,7 +3392,7 @@ pub(super) fn lower_prevent_all_damage_from(
                 return Err("oracle:unsupported-prevention-source");
             }
             PreventionSourceSpec::CreaturesOtherThanAbilitySource
-        } else if let Some(filter) = lower_prevention_source_filter_single(group) {
+        } else if let Some(filter) = lower_prevention_source_filter_single(group, vocabulary) {
             PreventionSourceSpec::Filter(filter)
         } else {
             return Err("oracle:unsupported-prevention-source");
@@ -3224,7 +3431,7 @@ pub(super) fn lower_prevent_all_damage_from(
             let SubjectRefAst::Group(g) = part else {
                 return Err("oracle:unsupported-prevention-source");
             };
-            let f = lower_prevention_source_filter_single(g)
+            let f = lower_prevention_source_filter_single(g, vocabulary)
                 .ok_or("oracle:unsupported-prevention-source")?;
             if f.any_colors.is_empty() || !f.forbidden_colors.is_empty() || f.colorless_only {
                 return Err("oracle:unsupported-prevention-source");
@@ -3238,6 +3445,7 @@ pub(super) fn lower_prevent_all_damage_from(
                         || acc.unblocked_only != f.unblocked_only
                         || acc.required_keyword != f.required_keyword
                         || acc.forbidden_keyword != f.forbidden_keyword
+                        || acc.forbidden_subtypes != f.forbidden_subtypes
                         || acc.controller != f.controller
                     {
                         return Err("oracle:unsupported-prevention-source");
@@ -3312,15 +3520,9 @@ pub(super) fn lower_prevent_all_damage_from(
         recipient: resolved_recipient,
         both_directions,
     };
-    if matches!(spec.source, PreventionSourceSpec::ChosenColor) {
-        builder
-            .instructions
-            .push(Instruction::PreventDamageSpec(Box::new(spec)));
-    } else {
-        builder.instructions.push(
-            crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(spec),
-        );
-    }
+    builder
+        .instructions
+        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::prevent_damage_spec(spec));
     Ok(())
 }
 

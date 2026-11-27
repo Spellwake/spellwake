@@ -657,6 +657,10 @@ pub(super) fn lower_resolving_player_in_context(
                         domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
                         ..
                     } | Instruction::SelectExtremeLifePlayer { .. }
+                ) || matches!(
+                    op,
+                    Instruction::PromptChoice(spec)
+                        if matches!(spec.domain, spellwake_engine::toolbox::PromptDomain::Players { .. })
                 )
             }) =>
             {
@@ -776,6 +780,10 @@ pub(super) fn lower_resolving_player_in_context(
                         domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
                         ..
                     } | Instruction::SelectExtremeLifePlayer { .. }
+                ) || matches!(
+                    op,
+                    Instruction::PromptChoice(spec)
+                        if matches!(spec.domain, spellwake_engine::toolbox::PromptDomain::Players { .. })
                 )
             }) {
                 Ok(ResolvingPlayer::ChosenPlayer)
@@ -935,6 +943,7 @@ fn bind_instruction_value_expr_targets(
         | InstructionAst::LookTopLibrary { count, .. }
         | InstructionAst::PlayerLookTopLibrary { count, .. }
         | InstructionAst::ExileTopLibrary { count, .. }
+        | InstructionAst::ExileWithCounters { count, .. }
         | InstructionAst::Earthbend { count }
         | InstructionAst::PutCounters { count, .. } => bind(count, builder),
         InstructionAst::DiscardUpTo {
@@ -1130,13 +1139,32 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             body_uses_chosen_x(body)
         }
         Instruction::DrawCards(spec) => value_expr_uses_chosen_x(&spec.amount),
-        Instruction::MutateObject(spec) => match &spec.op {
-            spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
-            | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. } => {
-                value_expr_uses_chosen_x(amount)
-            }
-            spellwake_engine::toolbox::ObjectMutation::MoveCounters { amount, .. } => {
-                amount.as_ref().is_some_and(value_expr_uses_chosen_x)
+        Instruction::MutateObject(spec) => {
+            let sel_x = match &spec.selection {
+                spellwake_engine::toolbox::ZoneSelection::Random { count, .. } => {
+                    value_expr_uses_chosen_x(count)
+                }
+                spellwake_engine::toolbox::ZoneSelection::Prompt { min, max, .. } => {
+                    value_expr_uses_chosen_x(min) || value_expr_uses_chosen_x(max)
+                }
+                spellwake_engine::toolbox::ZoneSelection::All => false,
+            };
+            sel_x
+                || match &spec.op {
+                    spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
+                    | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
+                        amount, ..
+                    } => value_expr_uses_chosen_x(amount),
+                    spellwake_engine::toolbox::ObjectMutation::MoveCounters { amount, .. } => {
+                        amount.as_ref().is_some_and(value_expr_uses_chosen_x)
+                    }
+                    _ => false,
+                }
+        }
+        Instruction::PromptChoice(spec) => match &spec.domain {
+            spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
+            | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                value_expr_uses_chosen_x(min) || value_expr_uses_chosen_x(max)
             }
             _ => false,
         },
@@ -1388,6 +1416,23 @@ pub(super) fn lower_instruction(
             self_pronoun_valid,
             bound_x,
         ),
+        InstructionAst::ShuffleLibrary { .. } => {
+            match lower_zone_moves_instruction(
+                ins,
+                builder,
+                vocabulary,
+                ids,
+                in_trigger,
+                self_pronoun_valid,
+                bound_x,
+            ) {
+                Ok(()) => Ok(()),
+                Err("oracle:unbound-that-player") => {
+                    lower_shuffle_that_player_fallback(builder, in_trigger)
+                }
+                Err(err) => Err(err),
+            }
+        }
         InstructionAst::Destroy { .. }
         | InstructionAst::Discard { .. }
         | InstructionAst::DiscardHand { .. }
@@ -1413,7 +1458,6 @@ pub(super) fn lower_instruction(
         | InstructionAst::SacrificeUnlessPay { .. }
         | InstructionAst::ShuffleGraveyardIntoLibrary { .. }
         | InstructionAst::ShuffleIntoLibrary { .. }
-        | InstructionAst::ShuffleLibrary { .. }
         | InstructionAst::WheelShuffleHandAndGraveyard { .. } => lower_zone_moves_instruction(
             ins,
             builder,
@@ -1554,6 +1598,7 @@ pub(super) fn lower_instruction(
         | InstructionAst::BindXY { .. }
         | InstructionAst::ChangeLife { .. }
         | InstructionAst::Choice(..)
+        | InstructionAst::ChooseAndKeep { .. }
         | InstructionAst::ChooseOption(..)
         | InstructionAst::ChooseFromGroup { .. }
         | InstructionAst::PlayerChooseFromGroup { .. }
@@ -1563,6 +1608,7 @@ pub(super) fn lower_instruction(
         | InstructionAst::Clash { .. }
         | InstructionAst::CollectEvidence { .. }
         | InstructionAst::Exert { .. }
+        | InstructionAst::ExileWithCounters { .. }
         | InstructionAst::FlipCoin
         | InstructionAst::ForEachCount { .. }
         | InstructionAst::ForEachObject { .. }
@@ -1570,12 +1616,16 @@ pub(super) fn lower_instruction(
         | InstructionAst::ForEachSubjectPlayer { .. }
         | InstructionAst::Forage
         | InstructionAst::InteractiveChoice(..)
+        | InstructionAst::LookAtHand { .. }
         | InstructionAst::ManualTabletopAction { .. }
         | InstructionAst::Modal { .. }
         | InstructionAst::Optional(..)
         | InstructionAst::OptionalPlayer { .. }
         | InstructionAst::PayCost(..)
         | InstructionAst::PlayerPayCost { .. }
+        | InstructionAst::PutSticker { .. }
+        | InstructionAst::PutStickerWithCost { .. }
+        | InstructionAst::RevealUntil { .. }
         | InstructionAst::RingTemptsYou
         | InstructionAst::RollDiceChooseOne { .. }
         | InstructionAst::RollDie { .. }

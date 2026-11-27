@@ -138,7 +138,22 @@ pub(super) fn skittering_cicada(
         grouping: spellwake_engine::program::TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::BoostSourceByCastManaValue],
+            vec![Instruction::ApplyContinuous(Box::new(
+                spellwake_engine::toolbox::ApplyContinuousSpec::dynamic_boost(
+                    spellwake_engine::toolbox::ObjectQuery::Source,
+                    spellwake_engine::program::ValueExpr::object_stat(
+                        spellwake_engine::program::ValueObjectRef::TriggeringSpell,
+                        spellwake_engine::program::ObjectStatKind::ManaValue,
+                    ),
+                    spellwake_engine::program::ValueExpr::object_stat(
+                        spellwake_engine::program::ValueObjectRef::TriggeringSpell,
+                        spellwake_engine::program::ObjectStatKind::ManaValue,
+                    ),
+                    BTreeSet::from([KeywordAbility::Trample]),
+                    BTreeSet::new(),
+                    spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                ),
+            ))],
         ),
     });
     Some(program)

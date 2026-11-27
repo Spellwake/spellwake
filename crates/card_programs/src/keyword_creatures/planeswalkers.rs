@@ -374,9 +374,93 @@ pub(super) fn compile(
                 ))
             }
             "Gain control of all creatures until end of turn. Untap them. They gain haste until end of turn." => {
+                use spellwake_engine::characteristics::{
+                    AbilityChange, ControlRecipient, ResolvedDuration, ResolvedPartSpec,
+                    ResolvedPartsSpec,
+                };
                 Some((
                     BodyTarget::None,
-                    vec![Instruction::UntapAndControlCreatures],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::set_group_tapped(
+                            ObjectFilter::creature(),
+                            false,
+                        ),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Battlefield,
+                                ObjectFilter::creature(),
+                            ),
+                            ResolvedPartsSpec(vec![
+                                ResolvedPartSpec::Control(ControlRecipient::ResolvingController),
+                                ResolvedPartSpec::Abilities(AbilityChange::grant_keywords([
+                                    KeywordAbility::Haste,
+                                ])),
+                            ]),
+                            ResolvedDuration::UntilEndOfTurn,
+                        ),
+                    ],
+                ))
+            }
+            "You and target opponent each draw a card." => Some((
+                BodyTarget::SingleOpponent,
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
+                ],
+            )),
+            "Put a +1/+1 counter on each creature you control and a loyalty counter on each other planeswalker you control." => {
+                Some((
+                    BodyTarget::None,
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Battlefield,
+                                ObjectFilter::creature().controlled(),
+                            ),
+                            spellwake_engine::effects::CounterKind::PlusOne,
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                            spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Battlefield,
+                                ObjectFilter::planeswalker()
+                                    .controlled()
+                                    .other_than_ability_source(),
+                            ),
+                            spellwake_engine::effects::CounterKind::Loyalty,
+                            spellwake_engine::program::ValueExpr::literal(1),
+                        ),
+                    ],
+                ))
+            }
+            text if text
+                == format!(
+                    "You draw X cards and {} deals X damage to each opponent, where X is the number of planeswalkers you control.",
+                    card.name
+                ) =>
+            {
+                let count =
+                    spellwake_engine::program::ValueExpr::controlled_type(CardType::Planeswalker);
+                Some((
+                    BodyTarget::None,
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
+                            count.clone(),
+                        ),
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                spellwake_engine::toolbox::PlayerSelector::Group(
+                                    spellwake_engine::program::AffectedPlayers::EachOpponent,
+                                ),
+                            ),
+                            count,
+                            false,
+                        ),
+                    ],
                 ))
             }
             _ => None,
@@ -756,7 +840,6 @@ pub(super) fn compile(
                     })) }),
             text if text == format!("During target opponent's next turn, creatures that player controls attack {} if able.",card.name) =>
                 (BodyTarget::SingleOpponent,Instruction::RequireAttackSourceNextTurn),
-            "You and target opponent each draw a card." => (BodyTarget::SingleOpponent,Instruction::DrawControllerAndTarget {amount:one()}),
             "Choose left or right. Until your next turn, each player may attack only the nearest opponent in the last chosen direction and planeswalkers controlled by that opponent." =>
                 (BodyTarget::None,Instruction::ChooseAttackDirection),
             "Until end of turn, each planeswalker you control becomes a 4/4 red Dragon creature and gains flying." => {
@@ -765,7 +848,17 @@ pub(super) fn compile(
                     subtypes:SubtypeOperation::Set(InstructionSubtypeOperand::Literal([vocabulary.resolve_label("Dragon")?].into())),land_subtypes:SubtypeOperation::Keep}),
                     ResolvedPartSpec::Color(ColorOperation::Set([Color::Red].into())),ResolvedPartSpec::Abilities(AbilityChange::grant_keywords([KeywordAbility::Flying])),
                     ResolvedPartSpec::SetPT(PowerToughness {power:4.into(),toughness:4.into()})]);
-                (BodyTarget::None,Instruction::ChangeControlledPlaneswalkers {parts,duration:ResolvedDuration::UntilEndOfTurn})
+                (
+                    BodyTarget::None,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                            ObjectFilter::planeswalker().controlled(),
+                        ),
+                        parts,
+                        ResolvedDuration::UntilEndOfTurn,
+                    ),
+                )
             }
             "Create a 4/4 red Dragon creature token with flying." => (BodyTarget::None,super::ordinary_text::create_tokens("a 4/4 red Dragon creature token with flying",vocabulary)?),
             "Destroy target tapped creature." => (BodyTarget::FilteredPermanent(ObjectFilter::creature().tapped()),crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spellwake_engine::toolbox::ZoneOpSpec::move_all(spellwake_engine::toolbox::ObjectQuery::Targets, spellwake_engine::toolbox::ZoneDest::Graveyard { semantics: spellwake_engine::toolbox::GraveyardSemantics::Destroy { allow_regenerate: true } }))),
@@ -795,8 +888,6 @@ pub(super) fn compile(
                 let creation = TokenCreation::one(TokenDefinition::new(token, name, vocabulary).ok()?);
                 (BodyTarget::None, Instruction::CreateTokens { creations: vec![creation] })
             },
-            text if text == format!("You draw X cards and {} deals X damage to each opponent, where X is the number of planeswalkers you control.", card.name) =>
-                (BodyTarget::None, Instruction::DrawAndDamageOpponents { amount: spellwake_engine::program::ValueExpr::controlled_type(CardType::Planeswalker) }),
             "Untap up to four target permanents." => (BodyTarget::SinglePermanent, Instruction::AffectPermanentTargets {
                 minimum: 0, maximum: 4, action: spellwake_engine::program::PermanentTargetAction::Untap,
             }),
@@ -809,8 +900,6 @@ pub(super) fn compile(
                 (BodyTarget::SingleCreature, Instruction::AffectPermanentTargets { minimum: 0, maximum: 1,
                     action: spellwake_engine::program::PermanentTargetAction::Modify { parts, duration: ResolvedDuration::UntilEndOfTurn } })
             },
-            "Put a +1/+1 counter on each creature you control and a loyalty counter on each other planeswalker you control." =>
-                (BodyTarget::None, Instruction::PutCreatureAndOtherPlaneswalkerCounters),
             "You get an emblem with \"If a source would deal damage to you or a planeswalker you control, prevent all but 1 of that damage.\"" => (
                 BodyTarget::None,
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::create_emblem(

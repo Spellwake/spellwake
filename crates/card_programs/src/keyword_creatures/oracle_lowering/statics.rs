@@ -5281,6 +5281,84 @@ pub(super) fn lower_static(
                 Err("oracle:unsupported-static")
             }
         }
+        StaticAbilityAst::CompiledStickerOption {
+            ticket_cost,
+            payload,
+            power,
+            toughness,
+            compiled,
+        } if !is_spell => {
+            let mut resolved_parts = Vec::new();
+            if let (Some(p_str), Some(t_str)) = (power.as_deref(), toughness.as_deref()) {
+                let p = p_str
+                    .trim()
+                    .parse::<i64>()
+                    .map_err(|_| "oracle:unsupported-static")?;
+                let t = t_str
+                    .trim()
+                    .parse::<i64>()
+                    .map_err(|_| "oracle:unsupported-static")?;
+                resolved_parts.push(ResolvedPartSpec::SetPT(PowerToughness {
+                    power: p.into(),
+                    toughness: t.into(),
+                }));
+            } else if let Some(sub_face) = compiled.as_deref() {
+                let static_parts = lower_granted_ability_face_parts(sub_face, vocabulary, ids)
+                    .map_err(|_| "oracle:unsupported-static")?;
+                for part in static_parts {
+                    resolved_parts.push(
+                        static_part_to_resolved_part_spec(part)
+                            .map_err(|_| "oracle:unsupported-static")?,
+                    );
+                }
+            } else {
+                return Err("oracle:unsupported-static");
+            }
+            if resolved_parts.is_empty() {
+                return Err("oracle:unsupported-static");
+            }
+            let empty_slots = std::collections::BTreeSet::new();
+            let mut ops = Vec::new();
+            if *ticket_cost > 0 {
+                let ticket_kind =
+                    CounterKind::from_oracle_label("ticket").ok_or("oracle:unsupported-static")?;
+                ops.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::pay_player_counter(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                        ticket_kind,
+                        ValueExpr::literal(i64::from(*ticket_cost)),
+                    ),
+                );
+            }
+            ops.push(Instruction::SetObjectTag {
+                query: Box::new(spellwake_engine::toolbox::ObjectQuery::Targets),
+                key: spellwake_engine::toolbox::TagKey::Label("sticker".to_string()),
+                value: Some(spellwake_engine::toolbox::TagValue::Text(payload.clone())),
+            });
+            for part in resolved_parts {
+                let spec = ResolvedPartsSpec(vec![part]);
+                spec.validate(vocabulary, &empty_slots)
+                    .map_err(|_| "oracle:unsupported-static")?;
+                ops.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
+                        spellwake_engine::toolbox::ObjectQuery::Targets,
+                        spec,
+                        ResolvedDuration::NoStatedDuration,
+                    ),
+                );
+            }
+            let nonland_controlled =
+                ObjectFilter::from_clause(ObjectClause::any().controlled().nonland());
+            program.activated.push(ActivatedAbility {
+                id: ids.activated(),
+                mana_cost: ManaCost::free(),
+                source_cost: SourceCost::None,
+                body: ExecutableBody::new(BodyTarget::FilteredPermanent(nonland_controlled), ops),
+            });
+            Ok(())
+        }
         _ => Err("oracle:unsupported-static"),
     }
 }

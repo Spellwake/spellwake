@@ -1561,9 +1561,24 @@ pub(super) fn lower_restrictions_statics_instruction(
                             }, dur));
                         return Ok(());
                     }
+                    let rule_trim_no_dot = rule_low.trim_end_matches('.').trim();
+                    let rule_no_turn = rule_trim_no_dot
+                        .strip_suffix(" this turn")
+                        .unwrap_or(rule_trim_no_dot)
+                        .trim();
                     if matches!(
-                        rule_low.as_str(),
-                        "cant_play_lands" | "can't play lands" | "cantplaylands"
+                        rule_no_turn,
+                        "cant_play_lands"
+                            | "can't play lands"
+                            | "cantplaylands"
+                            | "players can't play lands"
+                            | "opponents can't play lands"
+                            | "your opponents can't play lands"
+                            | "each opponent can't play lands"
+                            | "you can't play lands"
+                            | "that player can't play lands"
+                            | "target player can't play lands"
+                            | "target opponent can't play lands"
                     ) {
                         let players = match subject.as_deref() {
                             Some(SubjectRefAst::Player(p)) => {
@@ -1580,7 +1595,30 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 })?;
                                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                             }
-                            None => AffectedPlayers::EachPlayer,
+                            None => {
+                                if rule_no_turn.starts_with("you ") {
+                                    AffectedPlayers::One(ResolvingPlayer::Controller)
+                                } else if rule_no_turn.starts_with("your opponents ")
+                                    || rule_no_turn.starts_with("opponents ")
+                                    || rule_no_turn.starts_with("each opponent ")
+                                {
+                                    AffectedPlayers::EachOpponent
+                                } else if rule_no_turn.starts_with("that player ") {
+                                    lower_affected_players_in_context(
+                                        PlayerRefAst::ThatPlayer,
+                                        builder,
+                                        in_trigger,
+                                    )?
+                                } else if rule_no_turn.starts_with("target player ") {
+                                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                                } else if rule_no_turn.starts_with("target opponent ") {
+                                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                                } else {
+                                    AffectedPlayers::EachPlayer
+                                }
+                            }
                             _ => return Err("oracle:unsupported-temp-static"),
                         };
                         builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::CantPlayLands { players }, dur));
@@ -1710,7 +1748,33 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 })?;
                                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
                             }
-                            None => AffectedPlayers::EachPlayer,
+                            None => {
+                                if rule_low.starts_with("you ") {
+                                    AffectedPlayers::One(ResolvingPlayer::Controller)
+                                } else if rule_low.starts_with("your opponents ")
+                                    || rule_low.starts_with("opponents ")
+                                    || rule_low.starts_with("each opponent ")
+                                {
+                                    AffectedPlayers::EachOpponent
+                                } else if rule_low.starts_with("that player ")
+                                    || rule_low.starts_with("they ")
+                                {
+                                    let rp = lower_resolving_player_in_context(
+                                        PlayerRefAst::ThatPlayer,
+                                        builder,
+                                        in_trigger,
+                                    )?;
+                                    AffectedPlayers::One(rp)
+                                } else if rule_low.starts_with("target opponent ") {
+                                    builder.bind_target(BodyTarget::SingleOpponent)?;
+                                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                                } else if rule_low.starts_with("target player ") {
+                                    builder.bind_target(BodyTarget::SinglePlayer)?;
+                                    AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+                                } else {
+                                    AffectedPlayers::EachPlayer
+                                }
+                            }
                             _ => return Err("oracle:unsupported-temp-static"),
                         };
                         builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::PlayerCantGainLife { players }, dur));
@@ -1833,8 +1897,12 @@ pub(super) fn lower_restrictions_statics_instruction(
                             )), dur));
                         return Ok(());
                     }
+                    let draw_norm = rule_no_dot
+                        .strip_suffix(" this turn")
+                        .unwrap_or(rule_no_dot)
+                        .trim();
                     if matches!(
-                        rule_low.as_str(),
+                        draw_norm,
                         "players can't draw cards"
                             | "players can't draw"
                             | "opponents can't draw cards"
@@ -1842,17 +1910,24 @@ pub(super) fn lower_restrictions_statics_instruction(
                             | "opponents can't draw"
                             | "your opponents can't draw"
                     ) {
-                        let draw_rule = if rule_low.contains("opponent") {
+                        let draw_rule = if draw_norm.contains("opponent") {
                             StaticDrawRule::OpponentsCannotDraw
                         } else {
                             StaticDrawRule::PlayersCannotDraw
+                        };
+                        let eff_dur = if dur == ResolvedDuration::NoStatedDuration
+                            && rule_no_dot.ends_with(" this turn")
+                        {
+                            ResolvedDuration::UntilEndOfTurn
+                        } else {
+                            dur
                         };
                         builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                                 StaticContinuousAbility::DrawRule {
                                     id: ids.static_id(),
                                     rule: draw_rule,
                                 },
-                            )), dur));
+                            )), eff_dur));
                         return Ok(());
                     }
                     if let Some((players, max_more)) = try_parse_cast_max_more_spells_this_turn(
@@ -3093,6 +3168,13 @@ pub(super) fn lower_restrictions_statics_instruction(
         } if matches!(
             restriction.as_str(),
             "DamageCantBePreventedThisTurn" | "DamageCantBePrevented"
+        ) || matches!(
+            restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .as_str(),
+            "damage can't be prevented" | "damage can't be prevented this turn"
         ) =>
         {
             builder.instructions.push(
@@ -3220,6 +3302,14 @@ pub(super) fn lower_restrictions_statics_instruction(
                     | "players can't lose life this turn"
                     | "you can't lose life"
                     | "you can't lose life this turn"
+                    | "opponents can't lose life"
+                    | "opponents can't lose life this turn"
+                    | "your opponents can't lose life"
+                    | "your opponents can't lose life this turn"
+                    | "target player can't lose life"
+                    | "target player can't lose life this turn"
+                    | "target opponent can't lose life"
+                    | "target opponent can't lose life this turn"
                     | "that player can't lose life"
                     | "that player can't lose life this turn"
             )
@@ -3233,6 +3323,14 @@ pub(super) fn lower_restrictions_statics_instruction(
                 AffectedPlayers::EachPlayer
             } else if r_low.starts_with("you ") {
                 AffectedPlayers::One(ResolvingPlayer::Controller)
+            } else if r_low.starts_with("opponents ") || r_low.starts_with("your opponents ") {
+                AffectedPlayers::EachOpponent
+            } else if r_low.starts_with("target opponent ") {
+                builder.bind_target(BodyTarget::SingleOpponent)?;
+                AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
+            } else if r_low.starts_with("target player ") {
+                builder.bind_target(BodyTarget::SinglePlayer)?;
+                AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
             } else {
                 let rp = lower_resolving_player_in_context(
                     PlayerRefAst::ThatPlayer,
@@ -3744,7 +3842,10 @@ pub(super) fn lower_restrictions_statics_instruction(
             matches!(
                 r_low.as_str(),
                 "you can't lose the game this turn"
+                    | "until end of turn, you can't lose the game"
                     | "you can't lose the game for the rest of the game"
+                    | "you can't lose the game and your opponents can't win the game this turn"
+                    | "until end of turn, you can't lose the game and your opponents can't win the game"
             )
         } =>
         {
@@ -3757,12 +3858,17 @@ pub(super) fn lower_restrictions_statics_instruction(
             } else {
                 ResolvedDuration::UntilEndOfTurn
             };
+            let rule = if r_low.contains("opponents can't win the game") {
+                StaticRestriction::ControllerCantLoseOpponentsCantWin
+            } else {
+                StaticRestriction::ControllerCantLoseGame
+            };
             builder.instructions.push(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
                     TemporaryRuleKind::TemporaryStatic(Box::new(
                         StaticContinuousAbility::Restriction {
                             id: ids.static_id(),
-                            rule: StaticRestriction::ControllerCantLoseGame,
+                            rule,
                         },
                     )),
                     dur,
@@ -3773,7 +3879,29 @@ pub(super) fn lower_restrictions_statics_instruction(
         InstructionAst::AbilityRestriction {
             restriction,
             condition: None,
-        } if restriction.eq_ignore_ascii_case("NoMaxHandSizeRestOfGame") => {
+        } if restriction.eq_ignore_ascii_case("NoMaxHandSizeRestOfGame")
+            || matches!(
+                restriction
+                    .trim()
+                    .trim_end_matches('.')
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "you have no maximum hand size for the rest of the game"
+                    | "you have no maximum hand size until your next turn"
+                    | "you have no maximum hand size this turn"
+            ) =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let dur = if r_low.ends_with(" until your next turn") {
+                ResolvedDuration::UntilControllerNextTurn
+            } else if r_low.ends_with(" this turn") {
+                ResolvedDuration::UntilEndOfTurn
+            } else {
+                ResolvedDuration::NoStatedDuration
+            };
             builder.instructions.push(
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
                     TemporaryRuleKind::TemporaryStatic(Box::new(
@@ -3782,7 +3910,164 @@ pub(super) fn lower_restrictions_statics_instruction(
                             rule: StaticDrawRule::NoMaximumHandSize,
                         },
                     )),
-                    ResolvedDuration::NoStatedDuration,
+                    dur,
+                ),
+            );
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if matches!(
+            restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .as_str(),
+            "your life total can't change this turn"
+                | "your life total can't change until your next turn"
+                | "until your next turn, your life total can't change"
+        ) =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let dur = if r_low.contains("until your next turn") {
+                ResolvedDuration::UntilControllerNextTurn
+            } else {
+                ResolvedDuration::UntilEndOfTurn
+            };
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::ControllerLifeTotalCantChange,
+                        },
+                    )),
+                    dur,
+                ),
+            );
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if matches!(
+            restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .as_str(),
+            "players can't search libraries this turn"
+                | "opponents can't search libraries this turn"
+                | "your opponents can't search libraries this turn"
+        ) =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let rel = if r_low.contains("opponent") {
+                PlayerRelation::Opponent
+            } else {
+                PlayerRelation::AnyParticipant
+            };
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::PlayersCantSearchLibraries(rel),
+                        },
+                    )),
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if matches!(
+            restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .as_str(),
+            "players can't draw cards this turn"
+                | "opponents can't draw cards this turn"
+                | "your opponents can't draw cards this turn"
+        ) =>
+        {
+            let r_low = restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase();
+            let draw_rule = if r_low.contains("opponent") {
+                StaticDrawRule::OpponentsCannotDraw
+            } else {
+                StaticDrawRule::PlayersCannotDraw
+            };
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::DrawRule {
+                            id: ids.static_id(),
+                            rule: draw_rule,
+                        },
+                    )),
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if matches!(
+            restriction
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .as_str(),
+            "creatures entering don't cause abilities to trigger this turn"
+                | "creatures entering the battlefield don't cause abilities to trigger this turn"
+        ) =>
+        {
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::SuppressEntersTriggers,
+                        },
+                    )),
+                    ResolvedDuration::UntilEndOfTurn,
+                ),
+            );
+            Ok(())
+        }
+        InstructionAst::AbilityRestriction {
+            restriction,
+            condition: None,
+        } if restriction
+            .trim()
+            .trim_end_matches('.')
+            .eq_ignore_ascii_case(
+                "cards in graveyards can't be the targets of spells or abilities this turn",
+            ) =>
+        {
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(
+                    TemporaryRuleKind::TemporaryStatic(Box::new(
+                        StaticContinuousAbility::Restriction {
+                            id: ids.static_id(),
+                            rule: StaticRestriction::PreventGraveyardTargeting,
+                        },
+                    )),
+                    ResolvedDuration::UntilEndOfTurn,
                 ),
             );
             Ok(())
@@ -4971,9 +5256,7 @@ pub(super) fn lower_restrictions_statics_instruction(
                                 | Instruction::DamageOrderedTargets { .. }
                                 | Instruction::DamageFromPower(_)
                                 | Instruction::DamageFromGrantingPermanent { .. }
-                                | Instruction::DamageDamagedPlayersCreatures
                                 | Instruction::DamageTargetControllersCreatures { .. }
-                                | Instruction::DamageCapturedBlocker(_)
                                 | Instruction::DamageCreatureAtSpellMastery { .. }
                                 | Instruction::DealDamageToAnnouncedTargets { .. }
                                 | Instruction::AffectPermanentTargets {
@@ -6750,9 +7033,7 @@ fn try_lower_temp_exile_replacement(
                         | Instruction::DamageOrderedTargets { .. }
                         | Instruction::DamageFromPower(_)
                         | Instruction::DamageFromGrantingPermanent { .. }
-                        | Instruction::DamageDamagedPlayersCreatures
                         | Instruction::DamageTargetControllersCreatures { .. }
-                        | Instruction::DamageCapturedBlocker(_)
                         | Instruction::DamageCreatureAtSpellMastery { .. }
                         | Instruction::DealDamageToAnnouncedTargets { .. }
                         | Instruction::AffectPermanentTargets {

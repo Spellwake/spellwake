@@ -3,9 +3,8 @@ use super::*;
 use crate::{
     activated::{PowerAbility, SourceCost},
     characteristics::{
-        AbilityChange, PowerToughness, ResolvedDuration, ResolvedPart, ResolvedParts,
-        StaticContinuousAbility, StaticModifierRule, SubtypeOperation, TypeChange, TypeOperation,
-        selector_matches_permanent,
+        ResolvedDuration, ResolvedPart, ResolvedParts, StaticContinuousAbility, StaticModifierRule,
+        SubtypeOperation, TypeChange, TypeOperation, selector_matches_permanent,
     },
     occurrence::{EventCause, RulesOccurrence},
 };
@@ -255,58 +254,6 @@ impl EffectWindow {
                     charge_placed,
                 });
                 Ok(facts)
-            },
-        )
-    }
-
-    pub(super) fn boost_saddled_attacker(
-        &mut self,
-        entry: &crate::stack_window::StackEntry,
-        adjustment: PowerToughness,
-        keyword: KeywordAbility,
-        instruction: usize,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let StackKind::TriggeredAbility { source } = entry.kind() else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let source = source.id();
-        if !self
-            .window
-            .cards()
-            .get(source)
-            .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
-        {
-            return Ok(());
-        }
-        let before = self.rules_snapshot(None)?;
-        let effect = self.characteristics.add_effect(
-            entry.id(),
-            source,
-            ResolvedParts(vec![
-                ResolvedPart::ModifyPT(adjustment),
-                ResolvedPart::Abilities(AbilityChange::grant_keywords([keyword])),
-            ]),
-            ResolvedDuration::UntilEndOfTurn,
-        )?;
-        self.emit_from(
-            EventCause::Instruction {
-                entry: entry.id(),
-                instruction,
-            },
-            &before,
-            None,
-            append,
-            |previous, current, _| {
-                let appearances = occurrence_flow::characteristic_appearance_changes(
-                    previous,
-                    current,
-                    [source],
-                )?;
-                Ok(vec![RulesOccurrence::ContinuousEffectCreated {
-                    effect,
-                    appearances,
-                }])
             },
         )
     }

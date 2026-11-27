@@ -1374,9 +1374,7 @@ fn rewrite_instructions_unique_related_player(
                     }
                 }
             }
-            Instruction::Discard { players, .. }
-            | Instruction::Sacrifice { players, .. }
-            | Instruction::TapOrUntapControlled { players, .. } => {
+            Instruction::Discard { players, .. } | Instruction::Sacrifice { players, .. } => {
                 rewrite_affected_players_if_unique(players, replacement);
             }
             Instruction::AdjustLife(spec) => {
@@ -1476,6 +1474,18 @@ fn rewrite_instructions_unique_related_player(
                     &|ap| rewrite_affected_players_if_unique(ap, replacement),
                     &|_| {},
                 );
+                match &mut spec.selection {
+                    spellwake_engine::toolbox::ZoneSelection::Random { chooser, .. }
+                    | spellwake_engine::toolbox::ZoneSelection::Prompt { chooser, .. } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            chooser,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                    }
+                    spellwake_engine::toolbox::ZoneSelection::All => {}
+                }
                 match &mut spec.op {
                     spellwake_engine::toolbox::ObjectMutation::Goad { by } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
@@ -1547,6 +1557,51 @@ fn rewrite_instructions_unique_related_player(
                     &|_| {},
                 );
                 rewrite_instructions_unique_related_player(&mut body.instructions, replacement);
+            }
+            Instruction::ForEach { query, body, .. } => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                    query,
+                    &|p| rewrite_resolving_player_if_unique(p, replacement),
+                    &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                    &|_| {},
+                );
+                rewrite_instructions_unique_related_player(&mut body.instructions, replacement);
+            }
+            Instruction::PromptChoice(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.chooser,
+                    &|p| rewrite_resolving_player_if_unique(p, replacement),
+                    &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                    &|_| {},
+                );
+                match &mut spec.domain {
+                    spellwake_engine::toolbox::PromptDomain::Objects { query, .. }
+                    | spellwake_engine::toolbox::PromptDomain::Partition { query, .. } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            query,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                    }
+                    spellwake_engine::toolbox::PromptDomain::Players { selector, .. } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            selector,
+                            &|p| rewrite_resolving_player_if_unique(p, replacement),
+                            &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                            &|_| {},
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            Instruction::SetObjectTag { query, .. } => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                    query,
+                    &|p| rewrite_resolving_player_if_unique(p, replacement),
+                    &|ap| rewrite_affected_players_if_unique(ap, replacement),
+                    &|_| {},
+                );
             }
             Instruction::Mill { player, .. }
             | Instruction::Scry { player, .. }

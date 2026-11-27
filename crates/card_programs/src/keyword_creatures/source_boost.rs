@@ -276,7 +276,12 @@ pub(super) fn parse(
             },
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::PutChosenXChargeCounters],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_source(
+                        spellwake_engine::effects::CounterKind::Charge,
+                        spellwake_engine::program::ValueExpr::chosen_x(),
+                    ),
+                ],
             ),
             None,
         ));
@@ -640,7 +645,21 @@ pub(super) fn parse(
                 BodyTarget::None,
                 vec![
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library(),
-                    Instruction::ExileTopForFreePlay,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_library_top(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                        spellwake_engine::program::ValueExpr::literal(1),
+                        false,
+                    ),
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::grant_play_permission(
+                        spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            spellwake_engine::program::ResolvingPlayer::Controller,
+                        ),
+                        spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        false,
+                        true,
+                        false,
+                    ),
                 ],
             ),
             restriction,
@@ -655,12 +674,24 @@ pub(super) fn parse(
             }
         )
     {
+        let neg_x = spellwake_engine::program::ValueExpr::Scale {
+            expr: Box::new(spellwake_engine::program::ValueExpr::chosen_x()),
+            factor: (-1).into(),
+        };
         return Some((
             mana_cost,
             source_cost,
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::WeakenTargetByChosenX],
+                vec![
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::modify_group_eot(
+                        spellwake_engine::program::EffectSubject::TargetObject,
+                        neg_x.clone(),
+                        neg_x,
+                        BTreeSet::new(),
+                        BTreeSet::new(),
+                    ),
+                ],
             ),
             restriction,
         ));
@@ -1176,7 +1207,29 @@ pub(super) fn parse(
             ExecutableBody::new(
                 BodyTarget::None,
                 vec![
-                    Instruction::ReturnOwnedCommandersToHand,
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::Union(vec![
+                                spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Command,
+                                    spellwake_engine::program::ObjectFilter::any()
+                                        .owned()
+                                        .commander(),
+                                ),
+                                spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
+                                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                            spellwake_engine::program::ResolvingPlayer::Controller,
+                                        ),
+                                    )),
+                                    spellwake_engine::program::ObjectFilter::any()
+                                        .owned()
+                                        .commander(),
+                                ),
+                            ]),
+                            spellwake_engine::toolbox::ZoneDest::Hand,
+                        ),
+                    ),
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
                         spellwake_engine::toolbox::ZoneOpSpec::move_all(
                             spellwake_engine::toolbox::ObjectQuery::zone(

@@ -1033,46 +1033,6 @@ impl EffectWindow {
             .collect())
     }
 
-    fn related_exile_subjects(
-        &self,
-        group: crate::program::RelatedExileGroup,
-    ) -> Result<BTreeSet<ObjectId>, EffectError> {
-        use crate::program::RelatedExileGroup;
-        let entry = self
-            .window
-            .resolving()
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        let target = self.instruction_target(entry)?.choice().target;
-        let evaluated = self.evaluated_characteristics()?;
-        let battlefield = evaluated
-            .objects
-            .values()
-            .filter(|card| card.zone == ObjectZone::Battlefield);
-        match (group, target) {
-            (RelatedExileGroup::CreaturesSharingTargetName, TargetRef::Object(id)) => {
-                let target = evaluated.get(id).ok_or(EffectError::InconsistentProgram)?;
-                Ok(battlefield
-                    .filter(|card| {
-                        card.is_creature()
-                            && (card.object == id
-                                || self
-                                    .name_rules
-                                    .shares_name(&card.current_names, &target.current_names))
-                    })
-                    .map(|card| card.object)
-                    .collect())
-            }
-            (
-                RelatedExileGroup::TargetPlayerNonlandsUntilNextEndStep,
-                TargetRef::Player(player),
-            ) => Ok(battlefield
-                .filter(|card| card.controller == Some(player) && !card.has_type(CardType::Land))
-                .map(|card| card.object)
-                .collect()),
-            _ => Err(EffectError::InconsistentProgram),
-        }
-    }
-
     pub(super) fn selection_players(
         &self,
         players: AffectedPlayers,
@@ -1551,21 +1511,6 @@ impl EffectWindow {
                     },
                 )
             }
-            Instruction::ExileCapturedGraveyardCard => {
-                let Some((object, player)) = self.captured_graveyard_card()? else {
-                    self.advance_instruction()?;
-                    return Ok(true);
-                };
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ExileChosenGraveyardCards {
-                        player,
-                        domain: [object].into(),
-                    },
-                )
-            }
             Instruction::ExileUpToTwoGraveyardTargetsGainLife => {
                 let objects = self.legal_permanent_targets()?;
                 all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
@@ -1573,14 +1518,6 @@ impl EffectWindow {
                     AffectedPlayers::EachPlayer,
                     &all,
                     ResolutionSelectionOperation::ExileGraveyardTargets { objects },
-                )
-            }
-            Instruction::ReturnOwnedCommandersToHand => {
-                all = ValueExpr::Literal(RulesInteger::from_usize(self.commanders.len()));
-                (
-                    AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
-                    &all,
-                    ResolutionSelectionOperation::OwnedCommandersToHand,
                 )
             }
             Instruction::ChooseRevealedHandCard {
@@ -1668,7 +1605,7 @@ impl EffectWindow {
                     ResolutionSelectionOperation::ReturnAnnouncedTargets { objects },
                 )
             }
-            Instruction::ExileDefeatedSiege | Instruction::ExileSourceAndGainLife(_) => {
+            Instruction::ExileDefeatedSiege => {
                 let entry = self
                     .window
                     .resolving()
@@ -1765,15 +1702,6 @@ impl EffectWindow {
                         source,
                         monarch_controller,
                     },
-                )
-            }
-            Instruction::ExileRelatedPermanents(group) => {
-                let objects = self.related_exile_subjects(*group)?;
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
                 )
             }
             Instruction::ExileDelayedObjects(ids) => {
@@ -2215,16 +2143,6 @@ impl EffectWindow {
                     ResolutionSelectionOperation::SacrificeExceptVowed { kept },
                 )
             }
-            Instruction::SacrificeColoredPermanents => {
-                all = ValueExpr::Literal(RulesInteger::from_usize(
-                    self.window.cards().iter().count(),
-                ));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::SacrificeColored,
-                )
-            }
             Instruction::ChooseOtherControlledCreature {
                 sacrifice,
                 or_exile_source,
@@ -2428,19 +2346,6 @@ impl EffectWindow {
                     _ => return Err(EffectError::InconsistentProgram),
                 }
             }
-            Instruction::TapOrUntapControlled {
-                players,
-                tap,
-                amount,
-                filter,
-            } => (
-                *players,
-                amount,
-                ResolutionSelectionOperation::TapOrUntapControlled {
-                    tap: *tap,
-                    filter: filter.clone(),
-                },
-            ),
             Instruction::UntapOrTapSelect {
                 chooser,
                 filter,
@@ -2538,7 +2443,6 @@ impl EffectWindow {
             | Instruction::OfferManaPayment { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::BoostSaddledAttacker { .. }
             | Instruction::SetControlledCreatureSizeToHand
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
@@ -2592,7 +2496,6 @@ impl EffectWindow {
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ControlManaSourceThroughNextTurn
             | Instruction::ResolvePowerAbility(_)
-            | Instruction::Adapt(_)
             | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokensToFight(_)
@@ -2610,11 +2513,8 @@ impl EffectWindow {
             | Instruction::DamageCreatureAtSpellMastery { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::ControllerLosesRememberedManaValue
-            | Instruction::ExiledTargetControllerGainsPower
             | Instruction::AdditionalCombat { .. }
             | Instruction::AdditionalCombatAfterUntappingAttackers
-            | Instruction::PreventDamageThisTurn(_)
-            | Instruction::PreventDamageSpec(_)
             | Instruction::RemoveCreatureCounters { .. }
             | Instruction::ChooseAndReturnOwnGraveyardCardsByType
             | Instruction::TargetDamagesItsControllersOtherCreatures
@@ -2622,17 +2522,12 @@ impl EffectWindow {
             | Instruction::ReflectAttachedCreatureDamage
             | Instruction::GrantFlashback(_)
             | Instruction::TapTargetWhileControllingSource
-            | Instruction::TapAttackersAndSkipNextUntap
             | Instruction::AttachOnEntry { .. }
             | Instruction::ControlledSubtypeDamagesAttacker(_)
             | Instruction::RevealTopAndRemoveAttackerIfForest
-            | Instruction::DamageCapturedBlocker(_)
-            | Instruction::ChangeControlledPlaneswalkers { .. }
-            | Instruction::UntapAndControlCreatures
             | Instruction::Proliferate
             | Instruction::DamagePlayersHalfLife
             | Instruction::DamageTargetControllersCreatures { .. }
-            | Instruction::DrawAndDamageOpponents { .. }
             | Instruction::RepeatOpponentLifeLoss
             | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateReflectingShield
@@ -2679,7 +2574,6 @@ impl EffectWindow {
             | Instruction::CastFoundSpell(_)
             | Instruction::LookTopOneRestGraveyard { .. }
             | Instruction::RevealTopHandRestGraveyard { .. }
-            | Instruction::LookTopOneRestBottom { .. }
             | Instruction::LookTopCreatureSharingAttachedSubtype { .. }
             | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
             | Instruction::RevealHandAndBottomPiles
@@ -2698,7 +2592,6 @@ impl EffectWindow {
             | Instruction::PutEquipmentFromHandOrGraveyard
             | Instruction::EquipNewToken
             | Instruction::Encore
-            | Instruction::GrantNewTokensHaste
             | Instruction::RequireAttackSourceNextTurn
             | Instruction::ChooseAttackDirection
             | Instruction::ReselectAttackDefender
@@ -2717,9 +2610,6 @@ impl EffectWindow {
             | Instruction::PutGraveyardCreatureAtMostX
             | Instruction::PutLandFromExiledCohort
             | Instruction::ExileTopForEachSpellType(_)
-            | Instruction::ExileTopFreeNoncreatureSpells(_)
-            | Instruction::ExileRelatedTopForCastThisTurn
-            | Instruction::ExileRelatedTopForPlay
             | Instruction::ExileTopForPlay { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::ScheduleCreatedTokenExile(_)
@@ -2727,7 +2617,6 @@ impl EffectWindow {
             | Instruction::RegisterTokenLinkedExile
             | Instruction::ReturnTokenLinkedExile
             | Instruction::AddMana(_)
-            | Instruction::AbandonSourceScheme
             | Instruction::TabletopHonorAction { .. }
             | Instruction::CreateNonlegendaryLoyaltyCopy
             | Instruction::WeakenOpposingAttackersUntilNextTurn
@@ -2742,7 +2631,6 @@ impl EffectWindow {
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::RemoveLoyaltyExileTopForPlay
-            | Instruction::DamageDamagedPlayersCreatures
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
@@ -2779,22 +2667,15 @@ impl EffectWindow {
             | Instruction::ResolveCounterKeyword(_)
             | Instruction::SacrificeEvoked
             | Instruction::SacrificeStateTriggerSource
-            | Instruction::SacrificeUpkeepSource(_)
             | Instruction::CounterWardSource
             | Instruction::CounterTriggeringStackObject
-            | Instruction::BoostSourceByCastManaValue
             | Instruction::Attach(_)
-            | Instruction::PutCounterOnRelatedPermanent
-            | Instruction::PutCountersOnControlledCreaturesAndGrant(_)
-            | Instruction::PutCreatureAndOtherPlaneswalkerCounters
-            | Instruction::LinkedPlayerLosesDamageAmount
             | Instruction::FightSourceWithTarget
             | Instruction::TransformSourceAndAttachToTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
             | Instruction::ReturnUpToOneRecentGraveyardCard
-            | Instruction::ExileTopForFreePlay
             | Instruction::ExileTargetUntilNonlandForFreeCast
             | Instruction::ExileTopRepeatOnPermanentEntry
             | Instruction::ShuffleTargetGraveyardCards { .. }
@@ -2811,7 +2692,6 @@ impl EffectWindow {
             | Instruction::CopyCreatureAsToken
             | Instruction::CopyOtherControlledNontokensAsEntryHost
             | Instruction::CastLinkedSpellMatchingX
-            | Instruction::PutChosenXChargeCounters
             | Instruction::AddCounterAndDischargeOnResolution(_)
             | Instruction::RemoveCountersFromPermanent { .. }
             | Instruction::ReturnAnyGraveyardCreatureBlackSubtype(_)
@@ -2826,21 +2706,15 @@ impl EffectWindow {
             | Instruction::CopySpell
             | Instruction::CopyOtherTargetAsArtifact
             | Instruction::CopyTargetToSource { .. }
-            | Instruction::WeakenTargetByChosenX
             | Instruction::AnimateTargetAsCountedCreature { .. }
             | Instruction::GrantProtectionChosenColor(_)
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
-            | Instruction::DrawHighestEntrantController
-            | Instruction::DrawRelatedPlayer
-            | Instruction::DrawCombatDamageSourceController
             | Instruction::DrawAndLoseLifeForTargetGraveyardCreatures
-            | Instruction::DrawControllerAndTarget { .. }
             | Instruction::DrawPlayersControllingName(_)
             | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
-            | Instruction::ExileCombatDamagedCreature
             | Instruction::CreateArmyIfAbsent { .. }
             | Instruction::ForEachPlayer { .. }
             | Instruction::OfferAnyPlayer { .. }
@@ -4751,17 +4625,8 @@ impl EffectWindow {
             .ok_or(EffectError::InconsistentSelectionWork)?;
         let exile_siege = matches!(actual, Instruction::ExileDefeatedSiege);
         let exile_source = false;
-        let exile_source_life = match actual {
-            Instruction::ExileSourceAndGainLife(amount) => Some(*amount),
-            _ => None,
-        };
         let delay_exile_return = false;
-        let delay_cohort_return = matches!(
-            actual,
-            Instruction::ExileRelatedPermanents(
-                crate::program::RelatedExileGroup::TargetPlayerNonlandsUntilNextEndStep
-            )
-        );
+        let delay_cohort_return = false;
         let imprint = matches!(
             actual,
             Instruction::ImprintTargetLand | Instruction::ImprintTargetCreature
@@ -4795,21 +4660,6 @@ impl EffectWindow {
                 },
                 Instruction::ExileRelatedHandCardForPlay,
             ) => AffectedPlayers::One(ResolvingPlayer::UniqueRelatedPlayer),
-            (
-                ResolutionSelectionOperation::ExileChosenGraveyardCards { player, domain },
-                Instruction::ExileCapturedGraveyardCard,
-            ) if self
-                .captured_graveyard_card()?
-                .is_some_and(|(card, owner)| {
-                    owner == *player && *domain == BTreeSet::from([card])
-                }) =>
-            {
-                AffectedPlayers::EachPlayer
-            }
-            (
-                ResolutionSelectionOperation::OwnedCommandersToHand,
-                Instruction::ReturnOwnedCommandersToHand,
-            ) => AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
             (
                 ResolutionSelectionOperation::RevealedHand {
                     chooser,
@@ -4886,10 +4736,6 @@ impl EffectWindow {
                 actual @ (Instruction::ExileCreatureAtMostRevealedPower
                 | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue),
             ) if *objects == self.revealed_exile_subjects(actual)? => AffectedPlayers::EachPlayer,
-            (
-                ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
-                Instruction::ExileRelatedPermanents(group),
-            ) if *objects == self.related_exile_subjects(*group)? => AffectedPlayers::EachPlayer,
             (
                 ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
                 Instruction::ExileDelayedObjects(ids),
@@ -5011,7 +4857,6 @@ impl EffectWindow {
                 }
                 | Instruction::SacrificeEvoked
                 | Instruction::SacrificeStateTriggerSource
-                | Instruction::SacrificeUpkeepSource(_)
                 | Instruction::ResolveCounterKeyword(
                     crate::program::CounterKeyword::Fading(_)
                     | crate::program::CounterKeyword::VanishingLastCounter,
@@ -5048,10 +4893,6 @@ impl EffectWindow {
                 ResolutionSelectionOperation::SacrificeExceptVowed { kept },
                 Instruction::SacrificeOtherCreatures,
             ) if kept == &cursor.vowed_creatures => AffectedPlayers::EachPlayer,
-            (
-                ResolutionSelectionOperation::SacrificeColored,
-                Instruction::SacrificeColoredPermanents,
-            ) => AffectedPlayers::EachPlayer,
             (
                 ResolutionSelectionOperation::OtherControlledCreature {
                     source,
@@ -5091,7 +4932,7 @@ impl EffectWindow {
                     source: None,
                     monarch_controller: None,
                 },
-                Instruction::ExileDefeatedSiege | Instruction::ExileSourceAndGainLife(_),
+                Instruction::ExileDefeatedSiege,
             ) if matches!(entry.kind(), StackKind::TriggeredAbility {source} | StackKind::ActivatedAbility {source} if *object==source.id()) => {
                 AffectedPlayers::EachPlayer
             }
@@ -5677,22 +5518,6 @@ impl EffectWindow {
             },
             append,
         )?;
-        if let Some(amount) = exile_source_life
-            && !ordered.is_empty()
-        {
-            let player = self
-                .window
-                .resolving()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .controller();
-            self.adjust_life_at_cut(
-                cursor.entry,
-                cursor.instruction,
-                player,
-                &crate::life::LifeAdjustment::Gain(i64::from(amount).into()),
-                append,
-            )?;
-        }
         if exiled_creatures > 0 {
             let player = self
                 .window

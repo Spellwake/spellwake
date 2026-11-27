@@ -35,7 +35,6 @@ use spellwake_engine::{
         StaticTypeChange, StaticUntapRule, StaticZone, SubtypeOperation, SubtypeProtection,
         TypeChangeSpec, TypeOperation,
     },
-    damage::TurnPreventionFilter,
     effects::CounterKind,
     emblem::EmblemDefinition,
     face_down::FaceUpAbility,

@@ -217,7 +217,6 @@ impl EffectWindow {
                         Instruction::DrawToChosenOpponentHandSize
                             | Instruction::LookTopOneRestGraveyard { .. }
                             | Instruction::RevealTopHandRestGraveyard { .. }
-                            | Instruction::LookTopOneRestBottom { .. }
                             | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
                             | Instruction::RevealHandAndBottomPiles
                             | Instruction::RevealDividePiles
@@ -450,10 +449,14 @@ impl EffectWindow {
                                     | Instruction::GrantChosenProtection { .. },
                                     _,
                                 ) => bound.colors == mana_domains::colored_mana(),
-                                (Instruction::PreventDamageSpec(spec), _)
+                                (Instruction::ApplyContinuous(spec), _)
                                     if matches!(
-                                        spec.source,
-                                        crate::damage::PreventionSourceSpec::ChosenColor
+                                        &spec.payload,
+                                        crate::toolbox::ContinuousPayload::PreventDamage(prev)
+                                            if matches!(
+                                                prev.source,
+                                                crate::damage::PreventionSourceSpec::ChosenColor
+                                            )
                                     ) =>
                                 {
                                     bound.colors == mana_domains::colored_mana()

@@ -1883,6 +1883,207 @@ pub(super) fn lower_control_misc_instruction(
             }
             _ => Err("oracle:unsupported-choose-player-target"),
         },
+        InstructionAst::LookAtHand { player } => {
+            if let Some(players) = try_group_affected_players(*player) {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                zone: spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Group(players),
+                                )),
+                                filter: Box::new(ObjectFilter::any()),
+                                slice: spellwake_engine::toolbox::QuerySlice::All,
+                            },
+                            spellwake_engine::toolbox::ZoneDest::LookOnly {
+                                viewer: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                            },
+                        ),
+                    ),
+                );
+                return Ok(());
+            }
+            if matches!(player, PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer) {
+                const LOOK_HAND_PLAYER_BIND: spellwake_engine::toolbox::BindingId =
+                    spellwake_engine::toolbox::BindingId(922);
+                let group = if *player == PlayerRefAst::AnyOpponent {
+                    AffectedPlayers::EachOpponent
+                } else {
+                    AffectedPlayers::EachPlayer
+                };
+                builder
+                    .instructions
+                    .push(Instruction::PromptChoice(Box::new(
+                        spellwake_engine::toolbox::PromptChoiceSpec {
+                            chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            domain: spellwake_engine::toolbox::PromptDomain::Players {
+                                selector: spellwake_engine::toolbox::PlayerSelector::Group(group),
+                                min: 1,
+                                max: 1,
+                            },
+                            category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                            bind_to: LOOK_HAND_PLAYER_BIND,
+                            bind_unchosen: None,
+                            tag_partition: None,
+                            auto_resolve_trivial: true,
+                        },
+                    )));
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                            spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                                zone: spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                    spellwake_engine::toolbox::PlayerSelector::Bound(
+                                        LOOK_HAND_PLAYER_BIND,
+                                    ),
+                                )),
+                                filter: Box::new(ObjectFilter::any()),
+                                slice: spellwake_engine::toolbox::QuerySlice::All,
+                            },
+                            spellwake_engine::toolbox::ZoneDest::LookOnly {
+                                viewer: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                            },
+                        ),
+                    ),
+                );
+                return Ok(());
+            }
+            let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                    spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                        spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                            zone: spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                            )),
+                            filter: Box::new(ObjectFilter::any()),
+                            slice: spellwake_engine::toolbox::QuerySlice::All,
+                        },
+                        spellwake_engine::toolbox::ZoneDest::LookOnly {
+                            viewer: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                        },
+                    ),
+                ),
+            );
+            Ok(())
+        }
+        InstructionAst::ExileWithCounters {
+            subject,
+            counter_kind,
+            count,
+            face_down,
+        } => {
+            const EXILE_COUNTERS_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(920);
+            let kind = parse_counter_kind(counter_kind).ok_or("oracle:unsupported-counter-kind")?;
+            if !kind.is_permanent() {
+                return Err("oracle:unsupported-counter-kind");
+            }
+            let eff_subject =
+                unwrap_in_zone_subject(subject).unwrap_or_else(|| (**subject).clone());
+            let (source_q, selection) = lower_exile_with_counters_subject(
+                &eff_subject,
+                builder,
+                vocabulary,
+                in_trigger,
+                self_pronoun_valid,
+            )?;
+            let amt_expr = lower_value_expr_in_context(
+                resolve_x(count, bound_x),
+                builder,
+                in_trigger,
+                vocabulary,
+            )?;
+            let mut exile_spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                source_q,
+                selection,
+                spellwake_engine::toolbox::ZoneDest::Exile {
+                    face_down: *face_down,
+                    viewer: (*face_down).then_some(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                    ),
+                    link_to_source: false,
+                    delayed_return: None,
+                    link_group: None,
+                },
+            );
+            exile_spec.bind_moved = Some(EXILE_COUNTERS_BIND);
+            builder
+                .instructions
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(exile_spec));
+            builder.instructions.push(
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::put_counters_on_query(
+                    spellwake_engine::toolbox::ObjectQuery::Bound(EXILE_COUNTERS_BIND),
+                    kind,
+                    amt_expr,
+                ),
+            );
+            Ok(())
+        }
+        InstructionAst::PutSticker { kind, target }
+        | InstructionAst::PutStickerWithCost { kind, target, .. } => lower_put_sticker_instruction(
+            kind,
+            target,
+            builder,
+            vocabulary,
+            in_trigger,
+            self_pronoun_valid,
+        ),
+        InstructionAst::RevealUntil {
+            player,
+            filter,
+            count,
+        } => {
+            const REVEAL_UNTIL_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(925);
+            let p_sel = if let Some(players) = try_group_affected_players(*player) {
+                spellwake_engine::toolbox::PlayerSelector::Group(players)
+            } else {
+                let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+                spellwake_engine::toolbox::PlayerSelector::Resolving(rp)
+            };
+            let obj_filter =
+                lower_object_filter_in_context(filter, builder, in_trigger, vocabulary)?;
+            bind_filter_player_target(builder, &obj_filter)?;
+            let cnt_expr = lower_value_expr_in_context(
+                resolve_x(count, bound_x),
+                builder,
+                in_trigger,
+                vocabulary,
+            )?;
+            let mut spec = spellwake_engine::toolbox::ZoneOpSpec::move_all(
+                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
+                    zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(p_sel)),
+                    filter: Box::new(ObjectFilter::any()),
+                    slice: spellwake_engine::toolbox::QuerySlice::UntilMatch {
+                        filter: Box::new(obj_filter),
+                        count: Box::new(cnt_expr),
+                        include_non_matches: true,
+                    },
+                },
+                spellwake_engine::toolbox::ZoneDest::RevealOnly,
+            );
+            spec.bind_moved = Some(REVEAL_UNTIL_BIND);
+            builder
+                .instructions
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
+            Ok(())
+        }
+        InstructionAst::ChooseAndKeep {
+            pick,
+            keep_to,
+            rest_to,
+        } => lower_standalone_choose_and_keep(pick, keep_to, rest_to, builder, vocabulary),
         InstructionAst::ManualTabletopAction { .. } => {
             Err("oracle:tabletop-honor-excluded-from-constructed")
         }
@@ -1953,6 +2154,18 @@ fn try_lower_choose_objects_new_primitives(
         (0i64, 1i64, rest.trim())
     } else if let Some(rest) = raw.strip_prefix("up to two ") {
         (0, 2, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("up to three ") {
+        (0, 3, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("up to four ") {
+        (0, 4, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("any number of ") {
+        (0, 100, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("one or more ") {
+        (1, 100, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("four ") {
+        (4, 4, rest.trim())
+    } else if let Some(rest) = raw.strip_prefix("three ") {
+        (3, 3, rest.trim())
     } else if let Some(rest) = raw.strip_prefix("two ") {
         (2, 2, rest.trim())
     } else if let Some(rest) = raw.strip_prefix("one ") {
@@ -1967,17 +2180,24 @@ fn try_lower_choose_objects_new_primitives(
         return None;
     }
 
-    // 2. Card from a revealed target opponent/player's hand (SourceZoneFilter::TargetPlayerHand).
+    // 2. Card from a revealed or looked-at target opponent/player's hand (SourceZoneFilter::TargetPlayerHand).
     if chooser == PlayerRefAst::You
         && !body_raw.contains("target")
         && matches!(
             builder.target,
             BodyTarget::SingleOpponent | BodyTarget::SinglePlayer
         )
-        && builder
-            .instructions
-            .iter()
-            .any(|op| matches!(op, Instruction::ZoneOp(spec) if matches!(spec.destination, spellwake_engine::toolbox::ZoneDest::RevealOnly)))
+        && builder.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::ZoneOp(spec)
+                    if matches!(
+                        spec.destination,
+                        spellwake_engine::toolbox::ZoneDest::RevealOnly
+                            | spellwake_engine::toolbox::ZoneDest::LookOnly { .. }
+                    )
+            )
+        })
         && let Some(card_phrase) = body_raw
             .strip_suffix(" from it")
             .or_else(|| body_raw.strip_suffix(" in it"))
@@ -2260,6 +2480,199 @@ fn try_lower_choose_objects_new_primitives(
         }
     }
 
+    // 8. Hand card choices via universal ZoneOp(ZoneSelection::Prompt, ZoneDest::None).
+    {
+        let hand_phrase = body_raw
+            .strip_suffix(" in your hand")
+            .or_else(|| body_raw.strip_suffix(" from your hand"))
+            .or_else(|| body_raw.strip_suffix(" in their hand"))
+            .or_else(|| body_raw.strip_suffix(" from their hand"));
+        if let Some(card_phrase) = hand_phrase
+            && !card_phrase.contains("target")
+            && let Ok(parsed) = spellwake_oracle_compiler::filter::parse_object_filter(
+                card_phrase.trim(),
+                &cached_compiler_vocab(vocabulary),
+            )
+            && parsed.zone.is_none()
+        {
+            let mut trial = builder.clone();
+            let p_sel = if let Some(players) = try_group_affected_players(chooser) {
+                Some(spellwake_engine::toolbox::PlayerSelector::Group(players))
+            } else {
+                lower_resolving_player_in_context(chooser, &mut trial, in_trigger)
+                    .ok()
+                    .map(spellwake_engine::toolbox::PlayerSelector::Resolving)
+            };
+            if let Some(p_sel) = p_sel
+                && let Ok(obj) = if is_unrestricted_filter(&parsed) {
+                    Ok(ObjectFilter::any())
+                } else {
+                    lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary)
+                }
+                && bind_filter_player_target(&mut trial, &obj).is_ok()
+            {
+                const CHOOSE_OBJ_BIND: spellwake_engine::toolbox::BindingId =
+                    spellwake_engine::toolbox::BindingId(923);
+                const CHOOSE_UNCHOSEN_BIND: spellwake_engine::toolbox::BindingId =
+                    spellwake_engine::toolbox::BindingId(924);
+                let mut spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                    spellwake_engine::toolbox::ObjectQuery::zone(
+                        spellwake_engine::toolbox::QueryZone::Hand(Box::new(p_sel.clone())),
+                        obj,
+                    ),
+                    spellwake_engine::toolbox::ZoneSelection::Prompt {
+                        chooser: p_sel,
+                        min: Box::new(ValueExpr::literal(min_val)),
+                        max: Box::new(ValueExpr::literal(max_val)),
+                        constraint: None,
+                        category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                        hidden: true,
+                    },
+                    spellwake_engine::toolbox::ZoneDest::None,
+                );
+                spec.bind_moved = Some(CHOOSE_OBJ_BIND);
+                spec.bind_unchosen = Some(CHOOSE_UNCHOSEN_BIND);
+                trial
+                    .instructions
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
+                *builder = trial;
+                return Some(Ok(()));
+            }
+        }
+    }
+
+    // 9. Exile card choices via universal ZoneOp(ZoneSelection::Prompt, ZoneDest::None).
+    {
+        let exile_match: Option<(&str, spellwake_engine::toolbox::QueryZone)> =
+            if let Some(p) = body_raw.strip_suffix(" you own in exile") {
+                Some((
+                    p,
+                    spellwake_engine::toolbox::QueryZone::ExileOwnedBy(Box::new(
+                        spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        ),
+                    )),
+                ))
+            } else if let Some(p) = body_raw.strip_suffix(" in exile") {
+                Some((p, spellwake_engine::toolbox::QueryZone::Exile))
+            } else {
+                None
+            };
+        if let Some((card_phrase, qz)) = exile_match
+            && !card_phrase.contains("target")
+            && let Ok(parsed) = spellwake_oracle_compiler::filter::parse_object_filter(
+                card_phrase.trim(),
+                &cached_compiler_vocab(vocabulary),
+            )
+            && parsed.zone.is_none()
+        {
+            let mut trial = builder.clone();
+            let p_sel = if let Some(players) = try_group_affected_players(chooser) {
+                Some(spellwake_engine::toolbox::PlayerSelector::Group(players))
+            } else {
+                lower_resolving_player_in_context(chooser, &mut trial, in_trigger)
+                    .ok()
+                    .map(spellwake_engine::toolbox::PlayerSelector::Resolving)
+            };
+            if let Some(p_sel) = p_sel
+                && let Ok(obj) = if is_unrestricted_filter(&parsed) {
+                    Ok(ObjectFilter::any())
+                } else {
+                    lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary)
+                }
+                && bind_filter_player_target(&mut trial, &obj).is_ok()
+            {
+                const CHOOSE_OBJ_BIND: spellwake_engine::toolbox::BindingId =
+                    spellwake_engine::toolbox::BindingId(923);
+                const CHOOSE_UNCHOSEN_BIND: spellwake_engine::toolbox::BindingId =
+                    spellwake_engine::toolbox::BindingId(924);
+                let mut spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                    spellwake_engine::toolbox::ObjectQuery::zone(qz, obj),
+                    spellwake_engine::toolbox::ZoneSelection::Prompt {
+                        chooser: p_sel,
+                        min: Box::new(ValueExpr::literal(min_val)),
+                        max: Box::new(ValueExpr::literal(max_val)),
+                        constraint: None,
+                        category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                        hidden: false,
+                    },
+                    spellwake_engine::toolbox::ZoneDest::None,
+                );
+                spec.bind_moved = Some(CHOOSE_OBJ_BIND);
+                spec.bind_unchosen = Some(CHOOSE_UNCHOSEN_BIND);
+                trial
+                    .instructions
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
+                *builder = trial;
+                return Some(Ok(()));
+            }
+        }
+    }
+
+    // 10. General non-target battlefield permanent choice (e.g. "a creature an opponent controls",
+    // "a nonland permanent", "another creature you control") via universal ZoneOp.
+    if !body_raw.contains("target")
+        && !body_raw.contains(" in ")
+        && !body_raw.contains(" from ")
+        && let Ok(mut parsed) = spellwake_oracle_compiler::filter::parse_object_filter(
+            body_raw,
+            &cached_compiler_vocab(vocabulary),
+        )
+        && matches!(parsed.zone, None | Some(ZoneFilter::Battlefield))
+        && !parsed.any_spell
+        && !parsed.is_ability
+        && (!parsed.any_types.is_empty()
+            || parsed.any_permanent
+            || !parsed.subtypes.is_empty()
+            || !parsed.forbidden_types.is_empty()
+            || parsed.controller.is_some())
+    {
+        parsed.zone = None;
+        let mut trial = builder.clone();
+        let p_sel = if let Some(players) = try_group_affected_players(chooser) {
+            Some(spellwake_engine::toolbox::PlayerSelector::Group(players))
+        } else {
+            lower_resolving_player_in_context(chooser, &mut trial, in_trigger)
+                .ok()
+                .map(spellwake_engine::toolbox::PlayerSelector::Resolving)
+        };
+        if let Some(p_sel) = p_sel
+            && let Ok(obj) = if is_unrestricted_filter(&parsed) {
+                Ok(ObjectFilter::any())
+            } else {
+                lower_object_filter_in_context(&parsed, &trial, in_trigger, vocabulary)
+            }
+            && bind_filter_player_target(&mut trial, &obj).is_ok()
+        {
+            const CHOOSE_OBJ_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(923);
+            const CHOOSE_UNCHOSEN_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(924);
+            let mut spec = spellwake_engine::toolbox::ZoneOpSpec::simple(
+                spellwake_engine::toolbox::ObjectQuery::zone(
+                    spellwake_engine::toolbox::QueryZone::Battlefield,
+                    obj,
+                ),
+                spellwake_engine::toolbox::ZoneSelection::Prompt {
+                    chooser: p_sel,
+                    min: Box::new(ValueExpr::literal(min_val)),
+                    max: Box::new(ValueExpr::literal(max_val)),
+                    constraint: None,
+                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                    hidden: false,
+                },
+                spellwake_engine::toolbox::ZoneDest::None,
+            );
+            spec.bind_moved = Some(CHOOSE_OBJ_BIND);
+            spec.bind_unchosen = Some(CHOOSE_UNCHOSEN_BIND);
+            trial
+                .instructions
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
+            *builder = trial;
+            return Some(Ok(()));
+        }
+    }
+
     None
 }
 
@@ -2535,6 +2948,19 @@ pub(super) fn try_desugar_for_each_object_single(
             face_down: false,
             into_pile: false,
         }),
+        InstructionAst::ExileWithCounters {
+            subject,
+            counter_kind,
+            count,
+            face_down,
+        } if is_loop_object_anaphora(subject) && !value_expr_ast_references_anaphora(count) => {
+            Some(InstructionAst::ExileWithCounters {
+                subject: all_subj(),
+                counter_kind: counter_kind.clone(),
+                count: count.clone(),
+                face_down: *face_down,
+            })
+        }
         InstructionAst::ReturnZone {
             subject,
             from_zone,
@@ -2692,6 +3118,7 @@ pub(super) fn parse_card_type_choice_list(cleaned: &str) -> Option<Vec<CardType>
 pub(in super::super) enum ParsedChoiceKind {
     Domain(spellwake_engine::program::ResolutionChoiceDomain),
     CreatureType { excluding: BTreeSet<CreatureTypeId> },
+    Prompt(spellwake_engine::toolbox::PromptDomain),
 }
 
 pub(in super::super) fn parse_choice_kind(
@@ -2716,6 +3143,41 @@ pub(in super::super) fn parse_choice_kind(
             max: b,
         }));
     }
+    if let Some(rest) = cleaned_choice.strip_prefix("a color other than ") {
+        let mut excluded = spellwake_engine::program::ColorMask::EMPTY;
+        for tok in rest.replace(" or ", ",").replace(" and ", ",").split(',') {
+            let color = match tok.trim() {
+                "white" => Some(spellwake_engine::characteristics::Color::White),
+                "blue" => Some(spellwake_engine::characteristics::Color::Blue),
+                "black" => Some(spellwake_engine::characteristics::Color::Black),
+                "red" => Some(spellwake_engine::characteristics::Color::Red),
+                "green" => Some(spellwake_engine::characteristics::Color::Green),
+                _ => None,
+            };
+            if let Some(c) = color {
+                excluded = excluded.with(c);
+            }
+        }
+        if !excluded.is_empty() {
+            let mut allowed = spellwake_engine::program::ColorMask::EMPTY;
+            for c in [
+                spellwake_engine::characteristics::Color::White,
+                spellwake_engine::characteristics::Color::Blue,
+                spellwake_engine::characteristics::Color::Black,
+                spellwake_engine::characteristics::Color::Red,
+                spellwake_engine::characteristics::Color::Green,
+            ] {
+                if !excluded.contains(c) {
+                    allowed = allowed.with(c);
+                }
+            }
+            if !allowed.is_empty() {
+                return Ok(ParsedChoiceKind::Prompt(
+                    spellwake_engine::toolbox::PromptDomain::Color { allowed },
+                ));
+            }
+        }
+    }
     match cleaned_choice {
         "a color" | "a color of your choice" | "any color" => {
             Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::Color))
@@ -2726,6 +3188,11 @@ pub(in super::super) fn parse_choice_kind(
         "a basic land type" | "a land type" | "a basic land type of your choice" => Ok(
             ParsedChoiceKind::Domain(ResolutionChoiceDomain::BasicLandType),
         ),
+        "a planeswalker type" | "a planeswalker subtype" => Ok(ParsedChoiceKind::Prompt(
+            spellwake_engine::toolbox::PromptDomain::Subtype {
+                kind: spellwake_engine::toolbox::SubtypeChoiceKind::Planeswalker,
+            },
+        )),
         "an opponent" | "an opponent of your choice" => {
             Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::Player {
                 opponents_only: true,
@@ -2736,16 +3203,38 @@ pub(in super::super) fn parse_choice_kind(
                 opponents_only: false,
             }))
         }
-        "a number" => Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::Number {
-            min: 0,
-            max: 20,
-        })),
-        "a card name" | "a card name of your choice" => {
+        "a number"
+        | "a number of your choice"
+        | "any number"
+        | "0 or greater"
+        | "a number 0 or greater"
+        | "a number greater than or equal to 0" => {
+            Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::Number {
+                min: 0,
+                max: 20,
+            }))
+        }
+        "a positive number"
+        | "1 or greater"
+        | "a number 1 or greater"
+        | "a number greater than 0"
+        | "a number greater than zero" => {
+            Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::Number {
+                min: 1,
+                max: 20,
+            }))
+        }
+        "a card name" | "a card name of your choice" | "any card name" => {
             Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::CardName {
                 nonland_only: false,
             }))
         }
-        "a nonland card name" | "a nonland card name of your choice" => {
+        "a nonland card name"
+        | "a nonland card name of your choice"
+        | "a noncreature card name"
+        | "a creature card name"
+        | "an artifact card name"
+        | "an instant or sorcery card name" => {
             Ok(ParsedChoiceKind::Domain(ResolutionChoiceDomain::CardName {
                 nonland_only: true,
             }))
@@ -3086,43 +3575,140 @@ pub(in super::super) fn emit_choice_for_player_ref(
     in_trigger: bool,
 ) -> Result<(), &'static str> {
     use spellwake_engine::program::ResolutionChoiceDomain;
+    const PROMPT_CHOICE_BIND: spellwake_engine::toolbox::BindingId =
+        spellwake_engine::toolbox::BindingId(928);
+    const PROMPT_SEAT_BIND: spellwake_engine::toolbox::BindingId =
+        spellwake_engine::toolbox::BindingId(929);
     match chooser {
         PlayerRefAst::EachPlayer | PlayerRefAst::EachOpponent | PlayerRefAst::EachOtherPlayer => {
-            let ParsedChoiceKind::Domain(domain) = kind else {
-                return Err("oracle:unsupported-choose-option");
-            };
             let players = lower_affected_players_in_context(chooser, builder, in_trigger)?;
-            if let Some(options) = choice_domain_to_player_option_branches(&domain) {
-                builder
-                    .instructions
-                    .push(Instruction::ChooseOptionForPlayers { players, options });
-            } else {
-                push_for_each_player(
-                    players,
-                    vec![Instruction::ChooseValue {
-                        chooser: ResolvingPlayer::LoopPlayer,
-                        domain,
-                    }],
-                    builder,
-                );
+            match kind {
+                ParsedChoiceKind::Domain(domain) => {
+                    if let Some(options) = choice_domain_to_player_option_branches(&domain) {
+                        builder
+                            .instructions
+                            .push(Instruction::ChooseOptionForPlayers { players, options });
+                    } else {
+                        push_for_each_player(
+                            players,
+                            vec![Instruction::ChooseValue {
+                                chooser: ResolvingPlayer::LoopPlayer,
+                                domain,
+                            }],
+                            builder,
+                        );
+                    }
+                    Ok(())
+                }
+                ParsedChoiceKind::CreatureType { .. } => {
+                    builder.instructions.push(Instruction::ForEachPlayerQuery {
+                        selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(
+                            players,
+                        )),
+                        bind_player: PROMPT_SEAT_BIND,
+                        body: Box::new(ExecutableBody::new(
+                            BodyTarget::None,
+                            vec![Instruction::PromptChoice(Box::new(
+                                spellwake_engine::toolbox::PromptChoiceSpec {
+                                    chooser: spellwake_engine::toolbox::PlayerSelector::Bound(
+                                        PROMPT_SEAT_BIND,
+                                    ),
+                                    domain: spellwake_engine::toolbox::PromptDomain::Subtype {
+                                        kind:
+                                            spellwake_engine::toolbox::SubtypeChoiceKind::Creature,
+                                    },
+                                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                    bind_to: PROMPT_CHOICE_BIND,
+                                    bind_unchosen: None,
+                                    tag_partition: None,
+                                    auto_resolve_trivial: false,
+                                },
+                            ))],
+                        )),
+                    });
+                    Ok(())
+                }
+                ParsedChoiceKind::Prompt(domain) => {
+                    builder.instructions.push(Instruction::ForEachPlayerQuery {
+                        selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(
+                            players,
+                        )),
+                        bind_player: PROMPT_SEAT_BIND,
+                        body: Box::new(ExecutableBody::new(
+                            BodyTarget::None,
+                            vec![Instruction::PromptChoice(Box::new(
+                                spellwake_engine::toolbox::PromptChoiceSpec {
+                                    chooser: spellwake_engine::toolbox::PlayerSelector::Bound(
+                                        PROMPT_SEAT_BIND,
+                                    ),
+                                    domain,
+                                    category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                    bind_to: PROMPT_CHOICE_BIND,
+                                    bind_unchosen: None,
+                                    tag_partition: None,
+                                    auto_resolve_trivial: false,
+                                },
+                            ))],
+                        )),
+                    });
+                    Ok(())
+                }
             }
-            Ok(())
         }
         PlayerRefAst::AnyOpponent | PlayerRefAst::AnyPlayer => {
-            let ParsedChoiceKind::Domain(domain) = kind else {
-                return Err("oracle:unsupported-choose-option");
-            };
             builder.instructions.push(Instruction::ChooseValue {
                 chooser: ResolvingPlayer::Controller,
                 domain: ResolutionChoiceDomain::Player {
                     opponents_only: chooser == PlayerRefAst::AnyOpponent,
                 },
             });
-            builder.instructions.push(Instruction::ChooseValue {
-                chooser: ResolvingPlayer::ChosenPlayer,
-                domain,
-            });
-            Ok(())
+            match kind {
+                ParsedChoiceKind::Domain(domain) => {
+                    builder.instructions.push(Instruction::ChooseValue {
+                        chooser: ResolvingPlayer::ChosenPlayer,
+                        domain,
+                    });
+                    Ok(())
+                }
+                ParsedChoiceKind::CreatureType { .. } => {
+                    builder
+                        .instructions
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec {
+                                chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::ChosenPlayer,
+                                ),
+                                domain: spellwake_engine::toolbox::PromptDomain::Subtype {
+                                    kind: spellwake_engine::toolbox::SubtypeChoiceKind::Creature,
+                                },
+                                category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                bind_to: PROMPT_CHOICE_BIND,
+                                bind_unchosen: None,
+                                tag_partition: None,
+                                auto_resolve_trivial: false,
+                            },
+                        )));
+                    Ok(())
+                }
+                ParsedChoiceKind::Prompt(domain) => {
+                    builder
+                        .instructions
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec {
+                                chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::ChosenPlayer,
+                                ),
+                                domain,
+                                category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                bind_to: PROMPT_CHOICE_BIND,
+                                bind_unchosen: None,
+                                tag_partition: None,
+                                auto_resolve_trivial: false,
+                            },
+                        )));
+                    Ok(())
+                }
+            }
         }
         other => {
             let rp = lower_resolving_player_in_context(other, builder, in_trigger)?;
@@ -3144,7 +3730,40 @@ pub(in super::super) fn emit_choice_for_player_ref(
                     });
                     Ok(())
                 }
-                ParsedChoiceKind::CreatureType { .. } => Err("oracle:unsupported-choose-option"),
+                ParsedChoiceKind::CreatureType { .. } => {
+                    builder
+                        .instructions
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec {
+                                chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                                domain: spellwake_engine::toolbox::PromptDomain::Subtype {
+                                    kind: spellwake_engine::toolbox::SubtypeChoiceKind::Creature,
+                                },
+                                category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                bind_to: PROMPT_CHOICE_BIND,
+                                bind_unchosen: None,
+                                tag_partition: None,
+                                auto_resolve_trivial: false,
+                            },
+                        )));
+                    Ok(())
+                }
+                ParsedChoiceKind::Prompt(domain) => {
+                    builder
+                        .instructions
+                        .push(Instruction::PromptChoice(Box::new(
+                            spellwake_engine::toolbox::PromptChoiceSpec {
+                                chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                                domain,
+                                category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                                bind_to: PROMPT_CHOICE_BIND,
+                                bind_unchosen: None,
+                                tag_partition: None,
+                                auto_resolve_trivial: false,
+                            },
+                        )));
+                    Ok(())
+                }
             }
         }
     }
@@ -4506,9 +5125,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             Instruction::Discard { players, amount }
             | Instruction::Sacrifice {
                 players, amount, ..
-            }
-            | Instruction::TapOrUntapControlled {
-                players, amount, ..
             } => {
                 rewrite_chosen_to_loop_ap(players);
                 rewrite_chosen_to_loop_ve(amount);
@@ -4638,6 +5254,66 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 );
                 rewrite_chosen_to_loop_ops(&mut body.instructions);
             }
+            Instruction::ForEach { query, body, .. } => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                    query,
+                    &rewrite_chosen_to_loop_rp,
+                    &rewrite_chosen_to_loop_ap,
+                    &rewrite_chosen_to_loop_ve,
+                );
+                rewrite_chosen_to_loop_ops(&mut body.instructions);
+            }
+            Instruction::PromptChoice(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.chooser,
+                    &rewrite_chosen_to_loop_rp,
+                    &rewrite_chosen_to_loop_ap,
+                    &rewrite_chosen_to_loop_ve,
+                );
+                match &mut spec.domain {
+                    spellwake_engine::toolbox::PromptDomain::Objects {
+                        query, min, max, ..
+                    } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            query,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                        rewrite_chosen_to_loop_ve(min);
+                        rewrite_chosen_to_loop_ve(max);
+                    }
+                    spellwake_engine::toolbox::PromptDomain::Players { selector, .. } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            selector,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                        rewrite_chosen_to_loop_ve(min);
+                        rewrite_chosen_to_loop_ve(max);
+                    }
+                    spellwake_engine::toolbox::PromptDomain::Partition { query, .. } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            query,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            Instruction::SetObjectTag { query, .. } => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                    query,
+                    &rewrite_chosen_to_loop_rp,
+                    &rewrite_chosen_to_loop_ap,
+                    &rewrite_chosen_to_loop_ve,
+                );
+            }
             Instruction::DrawCards(spec) => {
                 crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
                     &mut spec.players,
@@ -4654,6 +5330,30 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     &rewrite_chosen_to_loop_ap,
                     &rewrite_chosen_to_loop_ve,
                 );
+                match &mut spec.selection {
+                    spellwake_engine::toolbox::ZoneSelection::Random { count, chooser } => {
+                        rewrite_chosen_to_loop_ve(count);
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            chooser,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::ZoneSelection::Prompt {
+                        chooser, min, max, ..
+                    } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            chooser,
+                            &rewrite_chosen_to_loop_rp,
+                            &rewrite_chosen_to_loop_ap,
+                            &rewrite_chosen_to_loop_ve,
+                        );
+                        rewrite_chosen_to_loop_ve(min);
+                        rewrite_chosen_to_loop_ve(max);
+                    }
+                    spellwake_engine::toolbox::ZoneSelection::All => {}
+                }
                 match &mut spec.op {
                     spellwake_engine::toolbox::ObjectMutation::Goad { by } => {
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
@@ -5030,4 +5730,830 @@ pub(in super::super) fn lower_loop_player_sub_body(
     outer_builder.x_target_count |= sub.x_target_count;
     outer_builder.up_to_x_target_count |= sub.up_to_x_target_count;
     Ok(ExecutableBody::new(BodyTarget::None, sub.instructions))
+}
+
+fn zone_filter_to_query_zone_in_context(
+    zone: Option<ZoneFilter>,
+    builder: &mut BodyBuilder,
+    in_trigger: bool,
+) -> Result<(spellwake_engine::toolbox::QueryZone, bool), &'static str> {
+    use spellwake_engine::toolbox::{PlayerSelector, QueryZone};
+    match zone {
+        None | Some(ZoneFilter::Battlefield) => Ok((QueryZone::Battlefield, false)),
+        Some(ZoneFilter::YourHand) => Ok((
+            QueryZone::Hand(Box::new(PlayerSelector::Resolving(
+                ResolvingPlayer::Controller,
+            ))),
+            true,
+        )),
+        Some(ZoneFilter::ThatPlayerHand) => {
+            let rp =
+                lower_resolving_player_in_context(PlayerRefAst::ThatPlayer, builder, in_trigger)?;
+            Ok((
+                QueryZone::Hand(Box::new(PlayerSelector::Resolving(rp))),
+                true,
+            ))
+        }
+        Some(ZoneFilter::YourGraveyard) => Ok((
+            QueryZone::Graveyard(Box::new(PlayerSelector::Resolving(
+                ResolvingPlayer::Controller,
+            ))),
+            false,
+        )),
+        Some(
+            ZoneFilter::AnyGraveyard | ZoneFilter::AllGraveyards | ZoneFilter::SingleGraveyard,
+        ) => Ok((
+            QueryZone::Graveyard(Box::new(PlayerSelector::Group(AffectedPlayers::EachPlayer))),
+            false,
+        )),
+        Some(ZoneFilter::OpponentGraveyard) => Ok((
+            QueryZone::Graveyard(Box::new(PlayerSelector::Group(
+                AffectedPlayers::EachOpponent,
+            ))),
+            false,
+        )),
+        Some(ZoneFilter::ThatPlayerGraveyard) => {
+            let rp =
+                lower_resolving_player_in_context(PlayerRefAst::ThatPlayer, builder, in_trigger)?;
+            Ok((
+                QueryZone::Graveyard(Box::new(PlayerSelector::Resolving(rp))),
+                false,
+            ))
+        }
+        Some(ZoneFilter::Exile) => Ok((QueryZone::Exile, false)),
+        Some(ZoneFilter::YourLibrary) => Ok((
+            QueryZone::Library(Box::new(PlayerSelector::Resolving(
+                ResolvingPlayer::Controller,
+            ))),
+            true,
+        )),
+        Some(ZoneFilter::ThatPlayerLibrary) => {
+            let rp =
+                lower_resolving_player_in_context(PlayerRefAst::ThatPlayer, builder, in_trigger)?;
+            Ok((
+                QueryZone::Library(Box::new(PlayerSelector::Resolving(rp))),
+                true,
+            ))
+        }
+        _ => Err("oracle:unsupported-zone"),
+    }
+}
+
+fn lower_exile_with_counters_subject(
+    subject: &SubjectRefAst,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+) -> Result<
+    (
+        spellwake_engine::toolbox::ObjectQuery,
+        spellwake_engine::toolbox::ZoneSelection,
+    ),
+    &'static str,
+> {
+    use spellwake_engine::toolbox::{ChoiceCategory, ObjectQuery, PlayerSelector, ZoneSelection};
+    if is_self_pronoun(subject, builder, self_pronoun_valid) {
+        return Ok((ObjectQuery::Source, ZoneSelection::All));
+    }
+    match subject {
+        SubjectRefAst::TargetObject {
+            filter,
+            count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
+        } => {
+            let bt = if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                && !filter.is_ability
+                && !filter.any_spell
+            {
+                let mut clean = filter.as_ref().clone();
+                clean.zone = None;
+                lower_battlefield_body_target_in_context(&clean, builder, in_trigger, vocabulary)?
+            } else {
+                lower_target_subject(
+                    &SubjectRefAst::TargetObject {
+                        filter: filter.clone(),
+                        count: TargetCountAst::Exact(1),
+                    },
+                    vocabulary,
+                )?
+            };
+            builder.bind_target(bt)?;
+            if *count == TargetCountAst::UpTo(1) && is_permanent_body_target(bt) {
+                builder.up_to_one_target = true;
+            }
+            Ok((ObjectQuery::Targets, ZoneSelection::All))
+        }
+        SubjectRefAst::TargetOneOf {
+            options,
+            count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
+        } => {
+            let bt = lower_target_subject(
+                &SubjectRefAst::TargetOneOf {
+                    options: options.clone(),
+                    count: TargetCountAst::Exact(1),
+                },
+                vocabulary,
+            )?;
+            builder.bind_target(bt)?;
+            if *count == TargetCountAst::UpTo(1) && is_permanent_body_target(bt) {
+                builder.up_to_one_target = true;
+            }
+            Ok((ObjectQuery::Targets, ZoneSelection::All))
+        }
+        SubjectRefAst::TriggerSubject if in_trigger => {
+            Ok((ObjectQuery::TriggerSubject, ZoneSelection::All))
+        }
+        SubjectRefAst::AttachedHost(_)
+            if in_trigger || self_pronoun_valid || builder.has_source =>
+        {
+            Ok((ObjectQuery::AttachedHost, ZoneSelection::All))
+        }
+        SubjectRefAst::Anaphora(_) => {
+            if is_permanent_body_target(builder.target)
+                || is_graveyard_body_target(builder.target)
+                || is_stack_body_target(builder.target)
+            {
+                Ok((ObjectQuery::Targets, ZoneSelection::All))
+            } else if last_instruction_moved_object(&builder.instructions) {
+                Ok((ObjectQuery::LastMoved, ZoneSelection::All))
+            } else if last_instruction_created_tokens(&builder.instructions) {
+                Ok((ObjectQuery::CreatedTokens, ZoneSelection::All))
+            } else if in_trigger {
+                Ok((ObjectQuery::TriggerSubject, ZoneSelection::All))
+            } else if self_pronoun_valid || builder.has_source {
+                Ok((ObjectQuery::Source, ZoneSelection::All))
+            } else {
+                Err("oracle:unsupported-exile-subject")
+            }
+        }
+        SubjectRefAst::All(f) | SubjectRefAst::Each(f) if !f.is_ability && !f.any_spell => {
+            let (qz, _) = zone_filter_to_query_zone_in_context(f.zone, builder, in_trigger)?;
+            let mut clean = f.as_ref().clone();
+            clean.zone = None;
+            let obj = if is_unrestricted_filter(&clean) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter_in_context(&clean, builder, in_trigger, vocabulary)?
+            };
+            bind_filter_player_target(builder, &obj)?;
+            Ok((ObjectQuery::zone(qz, obj), ZoneSelection::All))
+        }
+        SubjectRefAst::Group(f) if !f.is_ability && !f.any_spell => {
+            let (qz, hidden) = zone_filter_to_query_zone_in_context(f.zone, builder, in_trigger)?;
+            let mut clean = f.as_ref().clone();
+            clean.zone = None;
+            let obj = if is_unrestricted_filter(&clean) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter_in_context(&clean, builder, in_trigger, vocabulary)?
+            };
+            bind_filter_player_target(builder, &obj)?;
+            Ok((
+                ObjectQuery::zone(qz, obj),
+                ZoneSelection::Prompt {
+                    chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                    min: Box::new(ValueExpr::literal(1)),
+                    max: Box::new(ValueExpr::literal(1)),
+                    constraint: None,
+                    category: ChoiceCategory::Generic,
+                    hidden,
+                },
+            ))
+        }
+        _ => Err("oracle:unsupported-exile-subject"),
+    }
+}
+
+fn lower_put_sticker_instruction(
+    kind: &str,
+    target: &SubjectRefAst,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+    in_trigger: bool,
+    self_pronoun_valid: bool,
+) -> Result<(), &'static str> {
+    use spellwake_engine::toolbox::{
+        BindingId, ChoiceCategory, ObjectQuery, PlayerSelector, PromptChoiceSpec, PromptDomain,
+        QueryZone, TagKey, TagValue, ZoneDest, ZoneOpSpec, ZoneSelection,
+    };
+    const STICKER_PICK_BIND: BindingId = BindingId(921);
+    let tag_key = TagKey::Label("sticker".to_owned());
+    let kind_clean = kind.trim().to_ascii_lowercase();
+    let tag_val = if kind_clean.is_empty() || kind_clean == "any" {
+        TagValue::Flag(true)
+    } else {
+        TagValue::Text(kind_clean)
+    };
+    let eff = unwrap_in_zone_subject(target).unwrap_or_else(|| target.clone());
+    let emit_tag_query = |builder: &mut BodyBuilder, q: ObjectQuery| {
+        if q.uses_target() {
+            let mut spec = ZoneOpSpec::move_all(q, ZoneDest::None);
+            spec.tag_moved = Some((tag_key.clone(), tag_val.clone()));
+            builder
+                .instructions
+                .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
+        } else {
+            builder.instructions.push(Instruction::SetObjectTag {
+                query: Box::new(q),
+                key: tag_key.clone(),
+                value: Some(tag_val.clone()),
+            });
+        }
+    };
+    if is_self_pronoun(&eff, builder, self_pronoun_valid) {
+        emit_tag_query(builder, ObjectQuery::Source);
+        return Ok(());
+    }
+    match &eff {
+        SubjectRefAst::TargetObject {
+            filter,
+            count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
+        } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+            && !filter.is_ability
+            && !filter.any_spell =>
+        {
+            let mut clean = filter.as_ref().clone();
+            clean.zone = None;
+            let bt =
+                lower_battlefield_body_target_in_context(&clean, builder, in_trigger, vocabulary)?;
+            builder.bind_target(bt)?;
+            if *count == TargetCountAst::UpTo(1) && is_permanent_body_target(bt) {
+                builder.up_to_one_target = true;
+            }
+            emit_tag_query(builder, ObjectQuery::Targets);
+            Ok(())
+        }
+        SubjectRefAst::TargetOneOf {
+            options,
+            count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
+        } => {
+            let bt = lower_target_subject(
+                &SubjectRefAst::TargetOneOf {
+                    options: options.clone(),
+                    count: TargetCountAst::Exact(1),
+                },
+                vocabulary,
+            )?;
+            if !is_permanent_body_target(bt) {
+                return Err("oracle:unsupported-sticker-target");
+            }
+            builder.bind_target(bt)?;
+            if *count == TargetCountAst::UpTo(1) {
+                builder.up_to_one_target = true;
+            }
+            emit_tag_query(builder, ObjectQuery::Targets);
+            Ok(())
+        }
+        SubjectRefAst::TriggerSubject if in_trigger => {
+            emit_tag_query(builder, ObjectQuery::TriggerSubject);
+            Ok(())
+        }
+        SubjectRefAst::AttachedHost(_)
+            if in_trigger || self_pronoun_valid || builder.has_source =>
+        {
+            emit_tag_query(builder, ObjectQuery::AttachedHost);
+            Ok(())
+        }
+        SubjectRefAst::Anaphora(_) => {
+            if is_permanent_body_target(builder.target) {
+                emit_tag_query(builder, ObjectQuery::Targets);
+                Ok(())
+            } else if last_instruction_created_tokens(&builder.instructions) {
+                emit_tag_query(builder, ObjectQuery::CreatedTokens);
+                Ok(())
+            } else if last_instruction_moved_object(&builder.instructions) {
+                emit_tag_query(builder, ObjectQuery::LastMoved);
+                Ok(())
+            } else if in_trigger {
+                emit_tag_query(builder, ObjectQuery::TriggerSubject);
+                Ok(())
+            } else if self_pronoun_valid || builder.has_source {
+                emit_tag_query(builder, ObjectQuery::Source);
+                Ok(())
+            } else {
+                Err("oracle:unsupported-sticker-target")
+            }
+        }
+        SubjectRefAst::All(f) | SubjectRefAst::Each(f)
+            if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
+                && !f.is_ability
+                && !f.any_spell =>
+        {
+            let mut clean = f.as_ref().clone();
+            clean.zone = None;
+            let obj = if is_unrestricted_filter(&clean) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter_in_context(&clean, builder, in_trigger, vocabulary)?
+            };
+            bind_filter_player_target(builder, &obj)?;
+            emit_tag_query(builder, ObjectQuery::zone(QueryZone::Battlefield, obj));
+            Ok(())
+        }
+        SubjectRefAst::Group(f)
+            if matches!(f.zone, None | Some(ZoneFilter::Battlefield))
+                && !f.is_ability
+                && !f.any_spell =>
+        {
+            let mut clean = f.as_ref().clone();
+            clean.zone = None;
+            let obj = if is_unrestricted_filter(&clean) {
+                ObjectFilter::any()
+            } else {
+                lower_object_filter_in_context(&clean, builder, in_trigger, vocabulary)?
+            };
+            bind_filter_player_target(builder, &obj)?;
+            let query = ObjectQuery::zone(QueryZone::Battlefield, obj);
+            if query.uses_target() {
+                let mut spec = ZoneOpSpec::simple(
+                    query,
+                    ZoneSelection::Prompt {
+                        chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                        min: Box::new(ValueExpr::literal(1)),
+                        max: Box::new(ValueExpr::literal(1)),
+                        constraint: None,
+                        category: ChoiceCategory::Generic,
+                        hidden: false,
+                    },
+                    ZoneDest::None,
+                );
+                spec.tag_moved = Some((tag_key, tag_val));
+                builder
+                    .instructions
+                    .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(spec));
+            } else {
+                builder
+                    .instructions
+                    .push(Instruction::PromptChoice(Box::new(PromptChoiceSpec {
+                        chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                        domain: PromptDomain::Objects {
+                            query,
+                            min: Box::new(ValueExpr::literal(1)),
+                            max: Box::new(ValueExpr::literal(1)),
+                            constraint: None,
+                            hidden: false,
+                        },
+                        category: ChoiceCategory::Generic,
+                        bind_to: STICKER_PICK_BIND,
+                        bind_unchosen: None,
+                        tag_partition: None,
+                        auto_resolve_trivial: true,
+                    })));
+                builder.instructions.push(Instruction::SetObjectTag {
+                    query: Box::new(ObjectQuery::Bound(STICKER_PICK_BIND)),
+                    key: tag_key,
+                    value: Some(tag_val),
+                });
+            }
+            Ok(())
+        }
+        _ => Err("oracle:unsupported-sticker-target"),
+    }
+}
+
+fn lower_standalone_choose_and_keep(
+    pick: &str,
+    keep_to: &str,
+    rest_to: &str,
+    builder: &mut BodyBuilder,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<(), &'static str> {
+    use spellwake_engine::toolbox::{
+        BindingId, ChoiceCategory, GraveyardSemantics, LibraryOrderPos, ObjectQuery,
+        PlayerSelector, ZoneController, ZoneDest, ZoneOpSpec, ZoneSelection,
+    };
+    let has_pool = last_instruction_moved_object(&builder.instructions)
+        || builder.instructions.iter().rev().any(|op| {
+            matches!(
+                op,
+                Instruction::ZoneOp(_)
+                    | Instruction::ForEachPlayerQuery { .. }
+                    | Instruction::LookTopChoose { .. }
+                    | Instruction::LookTopChooseExt { .. }
+                    | Instruction::RevealUntilMatch { .. }
+                    | Instruction::RevealUntilMatchExt { .. }
+                    | Instruction::ExileTopPlay { .. }
+                    | Instruction::Mill { .. }
+                    | Instruction::SearchLibrary { .. }
+            )
+        });
+    if !has_pool {
+        return Err("oracle:unsupported-choose-and-keep");
+    }
+    let keep_low = keep_to.trim().to_ascii_lowercase();
+    let keep_dest = if keep_low.contains("hand") {
+        ZoneDest::Hand
+    } else if keep_low.contains("battlefield") {
+        ZoneDest::Battlefield {
+            controller: ZoneController::Player(Box::new(PlayerSelector::Resolving(
+                ResolvingPlayer::Controller,
+            ))),
+            tapped: keep_low.contains("tapped"),
+            attacking: keep_low.contains("attacking"),
+            transformed: false,
+            face_down: keep_low.contains("face down"),
+            entering_counters: Vec::new(),
+            attach_to: None,
+        }
+    } else if keep_low.contains("graveyard") {
+        ZoneDest::Graveyard {
+            semantics: GraveyardSemantics::Move,
+        }
+    } else if keep_low.contains("exile") {
+        ZoneDest::exile()
+    } else if keep_low.contains("top") && keep_low.contains("library") {
+        ZoneDest::Library {
+            position: LibraryOrderPos::Top,
+        }
+    } else if keep_low.contains("bottom") && keep_low.contains("library") {
+        ZoneDest::Library {
+            position: if keep_low.contains("random") {
+                LibraryOrderPos::BottomRandom
+            } else {
+                LibraryOrderPos::Bottom
+            },
+        }
+    } else {
+        return Err("oracle:unsupported-choose-and-keep");
+    };
+    let rest_low = rest_to.trim().to_ascii_lowercase();
+    let rest_shuffle = rest_low.contains("shuffle");
+    let rest_dest: Option<ZoneDest> = if rest_low.contains("bottom") {
+        Some(ZoneDest::Library {
+            position: if rest_low.contains("random") {
+                LibraryOrderPos::BottomRandom
+            } else {
+                LibraryOrderPos::Bottom
+            },
+        })
+    } else if rest_low.contains("graveyard") {
+        Some(ZoneDest::Graveyard {
+            semantics: GraveyardSemantics::Move,
+        })
+    } else if rest_low.contains("exile") {
+        Some(ZoneDest::exile())
+    } else if rest_low.contains("hand") {
+        Some(ZoneDest::Hand)
+    } else if rest_low.contains("top") && rest_low.contains("library") {
+        Some(ZoneDest::Library {
+            position: LibraryOrderPos::Top,
+        })
+    } else if rest_low.is_empty() || rest_shuffle {
+        None
+    } else {
+        return Err("oracle:unsupported-choose-and-keep");
+    };
+
+    let pick_low = pick.trim().trim_end_matches('.').to_ascii_lowercase();
+    let (keep_all, min_v, max_v, filter_opt): (bool, i64, i64, Option<ObjectFilter>) = if matches!(
+        pick_low.as_str(),
+        "all"
+            | "all of them"
+            | "them"
+            | "all cards"
+            | "all of those cards"
+            | "all cards revealed this way"
+            | "all cards exiled this way"
+            | "those cards"
+    ) {
+        (true, 0, 0, None)
+    } else if matches!(
+        pick_low.as_str(),
+        "one"
+            | "1"
+            | "one of them"
+            | "one of those cards"
+            | "a card"
+            | "that card"
+            | "a card from among them"
+    ) {
+        (false, 1, 1, None)
+    } else if matches!(
+        pick_low.as_str(),
+        "up to one"
+            | "up to 1"
+            | "up to one of them"
+            | "up to one card"
+            | "up to one of those cards"
+    ) {
+        (false, 0, 1, None)
+    } else if matches!(
+        pick_low.as_str(),
+        "two" | "2" | "two of them" | "two of those cards"
+    ) {
+        (false, 2, 2, None)
+    } else if matches!(
+        pick_low.as_str(),
+        "up to two" | "up to two of them" | "up to two of those cards"
+    ) {
+        (false, 0, 2, None)
+    } else if matches!(pick_low.as_str(), "three" | "3" | "three of them") {
+        (false, 3, 3, None)
+    } else if matches!(pick_low.as_str(), "up to three" | "up to three of them") {
+        (false, 0, 3, None)
+    } else {
+        let (all_flag, lo, hi, phrase) = if let Some(r) = pick_low
+            .strip_prefix("all ")
+            .or_else(|| pick_low.strip_prefix("each "))
+            .or_else(|| pick_low.strip_prefix("those "))
+        {
+            (true, 0i64, 0i64, r)
+        } else if let Some(r) = pick_low.strip_prefix("up to one ") {
+            (false, 0, 1, r)
+        } else if let Some(r) = pick_low.strip_prefix("up to two ") {
+            (false, 0, 2, r)
+        } else if let Some(r) = pick_low.strip_prefix("up to three ") {
+            (false, 0, 3, r)
+        } else if let Some(r) = pick_low.strip_prefix("any number of ") {
+            (false, 0, 100, r)
+        } else if let Some(r) = pick_low.strip_prefix("two ") {
+            (false, 2, 2, r)
+        } else if let Some(r) = pick_low.strip_prefix("three ") {
+            (false, 3, 3, r)
+        } else if let Some(r) = pick_low
+            .strip_prefix("one ")
+            .or_else(|| pick_low.strip_prefix("a "))
+            .or_else(|| pick_low.strip_prefix("an "))
+        {
+            (false, 1, 1, r)
+        } else {
+            return Err("oracle:unsupported-choose-and-keep");
+        };
+        let cleaned = phrase
+            .trim()
+            .trim_end_matches(" revealed this way")
+            .trim_end_matches(" exiled this way")
+            .trim_end_matches(" from among them")
+            .trim_end_matches(" from among those cards")
+            .trim();
+        let parsed = spellwake_oracle_compiler::filter::parse_object_filter(
+            cleaned,
+            &cached_compiler_vocab(vocabulary),
+        )
+        .map_err(|_| "oracle:unsupported-choose-and-keep")?;
+        if parsed.zone.is_some() {
+            return Err("oracle:unsupported-choose-and-keep");
+        }
+        let obj = if is_unrestricted_filter(&parsed) {
+            None
+        } else {
+            let f = lower_object_filter(&parsed, vocabulary)
+                .map_err(|_| "oracle:unsupported-choose-and-keep")?;
+            if f.has_target_player() || f.uses_target_permanent() {
+                return Err("oracle:unsupported-choose-and-keep");
+            }
+            Some(f)
+        };
+        (all_flag, lo, hi, obj)
+    };
+
+    const POOL_BIND: BindingId = BindingId(927);
+    const KEPT_BIND: BindingId = BindingId(925);
+    const UNCHOSEN_BIND: BindingId = BindingId(926);
+
+    let mut snap_spec = ZoneOpSpec::move_all(ObjectQuery::LastMoved, ZoneDest::None);
+    snap_spec.bind_moved = Some(POOL_BIND);
+    builder
+        .instructions
+        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(snap_spec));
+
+    let keep_source = match filter_opt {
+        Some(f) => ObjectQuery::BoundFiltered {
+            binding: POOL_BIND,
+            filter: Box::new(f),
+        },
+        None => ObjectQuery::Bound(POOL_BIND),
+    };
+    let keep_selection = if keep_all {
+        ZoneSelection::All
+    } else {
+        ZoneSelection::Prompt {
+            chooser: PlayerSelector::Resolving(ResolvingPlayer::Controller),
+            min: Box::new(ValueExpr::literal(min_v)),
+            max: Box::new(ValueExpr::literal(max_v)),
+            constraint: None,
+            category: ChoiceCategory::Generic,
+            hidden: false,
+        }
+    };
+    let mut keep_spec = ZoneOpSpec::simple(keep_source, keep_selection, keep_dest);
+    keep_spec.bind_moved = Some(KEPT_BIND);
+    keep_spec.bind_unchosen = Some(UNCHOSEN_BIND);
+    builder
+        .instructions
+        .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(keep_spec));
+
+    if let Some(rd) = rest_dest {
+        let mut rest_spec = ZoneOpSpec::move_all(
+            ObjectQuery::Difference(
+                Box::new(ObjectQuery::Bound(POOL_BIND)),
+                Box::new(ObjectQuery::Bound(KEPT_BIND)),
+            ),
+            rd,
+        );
+        if rest_shuffle {
+            rest_spec.shuffle_library =
+                Some(PlayerSelector::Resolving(ResolvingPlayer::Controller));
+        }
+        builder
+            .instructions
+            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(rest_spec));
+    } else if rest_shuffle {
+        builder
+            .instructions
+            .push(crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_own_library());
+    }
+    Ok(())
+}
+
+fn is_safe_resolving_player_for_shuffle(
+    p: ResolvingPlayer,
+    builder: &BodyBuilder,
+    in_trigger: bool,
+) -> bool {
+    let has_source = in_trigger || builder.has_source;
+    match p {
+        ResolvingPlayer::Controller
+        | ResolvingPlayer::ActivePlayer
+        | ResolvingPlayer::DefendingPlayer
+        | ResolvingPlayer::RandomOpponent => true,
+        ResolvingPlayer::EnchantedPlayer
+        | ResolvingPlayer::AttachedHostController
+        | ResolvingPlayer::SourceOwner
+        | ResolvingPlayer::SourceChosenPlayer => has_source,
+        ResolvingPlayer::ChosenPlayer => builder.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::ChooseValue {
+                    domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
+                    ..
+                } | Instruction::SelectExtremeLifePlayer { .. }
+            ) || matches!(
+                op,
+                Instruction::PromptChoice(spec)
+                    if matches!(spec.domain, spellwake_engine::toolbox::PromptDomain::Players { .. })
+            )
+        }),
+        ResolvingPlayer::UniqueRelatedPlayer
+        | ResolvingPlayer::TriggerSubjectController
+        | ResolvingPlayer::TriggerSubjectOwner => in_trigger,
+        _ => false,
+    }
+}
+
+pub(super) fn lower_shuffle_that_player_fallback(
+    builder: &mut BodyBuilder,
+    in_trigger: bool,
+) -> Result<(), &'static str> {
+    use spellwake_engine::toolbox::{ObjectQuery, PlayerSelector, ZoneOpSpec};
+    // 1. Prior SearchLibrary(PlayerLibrary(players)) or multi-player loop/offer/choice.
+    for op in builder.instructions.iter().rev() {
+        match op {
+            Instruction::SearchLibrary { filter } => {
+                let rp = filter.searcher;
+                if is_safe_resolving_player_for_shuffle(rp, builder, in_trigger) {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            ZoneOpSpec::shuffle(PlayerSelector::Resolving(rp)),
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+            Instruction::ForEachPlayer { players, .. }
+            | Instruction::OfferAnyPlayer { players, .. }
+            | Instruction::ChooseOptionForPlayers { players, .. } => {
+                let ok = match players {
+                    AffectedPlayers::One(rp) => {
+                        is_safe_resolving_player_for_shuffle(*rp, builder, in_trigger)
+                    }
+                    _ => true,
+                };
+                if ok {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            ZoneOpSpec::shuffle(PlayerSelector::Group(*players)),
+                        ),
+                    );
+                    return Ok(());
+                }
+            }
+            Instruction::AdjustLife(spec) => match &spec.players {
+                PlayerSelector::Resolving(rp) | PlayerSelector::Group(AffectedPlayers::One(rp))
+                    if *rp != ResolvingPlayer::Controller
+                        && is_safe_resolving_player_for_shuffle(*rp, builder, in_trigger) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(*rp),
+                    );
+                    return Ok(());
+                }
+                PlayerSelector::Group(players) if !matches!(players, AffectedPlayers::One(_)) => {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            ZoneOpSpec::shuffle(PlayerSelector::Group(*players)),
+                        ),
+                    );
+                    return Ok(());
+                }
+                _ => {}
+            },
+            Instruction::MutatePlayer(spec) => match &spec.players {
+                PlayerSelector::Resolving(rp) | PlayerSelector::Group(AffectedPlayers::One(rp))
+                    if *rp != ResolvingPlayer::Controller
+                        && is_safe_resolving_player_for_shuffle(*rp, builder, in_trigger) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(*rp),
+                    );
+                    return Ok(());
+                }
+                PlayerSelector::Group(players) if !matches!(players, AffectedPlayers::One(_)) => {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            ZoneOpSpec::shuffle(PlayerSelector::Group(*players)),
+                        ),
+                    );
+                    return Ok(());
+                }
+                _ => {}
+            },
+            Instruction::Discard { players, .. }
+            | Instruction::Sacrifice { players, .. }
+            | Instruction::ChooseObjects { players, .. } => match players {
+                AffectedPlayers::One(rp)
+                    if *rp != ResolvingPlayer::Controller
+                        && is_safe_resolving_player_for_shuffle(*rp, builder, in_trigger) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(*rp),
+                    );
+                    return Ok(());
+                }
+                group if !matches!(group, AffectedPlayers::One(_)) => {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
+                            ZoneOpSpec::shuffle(PlayerSelector::Group(*group)),
+                        ),
+                    );
+                    return Ok(());
+                }
+                _ => {}
+            },
+            Instruction::Scry { player, .. }
+            | Instruction::Surveil { player, .. }
+            | Instruction::OfferManaPayment { payer: player, .. }
+            | Instruction::OfferDynamicManaPayment { payer: player, .. }
+            | Instruction::ChooseOption {
+                chooser: player, ..
+            } if *player != ResolvingPlayer::Controller
+                && is_safe_resolving_player_for_shuffle(*player, builder, in_trigger) =>
+            {
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(
+                        *player,
+                    ),
+                );
+                return Ok(());
+            }
+            Instruction::PromptChoice(spec) => match &spec.chooser {
+                PlayerSelector::Resolving(rp)
+                    if *rp != ResolvingPlayer::Controller
+                        && is_safe_resolving_player_for_shuffle(*rp, builder, in_trigger) =>
+                {
+                    builder.instructions.push(
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::shuffle_player_library(*rp),
+                    );
+                    return Ok(());
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    // 2. Prior object movement or selection: shuffle the owners of those moved/selected objects.
+    let has_prior_objects = last_instruction_moved_object(&builder.instructions)
+        || builder.instructions.iter().rev().any(|op| {
+            matches!(
+                op,
+                Instruction::ZoneOp(_)
+                    | Instruction::ForEachPlayerQuery { .. }
+                    | Instruction::SearchLibrary { .. }
+                    | Instruction::LookTopChoose { .. }
+                    | Instruction::LookTopChooseExt { .. }
+                    | Instruction::RevealUntilMatch { .. }
+                    | Instruction::RevealUntilMatchExt { .. }
+                    | Instruction::ChooseObjects { .. }
+                    | Instruction::MutateObject(_)
+            )
+        });
+    if has_prior_objects {
+        builder.instructions.push(
+            crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(ZoneOpSpec::shuffle(
+                PlayerSelector::OwnersOf(Box::new(ObjectQuery::LastMoved)),
+            )),
+        );
+        return Ok(());
+    }
+    Err("oracle:unbound-that-player")
 }

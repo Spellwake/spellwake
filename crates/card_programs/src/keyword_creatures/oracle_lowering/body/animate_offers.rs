@@ -505,9 +505,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             Instruction::Discard { players, amount }
             | Instruction::Sacrifice {
                 players, amount, ..
-            }
-            | Instruction::TapOrUntapControlled {
-                players, amount, ..
             } => {
                 rewrite_offer_chosen_to_loop_ap(players);
                 rewrite_offer_chosen_to_loop_ve(amount);
@@ -631,6 +628,66 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     &rewrite_offer_chosen_to_loop_ve,
                 );
                 rewrite_offer_chosen_to_loop_ops(&mut body.instructions);
+            }
+            Instruction::ForEach { query, body, .. } => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                    query,
+                    &rewrite_offer_chosen_to_loop_rp,
+                    &rewrite_offer_chosen_to_loop_ap,
+                    &rewrite_offer_chosen_to_loop_ve,
+                );
+                rewrite_offer_chosen_to_loop_ops(&mut body.instructions);
+            }
+            Instruction::PromptChoice(spec) => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                    &mut spec.chooser,
+                    &rewrite_offer_chosen_to_loop_rp,
+                    &rewrite_offer_chosen_to_loop_ap,
+                    &rewrite_offer_chosen_to_loop_ve,
+                );
+                match &mut spec.domain {
+                    spellwake_engine::toolbox::PromptDomain::Objects {
+                        query, min, max, ..
+                    } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            query,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                        rewrite_offer_chosen_to_loop_ve(min);
+                        rewrite_offer_chosen_to_loop_ve(max);
+                    }
+                    spellwake_engine::toolbox::PromptDomain::Players { selector, .. } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_player_selector(
+                            selector,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                        rewrite_offer_chosen_to_loop_ve(min);
+                        rewrite_offer_chosen_to_loop_ve(max);
+                    }
+                    spellwake_engine::toolbox::PromptDomain::Partition { query, .. } => {
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                            query,
+                            &rewrite_offer_chosen_to_loop_rp,
+                            &rewrite_offer_chosen_to_loop_ap,
+                            &rewrite_offer_chosen_to_loop_ve,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            Instruction::SetObjectTag { query, .. } => {
+                crate::keyword_creatures::oracle_lowering::toolbox_emit::rewrite_object_query(
+                    query,
+                    &rewrite_offer_chosen_to_loop_rp,
+                    &rewrite_offer_chosen_to_loop_ap,
+                    &rewrite_offer_chosen_to_loop_ve,
+                );
             }
             Instruction::ChooseOptionForPlayers { players, options } => {
                 rewrite_offer_chosen_to_loop_ap(players);

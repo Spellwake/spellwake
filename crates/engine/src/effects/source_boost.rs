@@ -369,63 +369,6 @@ impl EffectWindow {
         }
     }
 
-    pub(super) fn untap_and_control_creatures(
-        &mut self,
-        entry: &StackEntry,
-        index: usize,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let before = self.rules_snapshot(None)?;
-        let affected = before
-            .view()
-            .evaluated
-            .objects
-            .values()
-            .filter(|p| p.zone == ObjectZone::Battlefield && p.is_creature())
-            .map(|p| p.object)
-            .collect::<BTreeSet<_>>();
-        if affected.is_empty() {
-            return Ok(());
-        }
-        let tapped = affected
-            .iter()
-            .copied()
-            .filter(|id| self.window.cards().get(*id).and_then(GameObject::tapped) == Some(true))
-            .collect::<Vec<_>>();
-        let cause = EventCause::Instruction {
-            entry: entry.id(),
-            instruction: index,
-        };
-        if !tapped.is_empty() {
-            let occurrences = self.untap_for_effect_with_stun(entry.id(), &tapped)?;
-            self.emit_from(cause.clone(), &before, None, append, |_, _, _| {
-                Ok(occurrences)
-            })?;
-        }
-        let before = self.rules_snapshot(None)?;
-        let parts = ResolvedParts(vec![
-            ResolvedPart::Control(entry.controller()),
-            ResolvedPart::Abilities(AbilityChange::grant_keywords([KeywordAbility::Haste])),
-        ]);
-        let effect = self.characteristics.add_effect_for_objects(
-            entry.id(),
-            affected,
-            parts,
-            ResolvedDuration::UntilEndOfTurn,
-        )?;
-        self.emit_from(cause, &before, None, append, |old, new, _| {
-            let appearances = occurrence_flow::characteristic_appearance_changes(
-                old,
-                new,
-                effect.affected.iter().copied(),
-            )?;
-            Ok(vec![RulesOccurrence::ContinuousEffectCreated {
-                effect,
-                appearances,
-            }])
-        })
-    }
-
     pub(super) fn modify_objects(
         &mut self,
         entry: &StackEntry,

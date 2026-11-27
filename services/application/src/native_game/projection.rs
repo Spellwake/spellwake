@@ -978,53 +978,90 @@ impl Projection<'_, '_> {
                 _ => false,
             };
         let total = ids.len();
-        let ids = if hidden {
-            match zone {
-                ObjectZone::Library(owner) => {
-                    let reveals = source.execution().draw_reveals(owner);
-                    let top_visible = source
-                        .execution()
-                        .library_top_access(&self.evaluated, owner, self.scope.binding.actor)
-                        .visible;
-                    let order_domain: &[ObjectId] =
+        let ids =
+            if hidden {
+                match zone {
+                    ObjectZone::Library(owner) => {
+                        let reveals = source.execution().draw_reveals(owner);
+                        let top_visible = source
+                            .execution()
+                            .library_top_access(&self.evaluated, owner, self.scope.binding.actor)
+                            .visible;
+                        let order_domain: &[ObjectId] =
                         match source.pending_decision().map(|d| d.frame()) {
                             Some(spellwake_engine::game::RuleFrame::ResolutionGraveyardOrder(
                                 frame,
                             )) if frame.chooser() == self.scope.binding.actor => frame.domain(),
+                            Some(spellwake_engine::game::RuleFrame::PromptChoice(frame)) => {
+                                match &frame.domain {
+                                    spellwake_engine::toolbox::ResolvedPromptDomain::Objects {
+                                        candidates,
+                                        hidden,
+                                        ..
+                                    } if !*hidden || frame.chooser == self.scope.binding.actor => {
+                                        candidates.as_slice()
+                                    }
+                                    spellwake_engine::toolbox::ResolvedPromptDomain::Partition {
+                                        candidates,
+                                        ..
+                                    } if frame.chooser == self.scope.binding.actor => {
+                                        candidates.as_slice()
+                                    }
+                                    _ => &[],
+                                }
+                            }
                             _ => &[],
                         };
-                    ids.into_iter()
-                        .enumerate()
-                        .filter_map(|(i, id)| {
-                            (reveals.contains(&id)
-                                || (i == 0 && top_visible)
-                                || order_domain.contains(&id))
-                            .then_some(id)
-                        })
-                        .collect()
-                }
-                ObjectZone::Hand(_) => {
-                    let revealed_select: &[ObjectId] =
+                        ids.into_iter()
+                            .enumerate()
+                            .filter_map(|(i, id)| {
+                                (reveals.contains(&id)
+                                    || (i == 0 && top_visible)
+                                    || order_domain.contains(&id))
+                                .then_some(id)
+                            })
+                            .collect()
+                    }
+                    ObjectZone::Hand(_) => {
+                        let revealed_select: &[ObjectId] =
                         match source.pending_decision().map(|d| d.frame()) {
                             Some(spellwake_engine::game::RuleFrame::ResolutionSelect(frame))
                                 if frame.chooser() == self.scope.binding.actor =>
                             {
                                 frame.domain()
                             }
+                            Some(spellwake_engine::game::RuleFrame::PromptChoice(frame)) => {
+                                match &frame.domain {
+                                    spellwake_engine::toolbox::ResolvedPromptDomain::Objects {
+                                        candidates,
+                                        hidden,
+                                        ..
+                                    } if !*hidden || frame.chooser == self.scope.binding.actor => {
+                                        candidates.as_slice()
+                                    }
+                                    spellwake_engine::toolbox::ResolvedPromptDomain::Partition {
+                                        candidates,
+                                        ..
+                                    } if frame.chooser == self.scope.binding.actor => {
+                                        candidates.as_slice()
+                                    }
+                                    _ => &[],
+                                }
+                            }
                             _ => &[],
                         };
-                    ids.into_iter()
-                        .filter(|id| {
-                            source.execution().revealed_by_ninjutsu(*id)
-                                || revealed_select.contains(id)
-                        })
-                        .collect()
+                        ids.into_iter()
+                            .filter(|id| {
+                                source.execution().revealed_by_ninjutsu(*id)
+                                    || revealed_select.contains(id)
+                            })
+                            .collect()
+                    }
+                    _ => Vec::new(),
                 }
-                _ => Vec::new(),
-            }
-        } else {
-            ids
-        };
+            } else {
+                ids
+            };
         let concealed = total - ids.len();
         if hidden && ids.is_empty() {
             return Ok(PlayerZone::Hidden {

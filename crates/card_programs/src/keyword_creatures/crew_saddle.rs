@@ -90,13 +90,16 @@ pub(crate) fn compile(
         grouping: TriggerGrouping::EachOccurrence,
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::BoostSaddledAttacker {
-                adjustment: PowerToughness {
-                    power: 1.into(),
-                    toughness: 2.into(),
-                },
-                keyword: KeywordAbility::Menace,
-            }],
+            vec![Instruction::ApplyContinuous(Box::new(
+                spellwake_engine::toolbox::ApplyContinuousSpec::dynamic_boost(
+                    spellwake_engine::toolbox::ObjectQuery::Source,
+                    spellwake_engine::program::ValueExpr::literal(1),
+                    spellwake_engine::program::ValueExpr::literal(2),
+                    BTreeSet::from([KeywordAbility::Menace]),
+                    BTreeSet::new(),
+                    spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                ),
+            ))],
         ),
     });
     Some(program)

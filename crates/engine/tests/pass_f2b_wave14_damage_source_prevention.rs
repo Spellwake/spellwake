@@ -89,13 +89,17 @@ fn chosen_damage_source_prevents_selected_permanent_respects_visibility_and_reje
             spell(
                 10,
                 BodyTarget::None,
-                vec![Instruction::PreventDamageSpec(Box::new(
-                    TurnPreventionSpec {
-                        combat_only: false,
-                        source: PreventionSourceSpec::ChosenSource(DamageSourceChoiceFilter::Any),
-                        recipient: PreventionRecipientSpec::Controller,
-                        both_directions: false,
-                    },
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(
+                        TurnPreventionSpec {
+                            combat_only: false,
+                            source: PreventionSourceSpec::ChosenSource(
+                                DamageSourceChoiceFilter::Any,
+                            ),
+                            recipient: PreventionRecipientSpec::Controller,
+                            both_directions: false,
+                        },
+                    ),
                 ))],
             ),
         ],
@@ -222,13 +226,15 @@ fn chosen_color_and_filtered_source_recipient_scopes_match_exact_subsets() {
             spell(
                 10,
                 BodyTarget::SingleAnyTarget,
-                vec![Instruction::PreventDamageSpec(Box::new(
-                    TurnPreventionSpec {
-                        combat_only: false,
-                        source: PreventionSourceSpec::ChosenColor,
-                        recipient: PreventionRecipientSpec::Target,
-                        both_directions: false,
-                    },
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(
+                        TurnPreventionSpec {
+                            combat_only: false,
+                            source: PreventionSourceSpec::ChosenColor,
+                            recipient: PreventionRecipientSpec::Target,
+                            both_directions: false,
+                        },
+                    ),
                 ))],
             ),
         ],
@@ -273,15 +279,17 @@ fn chosen_color_and_filtered_source_recipient_scopes_match_exact_subsets() {
             spell(
                 10,
                 BodyTarget::None,
-                vec![Instruction::PreventDamageSpec(Box::new(
-                    TurnPreventionSpec {
-                        combat_only: false,
-                        source: PreventionSourceSpec::ChosenSource(
-                            DamageSourceChoiceFilter::Colors(ColorMask::RED),
-                        ),
-                        recipient: PreventionRecipientSpec::Any,
-                        both_directions: false,
-                    },
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(
+                        TurnPreventionSpec {
+                            combat_only: false,
+                            source: PreventionSourceSpec::ChosenSource(
+                                DamageSourceChoiceFilter::Colors(ColorMask::RED),
+                            ),
+                            recipient: PreventionRecipientSpec::Any,
+                            both_directions: false,
+                        },
+                    ),
                 ))],
             ),
         ],
@@ -307,16 +315,18 @@ fn chosen_color_and_filtered_source_recipient_scopes_match_exact_subsets() {
             spell(
                 10,
                 BodyTarget::None,
-                vec![Instruction::PreventDamageSpec(Box::new(
-                    TurnPreventionSpec {
-                        combat_only: false,
-                        source: PreventionSourceSpec::Filter(PreventionSourceFilter {
-                            any_colors: ColorMask::BLACK.union(ColorMask::RED),
-                            ..Default::default()
-                        }),
-                        recipient: PreventionRecipientSpec::ControlledCreatures,
-                        both_directions: false,
-                    },
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(
+                        TurnPreventionSpec {
+                            combat_only: false,
+                            source: PreventionSourceSpec::Filter(PreventionSourceFilter {
+                                any_colors: ColorMask::BLACK.union(ColorMask::RED),
+                                ..Default::default()
+                            }),
+                            recipient: PreventionRecipientSpec::ControlledCreatures,
+                            both_directions: false,
+                        },
+                    ),
                 ))],
             ),
         ],
@@ -383,18 +393,20 @@ fn chosen_color_and_filtered_source_recipient_scopes_match_exact_subsets() {
                     ManaCost::free(),
                     ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::PreventDamageSpec(Box::new(
-                            TurnPreventionSpec {
-                                combat_only: false,
-                                source: PreventionSourceSpec::Filter(PreventionSourceFilter {
-                                    creatures_only: true,
-                                    attacking_only: true,
-                                    forbidden_keyword: Some(KeywordAbility::Flying),
-                                    ..Default::default()
-                                }),
-                                recipient: PreventionRecipientSpec::Controller,
-                                both_directions: false,
-                            },
+                        vec![Instruction::ApplyContinuous(Box::new(
+                            spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(
+                                TurnPreventionSpec {
+                                    combat_only: false,
+                                    source: PreventionSourceSpec::Filter(PreventionSourceFilter {
+                                        creatures_only: true,
+                                        attacking_only: true,
+                                        forbidden_keyword: Some(KeywordAbility::Flying),
+                                        ..Default::default()
+                                    }),
+                                    recipient: PreventionRecipientSpec::Controller,
+                                    both_directions: false,
+                                },
+                            ),
                         ))],
                     ),
                 ),
@@ -504,13 +516,15 @@ fn recipient_only_prevent_all_damage_scopes_protect_exact_recipients() {
             spell(
                 10,
                 BodyTarget::None,
-                vec![Instruction::PreventDamageSpec(Box::new(
-                    TurnPreventionSpec {
-                        combat_only: false,
-                        source: PreventionSourceSpec::Any,
-                        recipient: PreventionRecipientSpec::AllCreatures,
-                        both_directions: false,
-                    },
+                vec![Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::prevent_damage(
+                        TurnPreventionSpec {
+                            combat_only: false,
+                            source: PreventionSourceSpec::Any,
+                            recipient: PreventionRecipientSpec::AllCreatures,
+                            both_directions: false,
+                        },
+                    ),
                 ))],
             ),
         ],

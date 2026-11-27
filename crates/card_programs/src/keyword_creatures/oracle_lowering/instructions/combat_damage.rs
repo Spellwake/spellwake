@@ -464,11 +464,108 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                     }
                 }
+                // General two-permanent-target non-self damage (e.g. "Target creature deals
+                // damage equal to its toughness / N / X to target creature/planeswalker").
+                if builder.target == BodyTarget::None
+                    && builder.instructions.is_empty()
+                    && let SubjectRefAst::TargetObject {
+                        filter: src_f,
+                        count: TargetCountAst::Exact(1),
+                    } = eff_source
+                    && matches!(src_f.zone, None | Some(ZoneFilter::Battlefield))
+                    && !src_f.is_ability
+                    && !src_f.any_spell
+                    && let SubjectRefAst::TargetObject {
+                        filter: dst_f,
+                        count: TargetCountAst::Exact(1),
+                    } = target.as_ref()
+                    && matches!(dst_f.zone, None | Some(ZoneFilter::Battlefield))
+                    && !dst_f.is_ability
+                    && !dst_f.any_spell
+                {
+                    let mut src_clean = src_f.as_ref().clone();
+                    src_clean.zone = None;
+                    let mut dst_clean = dst_f.as_ref().clone();
+                    dst_clean.zone = None;
+                    if let (Ok(src_bt), Ok(dst_bt)) = (
+                        lower_battlefield_body_target_in_context(
+                            &src_clean, builder, in_trigger, vocabulary,
+                        ),
+                        lower_battlefield_body_target_in_context(
+                            &dst_clean, builder, in_trigger, vocabulary,
+                        ),
+                    ) && is_permanent_body_target(src_bt)
+                        && is_permanent_body_target(dst_bt)
+                    {
+                        let is_its_toughness = matches!(
+                            amount.as_ref(),
+                            ValueExprAst::ObjectStat {
+                                subject,
+                                stat: StatKind::Toughness,
+                            } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
+                        );
+                        let amt_res = if is_its_power {
+                            Ok(DamageAmountSpec::SourcePower)
+                        } else if is_its_toughness {
+                            Ok(DamageAmountSpec::SourceToughness)
+                        } else {
+                            let resolved_amt = resolve_x(amount, bound_x);
+                            let sac_rewritten = rewrite_sacrificed_permanent_anaphora(resolved_amt);
+                            let eff_amt = sac_rewritten.as_ref().unwrap_or(resolved_amt);
+                            lower_value_expr_in_context(eff_amt, builder, in_trigger, vocabulary)
+                                .map(|e| {
+                                    DamageAmountSpec::Expr(rewrite_milled_card_mana_value(
+                                        e, builder,
+                                    ))
+                                })
+                        };
+                        if let Ok(amt_spec) = amt_res {
+                            builder
+                                .instructions
+                                .push(Instruction::FixedTargetClause(Box::new(
+                                    ExecutableBody::new(
+                                        src_bt,
+                                        vec![Instruction::RememberPermanentTarget],
+                                    ),
+                                )));
+                            builder
+                                .instructions
+                                .push(Instruction::FixedTargetClause(Box::new(
+                                    ExecutableBody::new(
+                                        dst_bt,
+                                        vec![Instruction::RememberPermanentTarget],
+                                    ),
+                                )));
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage_from(
+                                    spellwake_engine::toolbox::DamageSourceQuery::Objects(
+                                        spellwake_engine::toolbox::ObjectQuery::LinkedTarget {
+                                            index: 0,
+                                        },
+                                    ),
+                                    spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                                        spellwake_engine::toolbox::ObjectQuery::LinkedTarget {
+                                            index: 1,
+                                        },
+                                    ),
+                                    amt_spec,
+                                    false,
+                                ),
+                            );
+                            return Ok(());
+                        }
+                    }
+                }
+                let unwrapped_eff_source = unwrap_in_zone_subject(eff_source);
+                let eff_source = unwrapped_eff_source.as_ref().unwrap_or(eff_source);
+                let unwrapped_target = unwrap_in_zone_subject(target);
+                let target_ref: &SubjectRefAst =
+                    unwrapped_target.as_ref().unwrap_or(target.as_ref());
                 let src_ref = match eff_source {
                     SubjectRefAst::SelfObject => Some(DamageSourceRef::AbilitySource),
                     SubjectRefAst::TargetObject {
                         filter,
-                        count: TargetCountAst::Exact(1),
+                        count: count @ (TargetCountAst::Exact(1) | TargetCountAst::UpTo(1)),
                     } if matches!(filter.zone, None | Some(ZoneFilter::Battlefield)) => {
                         let mut f_clean = filter.as_ref().clone();
                         f_clean.zone = None;
@@ -476,6 +573,9 @@ pub(super) fn lower_combat_damage_instruction(
                             &f_clean, builder, in_trigger, vocabulary,
                         )?;
                         builder.bind_target(bt)?;
+                        if *count == TargetCountAst::UpTo(1) {
+                            builder.up_to_one_target = true;
+                        }
                         Some(DamageSourceRef::TargetObject)
                     }
                     SubjectRefAst::TargetOneOf {
@@ -561,7 +661,7 @@ pub(super) fn lower_combat_damage_instruction(
                             stat: StatKind::Toughness,
                         } if matches!(subject.as_ref(), SubjectRefAst::Anaphora(_))
                     );
-                    let rec_ref = match target.as_ref() {
+                    let rec_ref = match target_ref {
                         SubjectRefAst::TargetObject {
                             filter,
                             count: TargetCountAst::Exact(1),
@@ -1108,50 +1208,265 @@ pub(super) fn lower_combat_damage_instruction(
                         );
                         return Ok(());
                     }
-                    if matches!(
-                        src,
-                        DamageSourceRef::TargetObject
-                            | DamageSourceRef::TriggeringObject
-                            | DamageSourceRef::AttachedHost
-                            | DamageSourceRef::AbilitySource
-                    ) && (matches!(
-                        target.as_ref(),
-                        SubjectRefAst::Player(PlayerRefAst::ItsOwner)
-                    ) || matches!(
-                        target.as_ref(),
-                        SubjectRefAst::OwnerOf(inner)
-                            if matches!(inner.as_ref(), SubjectRefAst::Anaphora(_))
-                    )) {
-                        let src_obj_q = match src {
-                            DamageSourceRef::TargetObject => {
-                                spellwake_engine::toolbox::ObjectQuery::Targets
-                            }
-                            DamageSourceRef::TriggeringObject => {
-                                spellwake_engine::toolbox::ObjectQuery::TriggerSubject
-                            }
-                            DamageSourceRef::AttachedHost => {
-                                spellwake_engine::toolbox::ObjectQuery::AttachedHost
-                            }
-                            DamageSourceRef::AbilitySource => {
-                                spellwake_engine::toolbox::ObjectQuery::Source
-                            }
-                            _ => unreachable!(),
-                        };
-                        builder.instructions.push(
-                            crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage_from(
-                                spellwake_engine::toolbox::DamageSourceQuery::Objects(
-                                    src_obj_q.clone(),
+                    let src_obj_q_opt = match &src {
+                        DamageSourceRef::TargetObject => {
+                            Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+                        }
+                        DamageSourceRef::TriggeringObject => {
+                            Some(spellwake_engine::toolbox::ObjectQuery::TriggerSubject)
+                        }
+                        DamageSourceRef::AttachedHost => {
+                            Some(spellwake_engine::toolbox::ObjectQuery::AttachedHost)
+                        }
+                        DamageSourceRef::AbilitySource => {
+                            Some(spellwake_engine::toolbox::ObjectQuery::Source)
+                        }
+                        DamageSourceRef::CreatedTokens => {
+                            Some(spellwake_engine::toolbox::ObjectQuery::CreatedTokens)
+                        }
+                        DamageSourceRef::LastMoved => {
+                            Some(spellwake_engine::toolbox::ObjectQuery::LastMoved)
+                        }
+                        DamageSourceRef::Matching(obj) => {
+                            Some(spellwake_engine::toolbox::ObjectQuery::zone(
+                                spellwake_engine::toolbox::QueryZone::Battlefield,
+                                *obj,
+                            ))
+                        }
+                        DamageSourceRef::AllPermanentTargets => {
+                            Some(spellwake_engine::toolbox::ObjectQuery::Targets)
+                        }
+                    };
+                    if let Some(src_obj_q) = src_obj_q_opt {
+                        let extra_target_q: Option<spellwake_engine::toolbox::DamageTargetQuery> =
+                            match target_ref {
+                                SubjectRefAst::Player(PlayerRefAst::ItsOwner) => Some(
+                                    spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                        spellwake_engine::toolbox::PlayerSelector::OwnersOf(
+                                            Box::new(src_obj_q.clone()),
+                                        ),
+                                    ),
                                 ),
-                                spellwake_engine::toolbox::DamageTargetQuery::Players(
-                                    spellwake_engine::toolbox::PlayerSelector::OwnersOf(Box::new(
+                                SubjectRefAst::OwnerOf(inner) => match inner.as_ref() {
+                                    SubjectRefAst::Anaphora(_) => Some(
+                                        spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                            spellwake_engine::toolbox::PlayerSelector::OwnersOf(
+                                                Box::new(src_obj_q.clone()),
+                                            ),
+                                        ),
+                                    ),
+                                    SubjectRefAst::TargetObject {
+                                        count: TargetCountAst::Exact(1),
+                                        ..
+                                    } => {
+                                        let bt = lower_target_subject(inner, vocabulary)?;
+                                        builder.bind_target(bt)?;
+                                        Some(spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::TargetOwner,
+                                            ),
+                                        ))
+                                    }
+                                    SubjectRefAst::TriggerSubject if in_trigger => Some(
+                                        spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::TriggerSubjectOwner,
+                                            ),
+                                        ),
+                                    ),
+                                    SubjectRefAst::SelfObject
+                                        if in_trigger || self_pronoun_valid || builder.has_source =>
+                                    {
+                                        Some(spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::SourceOwner,
+                                            ),
+                                        ))
+                                    }
+                                    SubjectRefAst::AttachedHost(_)
+                                        if in_trigger || self_pronoun_valid || builder.has_source =>
+                                    {
+                                        Some(spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                            spellwake_engine::toolbox::PlayerSelector::OwnersOf(
+                                                Box::new(
+                                                    spellwake_engine::toolbox::ObjectQuery::AttachedHost,
+                                                ),
+                                            ),
+                                        ))
+                                    }
+                                    _ => None,
+                                },
+                                SubjectRefAst::ControllerOf(inner) => match inner.as_ref() {
+                                    SubjectRefAst::TargetObject {
+                                        count: TargetCountAst::Exact(1),
+                                        ..
+                                    } => {
+                                        let bt = lower_target_subject(inner, vocabulary)?;
+                                        builder.bind_target(bt)?;
+                                        let rp = if is_stack_body_target(bt) {
+                                            ResolvingPlayer::TargetSpellController
+                                        } else {
+                                            ResolvingPlayer::TargetController
+                                        };
+                                        Some(spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                rp,
+                                            ),
+                                        ))
+                                    }
+                                    SubjectRefAst::TriggerSubject if in_trigger => Some(
+                                        spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::TriggerSubjectController,
+                                            ),
+                                        ),
+                                    ),
+                                    SubjectRefAst::SelfObject => Some(
+                                        spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::Controller,
+                                            ),
+                                        ),
+                                    ),
+                                    SubjectRefAst::AttachedHost(_)
+                                        if in_trigger || self_pronoun_valid || builder.has_source =>
+                                    {
+                                        Some(spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::AttachedHostController,
+                                            ),
+                                        ))
+                                    }
+                                    SubjectRefAst::All(f)
+                                    | SubjectRefAst::Each(f)
+                                    | SubjectRefAst::Group(f)
+                                        if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
+                                    {
+                                        let mut clean = f.as_ref().clone();
+                                        clean.zone = None;
+                                        let obj = lower_object_filter_in_context(
+                                            &clean, builder, in_trigger, vocabulary,
+                                        )?;
+                                        bind_filter_player_target(builder, &obj)?;
+                                        Some(spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                            spellwake_engine::toolbox::PlayerSelector::ControllersOf(
+                                                Box::new(
+                                                    spellwake_engine::toolbox::ObjectQuery::zone(
+                                                        spellwake_engine::toolbox::QueryZone::Battlefield,
+                                                        obj,
+                                                    ),
+                                                ),
+                                            ),
+                                        ))
+                                    }
+                                    _ => None,
+                                },
+                                SubjectRefAst::Player(
+                                    PlayerRefAst::ThatPlayerOrPlaneswalkerController,
+                                ) => {
+                                    let rp = lower_resolving_player_in_context(
+                                        PlayerRefAst::ThatPlayerOrPlaneswalkerController,
+                                        builder,
+                                        in_trigger,
+                                    )?;
+                                    Some(spellwake_engine::toolbox::DamageTargetQuery::Players(
+                                        spellwake_engine::toolbox::PlayerSelector::Resolving(rp),
+                                    ))
+                                }
+                                SubjectRefAst::Compound(items) if items.len() >= 2 => {
+                                    let mut obj_queries = Vec::new();
+                                    let mut player_sel: Option<
+                                        spellwake_engine::toolbox::PlayerSelector,
+                                    > = None;
+                                    let mut all_ok = true;
+                                    for item in items {
+                                        match item {
+                                            SubjectRefAst::Each(f)
+                                            | SubjectRefAst::All(f)
+                                            | SubjectRefAst::Group(f)
+                                                if matches!(
+                                                    f.zone,
+                                                    None | Some(ZoneFilter::Battlefield)
+                                                ) =>
+                                            {
+                                                let mut clean = f.as_ref().clone();
+                                                clean.zone = None;
+                                                if let Ok(obj) = lower_object_filter_in_context(
+                                                    &clean, builder, in_trigger, vocabulary,
+                                                ) && bind_filter_player_target(builder, &obj)
+                                                    .is_ok()
+                                                {
+                                                    obj_queries.push(
+                                                        spellwake_engine::toolbox::ObjectQuery::zone(
+                                                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                                                            obj,
+                                                        ),
+                                                    );
+                                                } else {
+                                                    all_ok = false;
+                                                    break;
+                                                }
+                                            }
+                                            SubjectRefAst::Player(p) if player_sel.is_none() => {
+                                                if let Ok(ap) = lower_affected_players_in_context(
+                                                    *p, builder, in_trigger,
+                                                ) {
+                                                    player_sel = Some(
+                                                        spellwake_engine::toolbox::PlayerSelector::Group(
+                                                            ap,
+                                                        ),
+                                                    );
+                                                } else {
+                                                    all_ok = false;
+                                                    break;
+                                                }
+                                            }
+                                            _ => {
+                                                all_ok = false;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if all_ok && !obj_queries.is_empty() {
+                                        let oq = if obj_queries.len() == 1 {
+                                            obj_queries.remove(0)
+                                        } else {
+                                            spellwake_engine::toolbox::ObjectQuery::Union(
+                                                obj_queries,
+                                            )
+                                        };
+                                        Some(match player_sel {
+                                            Some(players) => {
+                                                spellwake_engine::toolbox::DamageTargetQuery::Both {
+                                                    objects: oq,
+                                                    players,
+                                                }
+                                            }
+                                            None => {
+                                                spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                                                    oq,
+                                                )
+                                            }
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                }
+                                _ => None,
+                            };
+                        if let Some(target_q) = extra_target_q {
+                            builder.instructions.push(
+                                crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage_from(
+                                    spellwake_engine::toolbox::DamageSourceQuery::Objects(
                                         src_obj_q,
-                                    )),
+                                    ),
+                                    target_q,
+                                    amt_spec,
+                                    false,
                                 ),
-                                amt_spec,
-                                false,
-                            ),
-                        );
-                        return Ok(());
+                            );
+                            return Ok(());
+                        }
                     }
                 }
                 return Err("oracle:non-self-damage-source");
@@ -1532,10 +1847,36 @@ pub(super) fn lower_combat_damage_instruction(
                         }
                         SubjectRefAst::Anaphora(_)
                             if builder.target == BodyTarget::None
+                                && last_instruction_created_tokens(&builder.instructions) =>
+                        {
+                            spellwake_engine::toolbox::PlayerSelector::ControllersOf(Box::new(
+                                spellwake_engine::toolbox::ObjectQuery::CreatedTokens,
+                            ))
+                        }
+                        SubjectRefAst::Anaphora(_)
+                            if builder.target == BodyTarget::None
                                 && last_instruction_moved_object(&builder.instructions) =>
                         {
                             spellwake_engine::toolbox::PlayerSelector::ControllersOf(Box::new(
                                 spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                            ))
+                        }
+                        SubjectRefAst::All(f)
+                        | SubjectRefAst::Each(f)
+                        | SubjectRefAst::Group(f)
+                            if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
+                        {
+                            let mut clean = f.as_ref().clone();
+                            clean.zone = None;
+                            let obj = lower_object_filter_in_context(
+                                &clean, builder, in_trigger, vocabulary,
+                            )?;
+                            bind_filter_player_target(builder, &obj)?;
+                            spellwake_engine::toolbox::PlayerSelector::ControllersOf(Box::new(
+                                spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Battlefield,
+                                    obj,
+                                ),
                             ))
                         }
                         _ => return Err("oracle:unsupported-damage-target"),
@@ -1576,12 +1917,45 @@ pub(super) fn lower_combat_damage_instruction(
                                 ResolvingPlayer::SourceOwner,
                             )
                         }
+                        SubjectRefAst::AttachedHost(_)
+                            if self_pronoun_valid || in_trigger || builder.has_source =>
+                        {
+                            spellwake_engine::toolbox::PlayerSelector::OwnersOf(Box::new(
+                                spellwake_engine::toolbox::ObjectQuery::AttachedHost,
+                            ))
+                        }
+                        SubjectRefAst::Anaphora(_)
+                            if builder.target == BodyTarget::None
+                                && last_instruction_created_tokens(&builder.instructions) =>
+                        {
+                            spellwake_engine::toolbox::PlayerSelector::OwnersOf(Box::new(
+                                spellwake_engine::toolbox::ObjectQuery::CreatedTokens,
+                            ))
+                        }
                         SubjectRefAst::Anaphora(_)
                             if builder.target == BodyTarget::None
                                 && last_instruction_moved_object(&builder.instructions) =>
                         {
                             spellwake_engine::toolbox::PlayerSelector::OwnersOf(Box::new(
                                 spellwake_engine::toolbox::ObjectQuery::LastMoved,
+                            ))
+                        }
+                        SubjectRefAst::All(f)
+                        | SubjectRefAst::Each(f)
+                        | SubjectRefAst::Group(f)
+                            if matches!(f.zone, None | Some(ZoneFilter::Battlefield)) =>
+                        {
+                            let mut clean = f.as_ref().clone();
+                            clean.zone = None;
+                            let obj = lower_object_filter_in_context(
+                                &clean, builder, in_trigger, vocabulary,
+                            )?;
+                            bind_filter_player_target(builder, &obj)?;
+                            spellwake_engine::toolbox::PlayerSelector::OwnersOf(Box::new(
+                                spellwake_engine::toolbox::ObjectQuery::zone(
+                                    spellwake_engine::toolbox::QueryZone::Battlefield,
+                                    obj,
+                                ),
                             ))
                         }
                         _ => return Err("oracle:unsupported-damage-target"),
@@ -2062,7 +2436,43 @@ pub(super) fn lower_combat_damage_instruction(
                                             [first, second] => {
                                                 ObjectFilter::Either(*first, *second)
                                             }
-                                            _ => return Err("oracle:unsupported-damage-target"),
+                                            _ => {
+                                                let amt_expr = lower_amt(builder)?;
+                                                let queries: Vec<
+                                                    spellwake_engine::toolbox::ObjectQuery,
+                                                > = merged
+                                                    .into_iter()
+                                                    .map(|c| {
+                                                        spellwake_engine::toolbox::ObjectQuery::zone(
+                                                            spellwake_engine::toolbox::QueryZone::Battlefield,
+                                                            ObjectFilter::Clause(c),
+                                                        )
+                                                    })
+                                                    .collect();
+                                                let obj_q =
+                                                    spellwake_engine::toolbox::ObjectQuery::Union(
+                                                        queries,
+                                                    );
+                                                let target_q = match player_group {
+                                                    Some(players) => {
+                                                        spellwake_engine::toolbox::DamageTargetQuery::Both {
+                                                            objects: obj_q,
+                                                            players: spellwake_engine::toolbox::PlayerSelector::Group(players),
+                                                        }
+                                                    }
+                                                    None => {
+                                                        spellwake_engine::toolbox::DamageTargetQuery::Objects(obj_q)
+                                                    }
+                                                };
+                                                builder.instructions.push(
+                                                    crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                                                        target_q,
+                                                        amt_expr,
+                                                        false,
+                                                    ),
+                                                );
+                                                return Ok(());
+                                            }
                                         }
                                     };
                                     match player_group {
@@ -2266,6 +2676,21 @@ pub(super) fn lower_combat_damage_instruction(
                         DamageGroup::RelatedPlayer,
                         amt_expr,
                     );
+                    Ok(())
+                }
+                SubjectRefAst::DistinctTarget { filter, .. }
+                    if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                        && !filter.is_ability
+                        && !filter.any_spell =>
+                {
+                    let mut clean = filter.as_ref().clone();
+                    clean.zone = None;
+                    let bt = lower_battlefield_body_target_in_context(
+                        &clean, builder, in_trigger, vocabulary,
+                    )?;
+                    builder.bind_target(bt)?;
+                    let amt_expr = lower_amt(builder)?;
+                    push_damage_target(&mut builder.instructions, amt_expr);
                     Ok(())
                 }
                 _ => Err("oracle:unsupported-damage-target"),
@@ -7311,9 +7736,13 @@ pub(super) fn lower_target_one_of_damage_body_target(
                 return Ok(BodyTarget::SingleAnyTarget);
             }
             SubjectRefAst::TargetObject { filter, .. }
-                if filter.zone.is_none() && !filter.is_ability && !filter.any_spell =>
+                if matches!(filter.zone, None | Some(ZoneFilter::Battlefield))
+                    && !filter.is_ability
+                    && !filter.any_spell =>
             {
-                let obj = lower_object_filter_in_context(filter, builder, in_trigger, vocabulary)?;
+                let mut clean = filter.as_ref().clone();
+                clean.zone = None;
+                let obj = lower_object_filter_in_context(&clean, builder, in_trigger, vocabulary)?;
                 if obj == ObjectFilter::creature() {
                     has_creature = true;
                 } else if obj == ObjectFilter::planeswalker() {
@@ -7330,6 +7759,7 @@ pub(super) fn lower_target_one_of_damage_body_target(
             _ => return Err("oracle:unsupported-damage-target"),
         }
     }
+    let perm_clauses = merge_object_clauses_by_types(perm_clauses);
     if has_non_perm_special {
         let non_special_perm_count = perm_clauses
             .iter()

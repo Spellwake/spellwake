@@ -456,18 +456,6 @@ impl EffectWindow {
             Instruction::LookTopOneRestGraveyard { count } => {
                 (usize::from(*count), true, false, false)
             }
-            Instruction::LookTopOneRestBottom { count } => (
-                self.resolve_value_expr(player, count)?
-                    .max(0.into())
-                    .min(RulesInteger::from_usize(
-                        self.window.cards().library(player).len(),
-                    ))
-                    .to_usize()
-                    .ok_or(EffectError::InconsistentProgram)?,
-                true,
-                false,
-                true,
-            ),
             Instruction::LookTopCreatureSharingAttachedSubtype { count } => {
                 (usize::from(*count), true, false, true)
             }

@@ -7,42 +7,6 @@ use crate::{
 };
 
 impl EffectWindow {
-    pub(super) fn lose_life_for_linked_damage(
-        &mut self,
-        entry: StackEntryId,
-        instruction: usize,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let player = self.captured_related_player()?;
-        if !self.window.participants().contains(&player) {
-            return Ok(());
-        }
-        let trigger = self
-            .execution_bindings(entry)
-            .and_then(|bindings| bindings.trigger.as_ref())
-            .ok_or(EffectError::InconsistentProgram)?;
-        let amount =
-            trigger
-                .causes
-                .members()
-                .iter()
-                .try_fold(RulesInteger::from(0), |total, member| {
-                    let crate::occurrence::TriggerRelated::DamageReceived { amount, .. } =
-                        &member.related
-                    else {
-                        return Err(EffectError::InconsistentProgram);
-                    };
-                    Ok(total.plus(amount))
-                })?;
-        self.adjust_life_at_cut(
-            entry,
-            instruction,
-            player,
-            &LifeAdjustment::Lose(amount),
-            append,
-        )
-    }
-
     pub(super) fn life_gain_prohibitions(
         &self,
         current: &crate::characteristics::EvaluatedCharacteristics,

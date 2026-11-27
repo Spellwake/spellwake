@@ -3845,6 +3845,7 @@ pub(in super::super) fn lower_resolution_condition(
                         Some(
                             Instruction::ZoneOp(_)
                                 | Instruction::ForEachPlayerQuery { .. }
+                                | Instruction::MutateObject(_)
                                 | Instruction::Discard { .. }
                                 | Instruction::Sacrifice { .. }
                                 | Instruction::ChooseObjects { .. }

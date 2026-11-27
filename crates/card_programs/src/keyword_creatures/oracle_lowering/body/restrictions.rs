@@ -1398,7 +1398,6 @@ pub(in super::super) fn rewrite_instruction_anaphora(
         | Instruction::CollectEvidence {
             minimum: amount, ..
         }
-        | Instruction::TapOrUntapControlled { amount, .. }
         | Instruction::CreateTokenCopy { count: amount, .. }
         | Instruction::Monstrosity { amount }
         | Instruction::OfferDynamicManaPayment {
@@ -1448,11 +1447,19 @@ pub(in super::super) fn rewrite_instruction_anaphora(
                 &|v| rewrite_value_expr_anaphora(v, replacement),
             );
         }
-        Instruction::ForEachPlayerQuery { body, .. } => {
+        Instruction::ForEachPlayerQuery { body, .. } | Instruction::ForEach { body, .. } => {
             for inner in &mut body.instructions {
                 rewrite_instruction_anaphora(inner, replacement);
             }
         }
+        Instruction::PromptChoice(spec) => match &mut spec.domain {
+            spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
+            | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                rewrite_value_expr_anaphora(min, replacement);
+                rewrite_value_expr_anaphora(max, replacement);
+            }
+            _ => {}
+        },
         Instruction::DrawCards(spec) => {
             rewrite_value_expr_anaphora(&mut spec.amount, replacement);
         }
@@ -1661,6 +1668,14 @@ pub(in super::super) fn rewrite_body_prior_result(
                         &|v| rewrite_value_expr_prior_result(v, replacement),
                     );
                 }
+                Instruction::PromptChoice(spec) => match &mut spec.domain {
+                    spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
+                    | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                        rewrite_value_expr_prior_result(min, replacement);
+                        rewrite_value_expr_prior_result(max, replacement);
+                    }
+                    _ => {}
+                },
                 Instruction::DrawCards(spec) => {
                     rewrite_value_expr_prior_result(&mut spec.amount, replacement);
                 }
@@ -2681,7 +2696,6 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             | Instruction::CollectEvidence {
                 minimum: amount, ..
             }
-            | Instruction::TapOrUntapControlled { amount, .. }
             | Instruction::CreateTokenCopy { count: amount, .. }
             | Instruction::Monstrosity { amount }
             | Instruction::OfferDynamicManaPayment {
@@ -2732,9 +2746,17 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                     &|v| rewrite_value_expr_trigger_subject(v, replacement),
                 );
             }
-            Instruction::ForEachPlayerQuery { body, .. } => {
+            Instruction::ForEachPlayerQuery { body, .. } | Instruction::ForEach { body, .. } => {
                 rewrite_body_trigger_subject_stats(body, replacement);
             }
+            Instruction::PromptChoice(spec) => match &mut spec.domain {
+                spellwake_engine::toolbox::PromptDomain::Objects { min, max, .. }
+                | spellwake_engine::toolbox::PromptDomain::Number { min, max } => {
+                    rewrite_value_expr_trigger_subject(min, replacement);
+                    rewrite_value_expr_trigger_subject(max, replacement);
+                }
+                _ => {}
+            },
             Instruction::DrawCards(spec) => {
                 rewrite_value_expr_trigger_subject(&mut spec.amount, replacement);
             }

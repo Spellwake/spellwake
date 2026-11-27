@@ -1513,7 +1513,22 @@ fn creature(
                     NoTarget,
                     vec![
                         RequireCondition(spellwake_engine::program::InterveningCondition::NoOtherControlledCreatures),
-                        LookTopOneRestBottom { count: spellwake_engine::program::ValueExpr::Literal(4.into()) },
+                        Instruction::LookTopChoose {
+                            count: spellwake_engine::program::ValueExpr::Literal(4.into()),
+                            library_owner: spellwake_engine::program::ResolvingPlayer::Controller,
+                            filter: None,
+                            reveal: false,
+                            reveal_only: false,
+                            to_battlefield: false,
+                            enters_tapped: false,
+                            take_all_matching: false,
+                            max_picks: 1,
+                            rest_to_graveyard: false,
+                            rest_to_exile: false,
+                            rest_to_top: false,
+                            random_rest_order: false,
+                            secondary: None,
+                        },
                     ],
                 )],
             )
@@ -1525,7 +1540,21 @@ fn creature(
                 vec![(
                     spellwake_engine::program::TriggerSpec::blocks_or_blocked(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::BlockTriggerKind::BlockedByEach { without_flanking_only: false }),
                     NoTarget,
-                    vec![DamageCapturedBlocker(1)],
+                    vec![
+                        crate::keyword_creatures::oracle_lowering::toolbox_emit::deal_damage(
+                            spellwake_engine::toolbox::DamageTargetQuery::Objects(
+                                spellwake_engine::toolbox::ObjectQuery::Intersect(
+                                    Box::new(spellwake_engine::toolbox::ObjectQuery::TriggerSubject),
+                                    Box::new(spellwake_engine::toolbox::ObjectQuery::zone(
+                                        spellwake_engine::toolbox::QueryZone::Battlefield,
+                                        ObjectFilter::creature(),
+                                    )),
+                                ),
+                            ),
+                            spellwake_engine::program::ValueExpr::literal(1),
+                            false,
+                        ),
+                    ],
                 )],
             )
         }
