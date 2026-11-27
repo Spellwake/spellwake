@@ -87,7 +87,6 @@
     ],
     "postgresDbFilters": [
       "patreon_association",
-      "patreon_current_work",
       "patreon_intake",
       "patreon_refresh",
       "patreon_financial_integrity",

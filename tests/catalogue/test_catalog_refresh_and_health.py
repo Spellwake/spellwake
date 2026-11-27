@@ -362,7 +362,7 @@ class HealthChecksTests(unittest.TestCase):
             ["3d-tabletop", "ui-responsive", "component-gallery"],
         )
         patreon_spec = next(d for d in health_checks.DOMAINS if d.slug == "patreon")
-        self.assertIn("patreon_current_work", patreon_spec.db_filters)
+        self.assertIn("patreon_association", patreon_spec.db_filters)
 
     def test_parse_python_unittest_counts(self) -> None:
         ok_out = "......\n----------------------------------------------------------------------\nRan 12 tests in 0.042s\n\nOK\n"

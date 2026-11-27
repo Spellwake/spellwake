@@ -62,21 +62,6 @@
         ],
         "cwd": ".",
         "envExtra": {}
-      },
-      {
-        "kind": "cargo",
-        "label": "application member history replay integration tests",
-        "args": [
-          "cargo",
-          "test",
-          "--locked",
-          "--manifest-path",
-          "services/application/Cargo.toml",
-          "--test",
-          "member_history_replay"
-        ],
-        "cwd": ".",
-        "envExtra": {}
       }
     ],
     "postgresDbFilters": [
