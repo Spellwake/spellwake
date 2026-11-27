@@ -44,9 +44,7 @@ impl EffectWindow {
             EffectDecision::ResolutionSelect(frame)
                 if matches!(
                     frame.operation(),
-                    ResolutionSelectionKind::GraveyardToBattlefield
-                        | ResolutionSelectionKind::HandToBattlefield
-                        | ResolutionSelectionKind::ExileToBattlefield
+                    ResolutionSelectionKind::HandToBattlefield
                 ) =>
             {
                 self.resume_hand_entry(expected, frame, actor, reply)
@@ -84,8 +82,6 @@ impl EffectWindow {
                 };
                 self.resume_attack_defender(expected, bound, actor, choice)
             }
-            EffectDecision::PlaneswalkerType(_) => Err(EffectError::WrongResolutionFrame),
-            EffectDecision::AttackDirection(_) => Err(EffectError::WrongResolutionFrame),
             actual @ (EffectDecision::DrawReplacement(_)
             | EffectDecision::ZoneReplacement(_)
             | EffectDecision::OptionalEffect(_))
@@ -151,7 +147,6 @@ impl EffectWindow {
                     RulesJournal::default(),
                 )
             }
-            EffectDecision::DamageRecipientChoice(_) => Err(EffectError::WrongResolutionFrame),
             EffectDecision::DamageSourceChoice(bound) => {
                 let revision = self.next_revision(expected)?;
                 let DecisionReply::ChooseDamageSource(source) = reply else {
@@ -187,7 +182,6 @@ impl EffectWindow {
                     RulesJournal::default(),
                 )
             }
-            EffectDecision::LoyaltyRemoval(_) => Err(EffectError::WrongResolutionFrame),
             EffectDecision::ResolutionManaColor(bound) => {
                 let revision = self.next_revision(expected)?;
                 let cursor = self
@@ -1224,7 +1218,6 @@ impl EffectWindow {
                     RulesJournal::default(),
                 )
             }
-            EffectDecision::CounterRemoval(_) => Err(EffectError::WrongResolutionFrame),
             EffectDecision::Proliferate(bound) => {
                 let DecisionReply::Proliferate(selected) = reply else {
                     return Err(EffectError::WrongDecisionKind);

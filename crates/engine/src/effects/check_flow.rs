@@ -1642,11 +1642,6 @@ impl EffectWindow {
             } else {
                 use crate::occurrence::DelayedCopyAction;
                 let instructions = match &action {
-                    DelayedCopyAction::ReturnExiled(objects) => {
-                        vec![Instruction::ZoneOp(Box::new(
-                            crate::toolbox::ZoneOpSpec::return_delayed_exile(objects.clone()),
-                        ))]
-                    }
                     DelayedCopyAction::ReturnExiledWithCounters(objects) => {
                         vec![Instruction::ZoneOp(Box::new(
                             crate::toolbox::ZoneOpSpec::return_delayed_exile_with_counters(

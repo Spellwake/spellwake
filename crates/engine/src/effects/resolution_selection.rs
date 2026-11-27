@@ -13,59 +13,26 @@ mod tests;
 /// The kind of an executor-issued selected-object decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionSelectionKind {
-    VowCreature,
-    ChooseCreatureToKeep,
     Bolster,
     Amass,
-    Mill,
-    LibraryToGraveyard,
-    /// Choose zero or one creature card in your graveyard.
-    GraveyardCreatureToHand,
-    VoteForCard,
-    ExileMilledCreatures,
     HandToBattlefield,
-    GraveyardToBattlefield,
-    ExileToBattlefield,
-    TurnCreatureFaceUp,
-    MeldPartner,
     Soulbond,
     EquipmentToToken,
-    UnattachControlledEquipment,
     TokenReceivingEquipment,
     FoundSpellToCast,
-    AttachAllEquipment,
-    AttachChosenAurasAndEquipment,
-    /// Place any of the selected hand or graveyard Auras attached to the source.
-    AttachAurasFromHandOrGraveyard,
-    CopyDifferentlyNamedTokens,
     /// CR 701.30a Populate: choose one controlled creature token to copy.
     Populate,
-    Untap,
-    /// An effect's selected objects would enter the battlefield.
-    EnterBattlefield,
-    /// An effect moves a selection to its owner’s library.
-    ReturnToLibrary,
-    ReturnToCommandZone,
-    /// The whole cohort was determined by the effect. Only owner ordering is chosen.
-    Destroy,
     Exile,
-    /// A controlled permanent returns to its owner’s hand.
+    /// A controlled permanent returns to its owner's hand.
     ReturnToHand,
     /// A controlled current permanent moves to its owner's graveyard.
     Sacrifice,
-    /// The controller may sacrifice an eligible creature or take the printed alternative.
-    OptionalSacrifice,
-    /// Select creatures to save by paying the same life amount for each.
-    PayLifeToSaveCreatures,
     /// A physical card moves from its owner's hand to that graveyard.
-    DiscardUpTo,
     Discard,
     /// Interactive Blight N: choose one controlled creature to receive N -1/-1 counters.
     BlightCreature,
     /// Interactive Collect Evidence N: choose graveyard cards whose total mana value is at least N.
     CollectEvidence,
-    /// Interactive SelectZoneCardsToZone: choose filtered cards from a zone to move to a destination.
-    SelectZoneCards,
 }
 
 /// The original operation retained by the sole work owner.
@@ -329,7 +296,6 @@ pub struct ResolutionSelectionFrame {
     operation: ResolutionSelectionKind,
     domain: Vec<ObjectId>,
     required: usize,
-    custom_minimum: Option<usize>,
 }
 impl EffectWindow {
     /// Show only the already chosen battlefield permanents in this mixed-zone choice.
@@ -358,7 +324,6 @@ impl ResolutionSelectionFrame {
             domain,
             required: 1,
             operation: ResolutionSelectionKind::FoundSpellToCast,
-            custom_minimum: None,
         }
     }
     pub(super) fn equipment(
@@ -382,7 +347,6 @@ impl ResolutionSelectionFrame {
             domain,
             required: 1,
             operation,
-            custom_minimum: None,
         }
     }
     pub(super) fn hand_entry(
@@ -403,7 +367,6 @@ impl ResolutionSelectionFrame {
             operation,
             domain,
             required,
-            custom_minimum: None,
         }
     }
     /// Exact executor revision at which this immutable frame is issued.
@@ -432,30 +395,15 @@ impl ResolutionSelectionFrame {
     }
     /// Required distinct member count, clamped by the executor to domain size.
     pub fn minimum(&self) -> usize {
-        if let Some(min) = self.custom_minimum {
-            return min.min(self.required);
-        }
         if self.operation == ResolutionSelectionKind::CollectEvidence {
             return usize::from(self.required > 0);
         }
         if matches!(
             self.operation,
-            ResolutionSelectionKind::PayLifeToSaveCreatures
-                | ResolutionSelectionKind::OptionalSacrifice
-                | ResolutionSelectionKind::UnattachControlledEquipment
-                | ResolutionSelectionKind::DiscardUpTo
-                | ResolutionSelectionKind::ExileMilledCreatures
-                | ResolutionSelectionKind::FoundSpellToCast
+            ResolutionSelectionKind::FoundSpellToCast
                 | ResolutionSelectionKind::EquipmentToToken
-                | ResolutionSelectionKind::TurnCreatureFaceUp
                 | ResolutionSelectionKind::Soulbond
-                | ResolutionSelectionKind::ExileToBattlefield
                 | ResolutionSelectionKind::HandToBattlefield
-                | ResolutionSelectionKind::AttachChosenAurasAndEquipment
-                | ResolutionSelectionKind::AttachAurasFromHandOrGraveyard
-                | ResolutionSelectionKind::CopyDifferentlyNamedTokens
-                | ResolutionSelectionKind::Untap
-                | ResolutionSelectionKind::GraveyardCreatureToHand
         ) {
             0
         } else {
@@ -538,7 +486,6 @@ impl ResolutionSelectionWork {
                         operation: self.operation.kind(),
                         domain: requirement.domain.clone(),
                         required: requirement.required,
-                        custom_minimum: None,
                     })
                 })
             }
@@ -674,7 +621,7 @@ impl EffectWindow {
 
     /// Discard cohorts use exact owner hands. A vanished hand retires only its own staged choice.
     pub(super) fn refresh_hand_selection_after_departure(&mut self) -> Result<(), EffectError> {
-        let (filter_clone, check_rows) = {
+        let check_rows = {
             let Some(PendingWork::ResolutionSelection(work)) = &self.pending_work else {
                 return Err(EffectError::WrongSelectionFrame);
             };
@@ -690,50 +637,19 @@ impl EffectWindow {
                 return Err(EffectError::InconsistentSelectionWork);
             }
             let participants = self.window.participants();
-            let rows = requirements
+            requirements
                 .iter()
                 .filter(|r| participants.contains(&r.player))
                 .map(|r| (r.player, r.domain.clone()))
-                .collect::<Vec<_>>();
-            let filter_clone: Option<Box<crate::program::ObjectFilter>> = None;
-            (filter_clone, rows)
+                .collect::<Vec<_>>()
         };
-        let evaluated = if filter_clone.is_some() {
-            Some(self.evaluated_characteristics()?)
-        } else {
-            None
-        };
-        let ability_source =
-            self.window
-                .resolving()
-                .and_then(|entry| match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => Some(source.id()),
-                    StackKind::CardSpell(id) => Some(*id),
-                    _ => None,
-                });
-        let empty_excluded = BTreeSet::new();
         for (player, domain) in &check_rows {
             let hand = self
                 .window
                 .cards()
                 .iter()
                 .filter(|object| {
-                    object.card_id().is_some()
-                        && object.zone() == ObjectZone::Hand(*player)
-                        && match (&filter_clone, &evaluated) {
-                            (Some(filter), Some(eval)) => eval.get(object.id()).is_some_and(|v| {
-                                self.matches_object_filter(
-                                    **filter,
-                                    v,
-                                    *player,
-                                    ability_source,
-                                    &empty_excluded,
-                                    eval,
-                                )
-                            }),
-                            _ => true,
-                        }
+                    object.card_id().is_some() && object.zone() == ObjectZone::Hand(*player)
                 })
                 .map(GameObject::id);
             if !hand.eq(domain.iter().copied()) {
@@ -1267,13 +1183,6 @@ impl EffectWindow {
             .window
             .resolving()
             .ok_or(EffectError::WrongResolutionFrame)?;
-        let ability_source = match entry.kind() {
-            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
-                Some(source.id())
-            }
-            StackKind::CardSpell(id) => Some(*id),
-            _ => None,
-        };
         let amount = self.resolve_value_expr(entry.controller(), amount)?;
         if amount < 0.into() {
             return Err(EffectError::InconsistentSelectionWork);
@@ -1289,9 +1198,7 @@ impl EffectWindow {
                 .cards()
                 .iter()
                 .filter(|_| !protected)
-                .filter(|object| {
-                    self.selection_eligible(&operation, player, object, ability_source, &evaluated)
-                })
+                .filter(|object| self.selection_eligible(&operation, player, object, &evaluated))
                 .map(GameObject::id)
                 .collect();
             let bound = RulesInteger::from_usize(domain.len());
@@ -2009,7 +1916,7 @@ impl EffectWindow {
                             batch: Box::new(replacements),
                         }
                     } else {
-                        let groups = self.selection_owner_groups(&accepted)?;
+                        let groups = self.selection_arrival_groups(&accepted, None)?;
                         ResolutionSelectionStage::Ordering {
                             replacements: None,
                             selections: accepted,
@@ -2309,18 +2216,6 @@ impl EffectWindow {
             RulesJournal::default(),
         )
     }
-    pub(super) fn selection_owner_groups(
-        &self,
-        selections: &[ResolutionAcceptedSelection],
-    ) -> Result<Vec<ResolutionGraveyardGroup>, EffectError> {
-        self.zone_arrival_groups(
-            &selections
-                .iter()
-                .flat_map(|s| s.objects.iter().copied())
-                .collect::<Vec<_>>(),
-            None,
-        )
-    }
     pub(super) fn selection_arrival_groups(
         &self,
         selections: &[ResolutionAcceptedSelection],
@@ -2409,13 +2304,6 @@ impl EffectWindow {
                     )
                 )
         );
-        let exile_source = false;
-        let delay_exile_return = false;
-        let delay_cohort_return = false;
-        let imprint = false;
-        let inherit_from_exile = false;
-        let play_exiled_card: Option<SeatId> = None;
-        let independent_link: Option<(ObjectId, crate::program::LinkedExileGroup)> = None;
         let players = match (operation, actual) {
             (
                 ResolutionSelectionOperation::RevealedHand {
@@ -2633,13 +2521,6 @@ impl EffectWindow {
                 .collect(),
         };
         let evaluated = self.evaluated_characteristics()?;
-        let ability_source = match entry.kind() {
-            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
-                Some(source.id())
-            }
-            StackKind::CardSpell(id) => Some(*id),
-            _ => None,
-        };
         let mut unique = BTreeSet::new();
         for selected in &batch.logical {
             let object = self
@@ -2655,13 +2536,7 @@ impl EffectWindow {
                         selected.player,
                         entry.controller(),
                     )?)
-                || !self.selection_eligible(
-                    operation,
-                    selected.player,
-                    object,
-                    ability_source,
-                    &evaluated,
-                )
+                || !self.selection_eligible(operation, selected.player, object, &evaluated)
             {
                 return Err(EffectError::InconsistentSelectionWork);
             }
@@ -2805,24 +2680,22 @@ impl EffectWindow {
                     .then_some(movement.after.id())
             });
         }
-        if (matches!(
+        if matches!(
             operation,
             ResolutionSelectionOperation::ExileAnnouncedTargets { .. }
-        ) || exile_source)
-            && matches!(
-                self.payloads
-                    .get(&cursor.entry)
-                    .and_then(StackPayload::instructions)
-                    .and_then(|ops| ops.get(cursor.instruction + 1)),
-                Some(Instruction::ZoneOp(spec))
-                    if matches!(
-                        spec.destination,
-                        crate::toolbox::ZoneDest::Delayed(
-                            crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort { .. }
-                        )
+        ) && matches!(
+            self.payloads
+                .get(&cursor.entry)
+                .and_then(StackPayload::instructions)
+                .and_then(|ops| ops.get(cursor.instruction + 1)),
+            Some(Instruction::ZoneOp(spec))
+                if matches!(
+                    spec.destination,
+                    crate::toolbox::ZoneDest::Delayed(
+                        crate::toolbox::DelayedZoneAction::ReturnExiledTargetCohort { .. }
                     )
-            )
-        {
+                )
+        ) {
             cursor.impulse.flickered = ordered
                 .iter()
                 .filter(|(movement, _)| movement.after.zone() == ObjectZone::Exile)
@@ -2835,18 +2708,6 @@ impl EffectWindow {
                 })
                 .collect();
         }
-        if delay_cohort_return {
-            let exiled = ordered
-                .iter()
-                .flat_map(|(movement, _)| movement.arrivals())
-                .filter(|id| {
-                    self.window.cards().get(*id).is_some_and(|card| {
-                        card.zone() == ObjectZone::Exile && card.card_id().is_some()
-                    })
-                })
-                .collect();
-            self.delay_spell_return(cursor.entry, exiled)?;
-        }
         if let ResolutionSelectionOperation::ExileLinkedTargets { source, .. } = operation {
             for (movement, _) in &ordered {
                 if movement.after.zone() == ObjectZone::Exile {
@@ -2855,64 +2716,6 @@ impl EffectWindow {
                         .entry(*source)
                         .or_default()
                         .extend(movement.arrivals());
-                }
-            }
-        }
-        if let Some(player) = play_exiled_card {
-            for (movement, _) in &ordered {
-                if movement.after.zone() == ObjectZone::Exile && movement.after.card_id().is_some()
-                {
-                    self.card_play_permissions.insert(CardPlayPermission {
-                        zone: CardPlayZone::Exile,
-                        object: movement.after.id(),
-                        player,
-                        duration: CardPlayDuration::WhileInZone,
-                        any_color: false,
-                        free: false,
-                        cast_only: false,
-                    });
-                }
-            }
-        }
-        if inherit_from_exile {
-            for (movement, _) in &ordered {
-                self.remember_exiled_ability_donor(cursor.entry, movement);
-            }
-        }
-        if let ResolutionSelectionOperation::ExileSingle {
-            source,
-            monarch_controller,
-            ..
-        } = operation
-        {
-            for (movement, _) in &ordered {
-                if movement.after.zone() == ObjectZone::Exile {
-                    if let Some(link) = independent_link {
-                        self.independent_exile_links
-                            .entry(link)
-                            .or_default()
-                            .extend(movement.arrivals());
-                    }
-                    if imprint {
-                        self.remember_imprinted_card(cursor.entry, movement);
-                    }
-                    if let Some(source) = source {
-                        self.characteristics
-                            .linked_exiles
-                            .entry(*source)
-                            .or_default()
-                            .extend(movement.arrivals());
-                    }
-                    if delay_exile_return {
-                        self.schedule_return_at_next_end_step(
-                            cursor.entry,
-                            movement.arrivals().collect(),
-                        )?;
-                    }
-                    if let Some(controller) = monarch_controller {
-                        self.monarch_linked_exiles
-                            .extend(movement.arrivals().map(|id| (id, *controller)));
-                    }
                 }
             }
         }
@@ -2964,7 +2767,6 @@ impl EffectWindow {
         operation: &ResolutionSelectionOperation,
         player: SeatId,
         object: &GameObject,
-        _ability_source: Option<ObjectId>,
         evaluated: &EvaluatedCharacteristics,
     ) -> bool {
         let mana_value = || {

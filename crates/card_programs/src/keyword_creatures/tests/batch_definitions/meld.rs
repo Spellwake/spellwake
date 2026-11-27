@@ -10,10 +10,12 @@ fn field(player: SeatId) -> ObjectDestination {
     ObjectDestination::Battlefield { controller: player }
 }
 fn choice(state: GameState) -> GameState {
-    exile_hand::until(
-        state,
-        |s| matches!(s.pending_decision().map(|p|p.frame()),Some(RuleFrame::ResolutionSelect(f)) if f.operation()==ResolutionSelectionKind::MeldPartner),
-    )
+    exile_hand::until(state, |s| {
+        matches!(
+            s.pending_decision().map(|p| p.frame()),
+            Some(RuleFrame::ResolutionSelect(_))
+        )
+    })
 }
 fn view(s: &GameState, n: u64) -> spellwake_engine::characteristics::ObjectCharacteristics {
     s.execution()

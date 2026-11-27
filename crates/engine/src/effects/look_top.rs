@@ -1,67 +1,30 @@
-//! Private top-library choice with host-owned random bottom order.
+//! Top-library reveal and explore choices.
 use super::*;
 use crate::{
     occurrence::{EventCause, ZoneReason},
-    program::{LookTopFilter, ZoneActionKind},
+    program::ZoneActionKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LookTopWork {
     pub(super) cursor: ResolutionCursor,
     player: SeatId,
-    library_owner: SeatId,
-    private_exile: bool,
-    mana_value_life: Option<(RulesInteger, bool)>,
     exploring: Option<GameObject>,
     explore_nonland: bool,
     remaining_explores: u8,
     domain: Vec<ObjectId>,
-    eligible: Vec<ObjectId>,
-    reveal: bool,
-    reveal_only: bool,
-    required: bool,
-    battlefield_tapped: bool,
-    battlefield_else_hand: bool,
-    planeswalkers: bool,
-    choose_land_kind: bool,
-    keep_remaining: bool,
-    hand_limit: Option<usize>,
     selected: Vec<ObjectId>,
-    graveyard_order: Option<Vec<ObjectId>>,
-    bottom: Option<Vec<ObjectId>>,
+    decided: bool,
     pub(super) replacement: Option<ZoneReplacementBatch>,
 }
 impl LookTopWork {
-    fn graveyard_order_frame(&self, revision: u64) -> Option<LinkedReturnOrderFrame> {
-        if self.graveyard_order.is_some() {
-            return None;
-        }
-        let batch = self.replacement.as_ref()?;
-        let destination = crate::program::PublicZoneDestination::Graveyard;
-        let objects: Vec<_> = self
-            .selected
-            .iter()
-            .copied()
-            .filter(|&id| batch.destination(id).ok() == Some(destination))
-            .collect();
-        (objects.len() > 1).then_some(LinkedReturnOrderFrame {
-            revision,
-            chooser: self.library_owner,
-            objects,
-            destination,
-        })
-    }
     fn choice(&self, revision: u64) -> Option<EffectDecision> {
-        if self.bottom.is_some() {
+        if self.decided {
             return self
                 .replacement
                 .as_ref()
                 .and_then(|batch| batch.frame(revision))
-                .map(EffectDecision::ZoneReplacement)
-                .or_else(|| {
-                    self.graveyard_order_frame(revision)
-                        .map(EffectDecision::LinkedReturnOrder)
-                });
+                .map(EffectDecision::ZoneReplacement);
         }
         Some(EffectDecision::LibraryTop(
             LibraryTopFrame::looked_top(
@@ -70,21 +33,25 @@ impl LookTopWork {
                 self.cursor.instruction,
                 self.player,
                 self.domain.clone(),
-                self.eligible.clone(),
-                self.required,
-                self.reveal,
-                self.planeswalkers,
-                self.choose_land_kind,
-                self.hand_limit,
+                self.domain.clone(),
+                false,
+                true,
+                false,
+                false,
+                None,
                 self.explore_nonland,
             )
-            .with_reveal_only(self.reveal_only),
+            .with_reveal_only(self.exploring.is_none()),
         ))
     }
 }
 impl EffectWindow {
     pub(super) fn currently_revealed_look_top(&self, id: ObjectId) -> bool {
-        matches!(&self.pending_work, Some(PendingWork::LookTop(work)) if (work.exploring.is_some() || work.mana_value_life.is_some() || work.battlefield_else_hand) && work.domain.first()==Some(&id))
+        matches!(
+            &self.pending_work,
+            Some(PendingWork::LookTop(work))
+                if work.exploring.is_some() && work.domain.first() == Some(&id)
+        )
     }
     fn extra_explore_count(&self, source: &GameObject) -> Result<u8, EffectError> {
         let evaluated = self.evaluated_characteristics()?;
@@ -216,6 +183,61 @@ impl EffectWindow {
             _ => None,
         }
     }
+    fn start_explore_step(
+        &mut self,
+        cursor: ResolutionCursor,
+        player: SeatId,
+        source: GameObject,
+        card_id: ObjectId,
+        remaining_explores: u8,
+        append: &mut RulesJournal,
+    ) -> Result<LookTopWork, EffectError> {
+        let evaluated = self.evaluated_characteristics()?;
+        let explore_nonland = evaluated
+            .get(card_id)
+            .is_some_and(|card| !card.has_type(CardType::Land));
+        let object = self
+            .window
+            .cards()
+            .get(card_id)
+            .ok_or(EffectError::UnknownObject)?
+            .clone();
+        let before = self.rules_snapshot(None)?;
+        self.emit_from(
+            EventCause::Instruction {
+                entry: cursor.entry,
+                instruction: cursor.instruction,
+            },
+            &before,
+            None,
+            append,
+            |_, _, _| {
+                Ok(vec![
+                    crate::occurrence::RulesOccurrence::LibraryCardRevealed { object },
+                ])
+            },
+        )?;
+        if explore_nonland {
+            self.explore_counter(&source, &cursor, append)?;
+        }
+        let mut work = LookTopWork {
+            cursor,
+            player,
+            exploring: Some(source),
+            explore_nonland,
+            remaining_explores,
+            domain: vec![card_id],
+            selected: Vec::new(),
+            decided: false,
+            replacement: None,
+        };
+        if !explore_nonland {
+            work.selected.push(card_id);
+            work.decided = true;
+            work.replacement = Some(self.look_top_batch(&work)?);
+        }
+        Ok(work)
+    }
     pub(super) fn begin_look_top(
         &mut self,
         instruction: &Instruction,
@@ -231,22 +253,14 @@ impl EffectWindow {
                     )
                 )
         );
-        let (count, filter, required, reveal, battlefield_tapped, battlefield_else_hand): (
-            u8,
-            Option<LookTopFilter>,
-            bool,
-            bool,
-            bool,
-            bool,
-        ) = match instruction {
-            _ if is_may_reveal_library_top => (1, None, false, true, false, false),
+        let is_explore = matches!(
+            instruction,
             Instruction::MutateObject(spec)
-                if matches!(spec.op, crate::toolbox::ObjectMutation::Explore) =>
-            {
-                (1, None, false, true, false, false)
-            }
-            _ => return Ok(false),
-        };
+                if matches!(spec.op, crate::toolbox::ObjectMutation::Explore)
+        );
+        if !is_may_reveal_library_top && !is_explore {
+            return Ok(false);
+        }
         self.resolution_cursor()
             .ok_or(EffectError::WrongResolutionFrame)?;
         if is_may_reveal_library_top {
@@ -291,194 +305,46 @@ impl EffectWindow {
                     .and_then(GameObject::controller)
             })
             .unwrap_or(entry.controller());
-        let private_exile = false;
-        let library_owner = if private_exile {
-            let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
-            let target = self.instruction_target(entry)?;
-            let TargetRef::Player(seat) = target.choice().target else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            seat
-        } else {
-            player
-        };
-        let domain = self
-            .window
-            .cards()
-            .library(library_owner)
-            .iter()
-            .take(usize::from(count))
-            .copied()
-            .collect::<Vec<_>>();
-        let choose_land_kind = false;
+        let top_card = self.window.cards().library(player).first().copied();
         let extra_explores = match &exploring {
             Some(source) => self.extra_explore_count(source)?,
             None => 0,
         };
-        if domain.is_empty()
-            && let Some(source) = &exploring
-        {
-            let cursor = self
-                .resolution_cursor()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .clone();
-            for _ in 0..=extra_explores {
-                self.explore_counter(source, &cursor, append)?;
-                self.explored(source.clone(), player, &cursor, append)?;
-            }
-        }
-        if domain.is_empty() && !choose_land_kind {
-            if is_may_reveal_library_top && let Some(cursor) = self.resolution_cursor_mut() {
+        let Some(card_id) = top_card else {
+            if let Some(source) = &exploring {
+                let cursor = self
+                    .resolution_cursor()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .clone();
+                for _ in 0..=extra_explores {
+                    self.explore_counter(source, &cursor, append)?;
+                    self.explored(source.clone(), player, &cursor, append)?;
+                }
+            } else if let Some(cursor) = self.resolution_cursor_mut() {
                 cursor.results.last_action_succeeded = false;
                 cursor.results.last_action_count = Some(0.into());
             }
             self.advance_instruction()?;
             return Ok(true);
-        }
-        let evaluated = self.evaluated_characteristics()?;
-        let planeswalkers = false;
-        let explore_nonland = exploring.is_some()
-            && evaluated
-                .get(domain[0])
-                .is_some_and(|card| !card.has_type(CardType::Land));
-        let keep_remaining =
-            explore_nonland || filter == Some(LookTopFilter::SourceChosenCreatureTypeKeepRest);
-        let chosen_type = match filter {
-            Some(LookTopFilter::AllOfChosenType(slot)) => Some(
-                *self
-                    .resolution_cursor()
-                    .and_then(|cursor| cursor.values.get(&slot))
-                    .ok_or(EffectError::InconsistentProgram)?,
-            ),
-            Some(
-                LookTopFilter::SourceChosenCreatureType
-                | LookTopFilter::SourceChosenCreatureTypeKeepRest,
-            ) => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => {
-                        self.entry_creature_type_choices.get(&source.id()).copied()
-                    }
-                    _ => return Err(EffectError::InconsistentProgram),
-                }
-            }
-            _ => None,
         };
-        let eligible = domain
-            .iter()
-            .copied()
-            .filter(|id| {
-                evaluated.get(*id).is_some_and(|value| {
-                    if planeswalkers {
-                        return value.has_type(CardType::Planeswalker);
-                    }
-                    if battlefield_else_hand {
-                        return value
-                            .current_types
-                            .iter()
-                            .copied()
-                            .any(CardType::is_permanent)
-                            && self
-                                .copiable_program(*id)
-                                .is_some_and(|program| program.mana_value() <= 3.into())
-                            && self
-                                .linked_aura_domain(*id, player, &evaluated)
-                                .is_none_or(|domain| !domain.is_empty());
-                    }
-                    match filter {
-                        Some(LookTopFilter::NoncreatureNonland) => {
-                            !value.has_type(CardType::Creature) && !value.has_type(CardType::Land)
-                        }
-                        Some(LookTopFilter::Enchantment) => value.has_type(CardType::Enchantment),
-                        Some(
-                            LookTopFilter::SourceChosenCreatureType
-                            | LookTopFilter::SourceChosenCreatureTypeKeepRest,
-                        ) => {
-                            value.is_creature()
-                                && chosen_type.is_some_and(|kind| {
-                                    value.current_creature_subtypes.contains(&kind)
-                                })
-                        }
-                        Some(LookTopFilter::AllOfChosenType(_)) => chosen_type
-                            .is_some_and(|kind| value.current_creature_subtypes.contains(&kind)),
-                        Some(LookTopFilter::Land) => value.has_type(CardType::Land),
-                        None => true,
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
         let Some(PendingWork::Resolution(cursor)) = self.pending_work.take() else {
             return Err(EffectError::WrongResolutionFrame);
         };
-        let mana_value_life = None;
-        if exploring.is_some() || battlefield_else_hand || mana_value_life.is_some() {
-            let object = self
-                .window
-                .cards()
-                .get(domain[0])
-                .ok_or(EffectError::UnknownObject)?
-                .clone();
-            let before = self.rules_snapshot(None)?;
-            self.emit_from(
-                EventCause::Instruction {
-                    entry: cursor.entry,
-                    instruction: cursor.instruction,
-                },
-                &before,
-                None,
-                append,
-                |_, _, _| {
-                    Ok(vec![
-                        crate::occurrence::RulesOccurrence::LibraryCardRevealed { object },
-                    ])
-                },
-            )?;
-        }
-        let hand_limit =
-            matches!(filter, Some(LookTopFilter::AllOfChosenType(_))).then_some(eligible.len());
-        if let Some(source) = &exploring
-            && explore_nonland
-        {
-            self.explore_counter(source, &cursor, append)?;
-        }
-        let mut work = LookTopWork {
-            reveal_only: is_may_reveal_library_top,
-            exploring,
-            explore_nonland,
-            remaining_explores: extra_explores,
-            mana_value_life,
-            library_owner,
-            private_exile,
-            cursor,
-            player,
-            domain,
-            eligible,
-            reveal,
-            required,
-            battlefield_tapped,
-            battlefield_else_hand,
-            planeswalkers,
-            choose_land_kind,
-            keep_remaining,
-            hand_limit,
-            selected: vec![],
-            graveyard_order: None,
-            bottom: None,
-            replacement: None,
+        let work = if let Some(source) = exploring {
+            self.start_explore_step(cursor, player, source, card_id, extra_explores, append)?
+        } else {
+            LookTopWork {
+                cursor,
+                player,
+                exploring: None,
+                explore_nonland: false,
+                remaining_explores: 0,
+                domain: vec![card_id],
+                selected: Vec::new(),
+                decided: false,
+                replacement: None,
+            }
         };
-        if work.exploring.is_some() && !work.explore_nonland
-            || work.mana_value_life.is_some()
-            || battlefield_else_hand && work.eligible.is_empty()
-        {
-            let id = work.domain[0];
-            work.selected.push(id);
-            work.bottom = Some(vec![]);
-            work.replacement = Some(self.look_top_batch(&work)?);
-        }
         self.pending_work = Some(PendingWork::LookTop(Box::new(work)));
         Ok(true)
     }
@@ -618,49 +484,23 @@ impl EffectWindow {
                 return Err(EffectError::InconsistentProgram);
             }
             next.linked_return_work = Some(LinkedReturnWork {
-                origin: if frame.operation() == ResolutionSelectionKind::ExileToBattlefield {
-                    LinkedReturnOrigin::ChosenExile {
-                        controller: Some(actor),
-                        tapped: false,
-                        entry: frame.entry(),
-                        instruction: frame.instruction(),
-                    }
-                } else if next
-                    .window
-                    .cards()
-                    .get(objects[0])
-                    .is_some_and(|card| card.zone() == ObjectZone::Graveyard(actor))
-                {
-                    LinkedReturnOrigin::Graveyard {
-                        controller: None,
-                        subtype_counters: None,
-                        entry_additions: crate::program::EntryAdditions::default(),
-                        forest: false,
-                        corpse: false,
-                        tapped: false,
-                        player: Some(actor),
-                        entry: frame.entry(),
-                        instruction: frame.instruction(),
-                    }
-                } else {
-                    LinkedReturnOrigin::Hand {
-                        tapped: matches!(
-                            self.current_instruction()?,
-                            Instruction::ZoneOp(spec)
-                                if matches!(
-                                    spec.destination,
-                                    crate::toolbox::ZoneDest::Delayed(
-                                        crate::toolbox::DelayedZoneAction::PutHandPermanentsOntoBattlefield {
-                                            tapped: true,
-                                            ..
-                                        }
-                                    )
+                origin: LinkedReturnOrigin::Hand {
+                    tapped: matches!(
+                        self.current_instruction()?,
+                        Instruction::ZoneOp(spec)
+                            if matches!(
+                                spec.destination,
+                                crate::toolbox::ZoneDest::Delayed(
+                                    crate::toolbox::DelayedZoneAction::PutHandPermanentsOntoBattlefield {
+                                        tapped: true,
+                                        ..
+                                    }
                                 )
-                        ),
-                        player: actor,
-                        entry: frame.entry(),
-                        instruction: frame.instruction(),
-                    }
+                            )
+                    ),
+                    player: actor,
+                    entry: frame.entry(),
+                    instruction: frame.instruction(),
                 },
                 objects,
                 library_bottom: None,
@@ -690,152 +530,34 @@ impl EffectWindow {
     pub(super) fn resume_looked_order(
         &self,
         expected: u64,
-        bound: &LinkedReturnOrderFrame,
-        actor: SeatId,
-        reply: DecisionReply,
+        _bound: &LinkedReturnOrderFrame,
+        _actor: SeatId,
+        _reply: DecisionReply,
     ) -> Result<RuleProgress, EffectError> {
-        let revision = self.next_revision(expected)?;
-        if !self.is_looked_graveyard_order(bound) {
-            return Err(EffectError::WrongResolutionFrame);
-        }
-        if bound.chooser != actor {
-            return Err(EffectError::WrongChooser);
-        }
-        let DecisionReply::LinkedReturnOrder(order) = reply else {
-            return Err(EffectError::WrongDecisionKind);
-        };
-        if order.len() != bound.objects.len()
-            || order.iter().copied().collect::<BTreeSet<_>>()
-                != bound.objects.iter().copied().collect()
-        {
-            return Err(EffectError::IllegalTimestampOrder);
-        }
-        let mut next = self.clone();
-        next.revision = revision;
-        let Some(PendingWork::LookTop(work)) = &mut next.pending_work else {
-            return Err(EffectError::WrongResolutionFrame);
-        };
-        work.graveyard_order = Some(order);
-        next.progress_look_top(
-            DamageJournal::default(),
-            vec![],
-            vec![],
-            DrawJournal::default(),
-            RulesJournal::default(),
-        )
+        let _ = self.next_revision(expected)?;
+        Err(EffectError::WrongResolutionFrame)
     }
     fn look_top_batch(&self, work: &LookTopWork) -> Result<ZoneReplacementBatch, EffectError> {
+        let (action, reason) = if work.explore_nonland {
+            (
+                ZoneActionKind::EffectRevealedToGraveyard,
+                ZoneReason::RevealedToGraveyard,
+            )
+        } else {
+            (ZoneActionKind::EffectLookToHand, ZoneReason::LookTopToHand)
+        };
         self.begin_zone_replacements(zone_replacement::AuthorizedZoneBatch {
             cause: EventCause::Instruction {
                 entry: work.cursor.entry,
                 instruction: work.cursor.instruction,
             },
-            action: if work.explore_nonland {
-                ZoneActionKind::EffectRevealedToGraveyard
-            } else if work.private_exile {
-                ZoneActionKind::EffectExile
-            } else {
-                ZoneActionKind::EffectLookToHand
-            },
+            action,
             intents: work
                 .selected
                 .iter()
-                .map(|&before| zone_replacement::ZoneMoveIntent {
-                    before,
-                    reason: if work.explore_nonland {
-                        ZoneReason::RevealedToGraveyard
-                    } else if work.private_exile {
-                        ZoneReason::ExiledByEffect
-                    } else {
-                        ZoneReason::LookTopToHand
-                    },
-                })
+                .map(|&before| zone_replacement::ZoneMoveIntent { before, reason })
                 .collect(),
         })
-    }
-    pub(crate) fn resume_reveal_land_kind(
-        &self,
-        expected: u64,
-        frame: &LibraryTopFrame,
-        actor: SeatId,
-        land: bool,
-        tape: &EntropyTape,
-    ) -> Result<(RuleProgress, EntropyTape), crate::game::GameError> {
-        let revision = self.next_revision(expected)?;
-        if !frame.chooses_land_kind()
-            || self.look_top_frame().as_ref() != Some(&EffectDecision::LibraryTop(frame.clone()))
-        {
-            return Err(EffectError::WrongLibraryTopFrame.into());
-        }
-        if actor != frame.chooser() {
-            return Err(EffectError::WrongChooser.into());
-        }
-        let mut next = self.clone();
-        let Some(PendingWork::LookTop(mut work)) = next.pending_work.take() else {
-            return Err(EffectError::WrongLibraryTopFrame.into());
-        };
-        let evaluated = next.evaluated_characteristics()?;
-        let mut shown = Vec::new();
-        for &id in next.window.cards().library(work.player) {
-            let object = next
-                .window
-                .cards()
-                .get(id)
-                .ok_or(EffectError::UnknownObject)?
-                .clone();
-            work.domain.push(id);
-            shown.push(object);
-            if evaluated
-                .get(id)
-                .ok_or(EffectError::InconsistentProgram)?
-                .has_type(CardType::Land)
-                == land
-            {
-                work.selected.push(id);
-                break;
-            }
-        }
-        let (bottom, entropy) = tape.shuffled(
-            work.domain
-                .iter()
-                .copied()
-                .filter(|id| !work.selected.contains(id))
-                .collect(),
-        )?;
-        work.bottom = Some(bottom);
-        let mut append = RulesJournal::default();
-        for object in shown {
-            let before = next.rules_snapshot(None)?;
-            next.emit_from(
-                EventCause::Instruction {
-                    entry: work.cursor.entry,
-                    instruction: work.cursor.instruction,
-                },
-                &before,
-                None,
-                &mut append,
-                |_, _, _| {
-                    Ok(vec![
-                        crate::occurrence::RulesOccurrence::LibraryCardRevealed { object },
-                    ])
-                },
-            )?;
-        }
-        if !work.selected.is_empty() {
-            work.replacement = Some(next.look_top_batch(&work)?);
-        }
-        next.revision = revision;
-        next.pending_work = Some(PendingWork::LookTop(work));
-        Ok((
-            next.progress_look_top(
-                DamageJournal::default(),
-                vec![],
-                vec![],
-                DrawJournal::default(),
-                append,
-            )?,
-            entropy,
-        ))
     }
     pub(crate) fn resume_look_top(
         &self,
@@ -857,73 +579,13 @@ impl EffectWindow {
             return Err(EffectError::WrongLibraryTopFrame.into());
         };
         let mut work = *work;
-        if work.planeswalkers {
-            if selected.len() > 2
-                || selected.iter().collect::<BTreeSet<_>>().len() != selected.len()
-                || selected.iter().any(|id| !work.eligible.contains(id))
-            {
-                return Err(EffectError::InvalidLibraryPartition.into());
-            }
-            let (bottom, entropy) = tape.shuffled(
-                work.domain
-                    .iter()
-                    .copied()
-                    .filter(|id| !selected.contains(id))
-                    .collect(),
-            )?;
-            let mut append = RulesJournal::default();
-            let player = work.player;
-            let entry = work.cursor.entry;
-            let instruction = work.cursor.instruction;
-            next.pending_work = Some(PendingWork::Resolution(work.cursor));
-            if selected.is_empty() {
-                next.bottom_remaining_looked_at(player, entry, &bottom)?;
-            } else {
-                if next.linked_return_work.is_some() {
-                    return Err(EffectError::InconsistentProgram.into());
-                }
-                next.linked_return_work = Some(LinkedReturnWork {
-                    origin: LinkedReturnOrigin::LibraryTop {
-                        player,
-                        entry,
-                        instruction,
-                        tapped: false,
-                    },
-                    library_bottom: Some(bottom),
-                    objects: selected,
-                    wake_entry: None,
-                    orders: BTreeMap::new(),
-                    graveyard_orders: BTreeMap::new(),
-                    choices: BTreeMap::new(),
-                    auras: BTreeMap::new(),
-                    replacements: None,
-                });
-                next.finish_linked_return_if_ready(&mut append)?;
-            }
-            next.revision = revision;
-            next.advance_instruction()?;
-            return Ok((
-                next.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    append,
-                )?,
-                entropy,
-            ));
-        }
-        if selected.len() > work.hand_limit.unwrap_or(1)
-            || selected.iter().copied().collect::<BTreeSet<_>>().len() != selected.len()
-        {
+        if selected.len() > 1 {
             return Err(EffectError::InvalidLibraryPartition.into());
         }
-        if work.required && selected.is_empty()
-            || selected.iter().any(|id| !work.eligible.contains(id))
-        {
+        if selected.iter().any(|id| !work.domain.contains(id)) {
             return Err(EffectError::IllegalTarget.into());
         }
-        if work.reveal_only {
+        if work.exploring.is_none() {
             let mut append = RulesJournal::default();
             work.cursor.results.revealed_top_types.clear();
             work.cursor.results.revealed_top_card = None;
@@ -974,92 +636,8 @@ impl EffectWindow {
                 tape.clone(),
             ));
         }
-        if work.battlefield_tapped || work.battlefield_else_hand && !selected.is_empty() {
-            if next.linked_return_work.is_some() {
-                return Err(EffectError::InconsistentProgram.into());
-            }
-            let cursor = work.cursor;
-            next.pending_work = Some(PendingWork::Resolution(cursor.clone()));
-            let mut append = RulesJournal::default();
-            if let Some(&id) = selected.first() {
-                next.linked_return_work = Some(LinkedReturnWork {
-                    library_bottom: None,
-                    origin: LinkedReturnOrigin::LibraryTop {
-                        player: work.player,
-                        entry: cursor.entry,
-                        instruction: cursor.instruction,
-                        tapped: work.battlefield_tapped,
-                    },
-                    wake_entry: None,
-                    objects: vec![id],
-                    orders: BTreeMap::new(),
-                    graveyard_orders: BTreeMap::new(),
-                    choices: BTreeMap::new(),
-                    auras: BTreeMap::new(),
-                    replacements: None,
-                });
-                next.finish_linked_return_if_ready(&mut append)?;
-            }
-            next.revision = revision;
-            next.advance_instruction()?;
-            let (state, result, more) = next
-                .progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    append,
-                )?
-                .into_parts();
-            return Ok((RuleProgress::new(state, result, more), tape.clone()));
-        }
-        let selected = if work.battlefield_else_hand {
-            vec![work.domain[0]]
-        } else {
-            selected
-        };
-        let remaining = work
-            .domain
-            .iter()
-            .copied()
-            .filter(|id| !selected.contains(id))
-            .collect::<Vec<_>>();
-        let (bottom, entropy) = if work.keep_remaining {
-            (Vec::new(), tape.clone())
-        } else {
-            tape.shuffled(remaining)?
-        };
-        let mut append = RulesJournal::default();
-        if work.reveal && work.exploring.is_none() && !selected.is_empty() {
-            let shown = selected
-                .iter()
-                .map(|&id| {
-                    next.window
-                        .cards()
-                        .get(id)
-                        .cloned()
-                        .map(
-                            |object| crate::occurrence::RulesOccurrence::LibraryCardRevealed {
-                                object,
-                            },
-                        )
-                        .ok_or(EffectError::UnknownObject)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let before = next.rules_snapshot(None)?;
-            next.emit_from(
-                EventCause::Instruction {
-                    entry: work.cursor.entry,
-                    instruction: work.cursor.instruction,
-                },
-                &before,
-                None,
-                &mut append,
-                |_, _, _| Ok(shown),
-            )?;
-        }
         work.selected = selected;
-        work.bottom = Some(bottom);
+        work.decided = true;
         if !work.selected.is_empty() {
             work.replacement = Some(next.look_top_batch(&work)?);
         }
@@ -1070,9 +648,9 @@ impl EffectWindow {
             vec![],
             vec![],
             DrawJournal::default(),
-            append,
+            RulesJournal::default(),
         )?;
-        Ok((progress, entropy))
+        Ok((progress, tape.clone()))
     }
     pub(super) fn progress_look_top(
         mut self,
@@ -1103,21 +681,6 @@ impl EffectWindow {
                 append,
             ));
         }
-        if let Some(frame) = work.graveyard_order_frame(self.revision) {
-            self.pending_work = Some(PendingWork::LookTop(Box::new(work)));
-            return Ok(RuleProgress::new(
-                self,
-                RuleResult::Pending {
-                    checks: CheckJournal::default(),
-                    frame: EffectDecision::LinkedReturnOrder(frame),
-                    journal,
-                    declarations,
-                    assignments,
-                    draws,
-                },
-                append,
-            ));
-        }
         let mut moves = Vec::new();
         if let Some(batch) = &work.replacement {
             batch.verify_initial(self.look_top_batch(&work)?)?;
@@ -1127,18 +690,9 @@ impl EffectWindow {
                     destination: batch.destination(id)?,
                 });
             }
-            if let Some(order) = &work.graveyard_order {
-                moves.sort_by_key(|movement| {
-                    order
-                        .iter()
-                        .rev()
-                        .position(|id| *id == movement.before)
-                        .unwrap_or(order.len())
-                });
-            }
         }
         let before = self.rules_snapshot(None)?;
-        let top = if work.keep_remaining {
+        let top = if work.explore_nonland {
             work.domain
                 .iter()
                 .copied()
@@ -1151,35 +705,19 @@ impl EffectWindow {
             self.window.revision(),
             work.cursor.entry,
             crate::stack_window::LibraryTopCommit {
-                player: work.library_owner,
+                player: work.player,
                 frozen: &work.domain,
                 top: &top,
-                bottom: work
-                    .bottom
-                    .as_deref()
-                    .ok_or(EffectError::InconsistentProgram)?,
+                bottom: &[],
                 moves_application: &moves,
             },
         )?;
         self.window = window;
         let reason = if work.explore_nonland {
             ZoneReason::RevealedToGraveyard
-        } else if work.private_exile {
-            ZoneReason::ExiledByEffect
         } else {
             ZoneReason::LookTopToHand
         };
-        if work.private_exile {
-            for movement in &movements {
-                if movement.after.zone() == ObjectZone::Exile {
-                    self.face_down_exile
-                        .insert(movement.after.id(), work.player);
-                    self.any_type_exile_cast
-                        .insert((movement.after.id(), work.player));
-                }
-            }
-        }
-
         if !movements.is_empty() {
             self.emit_from(
                 EventCause::Instruction {
@@ -1209,79 +747,18 @@ impl EffectWindow {
                     .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
             {
                 let remaining = work.remaining_explores - 1;
-                let domain: Vec<ObjectId> = self
-                    .window
-                    .cards()
-                    .library(work.library_owner)
-                    .iter()
-                    .take(1)
-                    .copied()
-                    .collect();
-                if domain.is_empty() {
-                    for _ in 0..=remaining {
-                        self.explore_counter(&source, &work.cursor, &mut append)?;
-                        self.explored(source.clone(), work.player, &work.cursor, &mut append)?;
-                    }
-                } else {
-                    let evaluated = self.evaluated_characteristics()?;
-                    let explore_nonland = evaluated
-                        .get(domain[0])
-                        .is_some_and(|card| !card.has_type(CardType::Land));
-                    let object = self
-                        .window
-                        .cards()
-                        .get(domain[0])
-                        .ok_or(EffectError::UnknownObject)?
-                        .clone();
-                    let before_rev = self.rules_snapshot(None)?;
-                    self.emit_from(
-                        EventCause::Instruction {
-                            entry: work.cursor.entry,
-                            instruction: work.cursor.instruction,
-                        },
-                        &before_rev,
-                        None,
+                if let Some(card_id) = self.window.cards().library(work.player).first().copied() {
+                    let next_work = self.start_explore_step(
+                        work.cursor,
+                        work.player,
+                        source,
+                        card_id,
+                        remaining,
                         &mut append,
-                        |_, _, _| {
-                            Ok(vec![
-                                crate::occurrence::RulesOccurrence::LibraryCardRevealed { object },
-                            ])
-                        },
                     )?;
-                    if explore_nonland {
-                        self.explore_counter(&source, &work.cursor, &mut append)?;
-                    }
-                    let mut next_work = LookTopWork {
-                        reveal_only: false,
-                        exploring: Some(source),
-                        explore_nonland,
-                        remaining_explores: remaining,
-                        mana_value_life: None,
-                        library_owner: work.library_owner,
-                        private_exile: false,
-                        cursor: work.cursor,
-                        player: work.player,
-                        domain: domain.clone(),
-                        eligible: domain,
-                        reveal: true,
-                        required: false,
-                        battlefield_tapped: false,
-                        battlefield_else_hand: false,
-                        planeswalkers: false,
-                        choose_land_kind: false,
-                        keep_remaining: explore_nonland,
-                        hand_limit: None,
-                        selected: vec![],
-                        graveyard_order: None,
-                        bottom: None,
-                        replacement: None,
-                    };
-                    if !explore_nonland {
-                        let id = next_work.domain[0];
-                        next_work.selected.push(id);
-                        next_work.bottom = Some(vec![]);
-                        next_work.replacement = Some(self.look_top_batch(&next_work)?);
-                        self.pending_work = Some(PendingWork::LookTop(Box::new(next_work)));
+                    let auto_commit = !next_work.explore_nonland;
+                    self.pending_work = Some(PendingWork::LookTop(Box::new(next_work)));
+                    if auto_commit {
                         return self.progress_look_top(
                             journal,
                             declarations,
@@ -1290,7 +767,6 @@ impl EffectWindow {
                             append,
                         );
                     }
-                    self.pending_work = Some(PendingWork::LookTop(Box::new(next_work)));
                     let frame = self
                         .look_top_frame()
                         .ok_or(EffectError::WrongLibraryTopFrame)?;
@@ -1307,21 +783,11 @@ impl EffectWindow {
                         append,
                     ));
                 }
+                for _ in 0..=remaining {
+                    self.explore_counter(&source, &work.cursor, &mut append)?;
+                    self.explored(source.clone(), work.player, &work.cursor, &mut append)?;
+                }
             }
-        }
-        if let Some((amount, gain)) = &work.mana_value_life
-            && amount.is_positive()
-        {
-            let adjustment = crate::life::LifeAdjustment::Lose(amount.clone());
-            let own = gain.then(|| crate::life::LifeAdjustment::Gain(amount.clone()));
-            self.adjust_each_opponent_life_at_cut(
-                work.cursor.entry,
-                work.cursor.instruction,
-                work.player,
-                &adjustment,
-                own.as_ref(),
-                &mut append,
-            )?;
         }
         self.pending_work = Some(PendingWork::Resolution(work.cursor));
         self.advance_instruction()?;

@@ -342,7 +342,6 @@ fn cmm_the_wanderer_prevents_noncombat_damage_to_its_controller_and_other_perman
 #[ignore = "requires dated Oracle source and creature vocabulary"]
 fn cmm_teyo_creates_its_wall_draws_for_two_and_limits_attacks_in_either_direction() {
     use ManaType::*;
-    use spellwake_engine::effects::AttackDirection;
     let cost = [(Colourless, 2), (White, 1)];
     let start = game(
         vec![A, B, C],
@@ -384,11 +383,14 @@ fn cmm_teyo_creates_its_wall_draws_for_two_and_limits_attacks_in_either_directio
     }
     assert_eq!(draw.execution().window().cards().library(B).len(), 1);
     let offer = round(command(&ready, A, activate(&ready, 1, 2, &[])).into_state()).into_state();
-    for (direction, allowed, denied) in [
-        (AttackDirection::Left, C, A),
-        (AttackDirection::Right, A, C),
-    ] {
-        let chosen = reply(&offer, DecisionReply::AttackDirection(direction)).into_state();
+    for (direction, allowed, denied) in [(0u8, C, A), (1u8, A, C)] {
+        let chosen = reply(
+            &offer,
+            DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Options(
+                vec![direction],
+            )),
+        )
+        .into_state();
         let decision = exile_hand::until(chosen, |s| {
             s.turn().unwrap().position().number == 2
                 && matches!(
@@ -438,7 +440,6 @@ fn cmm_teyo_creates_its_wall_draws_for_two_and_limits_attacks_in_either_directio
 #[ignore = "requires dated Oracle source and creature vocabulary"]
 fn cmm_teyo_independent_directions_can_prevent_attacks_until_their_separate_expirations() {
     use ManaType::*;
-    use spellwake_engine::effects::AttackDirection;
     let cost = [(Colourless, 2), (White, 1)];
     let initial = game(
         vec![A, B, C],
@@ -462,12 +463,18 @@ fn cmm_teyo_independent_directions_can_prevent_attacks_until_their_separate_expi
     );
     let first =
         round(round(cast_untargeted(&initial, 1, &cost).into_state()).into_state()).into_state();
-    let choose = |game: &GameState, seat, card, dir| {
+    let choose = |game: &GameState, seat, card, dir: u8| {
         let offer =
             round(command(game, seat, activate(game, card, 2, &[])).into_state()).into_state();
-        reply(&offer, DecisionReply::AttackDirection(dir)).into_state()
+        reply(
+            &offer,
+            DecisionReply::PromptChoice(spellwake_engine::toolbox::PromptChoiceReply::Options(
+                vec![dir],
+            )),
+        )
+        .into_state()
     };
-    let left = choose(&first, A, 1, AttackDirection::Left);
+    let left = choose(&first, A, 1, 0);
     let mut main = exile_hand::until(left, |s| {
         s.turn().unwrap().position().number == 2
             && s.turn().unwrap().position().step == Step::PrecombatMain
@@ -499,7 +506,7 @@ fn cmm_teyo_independent_directions_can_prevent_attacks_until_their_separate_expi
     )
     .into_state();
     let ready = round(round(cast).into_state()).into_state();
-    let both = choose(&ready, B, 2, AttackDirection::Right);
+    let both = choose(&ready, B, 2, 1);
     let declare = |game: GameState, turn| {
         exile_hand::until(game, |s| {
             s.turn().unwrap().position().number == turn

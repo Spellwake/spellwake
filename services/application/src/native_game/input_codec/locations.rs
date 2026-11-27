@@ -211,9 +211,6 @@ pub(super) enum Location {
     PlaneswalkerType {
         label: String,
     },
-    AttackDirection {
-        left: bool,
-    },
     PermanentTypeOrder {
         index: NativeRevision,
     },
@@ -408,9 +405,6 @@ impl Location {
             NativeReference::DrawLandKind(land) => Self::DrawLandKind { land },
             NativeReference::PlaneswalkerType(kind) => Self::PlaneswalkerType {
                 label: kind.label().to_owned(),
-            },
-            NativeReference::AttackDirection(value) => Self::AttackDirection {
-                left: value == spellwake_engine::effects::AttackDirection::Left,
             },
             NativeReference::OptionalEffect(value) => match value {
                 OptionalEffectChoice::Take => Self::Optional { take: true },
@@ -647,11 +641,6 @@ impl Location {
                 spellwake_engine::program::PlaneswalkerSubtype::from_label(label)
                     .ok_or(NativeCodecError::InvalidRecord)?,
             ),
-            Self::AttackDirection { left } => NativeReference::AttackDirection(if *left {
-                spellwake_engine::effects::AttackDirection::Left
-            } else {
-                spellwake_engine::effects::AttackDirection::Right
-            }),
             Self::PermanentType { index: selected } => {
                 let RuleFrame::OptionalEffect(choice) = frame(scope)? else {
                     return Err(NativeCodecError::InvalidRecord);

@@ -437,20 +437,11 @@ pub fn reply(value: &DecisionReply) -> Value {
         DecisionReply::LinkedAuraChoice(value) => {
             json!({"tag":"LinkedAuraChoice","target":target(*value)})
         }
-        DecisionReply::PlaneswalkerType(direction) => {
-            json!({"tag":"PlaneswalkerType","subtype":direction.label()})
-        }
-        DecisionReply::AttackDirection(direction) => {
-            json!({"tag":"AttackDirection","direction":format!("{direction:?}")})
-        }
         DecisionReply::ChooseLandKind(land) => json!({"tag":"ChooseLandKind","land":land}),
         DecisionReply::MutateOnTop(value) => json!({"tag":"MutateOnTop","on_top":value}),
         DecisionReply::ChoosePile(pile) => json!({"tag":"ChoosePile","pile":pile}),
         DecisionReply::DrawReplacement(choice) => {
             json!({"tag":"DrawReplacement","choice":format!("{choice:?}")})
-        }
-        DecisionReply::ChooseDamageRecipient(recipient) => {
-            json!({"tag":"ChooseDamageRecipient","recipient":target(*recipient)})
         }
         DecisionReply::ChooseDamageSource(source) => {
             json!({"tag":"ChooseDamageSource","source":opaque(source)})
@@ -470,9 +461,6 @@ pub fn reply(value: &DecisionReply) -> Value {
         }
         DecisionReply::TimestampOrder(values) => {
             json!({"tag":"TimestampOrder","order":values.iter().map(|value|value.ordinal()).collect::<Vec<_>>()})
-        }
-        DecisionReply::RemoveCounters(counts) => {
-            json!({"tag":"RemoveCounters","counts":counts.iter().map(|(kind,count)|json!({"kind":format!("{kind:?}"),"count":count})).collect::<Vec<_>>()})
         }
         DecisionReply::Proliferate(values) => {
             json!({"tag":"Proliferate","selected":values.iter().map(|value|target(*value)).collect::<Vec<_>>()})
@@ -2691,12 +2679,6 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
         RuleFrame::LinkedAuraChoice(f) => {
             json!({"tag":"LinkedAuraChoice","chooser":f.chooser().0,"object":opaque(f.object()),"domain":f.domain().iter().copied().map(target).collect::<Vec<_>>()})
         }
-        RuleFrame::PlaneswalkerType(value) => {
-            json!({"tag":"PlaneswalkerType","chooser":value.chooser().0})
-        }
-        RuleFrame::AttackDirection(value) => {
-            json!({"tag":"AttackDirection","chooser":value.chooser().0})
-        }
         RuleFrame::MyriadDefender(value) => {
             json!({"tag":"MyriadDefender","chooser":value.chooser().0,"opponent":value.opponent().0,"may_decline":value.may_decline(),"defenders":value.defenders().map(target).collect::<Vec<_>>()})
         }
@@ -2709,17 +2691,11 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
         RuleFrame::TimestampOrder(value) => {
             json!({"tag":"TimestampOrder","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction(),"chooser":value.chooser().0,"members":value.members().iter().map(|member|json!({"ordinal":member.member.ordinal(),"creator":member.creator.0,"definition":program::view(&member.definition)})).collect::<Vec<_>>()})
         }
-        RuleFrame::CounterRemoval(frame) => {
-            json!({"tag":"CounterRemoval","chooser":frame.chooser().0,"object":opaque(frame.object()),"maximum":frame.maximum(),"domain":frame.domain().iter().map(|(kind,count)|json!({"kind":format!("{kind:?}"),"count":count})).collect::<Vec<_>>()})
-        }
         RuleFrame::Proliferate(frame) => {
             json!({"tag":"Proliferate","chooser":frame.chooser().0,"revision":frame.revision().to_string(),"domain":frame.domain().iter().map(|(who,kinds)|json!({"recipient":target(*who),"counters":kinds.iter().map(opaque).collect::<Vec<_>>()})).collect::<Vec<_>>()})
         }
         RuleFrame::DrawReplacement(value) => {
             json!({"tag":"DrawReplacement","revision":value.revision,"chooser":value.chooser.0,"domain":format!("{:?}",value.domain)})
-        }
-        RuleFrame::DamageRecipientChoice(value) => {
-            json!({"tag":"DamageRecipientChoice","chooser":value.chooser().0,"recipients":value.recipients().iter().copied().map(target).collect::<Vec<_>>()})
         }
         RuleFrame::DamageSourceChoice(value) => {
             json!({"tag":"DamageSourceChoice","chooser":value.chooser().0,"sources":value.sources().iter().map(opaque).collect::<Vec<_>>()})
@@ -2736,36 +2712,11 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
         RuleFrame::RevealedPiles(value) => {
             use spellwake_engine::effects::PileChoice;
             let choice = match value.choice() {
-                PileChoice::DividePermanents(cards) => {
-                    json!({"kind":"DividePermanents","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
-                }
-                PileChoice::Sacrifice { first, second } => {
-                    json!({"kind":"Sacrifice","first":first.iter().map(opaque).collect::<Vec<_>>(),"second":second.iter().map(opaque).collect::<Vec<_>>()})
-                }
                 PileChoice::Divide(cards) => {
                     json!({"kind":"Divide","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
                 }
                 PileChoice::Take { first, second } => {
                     json!({"kind":"Take","first":first.iter().map(opaque).collect::<Vec<_>>(),"second":second.iter().map(opaque).collect::<Vec<_>>()})
-                }
-                PileChoice::OneToHandRestBottom(cards) => {
-                    json!({"kind":"OneToHandRestBottom","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
-                }
-                PileChoice::OptionalCreatureToBattlefield { looked, eligible } => {
-                    json!({"kind":"OptionalCreatureToBattlefield","looked":looked.iter().map(opaque).collect::<Vec<_>>(),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>()})
-                }
-                PileChoice::OptionalUpTo {
-                    looked,
-                    eligible,
-                    max,
-                } => {
-                    json!({"kind":"OptionalUpTo","looked":looked.iter().map(opaque).collect::<Vec<_>>(),"eligible":eligible.iter().map(opaque).collect::<Vec<_>>(),"max":max})
-                }
-                PileChoice::OneToHand(cards) => {
-                    json!({"kind":"OneToHand","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
-                }
-                PileChoice::Creature(cards) => {
-                    json!({"kind":"Creature","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
                 }
                 PileChoice::BottomOrder(cards) => {
                     json!({"kind":"BottomOrder","cards":cards.iter().map(opaque).collect::<Vec<_>>()})
@@ -2775,9 +2726,6 @@ fn frame_with_cards(value: &RuleFrame, cards: &GameObjects) -> Result<Value, Str
                 }
             };
             json!({"tag":"RevealedPiles","chooser":value.chooser().0,"choice":choice})
-        }
-        RuleFrame::LoyaltyRemoval(value) => {
-            json!({"tag":"LoyaltyRemoval","revision":value.revision().to_string(),"entry":opaque(value.entry()),"instruction":value.instruction(),"chooser":value.chooser().0,"objects":value.objects().iter().map(opaque).collect::<Vec<_>>()})
         }
         RuleFrame::ResolutionManaColor(value) if value.split().is_some() => {
             let (first, second, total) = value.split().expect("split checked by pattern guard");

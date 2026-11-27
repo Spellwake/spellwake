@@ -207,16 +207,11 @@ pub enum RuleFrame {
     OptionIndex(crate::effects::OptionIndexFrame),
     PromptChoice(crate::toolbox::PromptChoiceFrame),
     RevealedPiles(crate::effects::PileChoiceFrame),
-    PlaneswalkerType(crate::effects::PlaneswalkerTypeFrame),
-    AttackDirection(crate::effects::AttackDirectionFrame),
     DrawReplacement(crate::effects::DrawReplacementFrame),
     OpponentChoice(crate::effects::OpponentChoiceFrame),
-    DamageRecipientChoice(crate::effects::DamageRecipientChoiceFrame),
     DamageSourceChoice(crate::effects::DamageSourceChoiceFrame),
-    LoyaltyRemoval(crate::effects::LoyaltyRemovalChoice),
     Combat(CombatDecision),
     Proliferate(crate::effects::ProliferateChoice),
-    CounterRemoval(crate::effects::CounterRemovalChoice),
     CreatureType(crate::effects::CreatureTypeChoice),
 }
 impl RuleFrame {
@@ -254,16 +249,11 @@ impl RuleFrame {
             Self::PromptChoice(f) => f.chooser(),
             Self::Mutation(f) => f.chooser(),
             Self::RevealedPiles(f) => f.chooser(),
-            Self::PlaneswalkerType(f) => f.chooser(),
-            Self::AttackDirection(f) => f.chooser(),
             Self::DrawReplacement(f) => f.chooser,
             Self::OpponentChoice(f) => f.chooser(),
-            Self::DamageRecipientChoice(f) => f.chooser(),
             Self::DamageSourceChoice(f) => f.chooser(),
-            Self::LoyaltyRemoval(f) => f.chooser(),
             Self::Combat(f) => f.chooser(),
             Self::Proliferate(f) => f.chooser(),
-            Self::CounterRemoval(f) => f.chooser(),
             Self::CreatureType(f) => f.chooser(),
         }
     }
@@ -297,22 +287,15 @@ impl RuleFrame {
             Self::Damage(f) => Some(EffectDecision::Damage(f.clone())),
             Self::Combat(f) => Some(EffectDecision::Combat(f.clone())),
             Self::Proliferate(f) => Some(EffectDecision::Proliferate(f.clone())),
-            Self::CounterRemoval(f) => Some(EffectDecision::CounterRemoval(f.clone())),
             Self::CreatureType(f) => Some(EffectDecision::CreatureType(f.clone())),
             Self::ResolutionManaColor(f) => Some(EffectDecision::ResolutionManaColor(f.clone())),
             Self::OptionIndex(f) => Some(EffectDecision::OptionIndex(f.clone())),
             Self::PromptChoice(f) => Some(EffectDecision::PromptChoice(f.clone())),
             Self::Mutation(f) => Some(EffectDecision::Mutation(f.clone())),
             Self::RevealedPiles(f) => Some(EffectDecision::RevealedPiles(f.clone())),
-            Self::PlaneswalkerType(f) => Some(EffectDecision::PlaneswalkerType(f.clone())),
-            Self::AttackDirection(f) => Some(EffectDecision::AttackDirection(f.clone())),
             Self::DrawReplacement(f) => Some(EffectDecision::DrawReplacement(f.clone())),
             Self::OpponentChoice(f) => Some(EffectDecision::OpponentChoice(f.clone())),
-            Self::DamageRecipientChoice(f) => {
-                Some(EffectDecision::DamageRecipientChoice(f.clone()))
-            }
             Self::DamageSourceChoice(f) => Some(EffectDecision::DamageSourceChoice(f.clone())),
-            Self::LoyaltyRemoval(f) => Some(EffectDecision::LoyaltyRemoval(f.clone())),
             Self::TransformOrder(f) => Some(EffectDecision::TransformOrder(f.clone())),
             Self::UntapKeepTapped(f) => Some(EffectDecision::UntapKeepTapped(f.clone())),
             Self::Opening(_) | Self::ManaColor(_) | Self::CounterReplacement(_) => None,
@@ -328,13 +311,9 @@ impl From<EffectDecision> for RuleFrame {
             EffectDecision::PromptChoice(f) => Self::PromptChoice(f),
             EffectDecision::Mutation(f) => Self::Mutation(f),
             EffectDecision::RevealedPiles(f) => Self::RevealedPiles(f),
-            EffectDecision::PlaneswalkerType(f) => Self::PlaneswalkerType(f),
-            EffectDecision::AttackDirection(f) => Self::AttackDirection(f),
             EffectDecision::DrawReplacement(f) => Self::DrawReplacement(f),
             EffectDecision::OpponentChoice(f) => Self::OpponentChoice(f),
-            EffectDecision::DamageRecipientChoice(f) => Self::DamageRecipientChoice(f),
             EffectDecision::DamageSourceChoice(f) => Self::DamageSourceChoice(f),
-            EffectDecision::LoyaltyRemoval(f) => Self::LoyaltyRemoval(f),
             EffectDecision::CastRecovery(f) => Self::CastRecovery(f),
             EffectDecision::LinkedAuraChoice(f) => Self::LinkedAuraChoice(f),
             EffectDecision::LinkedReturnOrder(f) => Self::LinkedReturnOrder(f),
@@ -361,7 +340,6 @@ impl From<EffectDecision> for RuleFrame {
             EffectDecision::Damage(f) => Self::Damage(f),
             EffectDecision::Combat(f) => Self::Combat(f),
             EffectDecision::Proliferate(f) => Self::Proliferate(f),
-            EffectDecision::CounterRemoval(f) => Self::CounterRemoval(f),
             EffectDecision::CreatureType(f) => Self::CreatureType(f),
         }
     }
@@ -1318,22 +1296,6 @@ impl GameState {
                     next.reply_opening(frame, choice)?;
                     next.pending = None;
                     None
-                } else if let RuleFrame::LibraryTop(frame) = &pending.frame
-                    && frame.chooses_land_kind()
-                {
-                    let DecisionReply::ChooseLandKind(land) = choice else {
-                        return Err(EffectError::WrongDecisionKind.into());
-                    };
-                    let empty = EntropyTape::new(vec![]);
-                    let (progress, entropy) = self.execution.resume_reveal_land_kind(
-                        self.execution.revision(),
-                        frame,
-                        input.actor,
-                        land,
-                        self.random.as_ref().unwrap_or(&empty),
-                    )?;
-                    next.random = Some(entropy);
-                    Some(progress)
                 } else if let RuleFrame::LibraryTop(frame) = &pending.frame
                     && frame.is_look_top()
                 {

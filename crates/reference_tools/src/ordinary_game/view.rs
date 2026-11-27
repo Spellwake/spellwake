@@ -382,9 +382,6 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
         DecisionReply::PromptChoice(_) => {
             return Err("prompt choice exceeds historical scope".into());
         }
-        DecisionReply::RemoveCounters(_) => {
-            return Err("counter removal exceeds historical scope".into());
-        }
         DecisionReply::Proliferate(_) => return Err("proliferate exceeds historical scope".into()),
         DecisionReply::PayAttackCost { .. }
         | DecisionReply::RedeclareReversingMana(_)
@@ -479,10 +476,7 @@ fn reply(fixture: &Fixture, history: &History, value: &DecisionReply) -> Result<
         DecisionReply::ChooseLandKind(_)
         | DecisionReply::MutateOnTop(_)
         | DecisionReply::ChoosePile(_)
-        | DecisionReply::PlaneswalkerType(_)
-        | DecisionReply::AttackDirection(_)
         | DecisionReply::DrawReplacement(_)
-        | DecisionReply::ChooseDamageRecipient(_)
         | DecisionReply::ChooseDamageSource(_)
         | DecisionReply::OpponentChoice(_)
         | DecisionReply::ReplacementChooser(_)
@@ -1171,9 +1165,6 @@ fn decision(
         RuleFrame::PromptChoice(_) => {
             return Err("historical ordinary scopes exclude prompt choices".into());
         }
-        RuleFrame::LoyaltyRemoval(_) => {
-            return Err("historical ordinary scopes exclude loyalty removal choices".into());
-        }
         RuleFrame::ResolutionManaColor(_) => {
             return Err("historical ordinary scopes exclude resolution mana choices".into());
         }
@@ -1209,9 +1200,6 @@ fn decision(
             FrameView::ResolutionPayment {
                 frame: projection::frame(value.frame(), state)?,
             }
-        }
-        RuleFrame::CounterRemoval(_) => {
-            return Err("counter removal exceeds historical scope".into());
         }
         RuleFrame::Proliferate(_) => return Err("proliferate exceeds historical scope".into()),
         RuleFrame::TriggerTarget(value) => {
@@ -1333,10 +1321,7 @@ fn decision(
         }
         RuleFrame::Mutation(_)
         | RuleFrame::RevealedPiles(_)
-        | RuleFrame::PlaneswalkerType(_)
-        | RuleFrame::AttackDirection(_)
         | RuleFrame::DrawReplacement(_)
-        | RuleFrame::DamageRecipientChoice(_)
         | RuleFrame::DamageSourceChoice(_)
         | RuleFrame::OpponentChoice(_)
         | RuleFrame::ReplacementChooser(_)

@@ -643,47 +643,24 @@ fn resolve_choices(
             assert_eq!(
                 movement.reason,
                 match kind {
-                    ResolutionSelectionKind::Destroy => ZoneReason::Destroyed,
                     ResolutionSelectionKind::Exile => ZoneReason::ExiledByEffect,
                     ResolutionSelectionKind::ReturnToHand => ZoneReason::ReturnToOwnersHand,
-                    ResolutionSelectionKind::Sacrifice
-                    | ResolutionSelectionKind::OptionalSacrifice =>
-                        ZoneReason::Sacrifice { player: *player },
+                    ResolutionSelectionKind::Sacrifice => {
+                        ZoneReason::Sacrifice { player: *player }
+                    }
                     ResolutionSelectionKind::Discard => ZoneReason::Discard { player: *player },
-                    ResolutionSelectionKind::VowCreature
-                    | ResolutionSelectionKind::ChooseCreatureToKeep
-                    | ResolutionSelectionKind::LibraryToGraveyard
-                    | ResolutionSelectionKind::PayLifeToSaveCreatures
-                    | ResolutionSelectionKind::AttachAurasFromHandOrGraveyard
-                    | ResolutionSelectionKind::DiscardUpTo
+                    ResolutionSelectionKind::Bolster
+                    | ResolutionSelectionKind::Amass
+                    | ResolutionSelectionKind::HandToBattlefield
+                    | ResolutionSelectionKind::Soulbond
                     | ResolutionSelectionKind::EquipmentToToken
                     | ResolutionSelectionKind::TokenReceivingEquipment
-                    | ResolutionSelectionKind::UnattachControlledEquipment
                     | ResolutionSelectionKind::FoundSpellToCast
-                    | ResolutionSelectionKind::TurnCreatureFaceUp
-                    | ResolutionSelectionKind::MeldPartner
-                    | ResolutionSelectionKind::Soulbond
-                    | ResolutionSelectionKind::ExileToBattlefield
-                    | ResolutionSelectionKind::ExileMilledCreatures
-                    | ResolutionSelectionKind::VoteForCard
-                    | ResolutionSelectionKind::GraveyardToBattlefield
-                    | ResolutionSelectionKind::HandToBattlefield
-                    | ResolutionSelectionKind::GraveyardCreatureToHand
-                    | ResolutionSelectionKind::ReturnToCommandZone
-                    | ResolutionSelectionKind::ReturnToLibrary
-                    | ResolutionSelectionKind::Mill
-                    | ResolutionSelectionKind::AttachChosenAurasAndEquipment
-                    | ResolutionSelectionKind::AttachAllEquipment
-                    | ResolutionSelectionKind::CopyDifferentlyNamedTokens
                     | ResolutionSelectionKind::Populate
-                    | ResolutionSelectionKind::Bolster
-                    | ResolutionSelectionKind::Amass
-                    | ResolutionSelectionKind::Untap
-                    | ResolutionSelectionKind::EnterBattlefield
                     | ResolutionSelectionKind::BlightCreature
-                    | ResolutionSelectionKind::CollectEvidence
-                    | ResolutionSelectionKind::SelectZoneCards =>
-                        panic!("unexpected selection cohort"),
+                    | ResolutionSelectionKind::CollectEvidence => {
+                        panic!("unexpected selection cohort")
+                    }
                 }
             );
             assert_eq!(
@@ -691,44 +668,20 @@ fn resolve_choices(
                 match kind {
                     ResolutionSelectionKind::ReturnToHand
                     | ResolutionSelectionKind::Sacrifice
-                    | ResolutionSelectionKind::OptionalSacrifice
-                    | ResolutionSelectionKind::Destroy
                     | ResolutionSelectionKind::Exile => ObjectZone::Battlefield,
                     ResolutionSelectionKind::Discard => ObjectZone::Hand(*player),
-                    ResolutionSelectionKind::VowCreature
-                    | ResolutionSelectionKind::ChooseCreatureToKeep
-                    | ResolutionSelectionKind::LibraryToGraveyard
-                    | ResolutionSelectionKind::PayLifeToSaveCreatures
-                    | ResolutionSelectionKind::AttachAurasFromHandOrGraveyard
-                    | ResolutionSelectionKind::DiscardUpTo
+                    ResolutionSelectionKind::Bolster
+                    | ResolutionSelectionKind::Amass
+                    | ResolutionSelectionKind::HandToBattlefield
+                    | ResolutionSelectionKind::Soulbond
                     | ResolutionSelectionKind::EquipmentToToken
                     | ResolutionSelectionKind::TokenReceivingEquipment
-                    | ResolutionSelectionKind::UnattachControlledEquipment
                     | ResolutionSelectionKind::FoundSpellToCast
-                    | ResolutionSelectionKind::TurnCreatureFaceUp
-                    | ResolutionSelectionKind::MeldPartner
-                    | ResolutionSelectionKind::Soulbond
-                    | ResolutionSelectionKind::ExileToBattlefield
-                    | ResolutionSelectionKind::ExileMilledCreatures
-                    | ResolutionSelectionKind::VoteForCard
-                    | ResolutionSelectionKind::GraveyardToBattlefield
-                    | ResolutionSelectionKind::HandToBattlefield
-                    | ResolutionSelectionKind::GraveyardCreatureToHand
-                    | ResolutionSelectionKind::ReturnToCommandZone
-                    | ResolutionSelectionKind::ReturnToLibrary
-                    | ResolutionSelectionKind::Mill
-                    | ResolutionSelectionKind::AttachChosenAurasAndEquipment
-                    | ResolutionSelectionKind::AttachAllEquipment
-                    | ResolutionSelectionKind::CopyDifferentlyNamedTokens
                     | ResolutionSelectionKind::Populate
-                    | ResolutionSelectionKind::Bolster
-                    | ResolutionSelectionKind::Amass
-                    | ResolutionSelectionKind::Untap
-                    | ResolutionSelectionKind::EnterBattlefield
                     | ResolutionSelectionKind::BlightCreature
-                    | ResolutionSelectionKind::CollectEvidence
-                    | ResolutionSelectionKind::SelectZoneCards =>
-                        panic!("unexpected selection cohort"),
+                    | ResolutionSelectionKind::CollectEvidence => {
+                        panic!("unexpected selection cohort")
+                    }
                 }
             );
             assert_eq!(

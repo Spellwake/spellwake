@@ -1195,17 +1195,6 @@ pub enum CastCopyKeyword {
     Replicate(usize),
 }
 
-/// Qualification filter for an optional top-library reveal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LookTopFilter {
-    NoncreatureNonland,
-    Enchantment,
-    Land,
-    AllOfChosenType(CreatureTypeSlot),
-    SourceChosenCreatureType,
-    SourceChosenCreatureTypeKeepRest,
-}
-
 /// Recipients of one simultaneous nontargeted damage event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RevealedHandSelection {

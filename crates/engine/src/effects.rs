@@ -92,9 +92,7 @@ mod power_up;
 mod source_boost;
 pub use counter_order::CounterReplacementChoice;
 mod amass;
-mod counter_removal;
 mod proliferate;
-pub use counter_removal::CounterRemovalChoice;
 pub use proliferate::{CounterKind, CustomCounterKey, ProliferateChoice};
 mod activation_cost;
 mod graveyard_exile;
@@ -488,12 +486,6 @@ enum LinkedReturnOrigin {
         forest: bool,
         corpse: bool,
     },
-    LibraryTop {
-        player: SeatId,
-        entry: StackEntryId,
-        instruction: usize,
-        tapped: bool,
-    },
 }
 impl LinkedReturnOrigin {
     fn entry_controller(self, card: &GameObject) -> SeatId {
@@ -520,9 +512,7 @@ impl LinkedReturnOrigin {
                     matches!(card.zone(), ObjectZone::Graveyard(owner) if player.is_none_or(|player| player == owner))
                 }
 
-                Self::Manifest { player, .. } | Self::LibraryTop { player, .. } => {
-                    card.zone() == ObjectZone::Library(player)
-                }
+                Self::Manifest { player, .. } => card.zone() == ObjectZone::Library(player),
             }
     }
     fn face_down_entry(self) -> Option<crate::face_down::FaceDownKind> {
@@ -543,7 +533,6 @@ impl LinkedReturnOrigin {
             Self::Graveyard { .. } => {
                 crate::occurrence::ZoneReason::ReturnFromGraveyardToBattlefield
             }
-            Self::LibraryTop { .. } => crate::occurrence::ZoneReason::LookTopToBattlefield,
         }
     }
     fn cause(self) -> crate::occurrence::EventCause {
@@ -560,9 +549,6 @@ impl LinkedReturnOrigin {
                 entry, instruction, ..
             }
             | Self::Graveyard {
-                entry, instruction, ..
-            }
-            | Self::LibraryTop {
                 entry, instruction, ..
             } => crate::occurrence::EventCause::Instruction { entry, instruction },
         }
@@ -762,13 +748,9 @@ pub enum EffectDecision {
     RevealedPiles(PileChoiceFrame),
     MyriadDefender(MyriadDefenderFrame),
     ReselectAttackDefender(AttackDefenderFrame),
-    PlaneswalkerType(PlaneswalkerTypeFrame),
-    AttackDirection(AttackDirectionFrame),
     OpponentChoice(OpponentChoiceFrame),
-    DamageRecipientChoice(DamageRecipientChoiceFrame),
     DamageSourceChoice(DamageSourceChoiceFrame),
     DrawReplacement(DrawReplacementFrame),
-    LoyaltyRemoval(LoyaltyRemovalChoice),
     CastRecovery(CastRecoveryFrame),
     LinkedAuraChoice(LinkedAuraChoiceFrame),
     LinkedReturnOrder(LinkedReturnOrderFrame),
@@ -796,7 +778,6 @@ pub enum EffectDecision {
     Damage(DamageDecision),
     Combat(CombatDecision),
     Proliferate(ProliferateChoice),
-    CounterRemoval(CounterRemovalChoice),
     CreatureType(CreatureTypeChoice),
 }
 impl EffectDecision {
@@ -810,13 +791,9 @@ impl EffectDecision {
             Self::RevealedPiles(f) => f.chooser,
             Self::MyriadDefender(f) => f.chooser(),
             Self::ReselectAttackDefender(f) => f.chooser(),
-            Self::PlaneswalkerType(f) => f.chooser,
-            Self::AttackDirection(f) => f.chooser,
             Self::OpponentChoice(f) => f.chooser,
-            Self::DamageRecipientChoice(f) => f.chooser,
             Self::DamageSourceChoice(f) => f.chooser,
             Self::DrawReplacement(f) => f.chooser,
-            Self::LoyaltyRemoval(f) => f.chooser,
             Self::CastRecovery(f) => f.chooser(),
             Self::LinkedAuraChoice(f) => f.chooser(),
             Self::LinkedReturnOrder(f) => f.chooser(),
@@ -841,7 +818,6 @@ impl EffectDecision {
             Self::Damage(f) => f.chooser(),
             Self::Combat(f) => f.chooser(),
             Self::Proliferate(f) => f.chooser(),
-            Self::CounterRemoval(f) => f.chooser(),
             Self::CreatureType(f) => f.chooser(),
         }
     }
@@ -856,14 +832,11 @@ impl EffectDecision {
             | Self::RevealedPiles(_)
             | Self::MyriadDefender(_)
             | Self::ReselectAttackDefender(_)
-            | Self::PlaneswalkerType(_)
-            | Self::AttackDirection(_)
             | Self::OpponentChoice(_)
-            | Self::UntapKeepTapped(_)
-            | Self::LoyaltyRemoval(_) => EffectError::SelectionRequired,
-            Self::DamageRecipientChoice(_)
-            | Self::DamageSourceChoice(_)
-            | Self::LinkedAuraChoice(_) => EffectError::SelectionRequired,
+            | Self::UntapKeepTapped(_) => EffectError::SelectionRequired,
+            Self::DamageSourceChoice(_) | Self::LinkedAuraChoice(_) => {
+                EffectError::SelectionRequired
+            }
             Self::LinkedReturnOrder(_) => EffectError::TimestampOrderRequired,
             Self::EntryChoice(_) => EffectError::SelectionRequired,
             Self::TokenEntryChoice(_) | Self::TokenAuraChoice(_) => EffectError::SelectionRequired,
@@ -882,7 +855,7 @@ impl EffectDecision {
             }
             Self::CopyTargets(_) => EffectError::CopyChoiceRequired,
             Self::TriggerTarget(_) => EffectError::TriggerTargetChoiceRequired,
-            Self::Proliferate(_) | Self::CounterRemoval(_) => EffectError::SelectionRequired,
+            Self::Proliferate(_) => EffectError::SelectionRequired,
             Self::CreatureType(_) => EffectError::CreatureTypeChoiceRequired,
             Self::CastRecovery(_) => EffectError::SelectionRequired,
             Self::Checks(_) | Self::Triggers(_) | Self::Damage(_) | Self::Combat(_) => {
@@ -937,14 +910,11 @@ pub enum DecisionReply {
     TokenDefender(TargetRef),
     MyriadDefender(Option<TargetRef>),
     ReselectAttackDefender(Option<TargetRef>),
-    PlaneswalkerType(crate::program::PlaneswalkerSubtype),
     /// Subset of eligible tapped permanents kept tapped during untap (CR 502.3).
     UntapKeepTapped(Vec<ObjectId>),
     /// Subset of eligible opening-hand cards put onto the battlefield pregame (CR 103.6).
     OpeningBattlefield(Vec<ObjectId>),
-    AttackDirection(AttackDirection),
     OpponentChoice(SeatId),
-    ChooseDamageRecipient(TargetRef),
     ChooseDamageSource(crate::damage::DamageSourceId),
     DrawReplacement(DrawReplacementChoice),
     ChoosePile(u8),
@@ -996,7 +966,6 @@ pub enum DecisionReply {
     /// Quantity of the first offered color. The remainder uses the second color.
     SplitMana(RulesInteger),
     Proliferate(Vec<TargetRef>),
-    RemoveCounters(BTreeMap<CounterKind, u8>),
     CreatureType(CreatureTypeId),
 }
 impl From<CopyTargetChoice> for DecisionReply {
@@ -1567,32 +1536,6 @@ pub enum AttackDirection {
     Left,
     Right,
 }
-/// Select one planeswalker subtype from CR 205.3j.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlaneswalkerTypeFrame {
-    revision: u64,
-    entry: StackEntryId,
-    instruction: usize,
-    chooser: SeatId,
-}
-impl PlaneswalkerTypeFrame {
-    pub fn chooser(&self) -> SeatId {
-        self.chooser
-    }
-}
-/// Choose the direction in which players may declare attacks until the next turn of the ability controller.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttackDirectionFrame {
-    revision: u64,
-    entry: StackEntryId,
-    instruction: usize,
-    chooser: SeatId,
-}
-impl AttackDirectionFrame {
-    pub fn chooser(&self) -> SeatId {
-        self.chooser
-    }
-}
 
 /// Public seats eligible for a choice of opponent made as an instruction resolves.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1613,25 +1556,6 @@ impl OpponentChoiceFrame {
         &self.opponents
     }
 }
-/// The resolving ability's non-targeted choice of a damage recipient.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DamageRecipientChoiceFrame {
-    revision: u64,
-    entry: StackEntryId,
-    instruction: usize,
-    chooser: SeatId,
-    recipients: Vec<TargetRef>,
-}
-impl DamageRecipientChoiceFrame {
-    /// The controller selecting the recipient.
-    pub fn chooser(&self) -> SeatId {
-        self.chooser
-    }
-    /// Exact recipients available to the resolving instruction.
-    pub fn recipients(&self) -> &[TargetRef] {
-        &self.recipients
-    }
-}
 /// The resolving effect's non-targeted choice of a source of damage (CR 609.7a).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DamageSourceChoiceFrame {
@@ -1649,33 +1573,6 @@ impl DamageSourceChoiceFrame {
     /// Exact legal public damage sources available to the resolving instruction.
     pub fn sources(&self) -> &[crate::damage::DamageSourceId] {
         &self.sources
-    }
-}
-
-/// Select controlled permanents from which to remove one loyalty counter each.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoyaltyRemovalChoice {
-    revision: u64,
-    entry: StackEntryId,
-    instruction: usize,
-    chooser: SeatId,
-    objects: Vec<ObjectId>,
-}
-impl LoyaltyRemovalChoice {
-    pub fn chooser(&self) -> SeatId {
-        self.chooser
-    }
-    pub fn objects(&self) -> &[ObjectId] {
-        &self.objects
-    }
-    pub fn revision(&self) -> u64 {
-        self.revision
-    }
-    pub fn entry(&self) -> StackEntryId {
-        self.entry
-    }
-    pub fn instruction(&self) -> usize {
-        self.instruction
     }
 }
 /// Choice of a mana color made while an instruction resolves.
@@ -2334,8 +2231,7 @@ impl EffectWindow {
     /// returned chooser and does not authorize disclosure of other library cards.
     pub fn pending_search_entry_subjects(&self) -> Option<(SeatId, Vec<ObjectId>)> {
         if let Some(work) = &self.linked_return_work
-            && let LinkedReturnOrigin::LibraryTop { player, .. }
-            | LinkedReturnOrigin::Hand { player, .. } = work.origin
+            && let LinkedReturnOrigin::Hand { player, .. } = work.origin
         {
             return Some((player, work.objects.clone()));
         }
@@ -3580,37 +3476,6 @@ impl EffectWindow {
         instance: crate::occurrence::TriggerInstanceId,
     ) -> bool {
         self.triggers.delayed_copy_waiting().contains_key(&instance)
-    }
-    fn delay_spell_return(
-        &mut self,
-        entry: StackEntryId,
-        objects: Vec<ObjectId>,
-    ) -> Result<(), EffectError> {
-        if objects.is_empty() {
-            return Ok(());
-        }
-        let entry = self
-            .window
-            .resolving()
-            .filter(|resolving| resolving.id() == entry)
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        match entry.kind() {
-            StackKind::CardSpell(id) => {
-                let source = self
-                    .rules_snapshot(None)?
-                    .view()
-                    .appearance(*id)
-                    .ok_or(EffectError::InconsistentProgram)?;
-                self.triggers
-                    .delay_exile_return(source, entry.controller(), objects);
-            }
-            StackKind::SpellCopy { .. } => {
-                self.triggers
-                    .delay_copy_exile_return(entry.id(), entry.controller(), objects);
-            }
-            _ => return Err(EffectError::InconsistentProgram),
-        }
-        Ok(())
     }
 
     fn delay_spell_return_with_counters(

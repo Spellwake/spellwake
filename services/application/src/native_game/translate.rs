@@ -2039,13 +2039,7 @@ impl NativeScope<'_> {
             (RuleFrame::RevealedPiles(frame), PlayerChoice::Objects { objects })
                 if matches!(
                     frame.choice(),
-                    spellwake_engine::effects::PileChoice::OneToHand(_)
-                        | spellwake_engine::effects::PileChoice::OneToHandRestBottom(_)
-                        | spellwake_engine::effects::PileChoice::OptionalCreatureToBattlefield { .. }
-                        | spellwake_engine::effects::PileChoice::OptionalUpTo { .. }
-                        | spellwake_engine::effects::PileChoice::Creature(_)
-                        | spellwake_engine::effects::PileChoice::Divide(_)
-                        | spellwake_engine::effects::PileChoice::DividePermanents(_)
+                    spellwake_engine::effects::PileChoice::Divide(_)
                 ) =>
             {
                 DecisionReply::SelectResolution(self.objects(objects)?)
@@ -2054,7 +2048,6 @@ impl NativeScope<'_> {
                 if matches!(
                     frame.choice(),
                     spellwake_engine::effects::PileChoice::Take { .. }
-                        | spellwake_engine::effects::PileChoice::Sacrifice { .. }
                 ) =>
             {
                 DecisionReply::ChoosePile(
@@ -2072,18 +2065,6 @@ impl NativeScope<'_> {
                 ) =>
             {
                 DecisionReply::OrderResolutionGraveyard(self.objects(ordered)?)
-            }
-            (RuleFrame::PlaneswalkerType(_), PlayerChoice::Option { option }) => {
-                let NativeReference::PlaneswalkerType(kind) = self.reference(option)? else {
-                    return Err(NativeBridgeError::WrongReferenceKind);
-                };
-                DecisionReply::PlaneswalkerType(kind)
-            }
-            (RuleFrame::AttackDirection(_), PlayerChoice::Option { option }) => {
-                let NativeReference::AttackDirection(direction) = self.reference(option)? else {
-                    return Err(NativeBridgeError::WrongReferenceKind);
-                };
-                DecisionReply::AttackDirection(direction)
             }
             (RuleFrame::DrawReplacement(_), PlayerChoice::Option { option }) => {
                 use spellwake_engine::effects::DrawReplacementChoice;
@@ -2111,9 +2092,6 @@ impl NativeScope<'_> {
                         self.objects(ordered)?,
                     ),
                 )
-            }
-            (RuleFrame::DamageRecipientChoice(_), PlayerChoice::Target { target }) => {
-                DecisionReply::ChooseDamageRecipient(self.target(target)?)
             }
             (RuleFrame::DamageSourceChoice(_), PlayerChoice::Option { option }) => {
                 let NativeReference::DamageSource(value) = self.reference(option)? else {
@@ -2621,14 +2599,6 @@ impl NativeScope<'_> {
                         .ok_or(NativeBridgeError::WrongReferenceKind)?,
                 ))
             }
-            (RuleFrame::CounterRemoval(_), PlayerChoice::CounterRemoval { counters }) => {
-                DecisionReply::RemoveCounters(
-                    counters
-                        .iter()
-                        .map(|entry| (entry.kind.clone().into(), entry.count))
-                        .collect(),
-                )
-            }
             (RuleFrame::Proliferate(_), PlayerChoice::TargetList { targets }) => {
                 DecisionReply::Proliferate(
                     targets
@@ -2636,9 +2606,6 @@ impl NativeScope<'_> {
                         .map(|who| self.target(who))
                         .collect::<Result<_, _>>()?,
                 )
-            }
-            (RuleFrame::LoyaltyRemoval(_), PlayerChoice::Objects { objects }) => {
-                DecisionReply::SelectResolution(self.objects(objects)?)
             }
             (RuleFrame::ResolutionManaColor(frame), PlayerChoice::Number { value })
                 if frame.split().is_some() =>

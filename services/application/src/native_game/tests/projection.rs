@@ -343,26 +343,15 @@ pub(super) fn verify_view(view: &mut NativeScope<'_>, original: Option<&PlayerCo
     {
         use spellwake_engine::effects::PileChoice;
         match frame.choice() {
-            PileChoice::OneToHand(ids)
-            | PileChoice::OneToHandRestBottom(ids)
-            | PileChoice::Creature(ids)
-            | PileChoice::Divide(ids)
+            PileChoice::Divide(ids)
             | PileChoice::BottomOrder(ids)
             | PileChoice::GraveyardOrder(ids) => {
                 revealed_by_decision.extend(ids.iter().copied());
             }
-            PileChoice::OptionalCreatureToBattlefield { looked, eligible }
-            | PileChoice::OptionalUpTo {
-                looked, eligible, ..
-            } => {
-                revealed_by_decision.extend(looked.iter().copied());
-                revealed_by_decision.extend(eligible.iter().copied());
-            }
-            PileChoice::Take { first, second } | PileChoice::Sacrifice { first, second } => {
+            PileChoice::Take { first, second } => {
                 revealed_by_decision.extend(first.iter().copied());
                 revealed_by_decision.extend(second.iter().copied());
             }
-            PileChoice::DividePermanents(_) => {}
         }
     }
     let hidden: BTreeSet<_> = source
@@ -1224,25 +1213,10 @@ fn assert_display_trace(snapshot: &PlayerSnapshot, view: &NativeScope<'_>, displ
             RuleFrame::RevealedPiles(frame) => {
                 use spellwake_engine::effects::PileChoice;
                 let ids: &[_] = match frame.choice() {
-                    PileChoice::OneToHand(ids)
-                    | PileChoice::OneToHandRestBottom(ids)
-                    | PileChoice::Creature(ids)
-                    | PileChoice::Divide(ids)
+                    PileChoice::Divide(ids)
                     | PileChoice::BottomOrder(ids)
                     | PileChoice::GraveyardOrder(ids) => ids,
-                    PileChoice::OptionalCreatureToBattlefield { looked, eligible }
-                    | PileChoice::OptionalUpTo {
-                        looked, eligible, ..
-                    } => {
-                        for &id in looked.iter().chain(eligible.iter()) {
-                            let obj = source.execution().window().cards().get(id).unwrap();
-                            let prog = source.execution().copiable_program(id).unwrap();
-                            expected.push(DisplayCall::Object(obj.clone(), prog.clone()));
-                        }
-                        &[]
-                    }
-                    PileChoice::Take { first, second }
-                    | PileChoice::Sacrifice { first, second } => {
+                    PileChoice::Take { first, second } => {
                         for &id in first.iter().chain(second.iter()) {
                             let obj = source.execution().window().cards().get(id).unwrap();
                             let prog = source.execution().copiable_program(id).unwrap();
@@ -1250,7 +1224,6 @@ fn assert_display_trace(snapshot: &PlayerSnapshot, view: &NativeScope<'_>, displ
                         }
                         &[]
                     }
-                    PileChoice::DividePermanents(_) => &[],
                 };
                 for &id in ids {
                     let obj = source.execution().window().cards().get(id).unwrap();

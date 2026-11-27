@@ -7,26 +7,6 @@ use crate::program::{PublicZoneDestination as Zone, ZoneActionKind};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PileChoice {
     Divide(Vec<ObjectId>),
-    DividePermanents(Vec<ObjectId>),
-    Sacrifice {
-        first: Vec<ObjectId>,
-        second: Vec<ObjectId>,
-    },
-    Creature(Vec<ObjectId>),
-    /// The controller privately chooses one of the looked-at cards to keep.
-    OneToHand(Vec<ObjectId>),
-    OneToHandRestBottom(Vec<ObjectId>),
-    /// Privately select up to one eligible card to enter, then order all other looked-at cards.
-    OptionalCreatureToBattlefield {
-        looked: Vec<ObjectId>,
-        eligible: Vec<ObjectId>,
-    },
-    /// Select up to `max` distinct eligible cards from the looked-at or revealed cards.
-    OptionalUpTo {
-        looked: Vec<ObjectId>,
-        eligible: Vec<ObjectId>,
-        max: usize,
-    },
     Take {
         first: Vec<ObjectId>,
         second: Vec<ObjectId>,
@@ -775,18 +755,15 @@ impl EffectWindow {
             return Err(EffectError::WrongResolutionFrame);
         }
         match (&frame.choice, reply) {
-            (
-                PileChoice::Divide(domain) | PileChoice::DividePermanents(domain),
-                DecisionReply::SelectResolution(selected),
-            ) if selected.iter().all(|id| domain.contains(id))
-                && selected.iter().collect::<BTreeSet<_>>().len() == selected.len() =>
+            (PileChoice::Divide(domain), DecisionReply::SelectResolution(selected))
+                if selected.iter().all(|id| domain.contains(id))
+                    && selected.iter().collect::<BTreeSet<_>>().len() == selected.len() =>
             {
                 work.first = Some(selected)
             }
-            (
-                PileChoice::Take { first, second } | PileChoice::Sacrifice { first, second },
-                DecisionReply::ChoosePile(index @ (1 | 2)),
-            ) => work.hand = Some(if index == 1 { first } else { second }.clone()),
+            (PileChoice::Take { first, second }, DecisionReply::ChoosePile(index @ (1 | 2))) => {
+                work.hand = Some(if index == 1 { first } else { second }.clone())
+            }
             (PileChoice::BottomOrder(domain), DecisionReply::OrderResolutionGraveyard(order))
                 if order.len() == domain.len()
                     && order.iter().collect::<BTreeSet<_>>() == domain.iter().collect() =>

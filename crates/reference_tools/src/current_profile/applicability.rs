@@ -1201,10 +1201,7 @@ native!(RuleFrame, self, {
         RuleFrame::TransformOrder(_) => Err(ApplicabilityError),
         RuleFrame::Mutation(_)
         | RuleFrame::RevealedPiles(_)
-        | RuleFrame::PlaneswalkerType(_)
-        | RuleFrame::AttackDirection(_)
         | RuleFrame::DrawReplacement(_)
-        | RuleFrame::DamageRecipientChoice(_)
         | RuleFrame::DamageSourceChoice(_)
         | RuleFrame::OpponentChoice(_)
         | RuleFrame::ReplacementChooser(_)
@@ -1234,12 +1231,10 @@ native!(RuleFrame, self, {
         {
             Ok(())
         }
-        RuleFrame::LoyaltyRemoval(_)
-        | RuleFrame::ResolutionManaColor(_)
+        RuleFrame::ResolutionManaColor(_)
         | RuleFrame::OptionIndex(_)
         | RuleFrame::PromptChoice(_)
         | RuleFrame::Proliferate(_)
-        | RuleFrame::CounterRemoval(_)
         | RuleFrame::UntapKeepTapped(_) => Err(ApplicabilityError),
     }
 });
@@ -1263,10 +1258,7 @@ native!(EffectDecision, self, {
         }
         EffectDecision::Mutation(_)
         | EffectDecision::RevealedPiles(_)
-        | EffectDecision::PlaneswalkerType(_)
-        | EffectDecision::AttackDirection(_)
         | EffectDecision::DrawReplacement(_)
-        | EffectDecision::DamageRecipientChoice(_)
         | EffectDecision::DamageSourceChoice(_)
         | EffectDecision::OpponentChoice(_)
         | EffectDecision::ReplacementChooser(_)
@@ -1295,12 +1287,10 @@ native!(EffectDecision, self, {
         {
             Ok(())
         }
-        EffectDecision::LoyaltyRemoval(_)
-        | EffectDecision::ResolutionManaColor(_)
+        EffectDecision::ResolutionManaColor(_)
         | EffectDecision::OptionIndex(_)
         | EffectDecision::PromptChoice(_)
         | EffectDecision::Proliferate(_)
-        | EffectDecision::CounterRemoval(_)
         | EffectDecision::UntapKeepTapped(_) => Err(ApplicabilityError),
     }
 });
@@ -1391,10 +1381,7 @@ native!(spellwake_engine::effects::DecisionReply, self, {
         DecisionReply::ChooseLandKind(_)
         | DecisionReply::MutateOnTop(_)
         | DecisionReply::ChoosePile(_)
-        | DecisionReply::PlaneswalkerType(_)
-        | DecisionReply::AttackDirection(_)
         | DecisionReply::DrawReplacement(_)
-        | DecisionReply::ChooseDamageRecipient(_)
         | DecisionReply::ChooseDamageSource(_)
         | DecisionReply::OpponentChoice(_)
         | DecisionReply::ReplacementChooser(_)
@@ -1434,7 +1421,6 @@ native!(spellwake_engine::effects::DecisionReply, self, {
         | DecisionReply::CreatureType(_) => Ok(()),
         DecisionReply::Proliferate(_)
         | DecisionReply::OptionIndex(_)
-        | DecisionReply::RemoveCounters(_)
         | DecisionReply::SplitMana(_)
         | DecisionReply::TriggerModes(_)
         | DecisionReply::ApplyCounterDoublersFirst(_)

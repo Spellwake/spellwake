@@ -55,7 +55,6 @@ pub enum NativeReference {
     DrawLandKind(Option<bool>),
     MiracleReveal(bool),
     PlaneswalkerType(spellwake_engine::program::PlaneswalkerSubtype),
-    AttackDirection(spellwake_engine::effects::AttackDirection),
     OptionalEffect(OptionalEffectChoice),
     EntryPayLife(bool),
     OptionIndex(u8),
@@ -267,11 +266,14 @@ impl NativeScope<'_> {
                 matches!(self.frame()?,RuleFrame::DrawReplacement(frame) if matches!(frame.domain,spellwake_engine::effects::DrawReplacementDomain::LandKind))
             }
             NativeReference::PlaneswalkerType(_) => {
-                matches!(self.frame()?, RuleFrame::PlaneswalkerType(_))
-                    || matches!(self.frame()?, RuleFrame::PromptChoice(frame) if matches!(&frame.domain, spellwake_engine::toolbox::ResolvedPromptDomain::PlaneswalkerType { allowed } if true))
-            }
-            NativeReference::AttackDirection(_) => {
-                matches!(self.frame()?, RuleFrame::AttackDirection(_))
+                matches!(
+                    self.frame()?,
+                    RuleFrame::PromptChoice(frame)
+                        if matches!(
+                            &frame.domain,
+                            spellwake_engine::toolbox::ResolvedPromptDomain::PlaneswalkerType { .. }
+                        )
+                )
             }
             NativeReference::OptionalEffect(choice) => {
                 matches!(self.frame()?, RuleFrame::OptionalEffect(frame) if frame.options().contains(&choice))
