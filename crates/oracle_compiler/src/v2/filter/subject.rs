@@ -208,6 +208,22 @@ pub fn parse_subject_ref(ts: &mut TokenStream<'_>) -> PResult<SubjectRef> {
                     count,
                     another,
                 };
+                if ts.eat_phrase(&["or", "suspended", "card"])
+                    || ts.eat_phrase(&["or", "suspended", "cards"])
+                {
+                    return Ok(SubjectRef::Compound(vec![
+                        first_target,
+                        SubjectRef::TargetObject {
+                            filter: Box::new(ObjectFilter {
+                                any_card: true,
+                                flags: FilterFlags::SUSPENDED,
+                                ..Default::default()
+                            }),
+                            count,
+                            another,
+                        },
+                    ]));
+                }
                 // Support `<target1> and [up to <N> | another | <N>] [other] target <flt2>` (`Hull Breach`, `Relic Crush`, `Blizzard Brawl`, `Grim Contest`)
                 let ccp = ts.checkpoint();
                 if ts.eat_word("and")

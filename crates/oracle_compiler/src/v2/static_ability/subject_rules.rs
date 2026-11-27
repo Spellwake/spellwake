@@ -1079,6 +1079,16 @@ pub(super) fn parse_subject_static_ability(
                 });
                 continue;
             }
+            if ts.eat_phrase(&["and", "attack", "each", "combat", "if", "able"])
+                || ts.eat_phrase(&["and", "attacks", "each", "combat", "if", "able"])
+            {
+                parts.push(StaticAbility::SubjectRule {
+                    subject: subject.clone(),
+                    rule: SubjectStaticRule::MustAttack,
+                    condition: condition.clone(),
+                });
+                continue;
+            }
             break;
         }
         return Ok(if parts.len() == 1 {
@@ -1136,7 +1146,32 @@ pub(super) fn parse_subject_static_ability(
         });
     }
 
-    // `<subj> attacks each combat if able [unless <cond>]`
+    // `<subj> attacks or blocks each combat if able` / `<subj> blocks each combat if able` / `<subj> attacks each combat if able [unless <cond>]`
+    if ts.eat_phrase(&["attacks", "or", "blocks", "each", "combat", "if", "able"])
+        || ts.eat_phrase(&["attack", "or", "block", "each", "combat", "if", "able"])
+    {
+        return Ok(StaticAbility::Compound(vec![
+            StaticAbility::SubjectRule {
+                subject: subject.clone(),
+                rule: SubjectStaticRule::MustAttack,
+                condition: condition.clone(),
+            },
+            StaticAbility::SubjectRule {
+                subject,
+                rule: SubjectStaticRule::AllMustBlock,
+                condition,
+            },
+        ]));
+    }
+    if ts.eat_phrase(&["blocks", "each", "combat", "if", "able"])
+        || ts.eat_phrase(&["block", "each", "combat", "if", "able"])
+    {
+        return Ok(StaticAbility::SubjectRule {
+            subject,
+            rule: SubjectStaticRule::AllMustBlock,
+            condition,
+        });
+    }
     if ts.eat_phrase(&["attacks", "each", "combat", "if", "able"])
         || ts.eat_phrase(&["attack", "each", "combat", "if", "able"])
         || ts.eat_phrase(&["attacks", "each", "turn", "if", "able"])

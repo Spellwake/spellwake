@@ -479,6 +479,33 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         ts.restore(cp);
     }
 
+    if ts.eat_phrase(&["during", "any", "turn", "you", "attacked", "with"]) {
+        if ts.next_number(false).is_some() {
+            let _ = ts.eat_phrase(&["or", "more"]);
+        }
+        let _ = opt(ts, parse_object_filter);
+        if ts.eat_comma() {
+            let body = parse_sentence_top(ts)?;
+            return Ok(vec![Effect::BranchCondition {
+                condition: crate::v2::ir::ConditionExpr::PlayerCheck {
+                    player: PlayerRef::You,
+                    kind: crate::v2::ir::PlayerConditionKind::AttackedThisTurn,
+                },
+                then_body: body,
+                else_body: Vec::new(),
+            }]);
+        }
+    }
+    if ts.eat_phrase(&["at", "this", "turn's", "next", "end", "of", "combat"]) && ts.eat_comma() {
+        let body = parse_sentence_top(ts)?;
+        return Ok(vec![Effect::DelayedTrigger {
+            trigger: DelayedTriggerKind::Step {
+                step: crate::ast::TurnStepAst::EndOfCombat,
+                owner: crate::v2::ir::StepOwner::Next,
+            },
+            body,
+        }]);
+    }
     // 5. Delayed trigger prefix: `At the beginning of <step>, <body>` or `When <event>, <body>`
     {
         let cp = ts.checkpoint();
@@ -1219,25 +1246,28 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
                     tail_ts.restore(pcp);
                     if (tail_ts.eat_word("pays") || tail_ts.eat_word("pay"))
                         && let Ok(amt) = try_parse(&mut tail_ts, parse_value_expr)
-                        && tail_ts.eat_word("life")
+                        && (tail_ts.eat_word("life") || tail_ts.is_eof())
                         && tail_ts.is_eof()
                     {
                         Some(Cost::PayLife(amt))
-                    } else if (tail_ts.eat_word("pays") || tail_ts.eat_word("pay"))
-                        && (tail_ts.eat_phrase(&["its", "mana", "cost"])
-                            || tail_ts.eat_phrase(&["that", "creature's", "mana", "cost"])
-                            || tail_ts.eat_phrase(&["that", "card's", "mana", "cost"]))
-                    {
-                        if tail_ts.eat_phrase(&["reduced", "by"]) {
-                            let _ = tail_ts.eat_mana_cost();
-                        }
-                        if tail_ts.is_eof() {
-                            Some(Cost::PayAnyAmountMana)
+                    } else {
+                        tail_ts.restore(pcp);
+                        if (tail_ts.eat_word("pays") || tail_ts.eat_word("pay"))
+                            && (tail_ts.eat_phrase(&["its", "mana", "cost"])
+                                || tail_ts.eat_phrase(&["that", "creature's", "mana", "cost"])
+                                || tail_ts.eat_phrase(&["that", "card's", "mana", "cost"]))
+                        {
+                            if tail_ts.eat_phrase(&["reduced", "by"]) {
+                                let _ = tail_ts.eat_mana_cost();
+                            }
+                            if tail_ts.is_eof() {
+                                Some(Cost::PayAnyAmountMana)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
-                    } else {
-                        None
                     }
                 }
             };
@@ -1311,18 +1341,32 @@ fn parse_sentence_top(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
         let body_slice = &ts.tokens[ts.pos..at_idx];
         let step_slice = &ts.tokens[at_idx + 4..];
         let mut step_ts = ts.sub_stream(step_slice, ParseStage::Effect);
-        if let Ok((step, owner)) = parse_step_with_owner(&mut step_ts)
-            && step_ts.is_eof()
-        {
-            let mut body_ts = ts.sub_stream(body_slice, ParseStage::Effect);
-            if let Ok(body) = parse_clause_seq(&mut body_ts, None)
-                && body_ts.is_eof()
-            {
-                ts.pos = ts.tokens.len();
-                return Ok(vec![Effect::DelayedTrigger {
-                    trigger: DelayedTriggerKind::Step { step, owner },
-                    body,
-                }]);
+        if let Ok((step, owner)) = parse_step_with_owner(&mut step_ts) {
+            let trailing_cond = if step_ts.eat_word("if") {
+                parse_condition(&mut step_ts).ok()
+            } else {
+                None
+            };
+            if step_ts.is_eof() {
+                let mut body_ts = ts.sub_stream(body_slice, ParseStage::Effect);
+                if let Ok(body) = parse_clause_seq(&mut body_ts, None)
+                    && body_ts.is_eof()
+                {
+                    ts.pos = ts.tokens.len();
+                    let delayed = Effect::DelayedTrigger {
+                        trigger: DelayedTriggerKind::Step { step, owner },
+                        body: if let Some(cond) = trailing_cond {
+                            vec![Effect::BranchCondition {
+                                condition: cond,
+                                then_body: body,
+                                else_body: Vec::new(),
+                            }]
+                        } else {
+                            body
+                        },
+                    };
+                    return Ok(vec![delayed]);
+                }
             }
         }
     }

@@ -3700,3 +3700,495 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
         )
     ));
 }
+
+/// 13. Deep Wave 10 compositional IR assertions (85.55% -> 86.16%, +198 cards, 0 regressions,
+///     0 core-enum bloat):
+///     - Proper card-name identifiers `FilterPredicate::Named(String)` (`Vraska's Scorn`,
+///       `Dragonstorm Forecaster`, `Power Plant Worker`, `Mine Worker`, `Nissa's Encouragement`)
+///     - `<count> of those tokens` (`Rite of Replication`, `Anax, Hardened in the Forge`,
+///       `Increasing Devotion`, `Runo Stromkirk`)
+///     - Compound `deals damage equal to <val> to <t1> and <t2>` (`Chandra's Ignition`, `Rupture`, `Time Bomb`)
+///     - Player `can't` restrictions in effects (`Skullcrack`, `Atarka's Command`, `Ranger-Captain of Eos`, `Azor`)
+///     - `the total number of` value expressions (`Crackling Drake`, `Beacon Bolt`, `Ral, Izzet Viceroy`)
+///     - `have N or more <flt> in your graveyard` (`Octavia, Living Thesis`, `Oversold Cemetery`, `Battle of Wits`)
+///     - `move any number of counters` (`Forgotten Ancient`, `Bioshift`)
+///     - Multi-color `that's white, blue, black, or red` (`Questing Druid`, `Quirion Dryad`, `Aether Gust`, `Fry`)
+///     - `from among cards exiled with ~` (`Nightveil Specter`, `Intellect Devourer`)
+///     - `blocks each combat if able` / `attacks or blocks each combat if able` (`Grand Melee`, `Avatar of Slaughter`, `Iron Golem`)
+///     - `unless <player> pays its mana cost [reduced by {M}]` (`Flash`, `Disruption Aura`),
+///       delayed-step conditions (`Shirei, Shizo's Caretaker`, `Phytotitan`), and copy exceptions with inline keywords (`Kaya, Intangible Slayer`, `Leonardo da Vinci`).
+#[test]
+fn v2_wave10_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        AnaphoraRef, CastPermissionMode, ConditionExpr, ConditionFlag, CopyException, Cost,
+        DelayedTriggerKind, Duration, Effect, FilterPredicate, ObjectMutation, PlayerConditionKind,
+        PlayerRestrictionKind, RuleRestrictionKind, StaticAbility, SubjectRef, SubjectStaticRule,
+        TokenSpec, ValueExpr, ZoneOpKind,
+    };
+
+    let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("content")
+        .join("tests")
+        .join("fixtures")
+        .join("creature-vocabulary.input.json");
+    let vocab = Vocabulary::load_from_file(&vocab_path).expect("load CR creature vocabulary");
+
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "Chandra's Ignition",
+            "Sorcery",
+            "Target creature you control deals damage equal to its power to each other creature and each opponent.",
+        ),
+        (
+            "Flash",
+            "Instant",
+            "You may put a creature card from your hand onto the battlefield. If you do, sacrifice it unless you pay its mana cost reduced by {2}.",
+        ),
+        (
+            "Vampire Nocturnus",
+            "Creature - Vampire",
+            "Play with the top card of your library revealed.\nAs long as the top card of your library is black, Vampire Nocturnus and other Vampire creatures you control get +2/+1 and have flying.",
+        ),
+        (
+            "Robber of the Rich",
+            "Creature - Human Archer Rogue",
+            "Reach, haste\nWhenever Robber of the Rich attacks, if defending player has more cards in hand than you, exile the top card of their library. During any turn you attacked with a Rogue, you may cast that card and you may spend mana as though it were mana of any color to cast that spell.",
+        ),
+        (
+            "Shirei, Shizo's Caretaker",
+            "Legendary Creature - Spirit",
+            "Whenever a creature with power 1 or less is put into your graveyard from the battlefield, you may return that card to the battlefield at the beginning of the next end step if Shirei, Shizo's Caretaker is still on the battlefield.",
+        ),
+        (
+            "Kaya, Intangible Slayer",
+            "Legendary Planeswalker - Kaya",
+            "Hexproof\n+2: Each opponent loses 3 life and you gain 3 life.\n0: You draw two cards. Then each opponent may scry 1.\n\u{2212}3: Exile target creature or enchantment. If it wasn't an Aura, create a token that's a copy of it, except it's a 1/1 white Spirit creature with flying in addition to its other types.",
+        ),
+        (
+            "Analyze the Pollen",
+            "Sorcery",
+            "As an additional cost to cast this spell, you may collect evidence 8.\nSearch your library for a basic land card. If evidence was collected, instead search your library for a creature or land card. Reveal that card, put it into your hand, then shuffle.",
+        ),
+        (
+            "Vraska's Scorn",
+            "Sorcery",
+            "Target opponent loses 4 life. You may search your library and/or graveyard for a card named Vraska, Scheming Gorgon, reveal it, and put it into your hand. If you search your library this way, shuffle.",
+        ),
+        (
+            "Dragonstorm Forecaster",
+            "Creature - Human Scout",
+            "{2}, {T}: Search your library for a card named Dragonstorm Globe or Boulderborn Dragon, reveal it, put it into your hand, then shuffle.",
+        ),
+        (
+            "Rite of Replication",
+            "Sorcery",
+            "Kicker {5}\nCreate a token that's a copy of target creature. If this spell was kicked, create five of those tokens instead.",
+        ),
+        (
+            "Increasing Devotion",
+            "Sorcery",
+            "Create five 1/1 white Human creature tokens. If this spell was cast from a graveyard, create ten of those tokens instead.\nFlashback {7}{W}{W}",
+        ),
+        (
+            "Aether Gust",
+            "Instant",
+            "Choose target spell or permanent that's red or green. Its owner puts it on their choice of the top or bottom of their library.",
+        ),
+        (
+            "Krosan Verge",
+            "Land",
+            "Krosan Verge enters tapped.\n{T}: Add {C}.\n{2}, {T}, Sacrifice Krosan Verge: Search your library for a Forest card and a Plains card, put them onto the battlefield tapped, then shuffle.",
+        ),
+        (
+            "Moonsilver Key",
+            "Artifact",
+            "{1}, {T}, Sacrifice Moonsilver Key: Search your library for an artifact card with a mana ability or a basic land card, reveal it, put it into your hand, then shuffle.",
+        ),
+        (
+            "Conflux",
+            "Sorcery",
+            "Search your library for a white card, a blue card, a black card, a red card, and a green card. Reveal those cards, put them into your hand, then shuffle.",
+        ),
+        (
+            "Questing Druid",
+            "Creature - Human Druid",
+            "Whenever you cast a spell that's white, blue, black, or red, put a +1/+1 counter on Questing Druid.",
+        ),
+        (
+            "Nightveil Specter",
+            "Creature - Specter",
+            "Flying\nWhenever Nightveil Specter deals combat damage to a player, that player exiles the top card of their library.\nYou may play lands and cast spells from among cards exiled with Nightveil Specter.",
+        ),
+        (
+            "Grand Melee",
+            "Enchantment",
+            "All creatures attack each combat if able.\nAll creatures block each combat if able.",
+        ),
+        (
+            "Avatar of Slaughter",
+            "Creature - Avatar",
+            "All creatures have double strike and attack each combat if able.",
+        ),
+        (
+            "Captain Ripley Vance",
+            "Legendary Creature - Human Pirate",
+            "Whenever you cast your third spell each turn, put a +1/+1 counter on Captain Ripley Vance, then it deals damage equal to its power to any target.",
+        ),
+        (
+            "Skullcrack",
+            "Instant",
+            "Players can't gain life this turn. Damage can't be prevented this turn. Skullcrack deals 3 damage to target player or planeswalker.",
+        ),
+        (
+            "Atarka's Command",
+            "Instant",
+            "Choose two \u{2014}\n\u{2022} Your opponents can't gain life this turn.\n\u{2022} Atarka's Command deals 3 damage to each opponent.\n\u{2022} You may put a land card from your hand onto the battlefield.\n\u{2022} Creatures you control get +1/+1 and gain reach until end of turn.",
+        ),
+        (
+            "Ranger-Captain of Eos",
+            "Creature - Human Soldier",
+            "When Ranger-Captain of Eos enters, you may search your library for a creature card with mana value 1 or less, reveal it, put it into your hand, then shuffle.\nSacrifice Ranger-Captain of Eos: Your opponents can't cast noncreature spells this turn.",
+        ),
+        (
+            "Crackling Drake",
+            "Creature - Drake",
+            "Flying\nCrackling Drake's power is equal to the total number of instant and sorcery cards you own in exile and in your graveyard.\nWhen Crackling Drake enters, draw a card.",
+        ),
+        (
+            "Octavia, Living Thesis",
+            "Creature - Elemental Octopus",
+            "Octavia, Living Thesis costs {8} less to cast if you have eight or more instant and/or sorcery cards in your graveyard.\nWard {8}\nMagecraft \u{2014} Whenever you cast or copy an instant or sorcery spell, target creature has base power and toughness 8/8 until end of turn.",
+        ),
+        (
+            "Forgotten Ancient",
+            "Creature - Elemental",
+            "Whenever a player casts a spell, you may put a +1/+1 counter on Forgotten Ancient.\nAt the beginning of your upkeep, you may move any number of +1/+1 counters from Forgotten Ancient onto other creatures.",
+        ),
+        (
+            "Essence Channeler",
+            "Creature - Bat Cleric",
+            "As long as you've lost life this turn, Essence Channeler has flying and vigilance.\nWhenever you gain life, put a +1/+1 counter on Essence Channeler.\nWhen Essence Channeler dies, put its counters on target creature you control.",
+        ),
+        (
+            "Timecrafting",
+            "Instant",
+            "Choose one \u{2014}\n\u{2022} Remove X time counters from target permanent or suspended card.\n\u{2022} Put X time counters on target permanent with a time counter on it or suspended card.",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in cases {
+        let compiled = compile_v2_strict(name, type_line, oracle_text, &vocab);
+        assert!(
+            compiled.strictly_compiled,
+            "Wave 10 card `{name}` failed strict v2 compilation: {:#?}",
+            compiled.faces[0].errors
+        );
+    }
+
+    // Deep IR assertions:
+    // 1. Vraska's Scorn -> FilterPredicate::Named("Vraska, Scheming Gorgon")
+    let vraska = compile_v2_strict(
+        "Vraska's Scorn",
+        "Sorcery",
+        "You may search your library and/or graveyard for a card named Vraska, Scheming Gorgon, reveal it, and put it into your hand. If you search your library this way, shuffle.",
+        &vocab,
+    );
+    assert!(matches!(
+        &vraska.faces[0].spell_effects[0],
+        Effect::Optional { body, .. }
+            if matches!(
+                body.first(),
+                Some(Effect::ZoneOp {
+                    op: ZoneOpKind::SearchLibrary { .. },
+                    subject: SubjectRef::Group(flt),
+                    ..
+                }) if flt.predicates.iter().any(|p| matches!(p, FilterPredicate::Named(n) if n == "Vraska, Scheming Gorgon"))
+            )
+    ));
+
+    // 2. Rite of Replication -> `create five of those tokens instead` -> ReplacePrevious(CreateToken(CopyOf(ThatToken)))
+    let rite = compile_v2_strict(
+        "Rite of Replication",
+        "Sorcery",
+        "Kicker {5}\nCreate a token that's a copy of target creature. If this spell was kicked, create five of those tokens instead.",
+        &vocab,
+    );
+    assert!(matches!(
+        &rite.faces[0].spell_effects[1],
+        Effect::BranchCondition { then_body, .. }
+            if matches!(
+                then_body.as_slice(),
+                [Effect::ReplacePrevious(inner)]
+                    if matches!(
+                        inner.as_slice(),
+                        [Effect::CreateToken {
+                            count: ValueExpr::Const(5),
+                            spec: TokenSpec::CopyOf { source, .. },
+                            ..
+                        }] if matches!(source.as_ref(), SubjectRef::Anaphora(AnaphoraRef::ThatToken))
+                    )
+            )
+    ));
+
+    // 3. Chandra's Ignition -> DealDamage with Compound target (each other creature + each opponent)
+    let ignition = compile_v2_strict(
+        "Chandra's Ignition",
+        "Sorcery",
+        "Target creature you control deals damage equal to its power to each other creature and each opponent.",
+        &vocab,
+    );
+    assert!(matches!(
+        ignition.faces[0].spell_effects.as_slice(),
+        [Effect::DealDamage {
+            target: SubjectRef::Compound(tgts),
+            ..
+        }] if tgts.len() == 2
+    ));
+
+    // 4. Flash -> Unless with Cost::PayAnyAmountMana
+    let flash = compile_v2_strict(
+        "Flash",
+        "Instant",
+        "You may put a creature card from your hand onto the battlefield. If you do, sacrifice it unless you pay its mana cost reduced by {2}.",
+        &vocab,
+    );
+    assert!(matches!(
+        &flash.faces[0].spell_effects[1],
+        Effect::IfPrevious { succeeded: true, body }
+            if matches!(
+                body.as_slice(),
+                [Effect::Unless {
+                    cost: Some(Cost::PayAnyAmountMana),
+                    ..
+                }]
+            )
+    ));
+
+    // 5. Skullcrack -> CantGainLife + DamageCantBePrevented + DealDamage
+    let skullcrack = compile_v2_strict(
+        "Skullcrack",
+        "Instant",
+        "Players can't gain life this turn. Damage can't be prevented this turn. Skullcrack deals 3 damage to target player or planeswalker.",
+        &vocab,
+    );
+    assert!(matches!(
+        skullcrack.faces[0].spell_effects.as_slice(),
+        [
+            Effect::ApplyContinuous {
+                effect: e1,
+                duration: Duration::UntilEndOfTurn,
+            },
+            Effect::ApplyContinuous {
+                effect: e2,
+                duration: Duration::UntilEndOfTurn,
+            },
+            Effect::DealDamage { .. },
+        ] if matches!(
+            e1.as_ref(),
+            StaticAbility::PlayerRestriction {
+                restriction: PlayerRestrictionKind::CantGainLife,
+                ..
+            }
+        ) && matches!(
+            e2.as_ref(),
+            StaticAbility::RuleRestriction {
+                rule: RuleRestrictionKind::DamageCantBePrevented,
+                ..
+            }
+        )
+    ));
+
+    // 6. Ranger-Captain of Eos -> Activated ability applying CantBeCast on noncreature spells
+    let ranger = compile_v2_strict(
+        "Ranger-Captain of Eos",
+        "Creature - Human Soldier",
+        "Sacrifice Ranger-Captain of Eos: Your opponents can't cast noncreature spells this turn.",
+        &vocab,
+    );
+    assert!(matches!(
+        ranger.faces[0].abilities.as_slice(),
+        [Ability::Activated { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::ApplyContinuous { effect, .. }]
+                    if matches!(
+                        effect.as_ref(),
+                        StaticAbility::RuleRestriction {
+                            rule: RuleRestrictionKind::CantBeCast,
+                            ..
+                        }
+                    )
+            )
+    ));
+
+    // 7. Octavia, Living Thesis -> CostModifier with ZoneHasCount(min_count: 8)
+    let octavia = compile_v2_strict(
+        "Octavia, Living Thesis",
+        "Creature - Elemental Octopus",
+        "Octavia, Living Thesis costs {8} less to cast if you have eight or more instant and/or sorcery cards in your graveyard.",
+        &vocab,
+    );
+    assert!(matches!(
+        octavia.faces[0].statics.as_slice(),
+        [StaticAbility::CostModifier {
+            less: true,
+            condition: Some(ConditionExpr::ZoneHasCount { min_count: 8, .. }),
+            ..
+        }]
+    ));
+
+    // 8. Nightveil Specter -> ZoneCastPermission(PlayFromZone { lands: true, spells: true })
+    let specter = compile_v2_strict(
+        "Nightveil Specter",
+        "Creature - Specter",
+        "You may play lands and cast spells from among cards exiled with Nightveil Specter.",
+        &vocab,
+    );
+    assert!(matches!(
+        specter.faces[0].statics.as_slice(),
+        [StaticAbility::ZoneCastPermission {
+            mode: CastPermissionMode::PlayFromZone {
+                lands: true,
+                spells: true,
+                ..
+            },
+            ..
+        }]
+    ));
+
+    // 9. Grand Melee -> MustAttack + AllMustBlock
+    let melee = compile_v2_strict(
+        "Grand Melee",
+        "Enchantment",
+        "All creatures attack each combat if able.\nAll creatures block each combat if able.",
+        &vocab,
+    );
+    assert!(matches!(
+        melee.faces[0].statics.as_slice(),
+        [
+            StaticAbility::SubjectRule {
+                rule: SubjectStaticRule::MustAttack,
+                ..
+            },
+            StaticAbility::SubjectRule {
+                rule: SubjectStaticRule::AllMustBlock,
+                ..
+            },
+        ]
+    ));
+
+    // 10. Essence Channeler -> ConditionExpr::PlayerCheck(LostLifeThisTurn)
+    let channeler = compile_v2_strict(
+        "Essence Channeler",
+        "Creature - Bat Cleric",
+        "As long as you've lost life this turn, Essence Channeler has flying and vigilance.",
+        &vocab,
+    );
+    assert!(matches!(
+        channeler.faces[0].statics.as_slice(),
+        [StaticAbility::GrantKeywords {
+            condition: Some(ConditionExpr::PlayerCheck {
+                kind: PlayerConditionKind::LostLifeThisTurn,
+                ..
+            }),
+            ..
+        }]
+    ));
+
+    // 11. Kaya, Intangible Slayer -> CopyException::SetBasePTAndTypes + AddKeywords(Flying)
+    let kaya = compile_v2_strict(
+        "Kaya, Intangible Slayer",
+        "Legendary Planeswalker - Kaya",
+        "\u{2212}3: Exile target creature or enchantment. If it wasn't an Aura, create a token that's a copy of it, except it's a 1/1 white Spirit creature with flying in addition to its other types.",
+        &vocab,
+    );
+    assert!(matches!(
+        kaya.faces[0].abilities.as_slice(),
+        [Ability::Loyalty { body, .. }]
+            if matches!(
+                &body[1],
+                Effect::BranchCondition { then_body, .. }
+                    if matches!(
+                        then_body.as_slice(),
+                        [Effect::CreateToken {
+                            spec: TokenSpec::CopyOf { exceptions, .. },
+                            ..
+                        }] if matches!(
+                            exceptions.as_slice(),
+                            [
+                                CopyException::SetBasePTAndTypes {
+                                    power: Some(1),
+                                    toughness: Some(1),
+                                    keep_existing_types: true,
+                                    ..
+                                },
+                                CopyException::AddKeywords(_),
+                            ]
+                        )
+                    )
+            )
+    ));
+
+    // 12. Shirei, Shizo's Caretaker -> BranchCondition(SubjectMatches) wrapping DelayedTrigger(EndStep)
+    let shirei = compile_v2_strict(
+        "Shirei, Shizo's Caretaker",
+        "Legendary Creature - Spirit",
+        "Whenever a creature with power 1 or less is put into your graveyard from the battlefield, you may return that card to the battlefield at the beginning of the next end step if Shirei, Shizo's Caretaker is still on the battlefield.",
+        &vocab,
+    );
+    assert!(matches!(
+        shirei.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::BranchCondition {
+                    condition: ConditionExpr::SubjectMatches { .. },
+                    then_body,
+                    ..
+                }] if matches!(
+                    then_body.as_slice(),
+                    [Effect::DelayedTrigger {
+                        trigger: DelayedTriggerKind::Step { .. },
+                        ..
+                    }]
+                )
+            )
+    ));
+
+    // 13. Analyze the Pollen (`AdditionalCostPaid`) & Forgotten Ancient (`MoveCounters`)
+    let pollen = compile_v2_strict(
+        "Analyze the Pollen",
+        "Sorcery",
+        "As an additional cost to cast this spell, you may collect evidence 8.\nSearch your library for a basic land card. If evidence was collected, instead search your library for a creature or land card. Reveal that card, put it into your hand, then shuffle.",
+        &vocab,
+    );
+    assert!(pollen.faces[0].spell_effects.iter().any(|e| matches!(
+        e,
+        Effect::BranchCondition {
+            condition: ConditionExpr::Flag(ConditionFlag::AdditionalCostPaid),
+            ..
+        }
+    )));
+    let ancient = compile_v2_strict(
+        "Forgotten Ancient",
+        "Creature - Elemental",
+        "At the beginning of your upkeep, you may move any number of +1/+1 counters from Forgotten Ancient onto other creatures.",
+        &vocab,
+    );
+    assert!(matches!(
+        ancient.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::Optional { body: inner, .. }]
+                    if matches!(
+                        inner.as_slice(),
+                        [Effect::MutateObject {
+                            mutation: ObjectMutation::MoveCounters { .. },
+                            ..
+                        }]
+                    )
+            )
+    ));
+}

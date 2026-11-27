@@ -1473,6 +1473,26 @@ fn parse_static_core(
                 ts.restore(spcp);
             }
             if ts.eat_phrase(&["may", "play", "lands", "and", "cast", "spells", "from"]) {
+                if (ts.eat_phrase(&["among", "cards", "exiled", "with"])
+                    || ts.eat_phrase(&["among", "cards", "you", "own", "exiled", "with"]))
+                    && ts.eat_tilde()
+                {
+                    return Ok(StaticAbility::ZoneCastPermission {
+                        player,
+                        filter: None,
+                        subject: None,
+                        zone: Some(crate::v2::ir::ZoneRef {
+                            zone: crate::v2::ir::ZoneKind::Exile,
+                            owner: crate::v2::ir::ZoneOwner::Default,
+                        }),
+                        mode: CastPermissionMode::PlayFromZone {
+                            top_only: false,
+                            lands: true,
+                            spells: true,
+                        },
+                        condition,
+                    });
+                }
                 let top_only = ts.eat_phrase(&["the", "top", "of"]);
                 let zone = parse_zone_ref(ts)?;
                 return Ok(StaticAbility::ZoneCastPermission {
@@ -1538,6 +1558,26 @@ fn parse_static_core(
                 });
             }
             if ts.eat_phrase(&["may", "play", "cards", "from"]) {
+                if (ts.eat_phrase(&["among", "cards", "exiled", "with"])
+                    || ts.eat_phrase(&["among", "cards", "you", "own", "exiled", "with"]))
+                    && ts.eat_tilde()
+                {
+                    return Ok(StaticAbility::ZoneCastPermission {
+                        player,
+                        filter: None,
+                        subject: None,
+                        zone: Some(crate::v2::ir::ZoneRef {
+                            zone: crate::v2::ir::ZoneKind::Exile,
+                            owner: crate::v2::ir::ZoneOwner::Default,
+                        }),
+                        mode: CastPermissionMode::PlayFromZone {
+                            top_only: false,
+                            lands: true,
+                            spells: true,
+                        },
+                        condition,
+                    });
+                }
                 let top_only = ts.eat_phrase(&["the", "top", "of"]);
                 let zone = parse_zone_ref(ts)?;
                 return Ok(StaticAbility::ZoneCastPermission {

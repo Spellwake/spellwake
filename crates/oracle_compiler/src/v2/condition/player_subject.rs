@@ -194,6 +194,19 @@ pub(super) fn parse_player_or_subject_condition(
                             rhs: Box::new(crate::v2::ir::ValueExpr::Const(n)),
                         });
                     }
+                    {
+                        let fcp = ts.checkpoint();
+                        if let Ok(mut flt) = try_parse(ts, parse_object_filter)
+                            && let Some(zone) = flt.zones.pop()
+                        {
+                            return Ok(ConditionExpr::ZoneHasCount {
+                                filter: Box::new(flt),
+                                zone,
+                                min_count: u16::try_from(n.max(1)).unwrap_or(1),
+                            });
+                        }
+                        ts.restore(fcp);
+                    }
                     if let Ok(kind) = try_parse(ts, parse_counter_kind)
                         && (ts.eat_word("counters") || ts.eat_word("counter"))
                     {
