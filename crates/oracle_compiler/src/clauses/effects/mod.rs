@@ -1193,10 +1193,17 @@ pub fn parse_atomic_effect(
     {
         return Ok(vec![InstructionAst::ManaSpendRestriction(s.to_string())]);
     }
-    if low == "exile that spell instead of putting it into your graveyard as it resolves"
-        || low == "exile that spell instead of putting it into its owner's graveyard as it resolves"
-        || low == "exile it instead of putting it into your graveyard as it resolves"
-        || low == "exile it instead of putting it into its owner's graveyard as it resolves"
+    if let Some(who_raw) = low
+        .strip_suffix(" wins the game")
+        .or_else(|| low.strip_suffix(" win the game"))
+        && let Some(player) = parse_player_ref(who_raw.trim())
+    {
+        return Ok(vec![InstructionAst::WinGame { player }]);
+    }
+    if let Some(after) = low.strip_prefix("exile ")
+        && let Some((subj_raw, rest)) = after.split_once(" instead of putting it into ")
+        && rest.ends_with(" graveyard as it resolves")
+        && matches!(subj_raw.trim(), "that spell" | "it" | "~")
     {
         return Ok(vec![InstructionAst::OneShotReplacement {
             subject: "that spell".to_string(),
@@ -4893,30 +4900,32 @@ pub fn parse_atomic_effect(
             duration: dur,
         }]);
     }
-    if low == "the next spell you cast this turn can't be countered" {
-        return Ok(vec![InstructionAst::CombatRuleMod {
-            subject: Box::new(SubjectRefAst::Player(PlayerRefAst::You)),
-            rule: "next_spell_cant_be_countered".to_string(),
-            duration: DurationAst::UntilEndOfTurn,
-        }]);
-    }
-    if low == "the next creature spell you cast this turn can't be countered" {
-        let creature_flt = crate::ast::ObjectFilterAst {
-            any_types: crate::ast::CardTypeMask::CREATURE,
-            ..Default::default()
-        };
-        return Ok(vec![InstructionAst::TemporaryStatic {
-            static_ability: Box::new(StaticAbilityAst::NextSpellModifier {
-                filter: Box::new(creature_flt.clone()),
-                effect: Box::new(StaticAbilityAst::PlayOrCastPermission {
-                    cast_only: true,
-                    filter: Box::new(creature_flt),
-                    permission: "can't be countered".to_string(),
-                    condition: None,
+    if let Some(spell_raw) = low
+        .strip_prefix("the next ")
+        .and_then(|r| r.strip_suffix(" you cast this turn can't be countered"))
+    {
+        let spell_trim = spell_raw.trim();
+        if spell_trim == "spell" {
+            return Ok(vec![InstructionAst::CombatRuleMod {
+                subject: Box::new(SubjectRefAst::Player(PlayerRefAst::You)),
+                rule: "next_spell_cant_be_countered".to_string(),
+                duration: DurationAst::UntilEndOfTurn,
+            }]);
+        }
+        if let Ok(flt) = parse_object_filter(spell_trim, vocab) {
+            return Ok(vec![InstructionAst::TemporaryStatic {
+                static_ability: Box::new(StaticAbilityAst::NextSpellModifier {
+                    filter: Box::new(flt.clone()),
+                    effect: Box::new(StaticAbilityAst::PlayOrCastPermission {
+                        cast_only: true,
+                        filter: Box::new(flt),
+                        permission: "can't be countered".to_string(),
+                        condition: None,
+                    }),
                 }),
-            }),
-            duration: DurationAst::UntilEndOfTurn,
-        }]);
+                duration: DurationAst::UntilEndOfTurn,
+            }]);
+        }
     }
     if low == "~ can't be copied" {
         return Ok(vec![InstructionAst::CombatRuleMod {
@@ -6416,38 +6425,46 @@ pub fn parse_atomic_effect(
             body: vec![InstructionAst::RollDie { sides: 20 }],
         }]);
     }
-    if low == "put both cards onto the battlefield under your control, then shuffle" {
+    if let Some(dest) = low
+        .strip_prefix("put both cards onto ")
+        .and_then(|r| r.strip_suffix(", then shuffle"))
+    {
         return Ok(vec![
             InstructionAst::MoveZone {
                 subject: Box::new(SubjectRefAst::Anaphora("both cards".to_string())),
-                to: "the battlefield under your control".to_string(),
+                to: dest.trim().to_string(),
             },
             InstructionAst::ShuffleLibrary {
                 player: PlayerRefAst::You,
             },
         ]);
     }
-    if low == "the player with the lowest life total gains control of ~" {
+    if let Some((highest, act_raw)) = low
+        .strip_prefix("the player with the highest life total ")
+        .map(|r| (true, r))
+        .or_else(|| {
+            low.strip_prefix("the player with the lowest life total ")
+                .map(|r| (false, r))
+        })
+        && let Ok(acts) = parse_atomic_effect(&format!("that player {}", act_raw.trim()), vocab)
+        && acts.len() == 1
+    {
         return Ok(vec![InstructionAst::ExtremeLifePlayerAction {
-            highest: false,
-            action: Box::new(InstructionAst::GainControl {
-                subject: Box::new(SubjectRefAst::SelfObject),
-                controller: PlayerRefAst::ThatPlayer,
-                duration: DurationAst::Permanent,
-            }),
+            highest,
+            action: Box::new(acts.into_iter().next().expect("checked len == 1")),
         }]);
     }
-    if low == "repeat the following process for each opponent in turn order" {
+    if let Some(after) = low.strip_prefix("repeat the following process for ") {
         return Ok(vec![InstructionAst::RepeatProcessExt {
             times: None,
-            for_list: vec!["each opponent in turn order".to_string()],
+            for_list: vec![after.trim().to_string()],
             until: None,
         }]);
     }
-    if low == "you do the same with the top three cards of your library" {
+    if let Some(after) = low.strip_prefix("you do the same with ") {
         return Ok(vec![InstructionAst::RepeatProcessExt {
             times: Some(Box::new(ValueExprAst::Const(1))),
-            for_list: vec!["the top three cards of your library".to_string()],
+            for_list: vec![after.trim().to_string()],
             until: None,
         }]);
     }
@@ -6458,25 +6475,32 @@ pub fn parse_atomic_effect(
             duration: DurationAst::UntilEndOfTurn,
         }]);
     }
-    if low == "up to two target players each manifest two cards from their hands" {
+    if let Some((players_raw, rest)) = low.split_once(" each manifest ")
+        && let Some((cnt_raw, tail)) = rest.split_once(" card")
+        && let (Ok(players), Ok(count)) = (
+            parse_subject_or_target(players_raw.trim(), vocab),
+            parse_value_expr(cnt_raw.trim(), vocab),
+        )
+    {
+        let zone_desc = tail.trim_start_matches('s').trim();
+        let subj_desc = if zone_desc.is_empty() {
+            None
+        } else {
+            Some(Box::new(SubjectRefAst::Anaphora(format!(
+                "cards {zone_desc}"
+            ))))
+        };
         return Ok(vec![InstructionAst::ForEachSubjectPlayer {
-            players: Box::new(SubjectRefAst::TargetPlayer {
-                opponent_only: false,
-                count: crate::ast::TargetCountAst::UpTo(2),
-            }),
+            players: Box::new(players),
             body: vec![InstructionAst::Manifest {
-                count: Box::new(ValueExprAst::Const(2)),
+                count: Box::new(count),
                 dread: false,
-                subject: Some(Box::new(SubjectRefAst::Anaphora(
-                    "cards from their hands".to_string(),
-                ))),
+                subject: subj_desc,
             }],
         }]);
     }
-    if low
-        == "that player chooses target player who controls more creatures than they do and is their opponent"
-        || low
-            == "that player chooses target player who controls more lands than they do and is their opponent"
+    if let Some(after) = low.strip_prefix("that player chooses target player who controls more ")
+        && after.ends_with(" than they do and is their opponent")
     {
         return Ok(vec![InstructionAst::InteractiveChoice(
             InteractiveChoiceKind::ChooseFromGroup {
@@ -6485,11 +6509,9 @@ pub fn parse_atomic_effect(
             },
         )]);
     }
-    if low == "an opponent guesses which number you chose, then you reveal the number you chose" {
+    if low.starts_with("an opponent guesses which ") && low.contains(", then you reveal ") {
         return Ok(vec![InstructionAst::InteractiveChoice(
-            InteractiveChoiceKind::SecretVote {
-                prompt: "an opponent guesses which number you chose, then you reveal the number you chose".to_string(),
-            },
+            InteractiveChoiceKind::SecretVote { prompt: low },
         )]);
     }
     if let Some(after_if) = low.strip_prefix("if ")
@@ -6507,25 +6529,19 @@ pub fn parse_atomic_effect(
     if let Some(trig_ins) = try_parse_inline_trigger(s, DurationAst::UntilEndOfTurn, vocab) {
         return Ok(vec![trig_ins]);
     }
-    if low == "you may play the top card of their library" {
+    if let Some(card_raw) = low.strip_prefix("you may play the top card of ")
+        && card_raw.ends_with(" library")
+    {
         return Ok(vec![InstructionAst::GrantCastPermission {
             player: PlayerRefAst::You,
-            subject: Box::new(SubjectRefAst::Anaphora(
-                "the top card of their library".to_string(),
-            )),
+            subject: Box::new(SubjectRefAst::Anaphora(format!(
+                "the top card of {card_raw}"
+            ))),
             duration: "this_turn".to_string(),
             cast_only: false,
             free: false,
             count_limit: None,
             alt_cost: None,
-        }]);
-    }
-    if low == "the player with the highest life total wins the game" {
-        return Ok(vec![InstructionAst::ExtremeLifePlayerAction {
-            highest: true,
-            action: Box::new(InstructionAst::WinGame {
-                player: PlayerRefAst::ThatPlayer,
-            }),
         }]);
     }
     if let Some(rest_okoye) =
@@ -6573,80 +6589,111 @@ pub fn parse_atomic_effect(
             return Ok(acc);
         }
     }
-    if low == "that player loses life equal to the difference"
-        || low == "they lose life equal to the difference"
+    if let Some((who_raw, gain)) = low
+        .strip_suffix(" loses life equal to the difference")
+        .or_else(|| low.strip_suffix(" lose life equal to the difference"))
+        .map(|w| (w, false))
+        .or_else(|| {
+            low.strip_suffix(" gains life equal to the difference")
+                .or_else(|| low.strip_suffix(" gain life equal to the difference"))
+                .map(|w| (w, true))
+        })
+        && let Some(player) = parse_player_ref(who_raw.trim())
     {
         return Ok(vec![InstructionAst::ChangeLife {
-            player: PlayerRefAst::ThatPlayer,
+            player,
             delta: Box::new(ValueExprAst::PriorResult),
-            gain: false,
+            gain,
         }]);
     }
-    if low == "that player mills a card for each 1 damage dealt to them" {
+    if let Some(who_raw) = low
+        .strip_suffix(" mills a card for each 1 damage dealt to them")
+        .or_else(|| low.strip_suffix(" mill a card for each 1 damage dealt to them"))
+        && let Some(player) = parse_player_ref(who_raw.trim())
+    {
         return Ok(vec![InstructionAst::Mill {
-            player: PlayerRefAst::ThatPlayer,
+            player,
             count: Box::new(ValueExprAst::PriorResult),
         }]);
     }
-    if low == "you may draw cards equal to the number of opponents dealt damage this way" {
+    if low
+        .strip_prefix("you may draw cards equal to the number of ")
+        .is_some_and(|r| r.ends_with(" dealt damage this way"))
+    {
         return Ok(vec![InstructionAst::Optional(vec![InstructionAst::Draw {
             player: PlayerRefAst::You,
             count: Box::new(ValueExprAst::PriorResult),
             up_to: false,
         }])]);
     }
-    if low
-        == "you may pay x life, where x is the number of opponents that were dealt combat damage this turn"
-    {
+    if let Some(pred) = low.strip_prefix("you may pay x life, where x is the number of ") {
         return Ok(vec![InstructionAst::BindX {
             x_expr: Box::new(ValueExprAst::CountPlayersMatching {
-                predicate: "opponents that were dealt combat damage this turn".to_string(),
+                predicate: pred.trim().to_string(),
             }),
             body: vec![InstructionAst::Optional(vec![InstructionAst::PayCost(
                 CostAtomAst::PayLife(Box::new(ValueExprAst::ChosenX)),
             )])],
         }]);
     }
-    if low == "you may have ~ become a copy of it, except it has this ability" {
+    if let Some(after) = low.strip_prefix("you may have ")
+        && let Some((subj_raw, rest)) = after.split_once(" become a copy of ")
+        && let Some((src_raw, exc_raw)) = rest.split_once(", except ")
+        && let (Ok(subject), Ok(source)) = (
+            parse_subject_or_target(subj_raw.trim(), vocab),
+            parse_subject_or_target(src_raw.trim(), vocab),
+        )
+    {
         return Ok(vec![InstructionAst::Optional(vec![
             InstructionAst::BecomeCopy {
-                subject: Box::new(SubjectRefAst::SelfObject),
-                source: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                subject: Box::new(subject),
+                source: Box::new(source),
                 duration: DurationAst::Permanent,
-                exception: Some("it has this ability".to_string()),
+                exception: Some(exc_raw.trim().to_string()),
             },
         ])]);
     }
-    if low
-        == "you may reveal that card if it has three or more colored mana symbols in its mana cost"
+    if let Some(after) = low.strip_prefix("you may reveal ")
+        && let Some((subj_raw, cond_raw)) = after.split_once(" if it has ")
+        && let Ok(subject) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
+        let status = cond_raw
+            .trim()
+            .strip_suffix(" in its mana cost")
+            .unwrap_or(cond_raw.trim())
+            .replace(' ', "_");
         return Ok(vec![InstructionAst::IfCondition {
             condition: Box::new(ConditionAst::HasStatus {
-                subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
-                status: "three_or_more_colored_mana_symbols".to_string(),
+                subject: Box::new(subject.clone()),
+                status,
             }),
             then_body: vec![InstructionAst::Optional(vec![
                 InstructionAst::RevealByPlayer {
                     player: PlayerRefAst::You,
-                    subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
+                    subject: Box::new(subject),
                 },
             ])],
         }]);
     }
-    if low == "add three mana in any combination of its colors and put it into your hand" {
-        return Ok(vec![
-            InstructionAst::AddQualifiedMana(Box::new(crate::ast::QualifiedManaAst {
+    if let Some(after) = low.strip_prefix("add ")
+        && let Some((cnt_raw, tail)) =
+            after.split_once(" mana in any combination of its colors and ")
+        && let (Ok(amount), Ok(mut follow)) = (
+            parse_value_expr(cnt_raw.trim(), vocab),
+            parse_atomic_effect(tail.trim(), vocab),
+        )
+    {
+        let mut out = vec![InstructionAst::AddQualifiedMana(Box::new(
+            crate::ast::QualifiedManaAst {
                 player: PlayerRefAst::You,
                 kind: "any_combination_of_subject_colors".to_string(),
-                amount: Some(Box::new(ValueExprAst::Const(3))),
+                amount: Some(Box::new(amount)),
                 source: Some(Box::new(SubjectRefAst::Anaphora("it".to_string()))),
                 choices: Vec::new(),
-            })),
-            InstructionAst::MoveZone {
-                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                to: "your hand".to_string(),
             },
-        ]);
+        ))];
+        out.append(&mut follow);
+        return Ok(out);
     }
 
     // Universal trailing "<effect> if <cond>" (Imoen, Tevesh Szat, Caravan Vigil, Alacrian Armory)

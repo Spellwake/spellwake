@@ -190,6 +190,7 @@ fn parse_single_zone_atom(e: &str) -> Option<ZoneFilter> {
         "the battlefield" => return Some(ZoneFilter::Battlefield),
         "the stack" => return Some(ZoneFilter::Stack),
         "graveyards" | "all graveyards" => return Some(ZoneFilter::AllGraveyards),
+        "hands" | "all hands" => return Some(ZoneFilter::AnyHand),
         _ => {}
     }
 

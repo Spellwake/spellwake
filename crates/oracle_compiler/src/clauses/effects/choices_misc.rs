@@ -6,24 +6,23 @@ use super::{
     parse_effect_or_temp_clause, parse_untap_permanent_instruction, split_leading_player_verb,
 };
 use crate::ast::{
-    AltCastCostAst, CardTypeMask, CategoryIterationKind, ColorMask, CombatState, CompareOp,
-    ConditionAst, ControllerRelation, CostAtomAst, DelayedStepScope, DurationAst, ExchangeKind,
+    AltCastCostAst, CardTypeMask, CategoryIterationKind, CompareOp, ConditionAst,
+    ControllerRelation, CostAtomAst, DelayedStepScope, DurationAst, ExchangeKind,
     FilterPredicateAst, GameMarker, InstructionAst, InteractiveChoiceKind, ManaSpecAst,
     NameFilterAst, ObjectFilterAst, ObjectFilterFlags, PileRefAst, PlayerRefAst, PlayerStatKind,
     PriorActionRefKind, ReplaceEffectWithAst, ReplacementEffectAst, Rounding, StatBoundAst,
-    StatKind, StaticAbilityAst, SubjectRefAst, SupertypeMask, TargetCountAst, TokenSpecAst,
-    TriggerEventAst, TriggerSpecAst, TurnStepAst, ValueExprAst, ZoneFilter,
+    StatKind, StaticAbilityAst, SubjectRefAst, TargetCountAst, TokenSpecAst, TriggerEventAst,
+    TriggerSpecAst, TurnStepAst, ValueExprAst, ZoneFilter,
 };
 use crate::clauses::costs::{parse_cost_atom, parse_cost_list, peel_leading_count};
 use crate::clauses::statics::{StaticOrReplacement, parse_static_or_replacement};
 use crate::clauses::triggers::parse_trigger_header;
 use crate::combinators::{
-    DepthGuard, any_card_flt, any_perm, card_type, normalize_sticker_kind, obj_type,
-    parse_rounding_word,
+    DepthGuard, any_card_flt, any_perm, normalize_sticker_kind, obj_type, parse_rounding_word,
 };
 use crate::filter::{
     parse_condition, parse_for_each_value_expr, parse_keyword_list, parse_object_filter,
-    parse_player_ref, parse_subject_or_target, parse_value_expr,
+    parse_player_ref, parse_subject_or_target, parse_token_creation, parse_value_expr,
 };
 use crate::preprocess::{count_symbol_sequence, is_mana_sequence, parse_base_pt};
 use crate::vocab::{Vocabulary, parse_number_word};
@@ -7028,442 +7027,533 @@ fn parse_remaining_lossless_clauses(
         }]);
     }
 
-    // 21. Wandering Archaic // Explore the Vastlands: two independent optional picks (land AND/OR instant-or-sorcery)
-    if low
-        == "each player looks at the top five cards of their library and may reveal a land card and/or an instant or sorcery card from among them"
+    // 21. Generalized look-top + dual optional "and/or" reveal:
+    //     "<player> looks at the top <N> cards of <lib> library and may reveal <f1> and/or <f2> from among them"
+    if let Some((who_raw, rest)) = clean_low
+        .split_once(" looks at the top ")
+        .or_else(|| clean_low.split_once(" look at the top "))
+        && let Some((cnt_raw, tail)) = rest.split_once(" cards of ")
+        && let Some((lib_raw, rev_raw)) = tail.split_once(" library and may reveal ")
+        && let Some(flts_raw) = rev_raw.strip_suffix(" from among them")
+        && let Some((f1_raw, f2_raw)) = flts_raw.split_once(" and/or ")
+        && let (Some(player), Ok(count), Ok(f1), Ok(f2)) = (
+            parse_player_ref(who_raw.trim()),
+            parse_value_expr(cnt_raw.trim(), vocab),
+            parse_object_filter(f1_raw.trim(), vocab),
+            parse_object_filter(f2_raw.trim(), vocab),
+        )
     {
-        let land = card_type(CardTypeMask::LAND);
-        let inst_sorc = card_type(CardTypeMask::INSTANT.union(CardTypeMask::SORCERY));
-        return Some(vec![InstructionAst::ForEachPlayer {
-            player: PlayerRefAst::EachPlayer,
-            body: vec![
-                InstructionAst::LookTopLibrary {
-                    reveal: false,
-                    library: "their".to_string(),
-                    count: Box::new(ValueExprAst::Const(5)),
-                },
-                InstructionAst::OptionalPlayer {
-                    player: PlayerRefAst::ThatPlayer,
-                    body: vec![InstructionAst::RevealFromLooked {
-                        filter: Box::new(land),
-                        to: "revealed".to_string(),
-                    }],
-                },
-                InstructionAst::OptionalPlayer {
-                    player: PlayerRefAst::ThatPlayer,
-                    body: vec![InstructionAst::RevealFromLooked {
-                        filter: Box::new(inst_sorc),
-                        to: "revealed".to_string(),
-                    }],
-                },
-            ],
-        }]);
+        let actor = if matches!(
+            player,
+            PlayerRefAst::EachPlayer | PlayerRefAst::EachOpponent
+        ) {
+            PlayerRefAst::ThatPlayer
+        } else {
+            player
+        };
+        let body = vec![
+            InstructionAst::LookTopLibrary {
+                reveal: false,
+                library: lib_raw.trim().to_string(),
+                count: Box::new(count),
+            },
+            InstructionAst::OptionalPlayer {
+                player: actor,
+                body: vec![InstructionAst::RevealFromLooked {
+                    filter: Box::new(f1),
+                    to: "revealed".to_string(),
+                }],
+            },
+            InstructionAst::OptionalPlayer {
+                player: actor,
+                body: vec![InstructionAst::RevealFromLooked {
+                    filter: Box::new(f2),
+                    to: "revealed".to_string(),
+                }],
+            },
+        ];
+        return Some(
+            if matches!(
+                player,
+                PlayerRefAst::EachPlayer | PlayerRefAst::EachOpponent
+            ) {
+                vec![InstructionAst::ForEachPlayer { player, body }]
+            } else {
+                body
+            },
+        );
     }
 
-    // Evil's Thrall: UntilEndOfPlayersNextTurn(You)
-    if low
-        == "if you control a villain with greater mana value than that creature, gain control of that creature until the end of your next turn instead"
+    // 22. Generalized "if you control <flt> with greater/less <stat> than <ref>, gain control of <tgt> until the end of your next turn instead"
+    if let Some(after) = clean_low.strip_prefix("if you control ")
+        && let Some((cond_part, eff_part)) = after.split_once(", gain control of ")
+        && let Some((tgt_raw, _)) = eff_part.split_once(" until the end of your next turn instead")
+        && let Some((flt_raw, cmp, stat_tail)) = cond_part
+            .split_once(" with greater ")
+            .map(|(f, r)| (f, CompareOp::Gt, r))
+            .or_else(|| {
+                cond_part
+                    .split_once(" with less ")
+                    .map(|(f, r)| (f, CompareOp::Lt, r))
+            })
+        && let Some((stat_raw, ref_raw)) = stat_tail.split_once(" than ")
+        && let Some(stat) = match stat_raw.trim() {
+            "mana value" => Some(StatKind::ManaValue),
+            "power" => Some(StatKind::Power),
+            "toughness" => Some(StatKind::Toughness),
+            _ => None,
+        }
+        && let (Ok(mut flt), Ok(ref_subj), Ok(tgt)) = (
+            parse_object_filter(flt_raw.trim(), vocab),
+            parse_subject_or_target(ref_raw.trim(), vocab),
+            parse_subject_or_target(tgt_raw.trim(), vocab),
+        )
     {
-        let mut villain = ObjectFilterAst {
-            subtypes: vec!["Villain".to_string()],
-            controller: Some(ControllerRelation::You),
-            ..Default::default()
-        };
-        villain.predicates.push(FilterPredicateAst::StatRelationTo {
-            stat: StatKind::ManaValue,
-            cmp: CompareOp::Gt,
+        flt.controller = Some(ControllerRelation::You);
+        flt.predicates.push(FilterPredicateAst::StatRelationTo {
+            stat,
+            cmp,
             expr: Box::new(ValueExprAst::ObjectStat {
-                subject: Box::new(SubjectRefAst::Anaphora("that creature".to_string())),
-                stat: StatKind::ManaValue,
+                subject: Box::new(ref_subj),
+                stat,
             }),
         });
         return Some(vec![InstructionAst::IfCondition {
             condition: Box::new(ConditionAst::ControlsCount {
                 player: PlayerRefAst::You,
-                filter: Box::new(villain),
+                filter: Box::new(flt),
                 op: CompareOp::Ge,
                 value: 1,
             }),
             then_body: vec![InstructionAst::ReplaceEffect(vec![
                 InstructionAst::GainControl {
                     controller: PlayerRefAst::You,
-                    subject: Box::new(SubjectRefAst::Anaphora("that creature".to_string())),
+                    subject: Box::new(tgt),
                     duration: DurationAst::UntilEndOfPlayersNextTurn(PlayerRefAst::You),
                 },
             ])],
         }]);
     }
 
-    // Sasaya / Winnowing (FilterPredicateAst::Exclude, NOT EXCLUDE_SELF)
-    if low
-        == "add an additional one mana of any type that land produced for each other land you control with the same name as it"
+    // 23. Generalized "add an additional one mana of any type that land produced for each <flt> with the same name as it"
+    if let Some(after) = clean_low
+        .strip_prefix("add an additional one mana of any type that land produced for each ")
+        && let Some(flt_raw) = after.strip_suffix(" with the same name as it")
     {
-        let mut other_land = obj_type(CardTypeMask::LAND);
-        other_land.controller = Some(ControllerRelation::You);
-        other_land.named = Some(NameFilterAst::SameAs(Box::new(SubjectRefAst::Anaphora(
-            "that land".to_string(),
-        ))));
-        other_land
-            .predicates
-            .push(FilterPredicateAst::Exclude(Box::new(
-                SubjectRefAst::Anaphora("that land".to_string()),
-            )));
-        return Some(vec![InstructionAst::AddManaLandProduced {
-            player: PlayerRefAst::You,
-            count: Some(Box::new(ValueExprAst::Count(Box::new(other_land)))),
-        }]);
+        let (is_other, core) = match flt_raw.trim().strip_prefix("other ") {
+            Some(c) => (true, c),
+            None => (false, flt_raw.trim()),
+        };
+        if let Ok(mut flt) = parse_object_filter(core, vocab) {
+            flt.named = Some(NameFilterAst::SameAs(Box::new(SubjectRefAst::Anaphora(
+                "that land".to_string(),
+            ))));
+            if is_other {
+                flt.predicates.push(FilterPredicateAst::Exclude(Box::new(
+                    SubjectRefAst::Anaphora("that land".to_string()),
+                )));
+            }
+            return Some(vec![InstructionAst::AddManaLandProduced {
+                player: PlayerRefAst::You,
+                count: Some(Box::new(ValueExprAst::Count(Box::new(flt)))),
+            }]);
+        }
     }
-    if low
-        == "then each player sacrifices all other creatures they control that don't share a creature type with the chosen creature they control"
+
+    // 24. Generalized "[then ]<player> sacrifices all [other ]<flt> that don't share a creature type with <ref>"
+    if let Some((who_raw, rest)) = clean_low
+        .split_once(" sacrifices all ")
+        .or_else(|| clean_low.split_once(" sacrifice all "))
+        && let Some(player) = parse_player_ref(who_raw.trim())
+        && let Some((flt_raw, ref_raw)) = rest.split_once(" that don't share a creature type with ")
     {
-        let mut flt = obj_type(CardTypeMask::CREATURE);
-        flt.controller = Some(ControllerRelation::ThatPlayer);
-        flt.predicates.push(FilterPredicateAst::Exclude(Box::new(
-            SubjectRefAst::Anaphora("the chosen creature".to_string()),
-        )));
-        flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
-            property: "creature_type".to_string(),
-            reference: Box::new(SubjectRefAst::Anaphora("the chosen creature".to_string())),
-            negated: true,
-        });
-        return Some(vec![InstructionAst::Sacrifice {
-            player: PlayerRefAst::EachPlayer,
-            count: None,
-            subject: Box::new(SubjectRefAst::All(Box::new(flt))),
-            except: None,
-            half: false,
-            rounding: None,
-            chooser: None,
+        let (is_other, core) = match flt_raw.trim().strip_prefix("other ") {
+            Some(c) => (true, c),
+            None => (false, flt_raw.trim()),
+        };
+        let ref_clean = ref_raw
+            .trim()
+            .strip_suffix(" they control")
+            .or_else(|| ref_raw.trim().strip_suffix(" you control"))
+            .unwrap_or(ref_raw.trim());
+        if let Ok(mut flt) = parse_object_filter(core, vocab) {
+            let ref_subj = SubjectRefAst::Anaphora(ref_clean.to_string());
+            if is_other {
+                flt.predicates
+                    .push(FilterPredicateAst::Exclude(Box::new(ref_subj.clone())));
+            }
+            flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
+                property: "creature_type".to_string(),
+                reference: Box::new(ref_subj),
+                negated: true,
+            });
+            return Some(vec![InstructionAst::Sacrifice {
+                player,
+                count: None,
+                subject: Box::new(SubjectRefAst::All(Box::new(flt))),
+                except: None,
+                half: false,
+                rounding: None,
+                chooser: None,
+            }]);
+        }
+    }
+
+    // 25. Generalized "<player> reveals a number of cards from the top of their library equal to <val>, puts all <flt> [they ]revealed this way onto <d1>, and puts the rest into <d2>"
+    if let Some((who_raw, rest)) =
+        clean_low.split_once(" reveals a number of cards from the top of their library equal to ")
+        && let Some(player) = parse_player_ref(who_raw.trim())
+        && let Some((val_raw, tail)) = rest.split_once(", puts all ")
+        && let Some((mid, d2_raw)) = tail.split_once(", and puts the rest into ")
+        && let Some((flt_raw, d1_raw)) = mid
+            .split_once(" they revealed this way onto ")
+            .or_else(|| mid.split_once(" revealed this way onto "))
+        && let (Ok(val), Ok(mut flt)) = (
+            parse_value_expr(val_raw.trim(), vocab),
+            parse_object_filter(flt_raw.trim(), vocab),
+        )
+    {
+        flt.predicates
+            .push(FilterPredicateAst::AffectedByPriorAction(
+                PriorActionRefKind::RevealedThisWay,
+            ));
+        let body = vec![
+            InstructionAst::LookTopLibrary {
+                reveal: true,
+                library: "their".to_string(),
+                count: Box::new(val),
+            },
+            InstructionAst::MoveZone {
+                subject: Box::new(SubjectRefAst::All(Box::new(flt))),
+                to: d1_raw.trim().to_string(),
+            },
+            InstructionAst::MoveZone {
+                subject: Box::new(SubjectRefAst::Anaphora("the rest".to_string())),
+                to: d2_raw.trim().to_string(),
+            },
+        ];
+        return Some(vec![InstructionAst::ForEachPlayer { player, body }]);
+    }
+
+    // 26. Generalized "<player> puts all <f1> revealed this way onto <d1>, then does the same for <f2>, then puts all cards revealed this way that weren't put onto <d1> on <d2>"
+    if let Some((who_raw, rest)) = clean_low.split_once(" puts all ")
+        && let Some(player) = parse_player_ref(who_raw.trim())
+        && let Some((f1_raw, tail)) = rest.split_once(" revealed this way onto ")
+        && let Some((d1_raw, tail2)) = tail.split_once(", then does the same for ")
+        && let Some((f2_raw, tail3)) =
+            tail2.split_once(", then puts all cards revealed this way that weren't put onto ")
+        && let Some((_, d2_raw)) = tail3.split_once(" on ")
+        && let (Ok(mut f1), Ok(mut f2)) = (
+            parse_object_filter(f1_raw.trim(), vocab),
+            parse_object_filter(f2_raw.trim(), vocab),
+        )
+    {
+        f1.predicates
+            .push(FilterPredicateAst::AffectedByPriorAction(
+                PriorActionRefKind::RevealedThisWay,
+            ));
+        f2.predicates
+            .push(FilterPredicateAst::AffectedByPriorAction(
+                PriorActionRefKind::RevealedThisWay,
+            ));
+        let d2 = d2_raw.trim().strip_prefix("the ").unwrap_or(d2_raw.trim());
+        return Some(vec![InstructionAst::ForEachPlayer {
+            player,
+            body: vec![
+                InstructionAst::MoveZone {
+                    subject: Box::new(SubjectRefAst::All(Box::new(f1))),
+                    to: d1_raw.trim().to_string(),
+                },
+                InstructionAst::MoveZone {
+                    subject: Box::new(SubjectRefAst::All(Box::new(f2))),
+                    to: d1_raw.trim().to_string(),
+                },
+                InstructionAst::MoveZone {
+                    subject: Box::new(SubjectRefAst::Anaphora("the rest".to_string())),
+                    to: d2.to_string(),
+                },
+            ],
         }]);
     }
 
-    // Over the Top / Warp World / Cryptic Gateway / Queen Kayla
-    if low
-        == "each player reveals a number of cards from the top of their library equal to the number of nonland permanents they control, puts all permanent cards they revealed this way onto the battlefield, and puts the rest into their graveyard"
+    // 27. Generalized "you may put <flt> that shares a creature type with <ref> onto <dest>"
+    if let Some(after) = clean_low.strip_prefix("you may put ")
+        && let Some((flt_raw, rest)) = after.split_once(" that shares a creature type with ")
+        && let Some((ref_raw, dest_raw)) = rest.rsplit_once(" onto ")
+        && let (Ok(mut flt), Ok(ref_subj)) = (
+            parse_object_filter(flt_raw.trim(), vocab),
+            parse_subject_or_target(ref_raw.trim(), vocab),
+        )
     {
-        let mut nonland = any_perm();
-        nonland.forbidden_types = CardTypeMask::LAND;
-        nonland.controller = Some(ControllerRelation::ThatPlayer);
-        let mut rev_perm = card_type(CardTypeMask::PERMANENT);
-        rev_perm
-            .predicates
-            .push(FilterPredicateAst::AffectedByPriorAction(
-                PriorActionRefKind::RevealedThisWay,
-            ));
-        return Some(vec![InstructionAst::ForEachPlayer {
-            player: PlayerRefAst::EachPlayer,
-            body: vec![
-                InstructionAst::LookTopLibrary {
-                    reveal: true,
-                    library: "their".to_string(),
-                    count: Box::new(ValueExprAst::Count(Box::new(nonland))),
-                },
-                InstructionAst::MoveZone {
-                    subject: Box::new(SubjectRefAst::All(Box::new(rev_perm))),
-                    to: "the battlefield".to_string(),
-                },
-                InstructionAst::MoveZone {
-                    subject: Box::new(SubjectRefAst::Anaphora("the rest".to_string())),
-                    to: "their graveyard".to_string(),
-                },
-            ],
-        }]);
-    }
-    if low
-        == "each player puts all artifact, creature, and land cards revealed this way onto the battlefield, then does the same for enchantment cards, then puts all cards revealed this way that weren't put onto the battlefield on the bottom of their library"
-    {
-        let mut acl = card_type(
-            CardTypeMask::ARTIFACT
-                .union(CardTypeMask::CREATURE)
-                .union(CardTypeMask::LAND),
-        );
-        acl.predicates
-            .push(FilterPredicateAst::AffectedByPriorAction(
-                PriorActionRefKind::RevealedThisWay,
-            ));
-        let mut ench = card_type(CardTypeMask::ENCHANTMENT);
-        ench.predicates
-            .push(FilterPredicateAst::AffectedByPriorAction(
-                PriorActionRefKind::RevealedThisWay,
-            ));
-        return Some(vec![InstructionAst::ForEachPlayer {
-            player: PlayerRefAst::EachPlayer,
-            body: vec![
-                InstructionAst::MoveZone {
-                    subject: Box::new(SubjectRefAst::All(Box::new(acl))),
-                    to: "the battlefield".to_string(),
-                },
-                InstructionAst::MoveZone {
-                    subject: Box::new(SubjectRefAst::All(Box::new(ench))),
-                    to: "the battlefield".to_string(),
-                },
-                InstructionAst::MoveZone {
-                    subject: Box::new(SubjectRefAst::Anaphora("the rest".to_string())),
-                    to: "bottom of their library".to_string(),
-                },
-            ],
-        }]);
-    }
-    if low
-        == "you may put a creature card from your hand that shares a creature type with each creature tapped this way onto the battlefield"
-    {
-        let mut tapped_cr = obj_type(CardTypeMask::CREATURE);
-        tapped_cr
-            .predicates
-            .push(FilterPredicateAst::AffectedByPriorAction(
-                PriorActionRefKind::TappedThisWay,
-            ));
-        let mut hand_cr = card_type(CardTypeMask::CREATURE);
-        hand_cr.zone = Some(ZoneFilter::YourHand);
-        hand_cr
-            .predicates
-            .push(FilterPredicateAst::SharesPropertyWith {
-                property: "creature_type".to_string(),
-                reference: Box::new(SubjectRefAst::Each(Box::new(tapped_cr))),
-                negated: false,
-            });
+        flt.predicates.push(FilterPredicateAst::SharesPropertyWith {
+            property: "creature_type".to_string(),
+            reference: Box::new(ref_subj),
+            negated: false,
+        });
         return Some(vec![InstructionAst::Optional(vec![
             InstructionAst::MoveZone {
-                subject: Box::new(SubjectRefAst::Group(Box::new(hand_cr))),
-                to: "the battlefield".to_string(),
+                subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
+                to: dest_raw.trim().to_string(),
             },
         ])]);
     }
-    if low
-        == "you may choose an artifact or creature card with mana value 1 you discarded this way, then do the same for artifact or creature cards with mana values 2 and 3"
+
+    // 28. Generalized "you may choose <flt> with mana value <n1> <prior>, then do the same for <flt2> with mana values <n2> and <n3>"
+    if let Some(after) = clean_low.strip_prefix("you may choose ")
+        && let Some((head, tail)) = after.split_once(", then do the same for ")
+        && let Some((flt_raw, mv1_tail)) = head.split_once(" with mana value ")
+        && let Some((n1_raw, prior_raw)) = mv1_tail.split_once(' ')
+        && let Some((_, mvs_raw)) = tail.split_once(" with mana values ")
+        && let Some((n2_raw, n3_raw)) = mvs_raw.split_once(" and ")
+        && let (Ok(base_flt), Some(n1), Some(n2), Some(n3)) = (
+            parse_object_filter(flt_raw.trim(), vocab),
+            parse_number_word(n1_raw.trim()),
+            parse_number_word(n2_raw.trim()),
+            parse_number_word(n3_raw.trim()),
+        )
     {
+        let prior = if prior_raw.contains("discarded") {
+            Some(PriorActionRefKind::DiscardedThisWay)
+        } else if prior_raw.contains("exiled") {
+            Some(PriorActionRefKind::ExiledThisWay)
+        } else {
+            None
+        };
         let mk = |mv| {
-            let mut f = card_type(CardTypeMask::ARTIFACT.union(CardTypeMask::CREATURE));
+            let mut f = base_flt.clone();
             f.stat_bounds.push(StatBoundAst {
                 stat: StatKind::ManaValue,
                 op: CompareOp::Eq,
                 value: Box::new(ValueExprAst::Const(mv)),
             });
-            f.predicates.push(FilterPredicateAst::AffectedByPriorAction(
-                PriorActionRefKind::DiscardedThisWay,
-            ));
+            if let Some(p) = &prior {
+                f.predicates
+                    .push(FilterPredicateAst::AffectedByPriorAction(p.clone()));
+            }
             f
         };
         return Some(vec![InstructionAst::Optional(vec![
             InstructionAst::ChoosePerFilter {
                 player: PlayerRefAst::You,
-                categories: vec![mk(1), mk(2), mk(3)],
+                categories: vec![mk(n1), mk(n2), mk(n3)],
                 sacrifice_rest: false,
             },
         ])]);
     }
 
-    // 17. Spy Network / Dream Cache / Decree of Annihilation / Sway of the Stars / Remove Enchantments
-    if low
-        == "look at target player's hand, the top card of that player's library, and any face-down creatures they control"
+    // 29. Generalized multi-target "look at <t1>, <t2>, and <t3>"
+    if let Some(after) = clean_low.strip_prefix("look at ")
+        && after.contains(", and ")
     {
-        let mut fd = obj_type(CardTypeMask::CREATURE);
-        fd.controller = Some(ControllerRelation::ThatPlayer);
-        fd.flags = ObjectFilterFlags::FACE_DOWN;
-        return Some(vec![InstructionAst::LookAt {
-            player: PlayerRefAst::You,
-            targets: vec![
-                SubjectRefAst::Anaphora("target player's hand".to_string()),
-                SubjectRefAst::Anaphora("the top card of that player's library".to_string()),
-                SubjectRefAst::All(Box::new(fd)),
-            ],
-        }]);
+        let norm = after.replace(", and ", ", ");
+        let pieces: Vec<&str> = norm.split(", ").map(str::trim).collect();
+        if pieces.len() >= 3 {
+            let targets: Vec<SubjectRefAst> = pieces
+                .into_iter()
+                .map(|p| {
+                    if let Some(rest) = p.strip_prefix("any ")
+                        && let Ok(flt) = parse_object_filter(rest, vocab)
+                    {
+                        SubjectRefAst::All(Box::new(flt))
+                    } else {
+                        SubjectRefAst::Anaphora(p.to_string())
+                    }
+                })
+                .collect();
+            return Some(vec![InstructionAst::LookAt {
+                player: PlayerRefAst::You,
+                targets,
+            }]);
+        }
     }
-    if low
-        == "draw three cards, then put two cards from your hand both on top of your library or both on the bottom of your library"
+
+    // 30. Generalized "<eff1>, then put <N> cards from <zone> both on <d1> or both on <d2>"
+    if let Some((head, tail)) = clean_low.split_once(", then put ")
+        && let Some((cnt_zone, dests)) = tail.split_once(" both on ")
+        && let Some((d1_raw, d2_raw)) = dests.split_once(" or both on ")
+        && let Some((cnt_raw, zone_raw)) = cnt_zone.split_once(" cards from ")
+        && let (Ok(mut out), Ok(count)) = (
+            parse_atomic_effect(head.trim(), vocab),
+            parse_value_expr(cnt_raw.trim(), vocab),
+        )
     {
-        let mut hand = any_card_flt();
-        hand.zone = Some(ZoneFilter::YourHand);
+        let mut flt = any_card_flt();
+        flt.zone = Some(if zone_raw.contains("hand") {
+            ZoneFilter::YourHand
+        } else {
+            ZoneFilter::YourGraveyard
+        });
         let mk_move = |dest: &str| {
             vec![InstructionAst::MoveCounted {
                 actor: Some(PlayerRefAst::You),
-                count: Some(Box::new(ValueExprAst::Const(2))),
+                count: Some(Box::new(count.clone())),
                 up_to: false,
                 any_number: false,
-                subject: Box::new(SubjectRefAst::Group(Box::new(hand.clone()))),
-                to: dest.to_string(),
+                subject: Box::new(SubjectRefAst::Group(Box::new(flt.clone()))),
+                to: dest
+                    .trim()
+                    .strip_prefix("the ")
+                    .unwrap_or(dest.trim())
+                    .to_string(),
             }]
         };
-        return Some(vec![
-            InstructionAst::Draw {
-                player: PlayerRefAst::You,
-                count: Box::new(ValueExprAst::Const(3)),
-                up_to: false,
-            },
-            InstructionAst::Choice(vec![
-                mk_move("top of your library"),
-                mk_move("bottom of your library"),
-            ]),
-        ]);
+        out.push(InstructionAst::Choice(vec![
+            mk_move(d1_raw),
+            mk_move(d2_raw),
+        ]));
+        return Some(out);
     }
-    if low
-        == "exile all artifacts, creatures, and lands from the battlefield, all cards from all graveyards, and all cards from all hands"
+
+    // 31. Generalized multi-clause board sweep:
+    //     "[then ](exile|destroy) all <f1>, all <f2>[, and all <f3>]"
+    if let Some((is_exile, rest)) = clean_low
+        .strip_prefix("exile all ")
+        .map(|r| (true, r))
+        .or_else(|| clean_low.strip_prefix("destroy all ").map(|r| (false, r)))
+        && (rest.contains(", all ") || rest.contains(", and all "))
     {
-        let mut bf = obj_type(
-            CardTypeMask::ARTIFACT
-                .union(CardTypeMask::CREATURE)
-                .union(CardTypeMask::LAND),
-        );
-        bf.zone = Some(ZoneFilter::Battlefield);
-        let mut gys = any_card_flt();
-        gys.zone = Some(ZoneFilter::AllGraveyards);
-        let mut hands = any_card_flt();
-        hands.zone = Some(ZoneFilter::AnyHand);
-        return Some(vec![InstructionAst::Exile {
-            actor: Some(PlayerRefAst::You),
-            subject: Box::new(SubjectRefAst::Compound(vec![
-                SubjectRefAst::All(Box::new(bf)),
-                SubjectRefAst::All(Box::new(gys)),
-                SubjectRefAst::All(Box::new(hands)),
-            ])),
-            random: false,
-            face_down: false,
-            into_pile: false,
-        }]);
+        let norm = rest.replace(", and all ", ", all ");
+        let mut subjects = Vec::new();
+        let mut all_ok = true;
+        for seg in norm.split(", all ") {
+            if let Ok(flt) = parse_object_filter(seg.trim(), vocab) {
+                subjects.push(SubjectRefAst::All(Box::new(flt)));
+            } else {
+                all_ok = false;
+                break;
+            }
+        }
+        if all_ok && subjects.len() >= 2 {
+            let compound = Box::new(SubjectRefAst::Compound(subjects));
+            return Some(vec![if is_exile {
+                InstructionAst::Exile {
+                    actor: Some(PlayerRefAst::You),
+                    subject: compound,
+                    random: false,
+                    face_down: false,
+                    into_pile: false,
+                }
+            } else {
+                InstructionAst::Destroy {
+                    subject: compound,
+                    random: false,
+                    except: None,
+                }
+            }]);
+        }
     }
-    if low
-        == "each player shuffles their hand, graveyard, and all permanents they own into their library, then draws seven cards"
+
+    // 32. Generalized "<player> shuffles their hand, graveyard, and all <flt> into their library[, then <eff>]"
+    if let Some((who_raw, rest)) = clean_low.split_once(" shuffles their hand, graveyard, and all ")
+        && let Some(player) = parse_player_ref(who_raw.trim())
+        && let Some((flt_raw, after_lib)) = rest.split_once(" into their library")
+        && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
-        let mut owned = any_perm();
-        owned.owner = Some(ControllerRelation::ThatPlayer);
         let mut hand = any_card_flt();
         hand.zone = Some(ZoneFilter::ThatPlayerHand);
         let mut gy = any_card_flt();
         gy.zone = Some(ZoneFilter::ThatPlayerGraveyard);
-        return Some(vec![InstructionAst::ForEachPlayer {
-            player: PlayerRefAst::EachPlayer,
-            body: vec![
-                InstructionAst::ShuffleIntoLibrary {
-                    subject: Box::new(SubjectRefAst::Compound(vec![
-                        SubjectRefAst::All(Box::new(hand)),
-                        SubjectRefAst::All(Box::new(gy)),
-                        SubjectRefAst::All(Box::new(owned)),
-                    ])),
-                },
-                InstructionAst::Draw {
-                    player: PlayerRefAst::ThatPlayer,
-                    count: Box::new(ValueExprAst::Const(7)),
-                    up_to: false,
-                },
-            ],
-        }]);
-    }
-    if low
-        == "then destroy all other enchantments you control, all other auras attached to permanents you control, and all other auras attached to attacking creatures your opponents control"
-    {
-        let mut ench = obj_type(CardTypeMask::ENCHANTMENT);
-        ench.controller = Some(ControllerRelation::You);
-        ench.flags = ObjectFilterFlags::EXCLUDE_SELF;
-        let mut aura1 = ObjectFilterAst {
-            subtypes: vec!["Aura".to_string()],
-            flags: ObjectFilterFlags::EXCLUDE_SELF,
-            ..Default::default()
-        };
-        let mut p_you = any_perm();
-        p_you.controller = Some(ControllerRelation::You);
-        aura1
-            .predicates
-            .push(FilterPredicateAst::AttachedTo(Box::new(
-                SubjectRefAst::All(Box::new(p_you)),
-            )));
-        let mut aura2 = ObjectFilterAst {
-            subtypes: vec!["Aura".to_string()],
-            flags: ObjectFilterFlags::EXCLUDE_SELF,
-            ..Default::default()
-        };
-        let mut atk_opp = obj_type(CardTypeMask::CREATURE);
-        atk_opp.combat = Some(CombatState::Attacking);
-        atk_opp.controller = Some(ControllerRelation::Opponents);
-        aura2
-            .predicates
-            .push(FilterPredicateAst::AttachedTo(Box::new(
-                SubjectRefAst::All(Box::new(atk_opp)),
-            )));
-        return Some(vec![InstructionAst::Destroy {
+        let mut body = vec![InstructionAst::ShuffleIntoLibrary {
             subject: Box::new(SubjectRefAst::Compound(vec![
-                SubjectRefAst::All(Box::new(ench)),
-                SubjectRefAst::All(Box::new(aura1)),
-                SubjectRefAst::All(Box::new(aura2)),
+                SubjectRefAst::All(Box::new(hand)),
+                SubjectRefAst::All(Box::new(gy)),
+                SubjectRefAst::All(Box::new(flt)),
             ])),
-            random: false,
-            except: None,
-        }]);
+        }];
+        if let Some(then_raw) = after_lib.trim().strip_prefix(", then ") {
+            if let Ok(mut follow) =
+                parse_atomic_effect(&format!("that player {}", then_raw.trim()), vocab)
+            {
+                body.append(&mut follow);
+            } else if let Ok(mut follow) = parse_atomic_effect(then_raw.trim(), vocab) {
+                body.append(&mut follow);
+            }
+        }
+        return Some(vec![InstructionAst::ForEachPlayer { player, body }]);
     }
 
-    // 18. Mercurial Transformation / Navigator's Compass / Phantasmal Form / Zur, Eternal Schemer
-    if low
-        == "until end of turn, target nonland permanent loses all abilities and becomes your choice of a blue frog creature with base power and toughness 1/1 or a blue octopus creature with base power and toughness 4/4"
+    // 33. Generalized "until <dur>, <subj> loses all abilities and becomes your choice of <opt1> or <opt2>"
+    if let Some(after) = clean_low.strip_prefix("until end of turn, ")
+        && let Some((subj_raw, rest)) =
+            after.split_once(" loses all abilities and becomes your choice of ")
+        && let Some((o1_raw, o2_raw)) = rest.split_once(" or ")
+        && let Ok(subject) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        let mut nl = any_perm();
-        nl.forbidden_types = CardTypeMask::LAND;
-        let tgt = SubjectRefAst::TargetObject {
-            filter: Box::new(nl),
-            count: TargetCountAst::Exact(1),
-        };
-        return Some(vec![
-            InstructionAst::RemoveAllAbilities {
-                subject: Box::new(tgt),
+        let parse_opt = |opt: &str| -> Option<Vec<InstructionAst>> {
+            let (desc_raw, pt_raw) = opt.split_once(" with base power and toughness ")?;
+            let (p, t) = pt_raw.trim().split_once('/')?;
+            let desc = desc_raw
+                .trim()
+                .strip_prefix("a ")
+                .or_else(|| desc_raw.trim().strip_prefix("an "))
+                .unwrap_or(desc_raw.trim());
+            Some(vec![InstructionAst::AnimateOrSetBasePT {
+                subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                power: p.trim().to_string(),
+                toughness: t.trim().to_string(),
+                description: Some(desc.to_string()),
+                keywords: Vec::new(),
                 duration: DurationAst::UntilEndOfTurn,
-            },
-            InstructionAst::Choice(vec![
-                vec![InstructionAst::AnimateOrSetBasePT {
-                    subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                    power: "1".to_string(),
-                    toughness: "1".to_string(),
-                    description: Some("blue Frog creature".to_string()),
-                    keywords: Vec::new(),
-                    duration: DurationAst::UntilEndOfTurn,
-                }],
-                vec![InstructionAst::AnimateOrSetBasePT {
-                    subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
-                    power: "4".to_string(),
-                    toughness: "4".to_string(),
-                    description: Some("blue Octopus creature".to_string()),
-                    keywords: Vec::new(),
-                    duration: DurationAst::UntilEndOfTurn,
-                }],
-            ]),
-        ]);
-    }
-    // Phantasmal Form
-    if low
-        == "until end of turn, up to two target creatures each have base power and toughness 3/3, gain flying, and become blue illusions in addition to their other colors and types"
-    {
-        let tgt = SubjectRefAst::TargetObject {
-            filter: Box::new(obj_type(CardTypeMask::CREATURE)),
-            count: TargetCountAst::UpTo(2),
+            }])
         };
-        return Some(vec![
-            InstructionAst::AnimateOrSetBasePT {
-                subject: Box::new(tgt),
-                power: "3".to_string(),
-                toughness: "3".to_string(),
-                description: Some("blue Illusion".to_string()),
-                keywords: vec!["flying".to_string()],
-                duration: DurationAst::UntilEndOfTurn,
-            },
-            InstructionAst::KeepExistingTypes(
-                "in addition to their other colors and types".to_string(),
-            ),
-        ]);
+        if let (Some(opt1), Some(opt2)) = (parse_opt(o1_raw), parse_opt(o2_raw)) {
+            return Some(vec![
+                InstructionAst::RemoveAllAbilities {
+                    subject: Box::new(subject),
+                    duration: DurationAst::UntilEndOfTurn,
+                },
+                InstructionAst::Choice(vec![opt1, opt2]),
+            ]);
+        }
     }
 
-    // Guff Rewrites History (cast nonland card exiled) & Furygale Flocking
-    if low == "each player may cast the nonland card they exiled without paying its mana cost" {
-        let mut nl = any_card_flt();
-        nl.forbidden_types = CardTypeMask::LAND;
-        nl.predicates
+    // 34. Generalized "until end of turn, <subj> each have base power and toughness <P>/<T>, gain <kws>, and become <desc>[ in addition to <keep>]"
+    if let Some(after) = clean_low.strip_prefix("until end of turn, ")
+        && let Some((subj_raw, rest)) = after.split_once(" each have base power and toughness ")
+        && let Some((pt_raw, tail)) = rest.split_once(", gain ")
+        && let Some((kw_raw, desc_full)) = tail.split_once(", and become ")
+        && let Some((p, t)) = pt_raw.trim().split_once('/')
+        && let (Ok(subject), Some(keywords)) = (
+            parse_subject_or_target(subj_raw.trim(), vocab),
+            parse_keyword_list(kw_raw.trim(), vocab),
+        )
+    {
+        let (desc, keep) = match desc_full.split_once(" in addition to ") {
+            Some((d, k)) => (d.trim(), Some(format!("in addition to {}", k.trim()))),
+            None => (desc_full.trim(), None),
+        };
+        let mut out = vec![InstructionAst::AnimateOrSetBasePT {
+            subject: Box::new(subject),
+            power: p.trim().to_string(),
+            toughness: t.trim().to_string(),
+            description: Some(desc.to_string()),
+            keywords,
+            duration: DurationAst::UntilEndOfTurn,
+        }];
+        if let Some(k) = keep {
+            out.push(InstructionAst::KeepExistingTypes(k));
+        }
+        return Some(out);
+    }
+
+    // 35. Generalized "<player> may cast the <flt> they exiled without paying its mana cost"
+    if let Some((who_raw, rest)) = clean_low.split_once(" may cast the ")
+        && let Some(player) = parse_player_ref(who_raw.trim())
+        && let Some(flt_raw) = rest.strip_suffix(" they exiled without paying its mana cost")
+        && let Ok(mut flt) = parse_object_filter(flt_raw.trim(), vocab)
+    {
+        flt.predicates
             .push(FilterPredicateAst::AffectedByPriorAction(
                 PriorActionRefKind::ExiledThisWay,
             ));
         return Some(vec![InstructionAst::ForEachPlayer {
-            player: PlayerRefAst::EachPlayer,
+            player,
             body: vec![InstructionAst::OptionalPlayer {
                 player: PlayerRefAst::ThatPlayer,
                 body: vec![InstructionAst::GrantCastPermission {
                     player: PlayerRefAst::ThatPlayer,
                     cast_only: true,
-                    subject: Box::new(SubjectRefAst::Group(Box::new(nl))),
+                    subject: Box::new(SubjectRefAst::Group(Box::new(flt))),
                     free: true,
                     duration: "now".to_string(),
                     count_limit: None,
@@ -7472,27 +7562,24 @@ fn parse_remaining_lossless_clauses(
             }],
         }]);
     }
-    if low
-        == "for each opponent, create two 3/3 blue and red elemental creature tokens with flying that attack that opponent this turn if able"
+
+    // 36. Generalized "for each <player>, create <token> that attack(s) that opponent this turn if able"
+    if let Some(after) = clean_low.strip_prefix("for each ")
+        && let Some((who_raw, rest)) = after.split_once(", create ")
+        && let Some(tok_raw) = rest
+            .strip_suffix(" that attack that opponent this turn if able")
+            .or_else(|| rest.strip_suffix(" that attacks that opponent this turn if able"))
+        && let (Some(player), Ok(token)) = (
+            parse_player_ref(&format!("each {}", who_raw.trim())),
+            parse_token_creation(tok_raw.trim(), vocab),
+        )
     {
         return Some(vec![InstructionAst::ForEachPlayer {
-            player: PlayerRefAst::EachOpponent,
+            player,
             body: vec![
                 InstructionAst::CreateToken {
                     controller: PlayerRefAst::You,
-                    token: TokenSpecAst::Creature {
-                        count: Box::new(ValueExprAst::Const(2)),
-                        power: "3".to_string(),
-                        toughness: "3".to_string(),
-                        colors: ColorMask::BLUE.union(ColorMask::RED),
-                        supertypes: SupertypeMask::EMPTY,
-                        card_types: CardTypeMask::CREATURE,
-                        subtypes: vec!["Elemental".to_string()],
-                        keywords: vec!["flying".to_string()],
-                        tapped: false,
-                        attacking: false,
-                        named: None,
-                    },
+                    token,
                 },
                 InstructionAst::CombatRuleMod {
                     subject: Box::new(SubjectRefAst::Anaphora("those tokens".to_string())),
@@ -7502,91 +7589,150 @@ fn parse_remaining_lossless_clauses(
             ],
         }]);
     }
-    // 20. Admiral Beckett Brass / Gollum, Obsessed Stalker / Scythe Specter / Azra Bladeseeker / Malignant Growth
-    if low
-        == "gain control of target nonland permanent controlled by a player who was dealt combat damage by three or more pirates this turn"
+
+    // 37. Generalized "gain control of <subj> controlled by a player who was dealt [combat ]damage by <N> or more <flt> this turn"
+    if let Some(after) = clean_low.strip_prefix("gain control of ")
+        && let Some((subj_raw, dmg_tail)) =
+            after.split_once(" controlled by a player who was dealt ")
+        && let Some((combat_only, by_tail)) = dmg_tail
+            .strip_prefix("combat damage by ")
+            .map(|r| (true, r))
+            .or_else(|| dmg_tail.strip_prefix("damage by ").map(|r| (false, r)))
+        && let Some((cnt_raw, flt_tail)) = by_tail.split_once(" or more ")
+        && let Some(flt_raw) = flt_tail.strip_suffix(" this turn")
+        && let (Ok(mut subj), Some(n), Ok(src_flt)) = (
+            parse_subject_or_target(subj_raw.trim(), vocab),
+            parse_number_word(cnt_raw.trim()),
+            parse_object_filter(flt_raw.trim(), vocab),
+        )
+        && let Ok(min_sources) = u16::try_from(n)
     {
-        let mut nl = any_perm();
-        nl.forbidden_types = CardTypeMask::LAND;
-        nl.controller = Some(ControllerRelation::ThatPlayer);
-        let pirate = ObjectFilterAst {
-            subtypes: vec!["Pirate".to_string()],
-            ..Default::default()
-        };
+        if let SubjectRefAst::TargetObject { ref mut filter, .. } = subj {
+            filter.controller = Some(ControllerRelation::ThatPlayer);
+        }
         return Some(vec![InstructionAst::IfCondition {
             condition: Box::new(ConditionAst::Marker(GameMarker::PlayerDealtDamageBy {
                 player: PlayerRefAst::ThatPlayer,
-                source_filter: Box::new(pirate),
-                min_sources: 3,
-                combat_only: true,
+                source_filter: Box::new(src_flt),
+                min_sources,
+                combat_only,
                 this_game: false,
             })),
             then_body: vec![InstructionAst::GainControl {
                 controller: PlayerRefAst::You,
-                subject: Box::new(SubjectRefAst::TargetObject {
-                    filter: Box::new(nl),
-                    count: TargetCountAst::Exact(1),
-                }),
+                subject: Box::new(subj),
                 duration: DurationAst::Permanent,
             }],
         }]);
     }
-    if low
-        == "each opponent dealt combat damage this game by a creature named ~ loses life equal to the amount of life you gained this turn"
+
+    // 38. Generalized "<player> dealt [combat ]damage (this game|this turn) by <flt> <eff>"
+    if let Some((who_raw, rest)) = clean_low
+        .split_once(" dealt combat damage ")
+        .map(|(w, r)| (w, (true, r)))
+        .or_else(|| {
+            clean_low
+                .split_once(" dealt damage ")
+                .map(|(w, r)| (w, (false, r)))
+        })
+        && let Some(player) = parse_player_ref(who_raw.trim())
+        && let (combat_only, after_dmg) = rest
+        && let Some((this_game, after_scope)) = after_dmg
+            .strip_prefix("this game by ")
+            .map(|r| (true, r))
+            .or_else(|| after_dmg.strip_prefix("this turn by ").map(|r| (false, r)))
     {
-        let mut self_cr = obj_type(CardTypeMask::CREATURE);
-        self_cr.named = Some(NameFilterAst::SelfName);
-        return Some(vec![InstructionAst::ForEachSubjectPlayer {
-            players: Box::new(SubjectRefAst::PlayerMatching {
-                player: PlayerRefAst::EachOpponent,
-                condition: Box::new(ConditionAst::Marker(GameMarker::PlayerDealtDamageBy {
-                    player: PlayerRefAst::ThatPlayer,
-                    source_filter: Box::new(self_cr),
-                    min_sources: 1,
-                    combat_only: true,
-                    this_game: true,
-                })),
-            }),
-            body: vec![InstructionAst::ChangeLife {
-                player: PlayerRefAst::ThatPlayer,
-                delta: Box::new(ValueExprAst::LifeChangedThisTurn {
-                    player: PlayerRefAst::You,
-                    gained: true,
-                }),
-                gain: false,
-            }],
-        }]);
+        for verb in [
+            " loses ",
+            " draws ",
+            " discards ",
+            " sacrifices ",
+            " mills ",
+        ] {
+            if let Some((src_raw, eff_tail)) = after_scope.split_once(verb)
+                && let (Ok(src_flt), Ok(body)) = (
+                    parse_object_filter(src_raw.trim(), vocab),
+                    parse_atomic_effect(&format!("that player{verb}{}", eff_tail.trim()), vocab),
+                )
+            {
+                return Some(vec![InstructionAst::ForEachSubjectPlayer {
+                    players: Box::new(SubjectRefAst::PlayerMatching {
+                        player,
+                        condition: Box::new(ConditionAst::Marker(
+                            GameMarker::PlayerDealtDamageBy {
+                                player: PlayerRefAst::ThatPlayer,
+                                source_filter: Box::new(src_flt),
+                                min_sources: 1,
+                                combat_only,
+                                this_game,
+                            },
+                        )),
+                    }),
+                    body,
+                }]);
+            }
+        }
     }
-    if low
-        == "each player who discarded a card with the greatest mana value among cards discarded this way loses life equal to that mana value"
+
+    // 39. Generalized "<player> who <action> a card with the (greatest|least) <stat> among cards <action> this way <eff>"
+    if let Some((who_raw, rest)) = clean_low.split_once(" who ")
+        && let Some(player) = parse_player_ref(who_raw.trim())
+        && let Some((act_raw, stat_tail)) = rest.split_once(" a card with the ")
+        && let Some((greatest, after_ext)) = stat_tail
+            .strip_prefix("greatest ")
+            .map(|r| (true, r))
+            .or_else(|| stat_tail.strip_prefix("least ").map(|r| (false, r)))
+        && let Some((stat_raw, after_among)) = after_ext.split_once(" among cards ")
+        && let Some((_, eff_tail)) = after_among.split_once(" this way ")
     {
-        return Some(vec![InstructionAst::ForEachSubjectPlayer {
-            players: Box::new(SubjectRefAst::PlayerMatching {
-                player: PlayerRefAst::EachPlayer,
-                condition: Box::new(ConditionAst::Marker(GameMarker::PlayerActionExtremeStat {
-                    player: PlayerRefAst::ThatPlayer,
-                    action: PriorActionRefKind::DiscardedThisWay,
-                    stat: StatKind::ManaValue,
-                    greatest: true,
-                    allow_tie: true,
-                })),
-            }),
-            body: vec![InstructionAst::ChangeLife {
-                player: PlayerRefAst::ThatPlayer,
-                delta: Box::new(ValueExprAst::ObjectStat {
-                    subject: Box::new(SubjectRefAst::Anaphora("that card".to_string())),
-                    stat: StatKind::ManaValue,
-                }),
-                gain: false,
-            }],
-        }]);
+        let action = match act_raw.trim() {
+            "discarded" => Some(PriorActionRefKind::DiscardedThisWay),
+            "exiled" => Some(PriorActionRefKind::ExiledThisWay),
+            "revealed" => Some(PriorActionRefKind::RevealedThisWay),
+            _ => None,
+        };
+        let stat = match stat_raw.trim() {
+            "mana value" => Some(StatKind::ManaValue),
+            "power" => Some(StatKind::Power),
+            "toughness" => Some(StatKind::Toughness),
+            _ => None,
+        };
+        if let (Some(action), Some(stat)) = (action, stat) {
+            let eff_norm = eff_tail
+                .trim()
+                .replace("that mana value", "that card's mana value");
+            if let Ok(body) = parse_atomic_effect(&format!("that player {eff_norm}"), vocab) {
+                return Some(vec![InstructionAst::ForEachSubjectPlayer {
+                    players: Box::new(SubjectRefAst::PlayerMatching {
+                        player,
+                        condition: Box::new(ConditionAst::Marker(
+                            GameMarker::PlayerActionExtremeStat {
+                                player: PlayerRefAst::ThatPlayer,
+                                action,
+                                stat,
+                                greatest,
+                                allow_tie: true,
+                            },
+                        )),
+                    }),
+                    body,
+                }]);
+            }
+        }
     }
-    if low
-        == "each player on your team may discard a card, then each player who discarded a card this way draws a card"
+
+    // 40. Generalized "<team_or_player> may discard a card, then <player2> who discarded a card this way <eff>"
+    if let Some((who1_raw, tail)) = clean_low.split_once(" may discard a card, then ")
+        && let Some((who2_raw, eff_raw)) = tail.split_once(" who discarded a card this way ")
+        && let (Some(p1), Some(p2), Ok(follow_body)) = (
+            parse_player_ref(who1_raw.trim()),
+            parse_player_ref(who2_raw.trim()),
+            parse_atomic_effect(&format!("that player {}", eff_raw.trim()), vocab),
+        )
     {
         return Some(vec![
             InstructionAst::ForEachPlayer {
-                player: PlayerRefAst::EachPlayerOnYourTeam,
+                player: p1,
                 body: vec![InstructionAst::OptionalPlayer {
                     player: PlayerRefAst::ThatPlayer,
                     body: vec![InstructionAst::Discard {
@@ -7600,7 +7746,7 @@ fn parse_remaining_lossless_clauses(
             },
             InstructionAst::ForEachSubjectPlayer {
                 players: Box::new(SubjectRefAst::PlayerMatching {
-                    player: PlayerRefAst::EachPlayerOnYourTeam,
+                    player: p2,
                     condition: Box::new(ConditionAst::Marker(
                         GameMarker::ZoneActionHappenedThisWay {
                             filter: Box::new(any_card_flt()),
@@ -7608,66 +7754,74 @@ fn parse_remaining_lossless_clauses(
                         },
                     )),
                 }),
-                body: vec![InstructionAst::Draw {
-                    player: PlayerRefAst::ThatPlayer,
-                    count: Box::new(ValueExprAst::Const(1)),
-                    up_to: false,
-                }],
-            },
-        ]);
-    }
-    if low
-        == "that player draws an additional card for each growth counter on ~, then ~ deals damage to the player equal to the number of cards they drew this way"
-    {
-        return Some(vec![
-            InstructionAst::Draw {
-                player: PlayerRefAst::ThatPlayer,
-                count: Box::new(ValueExprAst::CounterCount {
-                    subject: Box::new(SubjectRefAst::SelfObject),
-                    counter_kind: "growth".to_string(),
-                }),
-                up_to: false,
-            },
-            InstructionAst::DealDamage {
-                source: Box::new(SubjectRefAst::SelfObject),
-                target: Box::new(SubjectRefAst::Player(PlayerRefAst::ThatPlayer)),
-                amount: Box::new(ValueExprAst::CountDrawnThisWay(PlayerRefAst::ThatPlayer)),
+                body: follow_body,
             },
         ]);
     }
 
-    // 21. Flaming Gambit / Boreas Charger / Bruna / Hama / The Beamtown Bullies / Jurin / Recursive Recruitment / Quakebringer / The Wedding of River Song / Old Man of the Sea / Blim / Tunnel Vision / Alania
-    if low
-        == "that player or that planeswalker's controller may choose a creature they control and have ~ deal that damage to it instead"
+    // 41. Generalized "<player> draws an additional card for each <kind> counter on <subj>, then <eff>"
+    if let Some((who_raw, rest)) = clean_low.split_once(" draws an additional card for each ")
+        && let Some(player) = parse_player_ref(who_raw.trim())
+        && let Some((ck_subj, then_raw)) = rest.split_once(", then ")
+        && let Some((ck_raw, subj_raw)) = ck_subj.split_once(" counter on ")
+        && let (Ok(subj), Ok(mut follow)) = (
+            parse_subject_or_target(subj_raw.trim(), vocab),
+            parse_atomic_effect(then_raw.trim(), vocab),
+        )
     {
-        let mut cr = obj_type(CardTypeMask::CREATURE);
-        cr.controller = Some(ControllerRelation::ThatPlayerOrPlaneswalkerController);
+        let mut out = vec![InstructionAst::Draw {
+            player,
+            count: Box::new(ValueExprAst::CounterCount {
+                subject: Box::new(subj),
+                counter_kind: ck_raw.trim().to_string(),
+            }),
+            up_to: false,
+        }];
+        out.append(&mut follow);
+        return Some(out);
+    }
+
+    // 42. Generalized "<player> may choose <flt> and have <src> deal that damage to it instead"
+    if let Some((who_raw, rest)) = clean_low.split_once(" may choose ")
+        && let Some(player) = parse_player_ref(who_raw.trim())
+        && let Some((flt_raw, src_tail)) = rest.split_once(" and have ")
+        && let Some(src_raw) = src_tail.strip_suffix(" deal that damage to it instead")
+        && let (Ok(flt), Ok(source)) = (
+            parse_object_filter(flt_raw.trim(), vocab),
+            parse_subject_or_target(src_raw.trim(), vocab),
+        )
+    {
         return Some(vec![InstructionAst::OptionalPlayer {
-            player: PlayerRefAst::ThatPlayerOrPlaneswalkerController,
+            player,
             body: vec![InstructionAst::ReplaceEffect(vec![
                 InstructionAst::DealDamage {
-                    source: Box::new(SubjectRefAst::SelfObject),
-                    target: Box::new(SubjectRefAst::Group(Box::new(cr))),
+                    source: Box::new(source),
+                    target: Box::new(SubjectRefAst::Group(Box::new(flt))),
                     amount: Box::new(ValueExprAst::PriorResult),
                 },
             ])],
         }]);
     }
-    if low
-        == "search your library for a number of plains cards equal to the difference, reveal those cards, put one of them onto the battlefield tapped and the rest into your hand, then shuffle"
+
+    // 43. Generalized "search your library for a number of <flt> equal to <val>, reveal those cards, put <pick> onto <d1> and the rest into <d2>, then shuffle"
+    if let Some(after) = clean_low.strip_prefix("search your library for a number of ")
+        && let Some((flt_raw, tail)) = after.split_once(" equal to ")
+        && let Some((val_raw, rest)) = tail.split_once(", reveal those cards, put ")
+        && let Some((pick_d1, rest2)) = rest.split_once(" and the rest into ")
+        && let Some((pick_raw, d1_raw)) = pick_d1.split_once(" onto ")
+        && let Some(d2_raw) = rest2.strip_suffix(", then shuffle")
+        && let (Ok(flt), Ok(count)) = (
+            parse_object_filter(flt_raw.trim(), vocab),
+            parse_value_expr(val_raw.trim(), vocab),
+        )
     {
-        let plains = ObjectFilterAst {
-            subtypes: vec!["Plains".to_string()],
-            any_card: true,
-            ..Default::default()
-        };
         return Some(vec![InstructionAst::SearchLibrary {
             library: "your".to_string(),
-            count: Box::new(ValueExprAst::PriorResult),
+            count: Box::new(count),
             up_to: false,
             any_number: false,
             exact: false,
-            filter: Box::new(plains),
+            filter: Box::new(flt),
             reveal: true,
             to_zone: "follow_up".to_string(),
             shuffle: true,
@@ -7675,54 +7829,57 @@ fn parse_remaining_lossless_clauses(
             secondary_filter: None,
             secondary_is_or: false,
             where_x: None,
-            rest_to_zone: Some("your hand".to_string()),
+            rest_to_zone: Some(d2_raw.trim().to_string()),
             modifier: None,
             follow_up: vec![InstructionAst::ChooseAndKeep {
-                pick: "one of them".to_string(),
-                keep_to: "the battlefield tapped".to_string(),
-                rest_to: "your hand".to_string(),
+                pick: pick_raw.trim().to_string(),
+                keep_to: d1_raw.trim().to_string(),
+                rest_to: d2_raw.trim().to_string(),
             }],
         }]);
     }
-    if low
-        == "you may attach to it any number of auras on the battlefield and you may put onto the battlefield attached to it any number of aura cards that could enchant it from your graveyard and/or hand"
+
+    // 44. Generalized "you may attach to <tgt> any number of <f1> and you may put onto the battlefield attached to <tgt> any number of <f2> from <zones>"
+    if let Some(after) = clean_low.strip_prefix("you may attach to ")
+        && let Some((tgt_raw, rest)) = after.split_once(" any number of ")
+        && let Some((f1_raw, tail)) =
+            rest.split_once(" and you may put onto the battlefield attached to ")
+        && let Some((_, f2_zones)) = tail.split_once(" any number of ")
+        && let Some((f2_raw, zones_raw)) = f2_zones.rsplit_once(" from ")
+        && let (Ok(tgt), Ok(mut f1), Ok(mut f2)) = (
+            parse_subject_or_target(tgt_raw.trim(), vocab),
+            parse_object_filter(f1_raw.trim(), vocab),
+            parse_object_filter(
+                f2_raw
+                    .trim()
+                    .strip_suffix(" that could enchant it")
+                    .unwrap_or(f2_raw.trim()),
+                vocab,
+            ),
+        )
     {
-        let mut bf_aura = ObjectFilterAst {
-            subtypes: vec!["Aura".to_string()],
-            zone: Some(ZoneFilter::Battlefield),
-            ..Default::default()
-        };
-        bf_aura
-            .predicates
-            .push(FilterPredicateAst::CouldAttachTo(Box::new(
-                SubjectRefAst::Anaphora("it".to_string()),
-            )));
-        let mut gy_hand_aura = ObjectFilterAst {
-            subtypes: vec!["Aura".to_string()],
-            any_card: true,
-            zone: Some(ZoneFilter::YourHandOrGraveyard),
-            ..Default::default()
-        };
-        gy_hand_aura
-            .predicates
-            .push(FilterPredicateAst::CouldAttachTo(Box::new(
-                SubjectRefAst::Anaphora("it".to_string()),
-            )));
+        f1.predicates
+            .push(FilterPredicateAst::CouldAttachTo(Box::new(tgt.clone())));
+        f2.predicates
+            .push(FilterPredicateAst::CouldAttachTo(Box::new(tgt.clone())));
+        if zones_raw.contains("graveyard") && zones_raw.contains("hand") {
+            f2.zone = Some(ZoneFilter::YourHandOrGraveyard);
+        }
         return Some(vec![
             InstructionAst::Optional(vec![InstructionAst::Attach {
-                subject: Box::new(SubjectRefAst::Group(Box::new(bf_aura))),
-                target: Box::new(SubjectRefAst::Anaphora("it".to_string())),
+                subject: Box::new(SubjectRefAst::Group(Box::new(f1))),
+                target: Box::new(tgt.clone()),
                 any_number: true,
                 all: false,
             }]),
             InstructionAst::Optional(vec![InstructionAst::ReturnZone {
-                subject: Box::new(SubjectRefAst::Group(Box::new(gy_hand_aura))),
-                from_zone: Some("your graveyard and/or hand".to_string()),
+                subject: Box::new(SubjectRefAst::Group(Box::new(f2))),
+                from_zone: Some(zones_raw.trim().to_string()),
                 to: "the battlefield".to_string(),
                 tapped: false,
                 transformed: false,
                 with_counter: None,
-                attached_to: Some(Box::new(SubjectRefAst::Anaphora("it".to_string()))),
+                attached_to: Some(Box::new(tgt)),
                 random: false,
                 except: None,
                 count: None,
@@ -7732,43 +7889,60 @@ fn parse_remaining_lossless_clauses(
             }]),
         ]);
     }
-    if low
-        == "for as long as you control ~, you may cast the exiled card during your turn by waterbending {x} rather than paying its mana cost, where x is its mana value"
+
+    // 45. Generalized "for as long as <cond>, you may cast <subj> <dur> by <cost> rather than paying its mana cost, where x is <val>"
+    if let Some(after) = clean_low.strip_prefix("for as long as ")
+        && let Some((cond_raw, rest)) = after.split_once(", you may cast ")
+        && let Some((head, x_raw)) =
+            rest.split_once(" rather than paying its mana cost, where x is ")
+        && let Some((subj_dur, cost_raw)) = head.split_once(" by ")
+        && let (Ok(cond), Ok(x_expr)) = (
+            parse_condition(cond_raw.trim(), vocab),
+            parse_value_expr(x_raw.trim(), vocab),
+        )
     {
-        return Some(vec![InstructionAst::ForAsLongAs {
-            condition: Box::new(ConditionAst::Marker(GameMarker::ControlsSelf)),
-            body: vec![InstructionAst::BindX {
-                x_expr: Box::new(ValueExprAst::ObjectStat {
-                    subject: Box::new(SubjectRefAst::Anaphora("the exiled card".to_string())),
-                    stat: StatKind::ManaValue,
-                }),
-                body: vec![InstructionAst::GrantCastPermission {
-                    player: PlayerRefAst::You,
-                    cast_only: true,
-                    subject: Box::new(SubjectRefAst::Anaphora("the exiled card".to_string())),
-                    free: false,
-                    duration: "during your turn".to_string(),
-                    count_limit: None,
-                    alt_cost: Some(AltCastCostAst::PayCost(vec![CostAtomAst::Waterbend(
-                        "{X}".to_string(),
-                    )])),
+        let (subj_raw, dur_str) = match subj_dur.split_once(" during ") {
+            Some((s, d)) => (s.trim(), format!("during {}", d.trim())),
+            None => (subj_dur.trim(), "while_control_self".to_string()),
+        };
+        let alt_cost = cost_raw.trim().strip_prefix("waterbending ").map(|wb| {
+            AltCastCostAst::PayCost(vec![CostAtomAst::Waterbend(wb.trim().to_ascii_uppercase())])
+        });
+        if let (Ok(subj), Some(alt_cost)) = (parse_subject_or_target(subj_raw, vocab), alt_cost) {
+            return Some(vec![InstructionAst::ForAsLongAs {
+                condition: Box::new(cond),
+                body: vec![InstructionAst::BindX {
+                    x_expr: Box::new(x_expr),
+                    body: vec![InstructionAst::GrantCastPermission {
+                        player: PlayerRefAst::You,
+                        cast_only: true,
+                        subject: Box::new(subj),
+                        free: false,
+                        duration: dur_str,
+                        count_limit: None,
+                        alt_cost: Some(alt_cost),
+                    }],
                 }],
-            }],
-        }]);
+            }]);
+        }
     }
-    if low
-        == "target opponent whose turn it is puts target nonlegendary creature card from your graveyard onto the battlefield under their control"
+
+    // 46. Generalized "<player> puts <subj> from <zone> onto <dest>"
+    if let Some((who_raw, rest)) = clean_low.split_once(" puts ")
+        && let Some(player) = parse_player_ref(who_raw.trim())
+        && let Some((subj_zone, dest_raw)) = rest.split_once(" onto ")
+        && let Some((subj_raw, from_raw)) = subj_zone.rsplit_once(" from ")
+        && let Ok(mut subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        let mut cr = card_type(CardTypeMask::CREATURE);
-        cr.forbidden_supertypes = SupertypeMask::LEGENDARY;
-        cr.zone = Some(ZoneFilter::YourGraveyard);
+        if let SubjectRefAst::TargetObject { ref mut filter, .. } = subj
+            && from_raw.contains("your graveyard")
+        {
+            filter.zone = Some(ZoneFilter::YourGraveyard);
+        }
         return Some(vec![InstructionAst::ReturnZone {
-            subject: Box::new(SubjectRefAst::TargetObject {
-                filter: Box::new(cr),
-                count: TargetCountAst::Exact(1),
-            }),
-            from_zone: Some("your graveyard".to_string()),
-            to: "the battlefield under their control".to_string(),
+            subject: Box::new(subj),
+            from_zone: Some(from_raw.trim().to_string()),
+            to: dest_raw.trim().to_string(),
             tapped: false,
             transformed: false,
             with_counter: None,
@@ -7778,48 +7952,60 @@ fn parse_remaining_lossless_clauses(
             count: None,
             up_to: false,
             any_number: false,
-            actor: Some(PlayerRefAst::TargetOpponentWhoseTurnItIs),
+            actor: Some(player),
         }]);
     }
-    if low
-        == "each creature you control attacking a player gets +1/+0 until end of turn for each creature that player controls"
+
+    // 47. Generalized "each <flt> attacking a player gets <+P/+T> until end of turn for each <scale_flt>"
+    if let Some(after) = clean_low.strip_prefix("each ")
+        && let Some((flt_raw, rest)) = after.split_once(" attacking a player gets ")
+        && let Some((pt_raw, scale_raw)) = rest.split_once(" until end of turn for each ")
+        && let (Ok(mut atk), Some((dx, dy)), Ok(scale_flt)) = (
+            parse_object_filter(flt_raw.trim(), vocab),
+            crate::preprocess::parse_pt_mod(pt_raw.trim()),
+            parse_object_filter(scale_raw.trim(), vocab),
+        )
     {
-        let mut atk = obj_type(CardTypeMask::CREATURE);
-        atk.controller = Some(ControllerRelation::You);
         atk.predicates.push(FilterPredicateAst::AttackingTarget {
             target: Box::new(SubjectRefAst::Player(PlayerRefAst::AnyPlayer)),
             this_turn: false,
         });
-        let mut def_cr = obj_type(CardTypeMask::CREATURE);
-        def_cr.controller = Some(ControllerRelation::ThatPlayer);
         return Some(vec![InstructionAst::ModifyPT {
             subject: Box::new(SubjectRefAst::Each(Box::new(atk))),
-            dx: "+1".to_string(),
-            dy: "+0".to_string(),
+            dx,
+            dy,
             duration: DurationAst::UntilEndOfTurn,
-            scale: Some(Box::new(ValueExprAst::Count(Box::new(def_cr)))),
+            scale: Some(Box::new(ValueExprAst::Count(Box::new(scale_flt)))),
         }]);
     }
-    // Remaining specialized multi-clause rules (covered alongside compositional parsers above)
-    if low
-        == "if its controller has more than four cards in hand, they exile cards from their hand equal to the difference"
+
+    // 48. Generalized "if <player> has more than <N> cards in hand, they exile cards from their hand equal to the difference"
+    if let Some(after) = clean_low.strip_prefix("if ")
+        && let Some((who_raw, rest)) = after.split_once(" has more than ")
+        && let Some((num_raw, _)) = rest
+            .split_once(" cards in hand, they exile cards from their hand equal to the difference")
+        && let (Some(player), Some(n)) = (
+            parse_player_ref(who_raw.trim()),
+            parse_number_word(num_raw.trim()),
+        )
+        && let Ok(n_u16) = u16::try_from(n)
     {
         let mut hand = any_card_flt();
         hand.zone = Some(ZoneFilter::ThatPlayerHand);
         return Some(vec![InstructionAst::IfCondition {
             condition: Box::new(ConditionAst::HandCount {
-                player: PlayerRefAst::ItsController,
+                player,
                 op: CompareOp::Gt,
-                value: 4,
+                value: n_u16,
             }),
             then_body: vec![InstructionAst::MoveCounted {
-                actor: Some(PlayerRefAst::ItsController),
+                actor: Some(player),
                 count: Some(Box::new(ValueExprAst::Sub(
                     Box::new(ValueExprAst::PlayerStat {
-                        player: PlayerRefAst::ItsController,
+                        player,
                         stat: PlayerStatKind::CardsInHand,
                     }),
-                    Box::new(ValueExprAst::Const(4)),
+                    Box::new(ValueExprAst::Const(n)),
                 ))),
                 up_to: false,
                 any_number: false,
@@ -7828,11 +8014,13 @@ fn parse_remaining_lossless_clauses(
             }],
         }]);
     }
-    if low
-        == "put a counter of that kind on target permanent you control if it doesn't have a counter of that kind on it"
+
+    // 49. Generalized "put a counter of that kind on <subj> if it doesn't have a counter of that kind on it"
+    if let Some(subj_raw) = clean_low
+        .strip_prefix("put a counter of that kind on ")
+        .and_then(|r| r.strip_suffix(" if it doesn't have a counter of that kind on it"))
+        && let Ok(subj) = parse_subject_or_target(subj_raw.trim(), vocab)
     {
-        let mut perm = any_perm();
-        perm.controller = Some(ControllerRelation::You);
         return Some(vec![InstructionAst::IfCondition {
             condition: Box::new(ConditionAst::Not(Box::new(ConditionAst::CounterCompare {
                 subject: Box::new(SubjectRefAst::Anaphora("it".to_string())),
@@ -7841,50 +8029,49 @@ fn parse_remaining_lossless_clauses(
                 value: 1,
             }))),
             then_body: vec![InstructionAst::PutCounters {
-                subject: Box::new(SubjectRefAst::TargetObject {
-                    filter: Box::new(perm),
-                    count: TargetCountAst::Exact(1),
-                }),
+                subject: Box::new(subj),
                 counter_kind: "same".to_string(),
                 count: Box::new(ValueExprAst::Const(1)),
             }],
         }]);
     }
-    if low
-        == "if ~'s additional cost was paid, this effect doesn't affect combat damage that would be dealt by red creatures"
+
+    // 50. Generalized "if ~'s additional cost was paid, this effect doesn't affect combat damage that would be dealt by <flt>"
+    if let Some(flt_raw) = clean_low.strip_prefix(
+        "if ~'s additional cost was paid, this effect doesn't affect combat damage that would be dealt by ",
+    ) && let Ok(flt) = parse_object_filter(flt_raw.trim(), vocab)
     {
         return Some(vec![InstructionAst::IfCondition {
             condition: Box::new(ConditionAst::Marker(GameMarker::AdditionalCostPaid {
                 description: None,
             })),
             then_body: vec![InstructionAst::CombatRuleMod {
-                subject: Box::new(SubjectRefAst::All(Box::new(ObjectFilterAst {
-                    any_types: CardTypeMask::CREATURE,
-                    any_colors: ColorMask::RED,
-                    ..Default::default()
-                }))),
+                subject: Box::new(SubjectRefAst::All(Box::new(flt))),
                 rule: "exclude_combat_damage_from_prevention".to_string(),
                 duration: DurationAst::UntilEndOfTurn,
             }],
         }]);
     }
-    if low
-        == "you may reveal a creature card that doesn't share a creature type with a creature you control from among those cards and put it into your hand"
+
+    // 51. Generalized "you may reveal <f1> that doesn't share a creature type with <f2> from among those cards and put it into <dest>"
+    if let Some(after) = clean_low.strip_prefix("you may reveal ")
+        && let Some((f1_raw, rest)) = after.split_once(" that doesn't share a creature type with ")
+        && let Some((f2_raw, dest_raw)) =
+            rest.split_once(" from among those cards and put it into ")
+        && let (Ok(mut f1), Ok(f2)) = (
+            parse_object_filter(f1_raw.trim(), vocab),
+            parse_object_filter(f2_raw.trim(), vocab),
+        )
     {
-        let mut your_cr = obj_type(CardTypeMask::CREATURE);
-        your_cr.controller = Some(ControllerRelation::You);
-        let mut cr_card = card_type(CardTypeMask::CREATURE);
-        cr_card
-            .predicates
-            .push(FilterPredicateAst::SharesPropertyWith {
-                property: "creature_type".to_string(),
-                reference: Box::new(SubjectRefAst::Group(Box::new(your_cr))),
-                negated: true,
-            });
+        f1.predicates.push(FilterPredicateAst::SharesPropertyWith {
+            property: "creature_type".to_string(),
+            reference: Box::new(SubjectRefAst::Group(Box::new(f2))),
+            negated: true,
+        });
         return Some(vec![InstructionAst::Optional(vec![
             InstructionAst::RevealFromLooked {
-                filter: Box::new(cr_card),
-                to: "your hand".to_string(),
+                filter: Box::new(f1),
+                to: dest_raw.trim().to_string(),
             },
         ])]);
     }

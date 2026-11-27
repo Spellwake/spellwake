@@ -108,16 +108,6 @@ pub(crate) fn obj_type(mask: CardTypeMask) -> ObjectFilterAst {
     }
 }
 
-/// Convenience constructor for a card-form [`ObjectFilterAst`] matching one or more card types.
-#[inline]
-pub(crate) fn card_type(mask: CardTypeMask) -> ObjectFilterAst {
-    ObjectFilterAst {
-        any_types: mask,
-        any_card: true,
-        ..Default::default()
-    }
-}
-
 /// Convenience constructor for an [`ObjectFilterAst`] matching any permanent.
 #[inline]
 pub(crate) fn any_perm() -> ObjectFilterAst {

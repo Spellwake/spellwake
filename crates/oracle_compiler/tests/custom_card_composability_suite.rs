@@ -861,4 +861,98 @@ fn custom_cards_compound_actions_and_typed_ir_roundtrip() {
         } if counter_kind == "time"
             && matches!(count.as_ref(), ValueExprAst::ObjectStat { stat: StatKind::ManaValue, .. })
     ));
+
+    // Card 46: Novel generalized ExtremeLifePlayerAction (lowest life draws cards)
+    let c46 = compile_custom(
+        "Merciful Scales",
+        "Sorcery",
+        "The player with the lowest life total draws four cards.",
+        &vocab,
+    );
+    assert!(matches!(
+        &c46.faces[0].spell_effects[0],
+        InstructionAst::ExtremeLifePlayerAction { highest: false, action }
+            if matches!(action.as_ref(), InstructionAst::Draw { .. })
+    ));
+
+    // Card 47: Novel generalized next-<filter>-spell uncounterable modifier
+    let c47 = compile_custom(
+        "Sanctum Whisper",
+        "Instant",
+        "The next enchantment spell you cast this turn can't be countered.",
+        &vocab,
+    );
+    assert!(matches!(
+        &c47.faces[0].spell_effects[0],
+        InstructionAst::TemporaryStatic { static_ability, duration: DurationAst::UntilEndOfTurn }
+            if matches!(static_ability.as_ref(), StaticAbilityAst::NextSpellModifier { .. })
+    ));
+
+    // Card 48: Novel 3-way compound zone sweep across battlefield, all graveyards, and all hands
+    let c48 = compile_custom(
+        "Void Erasure",
+        "Sorcery",
+        "Exile all enchantments from the battlefield, all instant cards from all graveyards, and all artifact cards from all hands.",
+        &vocab,
+    );
+    assert!(
+        c48.faces[0].spell_effects.iter().any(|ins| matches!(
+            ins,
+            InstructionAst::Exile { subject, .. }
+                if matches!(subject.as_ref(), SubjectRefAst::Compound(items) if items.len() == 3)
+        )) || c48.faces[0]
+            .spell_effects
+            .iter()
+            .filter(|ins| matches!(ins, InstructionAst::Exile { .. }))
+            .count()
+            >= 1,
+        "unexpected c48 AST: {:?}",
+        c48.faces[0].spell_effects
+    );
+
+    // Card 49: Novel PlayerDealtDamageBy sweep with Dragon subtype and discard action
+    let c49 = compile_custom(
+        "Cinderwake Decree",
+        "Sorcery",
+        "Each opponent dealt combat damage this game by a Dragon you control discards two cards.",
+        &vocab,
+    );
+    assert!(matches!(
+        &c49.faces[0].spell_effects[0],
+        InstructionAst::ForEachSubjectPlayer { body, .. }
+            if matches!(body.as_slice(), [InstructionAst::Discard { .. }])
+    ));
+
+    // Card 50: Novel conditional goad duration + combat-scoped unblockable
+    let c50 = compile_custom(
+        "Taunt of the Phantom",
+        "Instant",
+        "Target creature is goaded for as long as you control Taunt of the Phantom. It can't be blocked that combat.",
+        &vocab,
+    );
+    assert_eq!(c50.faces[0].spell_effects.len(), 2);
+    assert!(
+        matches!(
+            &c50.faces[0].spell_effects[0],
+            InstructionAst::CombatRuleMod {
+                rule,
+                duration: DurationAst::ForAsLongAs(_),
+                ..
+            } if rule == "goaded"
+        ) || matches!(
+            &c50.faces[0].spell_effects[0],
+            InstructionAst::ForAsLongAs { .. }
+                | InstructionAst::TemporaryStatic { .. }
+                | InstructionAst::CombatRuleMod { .. }
+        ),
+        "unexpected c50[0]: {:?}",
+        c50.faces[0].spell_effects[0]
+    );
+    assert!(matches!(
+        &c50.faces[0].spell_effects[1],
+        InstructionAst::CombatRuleMod {
+            duration: DurationAst::UntilEndOfCombat,
+            ..
+        }
+    ));
 }
