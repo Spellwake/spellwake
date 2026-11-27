@@ -17,8 +17,10 @@ does not mean approval. Keep new and in-progress work distinct from accepted exp
 
 The code repository has a clean public history. Assets, operations and the pre-cutover
 repository archive remain private. Never push old-history branches into this public repository.
-No software license is implied by public visibility. Render deploys only the code repo's checked
-`main` snapshot; private artwork and operations changes do not deploy themselves.
+The root `LICENSE` and the README's License section define the MIT grant for original software
+and accompanying public documentation. Keep branding, private artwork, private operations
+material, and third-party material outside that grant. Render deploys only the code repo's
+checked `main` snapshot; private artwork and operations changes do not deploy themselves.
 
 ## Temporary storage and cleanup
 

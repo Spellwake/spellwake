@@ -68,4 +68,8 @@ Updated automatically from `main` and daily CI (`badges` branch). Live checks re
 
 </details>
 
-No software license is granted by publishing this source. Magic: The Gathering and its card imagery belong to Wizards of the Coast and their respective artists. This is unofficial fan content, not approved or endorsed by Wizards. Third-party dependencies retain their own licenses.
+## License
+
+Spellwake's original software and accompanying public documentation are available under the [MIT License](LICENSE), except where a separate license is identified. You may use, modify, redistribute, and sell copies of the covered code, including in closed-source forks, subject to the license's notice requirements.
+
+The MIT grant excludes the Spellwake name, logos, and branding, as well as artwork, cosmetic assets, and internal documentation held in the separate private repositories. Third-party material, including dependencies, bundled fonts, and separately licensed tools, remains subject to its own terms. The license does not grant rights to Magic: The Gathering materials, including card images, symbols, and card text or data obtained from or attributed to third parties. Spellwake is an independent project and is not endorsed or sponsored by Wizards of the Coast.
