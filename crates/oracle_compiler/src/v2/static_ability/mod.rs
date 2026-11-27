@@ -555,31 +555,6 @@ fn parse_static_core_inner(
         ts.restore(bcp);
     }
 
-    // 0aa0. `If you cast it any time a sorcery couldn't have been cast, the controller of the permanent it becomes sacrifices it at the beginning of the next cleanup step.`
-    {
-        let fscp = ts.checkpoint();
-        if ts.eat_phrase(&["if", "you", "cast", "it", "any", "time"])
-            && ts.eat_phrase(&["a", "sorcery", "couldn't", "have", "been", "cast"])
-            && ts.eat_comma()
-            && ts.eat_phrase(&[
-                "the",
-                "controller",
-                "of",
-                "the",
-                "permanent",
-                "it",
-                "becomes",
-            ])
-            && ts.eat_phrase(&["sacrifices", "it", "at", "the", "beginning"])
-            && ts.eat_phrase(&["of", "the", "next", "cleanup", "step"])
-        {
-            return Ok(StaticAbility::GlobalFlag(
-                StaticFlagKind::FlashSacrificeAtCleanup,
-            ));
-        }
-        ts.restore(fscp);
-    }
-
     // 0aa1. Deckbuilding / Reveal-top / Max-hand / Once-per-turn statics
     if ts.eat_phrase(&[
         "play", "with", "the", "top", "card", "of", "your", "library", "revealed",
@@ -888,25 +863,6 @@ fn parse_static_core_inner(
     }
     {
         let cp = ts.checkpoint();
-        if ts.eat_phrase(&["the", "first", "spell", "each", "player", "casts"])
-            && ts.eat_phrase(&["during", "each", "of", "their", "turns"])
-            && ts.eat_phrase(&[
-                "may", "be", "cast", "without", "paying", "its", "mana", "cost",
-            ])
-        {
-            return Ok(StaticAbility::ZoneCastPermission {
-                player: PlayerRef::EachPlayer,
-                filter: None,
-                subject: None,
-                zone: None,
-                mode: CastPermissionMode::FirstSpellFree,
-                condition,
-            });
-        }
-        ts.restore(cp);
-    }
-    {
-        let cp = ts.checkpoint();
         if (ts.eat_phrase(&["once", "during", "each", "of", "your", "turns"])
             || ts.eat_phrase(&["once", "each", "turn"]))
             && ts.eat_comma()
@@ -1067,27 +1023,13 @@ fn parse_static_core_inner(
         let rcp = ts.checkpoint();
         if ts.eat_phrase(&["this", "effect", "doesn't", "remove"])
             && (ts.eat_tilde()
-                || (ts.eat_phrase(&["auras", "and", "equipment", "you", "control"])
+                || (try_parse(ts, parse_object_filter).is_ok()
                     && ts.eat_phrase(&["that", "are", "already", "attached", "to", "it"]))
-                || ts.eat_phrase(&["auras", "that", "are", "already", "attached", "to", "it"])
                 || (ts.eat_phrase(&["auras", "already", "attached", "to"])
                     && opt(ts, parse_subject_ref).is_some())
                 || ts.eat_word("auras"))
         {
             return Ok(StaticAbility::GlobalFlag(StaticFlagKind::RetainAttachment));
-        }
-        ts.restore(rcp);
-    }
-    {
-        let rcp = ts.checkpoint();
-        if (ts.eat_phrase(&["this", "effect", "reduces", "only", "the", "amount"])
-            && ts.eat_phrase(&["of", "colored", "mana", "you", "pay"]))
-            || (ts.eat_phrase(&["this", "effect", "can't", "reduce", "the", "mana", "in"])
-                && (ts.eat_phrase(&["that", "cost", "to", "less", "than", "one", "mana"])
-                    || (ts.eat_phrase(&["that", "ability's", "activation", "cost"])
-                        && ts.eat_phrase(&["to", "less", "than", "one", "mana"]))))
-        {
-            return Ok(StaticAbility::GlobalFlag(StaticFlagKind::CostReductionRule));
         }
         ts.restore(rcp);
     }
@@ -1569,13 +1511,6 @@ fn parse_static_core_inner(
                 ]);
                 return Ok(StaticAbility::GlobalFlag(StaticFlagKind::AllColors));
             }
-            if ts.eat_phrase(&["saddles", "mounts", "and", "crews", "vehicles"])
-                && ts.eat_phrase(&["as", "though", "its", "power", "were"])
-                && let Some(n) = ts.next_number(false)
-                && ts.eat_word("greater")
-            {
-                return Ok(StaticAbility::GlobalFlag(StaticFlagKind::CrewPowerBonus(n)));
-            }
             if ts.eat_phrase(&["enters", "prepared"]) {
                 return Ok(StaticAbility::GlobalFlag(StaticFlagKind::EntersPrepared));
             }
@@ -1724,17 +1659,6 @@ fn parse_static_core_inner(
         ts.restore(lcp);
     }
     {
-        let ncp = ts.checkpoint();
-        if ts.eat_phrase(&["activated", "abilities", "of", "sources", "with"])
-            && ts.eat_phrase(&["the", "chosen", "name", "can't", "be", "activated"])
-        {
-            return Ok(StaticAbility::GlobalFlag(
-                StaticFlagKind::NamedSourcesCantActivate,
-            ));
-        }
-        ts.restore(ncp);
-    }
-    {
         let acp = ts.checkpoint();
         if ts.eat_phrase(&["activated", "abilities", "of"])
             && let Ok(flt) = try_parse(ts, parse_object_filter)
@@ -1839,13 +1763,9 @@ fn parse_static_core_inner(
                 }
                 {
                     let mv_cp = ts.checkpoint();
-                    if ts.eat_phrase(&["with", "power", "and", "toughness"])
-                        && ts.eat_phrase(&["each", "equal", "to", "its", "mana", "value"])
+                    if ts.eat_phrase(&["with", "power", "and", "toughness", "each", "equal", "to"])
+                        && let Ok(mv) = try_parse(ts, parse_value_expr)
                     {
-                        let mv = ValueExpr::ObjectStat {
-                            subject: Box::new(subj.clone()),
-                            stat: crate::ast::StatKind::ManaValue,
-                        };
                         parts.push(StaticAbility::DynamicBasePT {
                             power: Some(mv.clone()),
                             toughness: Some(mv),

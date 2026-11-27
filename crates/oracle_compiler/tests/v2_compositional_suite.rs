@@ -3289,11 +3289,6 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
             "When Goblin Recruiter enters, search your library for any number of Goblin cards, reveal them, then shuffle and put those cards on top in any order.",
         ),
         (
-            "Rosheen Meanderer",
-            "Legendary Creature - Giant Shaman",
-            "{T}: Add {C}{C}{C}{C}. Spend this mana only on costs that contain {X}.",
-        ),
-        (
             "Pay No Heed",
             "Instant",
             "Prevent all damage a source of your choice would deal this turn.",
@@ -3498,24 +3493,22 @@ fn v2_wave9_compositional_grammar_deep_ir_assertions() {
             )
     ));
 
-    // 9. Rosheen Meanderer -> ManaRule(SpendOnlyColorOnX)
-    let rosheen = compile_v2_strict(
-        "Rosheen Meanderer",
-        "Legendary Creature - Giant Shaman",
-        "{T}: Add {C}{C}{C}{C}. Spend this mana only on costs that contain {X}.",
+    // 9. Rosheen Meanderer fails closed honestly (SpendOnlyColorOnX(EMPTY) proxy purged)
+    let rosheen = compile_card_v2(
+        &CardInput {
+            oracle_id: "rosheen-meanderer",
+            name: "Rosheen Meanderer",
+            layout: "normal",
+            faces: vec![FaceInput {
+                name: "Rosheen Meanderer",
+                type_line: "Legendary Creature - Giant Shaman",
+                oracle_text: "{T}: Add {C}{C}{C}{C}. Spend this mana only on costs that contain {X}.",
+            }],
+        },
         &vocab,
     );
-    assert!(matches!(
-        rosheen.faces[0].abilities.as_slice(),
-        [Ability::Activated { body, .. }]
-            if matches!(
-                &body[1],
-                Effect::MutatePlayer {
-                    mutation: PlayerMutation::ManaRule(ManaRuleKind::SpendOnlyColorOnX(_)),
-                    ..
-                }
-            )
-    ));
+    assert!(!rosheen.strictly_compiled);
+    let _ = ManaRuleKind::SpendOnlyColorOnX(ColorMask::EMPTY);
 
     // 10. Goblin Recruiter -> ZoneOp(Move, Top + AnyOrder)
     let recruiter = compile_v2_strict(

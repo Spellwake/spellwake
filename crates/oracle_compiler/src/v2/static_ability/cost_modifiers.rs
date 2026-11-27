@@ -294,10 +294,11 @@ pub(super) fn parse_cost_modifier(
 fn parse_cost_scale_expr(ts: &mut TokenStream<'_>) -> Option<crate::v2::ir::ValueExpr> {
     use crate::v2::ir::{PriorActionKind, TurnEventKind, ValueExpr};
     let cp = ts.checkpoint();
-    if ts.eat_phrase(&["for", "each", "time", "it's", "been", "cast"])
-        && ts.eat_phrase(&["from", "the", "command", "zone", "this", "game"])
+    if ts.eat_phrase(&["for", "each"])
+        && let Ok(val) = try_parse(ts, crate::v2::value::parse_for_each_expr)
+        && matches!(val, ValueExpr::CommanderCastCount(_))
     {
-        return Some(ValueExpr::CommanderCastCount(PlayerRef::You));
+        return Some(val);
     }
     ts.restore(cp);
     if ts.eat_phrase(&["for", "each", "other", "spell", "cast", "this", "turn"]) {

@@ -623,11 +623,13 @@ fn parse_trigger_event_list_with_cond(
         ));
     }
 
-    // `a spell or ability an opponent controls causes you to discard <subj>`
+    // `<opponent-controlled spell or ability> causes you to discard <subj>`
     {
         let fcp = ts.checkpoint();
-        if ts.eat_phrase(&["a", "spell", "or", "ability"])
-            && ts.eat_phrase(&["an", "opponent", "controls"])
+        if let Ok(cause) = try_parse(ts, parse_object_filter)
+            && cause.any_spell
+            && cause.is_ability
+            && cause.controller == Some(ControllerRelation::Opponent)
             && ts.eat_phrase(&["causes", "you", "to", "discard"])
             && let Ok(subject) = try_parse(ts, parse_subject_ref)
         {

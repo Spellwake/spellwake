@@ -179,8 +179,10 @@ pub(super) fn parse_if_would_ext(ts: &mut TokenStream<'_>) -> PResult<Replacemen
     // 1f3. Forced discard replacements (`If a spell or ability an opponent controls causes you to discard ~ / a card, <instead>.`)
     {
         let cp = ts.checkpoint();
-        if ts.eat_phrase(&["a", "spell", "or", "ability"])
-            && ts.eat_phrase(&["an", "opponent", "controls"])
+        if let Ok(cause) = try_parse(ts, parse_object_filter)
+            && cause.any_spell
+            && cause.is_ability
+            && cause.controller == Some(crate::ast::ControllerRelation::Opponent)
             && ts.eat_phrase(&["causes", "you", "to", "discard"])
         {
             let disc_subj = if ts.eat_tilde() {

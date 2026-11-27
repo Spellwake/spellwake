@@ -643,13 +643,17 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         }
         ts.restore(lcp);
     }
-    // `the life total of a player with the most life`
+    // `the life total of <player_ref>` (covers `a player with the most life`, `target player`, etc.)
     {
         let hcp = ts.checkpoint();
         if ts.eat_phrase(&["the", "life", "total", "of"])
-            && ts.eat_phrase(&["a", "player", "with", "the", "most", "life"])
+            && let Ok(player) = try_parse(ts, parse_player_ref)
         {
-            return Ok(ValueExpr::HighestLifeTotal);
+            return Ok(if player == PlayerRef::HighestLifePlayer {
+                ValueExpr::HighestLifeTotal
+            } else {
+                player_stat(player, PlayerStatKind::LifeTotal)
+            });
         }
         ts.restore(hcp);
     }
@@ -779,8 +783,14 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
                 && let Some(c) = crate::vocab::lookup_color(&w.to_ascii_lowercase())
             {
                 ts.next_word();
-                if ts.eat_phrase(&["mana", "symbols", "in", "the", "mana", "costs"])
-                    && ts.eat_phrase(&["of", "permanents", "you", "control"])
+                if ts.eat_phrase(&["mana", "symbols", "in", "the", "mana", "costs", "of"])
+                    && let Ok(flt) = try_parse(ts, parse_object_filter)
+                    && flt.any_permanent
+                    && flt.controller == Some(ControllerRelation::You)
+                    && flt.zones.is_empty()
+                    && flt.predicates.is_empty()
+                    && flt.any_types.is_empty()
+                    && flt.forbidden_types.is_empty()
                 {
                     return Ok(ValueExpr::Devotion(c));
                 }

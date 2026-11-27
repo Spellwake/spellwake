@@ -96,17 +96,6 @@ pub(super) fn parse_subject_cant(
             ),
             (&["gain", "life"], PlayerRestrictionKind::CantGainLife),
             (
-                &[
-                    "activate",
-                    "abilities",
-                    "that",
-                    "aren't",
-                    "mana",
-                    "abilities",
-                ],
-                PlayerRestrictionKind::CantActivateAbilities,
-            ),
-            (
                 &["activate", "abilities"],
                 PlayerRestrictionKind::CantActivateAbilities,
             ),

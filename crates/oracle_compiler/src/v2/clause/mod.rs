@@ -18,7 +18,7 @@ pub(crate) mod tokens;
 mod zone_ext;
 mod zone_verbs;
 
-use crate::ast::{CardTypeMask, ColorMask};
+use crate::ast::CardTypeMask;
 use crate::v2::clause::player_verbs::parse_player_verb_frame;
 use crate::v2::clause::restrictions::{
     parse_activation_restrictions, parse_additional_combat, parse_temporary_static_clause,
@@ -1782,19 +1782,6 @@ fn parse_single_clause(
             return forbid(purpose);
         }
         return Err(ts.err("expected mana spend purpose after `This mana can't be spent to`"));
-    }
-    if ts.eat_phrase(&[
-        "spend", "this", "mana", "only", "on", "costs", "that", "contain",
-    ]) && ts.eat_mana_cost().is_some()
-    {
-        return Ok((
-            vec![mutate_player(
-                PlayerRef::You,
-                PlayerMutation::ManaRule(ManaRuleKind::SpendOnlyColorOnX(ColorMask::EMPTY)),
-                Duration::Instant,
-            )],
-            Some(PlayerRef::You),
-        ));
     }
     if ts.eat_phrase(&["spend", "this", "mana", "only", "to"]) {
         if ts.eat_phrase(&["cast", "spells", "from"]) {

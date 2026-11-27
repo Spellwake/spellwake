@@ -31,26 +31,21 @@ pub(super) fn parse_there_are_condition(ts: &mut TokenStream<'_>) -> Option<Cond
             PlayerConditionKind::IsMonarch,
         )));
     }
-    if ts.eat_phrase(&["there", "is", "an", "instant", "card"])
-        && ts.eat_phrase(&["and", "a", "sorcery", "card", "in"])
+    if ts.eat_phrase(&["there", "is"])
+        && let Ok(f1) = try_parse(ts, parse_object_filter)
+        && ts.eat_word("and")
+        && let Ok(f2) = try_parse(ts, parse_object_filter)
+        && ts.eat_word("in")
         && let Ok(zone) = try_parse(ts, parse_zone_ref)
     {
         return Some(ConditionExpr::And(
             Box::new(ConditionExpr::ZoneHasCount {
-                filter: Box::new(ObjectFilter {
-                    any_types: CardTypeMask::INSTANT,
-                    any_card: true,
-                    ..Default::default()
-                }),
+                filter: Box::new(f1),
                 zone,
                 min_count: 1,
             }),
             Box::new(ConditionExpr::ZoneHasCount {
-                filter: Box::new(ObjectFilter {
-                    any_types: CardTypeMask::SORCERY,
-                    any_card: true,
-                    ..Default::default()
-                }),
+                filter: Box::new(f2),
                 zone,
                 min_count: 1,
             }),

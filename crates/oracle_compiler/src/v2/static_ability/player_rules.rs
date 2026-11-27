@@ -177,16 +177,6 @@ pub(super) fn parse_player_static_ability(
                 }
                 return Ok(first);
             }
-            // Unlimited land plays on each of your turns
-            if player == PlayerRef::You {
-                let sp_cp = ts.checkpoint();
-                if ts.eat_phrase(&["may", "play", "any", "number", "of", "lands"])
-                    && ts.eat_phrase(&["on", "each", "of", "your", "turns"])
-                {
-                    return Ok(StaticAbility::AdditionalLandPlayStatic { player, extra: 99 });
-                }
-                ts.restore(sp_cp);
-            }
             // `You may <cost> rather than pay this spell's/~'s mana cost` OR `... rather than pay the mana cost for <flt>`
             {
                 let alt_cp = ts.checkpoint();
@@ -456,8 +446,9 @@ pub(super) fn parse_player_static_ability(
                     ts.restore(actcp);
                     let _ = ts.eat_phrase(&["may", "activate"]);
                     if ts.eat_tilde()
-                        && ts.eat_phrase(&["'s", "loyalty", "abilities"])
-                        && ts.eat_phrase(&["any", "time", "you", "could", "cast", "an", "instant"])
+                        && ts.eat_phrase(&["'s", "loyalty", "abilities", "any", "time"])
+                        && let Ok(PlayerRef::You) = try_parse(ts, parse_player_ref)
+                        && ts.eat_phrase(&["could", "cast", "an", "instant"])
                     {
                         return Ok(StaticAbility::GlobalFlag(StaticFlagKind::LoyaltyAsInstant));
                     }
@@ -732,7 +723,8 @@ pub(super) fn parse_player_static_ability(
             {
                 let sorc_cp = ts.checkpoint();
                 if ts.eat_phrase(&["can", "cast", "spells", "only", "any", "time"])
-                    && ts.eat_phrase(&["they", "could", "cast", "a", "sorcery"])
+                    && try_parse(ts, parse_player_ref).is_ok()
+                    && ts.eat_phrase(&["could", "cast", "a", "sorcery"])
                 {
                     return Ok(StaticAbility::PlayerRestriction {
                         player,
@@ -997,8 +989,11 @@ pub(super) fn parse_player_static_ability(
                             condition.clone(),
                         );
                         let flash_cp = ts.checkpoint();
-                        if ts.eat_phrase(&["and", "you", "may", "cast", "them"])
-                            && ts.eat_phrase(&["as", "though", "they", "had", "flash"])
+                        if ts.eat_word("and")
+                            && let Ok(PlayerRef::You) = try_parse(ts, parse_player_ref)
+                            && ts.eat_phrase(&[
+                                "may", "cast", "them", "as", "though", "they", "had", "flash",
+                            ])
                         {
                             return Ok(StaticAbility::Compound(vec![
                                 base,

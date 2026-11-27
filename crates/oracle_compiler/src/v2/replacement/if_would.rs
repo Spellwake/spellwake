@@ -25,6 +25,16 @@ fn eat_mana_override_cost(ts: &mut TokenStream<'_>) -> Option<crate::v2::ir::Man
     }
 }
 
+fn eat_token_multiplier(ts: &mut TokenStream<'_>) -> Option<u8> {
+    if ts.eat_phrase(&["twice", "that", "many"]) {
+        Some(2)
+    } else if ts.eat_phrase(&["three", "times", "that", "many"]) {
+        Some(3)
+    } else {
+        None
+    }
+}
+
 fn is_anaphoric_same_target(orig: &SubjectRef, tail: &SubjectRef) -> bool {
     use crate::v2::ir::AnaphoraRef;
     if orig == tail {
@@ -533,19 +543,22 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
     // 1a. Token creation replacements
     {
         let cp = ts.checkpoint();
-        if ts.eat_phrase(&["an", "effect", "would", "create"])
-            && ts.eat_phrase(&["one", "or", "more", "tokens"])
-            && ts.eat_phrase(&["under", "your", "control"])
+        if ts.eat_phrase(&["an", "effect", "would", "create", "one", "or", "more"])
+            && let Ok(flt) = try_parse(ts, parse_object_filter)
+            && flt.token == Some(true)
+            && (flt.controller == Some(crate::ast::ControllerRelation::You)
+                || ts.eat_phrase(&["under", "your", "control"]))
             && ts.eat_comma()
-            && ts.eat_phrase(&["it", "creates", "twice", "that", "many"])
+            && ts.eat_phrase(&["it", "creates"])
+            && let Some(factor) = eat_token_multiplier(ts)
             && ts.eat_phrase(&["of", "those", "tokens", "instead"])
         {
             let _ = ts.eat_period();
             ts.expect_eof()?;
             return Ok(Replacement::TokenRule {
                 controller: PlayerRef::You,
-                filter: None,
-                rule: TokenReplacementKind::Multiply(2),
+                filter: (!flt.any_types.is_empty()).then_some(flt),
+                rule: TokenReplacementKind::Multiply(factor),
             });
         }
         ts.restore(cp);
@@ -578,7 +591,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                     PlayerRef::EachPlayer
                 };
                 if ts.eat_comma() {
-                    if ts.eat_phrase(&["twice", "that", "many"])
+                    if let Some(factor) = eat_token_multiplier(ts)
                         && ts.eat_phrase(&["of", "those", "tokens", "are", "created", "instead"])
                     {
                         let _ = ts.eat_period();
@@ -586,18 +599,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                         return Ok(Replacement::TokenRule {
                             controller,
                             filter,
-                            rule: TokenReplacementKind::Multiply(2),
-                        });
-                    }
-                    if ts.eat_phrase(&["three", "times", "that", "many"])
-                        && ts.eat_phrase(&["of", "those", "tokens", "are", "created", "instead"])
-                    {
-                        let _ = ts.eat_period();
-                        ts.expect_eof()?;
-                        return Ok(Replacement::TokenRule {
-                            controller,
-                            filter,
-                            rule: TokenReplacementKind::Multiply(3),
+                            rule: TokenReplacementKind::Multiply(factor),
                         });
                     }
                     {
@@ -736,9 +738,11 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
     {
         let flt = parse_object_filter(ts)?;
         if ts.eat_comma()
-            && ts.eat_phrase(&["it", "puts", "twice", "that", "many"])
-            && ts.eat_phrase(&["of", "those", "counters"])
-            && ts.eat_phrase(&["on", "that", "permanent", "instead"])
+            && ts.eat_phrase(&["it", "puts"])
+            && let Some(factor) = eat_token_multiplier(ts)
+            && ts.eat_phrase(&["of", "those", "counters", "on"])
+            && try_parse(ts, parse_subject_ref).is_ok()
+            && ts.eat_word("instead")
         {
             let _ = ts.eat_period();
             ts.expect_eof()?;
@@ -746,7 +750,7 @@ pub(super) fn parse_if_would_replacement(ts: &mut TokenStream<'_>) -> PResult<Re
                 filter: flt,
                 kind: None,
                 add: 0,
-                factor: 2,
+                factor,
             });
         }
         return Err(ts.err("unsupported counter-doubling replacement clause"));

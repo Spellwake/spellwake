@@ -276,7 +276,11 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
         let cp = ts.checkpoint();
         let _ = ts.eat_word("all");
         if ts.eat_phrase(&["damage", "that", "would", "reduce"])
-            && ts.eat_phrase(&["your", "life", "total", "to", "less", "than"])
+            && let Ok(crate::v2::ir::ValueExpr::PlayerStat {
+                player: PlayerRef::You,
+                stat: crate::ast::PlayerStatKind::LifeTotal,
+            }) = try_parse(ts, parse_value_expr)
+            && ts.eat_phrase(&["to", "less", "than"])
             && let Some(floor) = ts.next_number(false)
             && ts.eat_phrase(&["reduces", "it", "to"])
             && ts.next_number(false) == Some(floor)
@@ -324,56 +328,48 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
         ts.restore(if_cp);
     }
 
-    // 2a0. `The first time you would draw a card / create one or more tokens each turn, [you may] <instead>`
+    // 2a0. `The first time <player> would draw a card / create one or more tokens each turn, [you may] <instead>`
     {
         let cp = ts.checkpoint();
         let first_time_cond =
             || crate::v2::ir::ConditionExpr::Flag(crate::v2::ir::ConditionFlag::FirstTimeEachTurn);
         if ts.eat_phrase(&["the", "first", "time"])
-            && ts.eat_phrase(&["you", "would", "draw", "a", "card"])
-            && ts.eat_phrase(&["each", "turn"])
-            && ts.eat_comma()
+            && let Ok(PlayerRef::You) = try_parse(ts, crate::v2::filter::parse_player_ref)
+            && ts.eat_word("would")
         {
-            let optional = ts.eat_phrase(&["you", "may"]);
-            if let Ok(instead) = parse_instead_clause(ts)
-                && eat_period_eof(ts)
-            {
-                return Ok(Replacement::ConditionalEnters {
-                    condition: first_time_cond(),
-                    inner: Box::new(Replacement::EventInstead {
-                        event: TriggerEvent::PlayerAction {
-                            player: PlayerRef::You,
-                            action: PlayerTriggerKind::CardDrawn,
-                        },
-                        instead: wrap_optional(optional, instead),
+            let ev = if ts.eat_phrase(&["draw", "a", "card"]) {
+                Some(TriggerEvent::PlayerAction {
+                    player: PlayerRef::You,
+                    action: PlayerTriggerKind::CardDrawn,
+                })
+            } else if ts.eat_phrase(&["create", "one", "or", "more", "tokens"]) {
+                Some(TriggerEvent::PlayerObjectEvent {
+                    player: PlayerRef::You,
+                    kind: PlayerObjectTriggerKind::CreatesTokens,
+                    filter: Some(ObjectFilter {
+                        token: Some(true),
+                        ..Default::default()
                     }),
-                });
-            }
-        }
-        ts.restore(cp);
-        if ts.eat_phrase(&["the", "first", "time"])
-            && ts.eat_phrase(&["you", "would", "create", "one", "or", "more", "tokens"])
-            && ts.eat_phrase(&["each", "turn"])
-            && ts.eat_comma()
-        {
-            let optional = ts.eat_phrase(&["you", "may"]);
-            if let Ok(instead) = parse_instead_clause(ts)
-                && eat_period_eof(ts)
+                })
+            } else {
+                None
+            };
+            if let Some(event) = ev
+                && ts.eat_phrase(&["each", "turn"])
+                && ts.eat_comma()
             {
-                return Ok(Replacement::ConditionalEnters {
-                    condition: first_time_cond(),
-                    inner: Box::new(Replacement::EventInstead {
-                        event: TriggerEvent::PlayerObjectEvent {
-                            player: PlayerRef::You,
-                            kind: PlayerObjectTriggerKind::CreatesTokens,
-                            filter: Some(ObjectFilter {
-                                token: Some(true),
-                                ..Default::default()
-                            }),
-                        },
-                        instead: wrap_optional(optional, instead),
-                    }),
-                });
+                let optional = ts.eat_phrase(&["you", "may"]);
+                if let Ok(instead) = parse_instead_clause(ts)
+                    && eat_period_eof(ts)
+                {
+                    return Ok(Replacement::ConditionalEnters {
+                        condition: first_time_cond(),
+                        inner: Box::new(Replacement::EventInstead {
+                            event,
+                            instead: wrap_optional(optional, instead),
+                        }),
+                    });
+                }
             }
         }
         ts.restore(cp);

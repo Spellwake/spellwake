@@ -566,24 +566,17 @@ pub(super) fn parse_subject_static_ability(
     // `<subj> assigns combat damage equal to its toughness rather than its power`
     {
         let t_cp = ts.checkpoint();
-        if (ts.eat_phrase(&[
-            "assigns",
-            "combat",
-            "damage",
-            "equal",
-            "to",
-            "its",
-            "toughness",
-        ]) && ts.eat_phrase(&["rather", "than", "its", "power"]))
-            || (ts.eat_phrase(&[
-                "assign",
-                "combat",
-                "damage",
-                "equal",
-                "to",
-                "their",
-                "toughness",
-            ]) && ts.eat_phrase(&["rather", "than", "their", "power"]))
+        if ts.eat_any_word(&["assigns", "assign"])
+            && ts.eat_phrase(&["combat", "damage", "equal", "to"])
+            && let Ok(crate::v2::ir::ValueExpr::ObjectStat {
+                stat: crate::ast::StatKind::Toughness,
+                ..
+            }) = try_parse(ts, parse_value_expr)
+            && ts.eat_phrase(&["rather", "than"])
+            && let Ok(crate::v2::ir::ValueExpr::ObjectStat {
+                stat: crate::ast::StatKind::Power,
+                ..
+            }) = try_parse(ts, parse_value_expr)
         {
             let mut parts = vec![StaticAbility::SubjectRule {
                 subject: subject.clone(),
@@ -1554,7 +1547,9 @@ pub(super) fn parse_subject_static_ability(
     {
         let ocp = ts.checkpoint();
         if ts.eat_phrase(&["enters", "under", "the", "control", "of"])
-            && ts.eat_phrase(&["an", "opponent", "of", "your", "choice"])
+            && let Ok(crate::v2::ir::PlayerRef::AnyOpponent) =
+                try_parse(ts, crate::v2::filter::parse_player_ref)
+            && ts.eat_phrase(&["of", "your", "choice"])
         {
             return Ok(StaticAbility::GlobalFlag(
                 StaticFlagKind::EntersUnderOpponentControl,

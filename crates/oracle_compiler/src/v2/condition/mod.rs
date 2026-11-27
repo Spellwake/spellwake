@@ -1001,11 +1001,15 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     }
     {
         let hcp = ts.checkpoint();
-        if ts.eat_phrase(&["you", "haven't", "cast", "a", "spell"])
-            && ts.eat_phrase(&["from", "your", "hand", "this", "turn"])
+        if let Ok(player) = try_parse(ts, parse_player_ref)
+            && ts.eat_any_word(&["haven't", "hasn't"])
+            && ts.eat_phrase(&["cast", "a", "spell", "from"])
+            && let Ok(zref) = try_parse(ts, parse_zone_ref)
+            && zref.zone == ZoneKind::Hand
+            && ts.eat_phrase(&["this", "turn"])
         {
             return Ok(not_cond(player_check(
-                PlayerRef::You,
+                player,
                 PlayerConditionKind::CastSpellFromHandThisTurn,
             )));
         }
@@ -1200,18 +1204,11 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
         }
         ts.restore(mcp);
     }
-    {
-        let ncp = ts.checkpoint();
-        if (ts.eat_phrase(&["it", "wasn't", "cast", "or"])
-            && ts.eat_phrase(&["no", "mana", "was", "spent", "to", "cast", "it"]))
-            || ts.eat_phrase(&["no", "mana", "was", "spent", "to", "cast", "it"])
-        {
-            return Ok(ConditionExpr::SubjectCheck {
-                subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
-                kind: SubjectConditionKind::NotCastOrNoManaSpent,
-            });
-        }
-        ts.restore(ncp);
+    if ts.eat_phrase(&["no", "mana", "was", "spent", "to", "cast", "it"]) {
+        return Ok(ConditionExpr::SubjectCheck {
+            subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+            kind: SubjectConditionKind::NotCastOrNoManaSpent,
+        });
     }
     const POISONED_PLAYERS: &[(&[&str], PlayerRef)] = &[
         (
@@ -1809,14 +1806,22 @@ fn parse_condition_atom(ts: &mut TokenStream<'_>) -> PResult<ConditionExpr> {
     }
     {
         let lcp = ts.checkpoint();
-        if (ts.eat_phrase(&["a", "land", "entered", "the", "battlefield"])
-            && ts.eat_phrase(&["under", "your", "control", "this", "turn"]))
-            || ts.eat_phrase(&["a", "land", "you", "control", "entered", "this", "turn"])
+        if let Ok(flt) = try_parse(ts, parse_object_filter)
+            && flt.any_types == CardTypeMask::LAND
+            && flt.forbidden_types.is_empty()
+            && flt.subtypes.is_empty()
+            && flt.predicates.is_empty()
+            && ts.eat_word("entered")
         {
-            return Ok(player_check(
-                PlayerRef::You,
-                PlayerConditionKind::LandEnteredThisTurn,
-            ));
+            let _ = ts.eat_phrase(&["the", "battlefield"]);
+            let your_ctrl = flt.controller == Some(ControllerRelation::You)
+                || (flt.controller.is_none() && ts.eat_phrase(&["under", "your", "control"]));
+            if your_ctrl && ts.eat_phrase(&["this", "turn"]) {
+                return Ok(player_check(
+                    PlayerRef::You,
+                    PlayerConditionKind::LandEnteredThisTurn,
+                ));
+            }
         }
         ts.restore(lcp);
     }

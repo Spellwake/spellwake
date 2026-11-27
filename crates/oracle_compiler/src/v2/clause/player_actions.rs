@@ -11,8 +11,8 @@ use crate::v2::parser::{PResult, TokenStream, try_parse};
 use crate::v2::value::parse_value_expr;
 
 use super::{
-    apply_continuous, apply_replacement, exact_count, exile_zone_op, move_zone_op, mutate_obj,
-    mutate_player, player_action, prompt_choice, simple_zone_dest, zone_cards_subject,
+    apply_replacement, exact_count, exile_zone_op, move_zone_op, mutate_obj, mutate_player,
+    player_action, prompt_choice, simple_zone_dest, zone_cards_subject,
 };
 
 pub(super) fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec> {
@@ -888,55 +888,6 @@ pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<V
             )]);
         }
         ts.restore(pcp);
-    }
-    // 3. `The escape/replicate cost is equal to [its | the card's] mana cost [plus <costs>]`
-    {
-        let ecp = ts.checkpoint();
-        if ts.eat_phrase(&["the", "escape", "cost", "is", "equal", "to"])
-            && ts.eat_any_phrase(&[&["its", "mana", "cost"], &["the", "card's", "mana", "cost"]])
-        {
-            let mut costs = vec![crate::v2::ir::Cost::PayAnyAmountMana];
-            if ts.eat_word("plus")
-                && let Ok(extra) = try_parse(ts, crate::v2::cost::parse_cost_list)
-            {
-                costs.extend(extra);
-            }
-            return Ok(vec![apply_continuous(
-                crate::v2::ir::StaticAbility::AlternativeCost(costs),
-                Duration::UntilEndOfTurn,
-            )]);
-        }
-        ts.restore(ecp);
-        if ts.eat_any_word(&["the", "its"])
-            && ts.peek_word().is_some_and(|w| {
-                matches!(
-                    w.to_ascii_lowercase().as_str(),
-                    "replicate"
-                        | "encore"
-                        | "embalm"
-                        | "harmonize"
-                        | "unearth"
-                        | "blitz"
-                        | "dash"
-                        | "disturb"
-                        | "foretell"
-                        | "plot"
-                        | "warp"
-                        | "madness"
-                )
-            })
-        {
-            ts.next_word();
-            if ts.eat_phrase(&["cost", "is", "equal", "to", "its", "mana", "cost"]) {
-                return Ok(vec![apply_continuous(
-                    crate::v2::ir::StaticAbility::AlternativeCost(vec![
-                        crate::v2::ir::Cost::PayAnyAmountMana,
-                    ]),
-                    Duration::Permanent,
-                )]);
-            }
-        }
-        ts.restore(ecp);
     }
     // 4. `copy the next <flt> you cast this turn when you cast it`
     {

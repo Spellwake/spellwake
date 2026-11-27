@@ -358,24 +358,17 @@ pub(super) fn parse_static_subject_tail(
             ts.restore(eq_cp);
         }
         // `assigns combat damage equal to its toughness rather than its power`
-        if (ts.eat_phrase(&[
-            "assigns",
-            "combat",
-            "damage",
-            "equal",
-            "to",
-            "its",
-            "toughness",
-        ]) && ts.eat_phrase(&["rather", "than", "its", "power"]))
-            || (ts.eat_phrase(&[
-                "assign",
-                "combat",
-                "damage",
-                "equal",
-                "to",
-                "their",
-                "toughness",
-            ]) && ts.eat_phrase(&["rather", "than", "their", "power"]))
+        if ts.eat_any_word(&["assigns", "assign"])
+            && ts.eat_phrase(&["combat", "damage", "equal", "to"])
+            && let Ok(crate::v2::ir::ValueExpr::ObjectStat {
+                stat: crate::ast::StatKind::Toughness,
+                ..
+            }) = try_parse(ts, crate::v2::value::parse_value_expr)
+            && ts.eat_phrase(&["rather", "than"])
+            && let Ok(crate::v2::ir::ValueExpr::ObjectStat {
+                stat: crate::ast::StatKind::Power,
+                ..
+            }) = try_parse(ts, crate::v2::value::parse_value_expr)
         {
             parts.push(StaticAbility::SubjectRule {
                 subject: subject.clone(),

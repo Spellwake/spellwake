@@ -827,19 +827,6 @@ pub(super) fn try_parse_roll_ext(
     actor: PlayerRef,
 ) -> Option<PResult<(Vec<Effect>, ())>> {
     let cp = ts.checkpoint();
-    if ts.eat_word("again") {
-        return Some(Ok((
-            vec![mutate_player(
-                actor,
-                PlayerMutation::RollDie {
-                    sides: 20,
-                    count: 1,
-                },
-                Duration::Instant,
-            )],
-            (),
-        )));
-    }
     let count_expr = if ts.eat_any_word(&["a", "an"]) {
         ValueExpr::Const(1)
     } else if let Ok(v) = try_parse(ts, parse_value_expr) {
@@ -960,10 +947,11 @@ pub(super) fn parse_trailing_play_mana_rider(
             ])
         };
         let after_and = ts.checkpoint();
-        if ts.eat_any_word(&["you", "they"])
+        if let Ok(sub_actor) = try_parse(ts, crate::v2::filter::parse_player_ref)
+            && matches!(sub_actor, PlayerRef::You | PlayerRef::ThatPlayer)
             && ts.eat_word("may")
-            && ts.eat_phrase(&["spend", "mana", "as", "though", "it", "were"])
-            && ts.eat_phrase(&["mana", "of", "any"])
+            && ts.eat_word("spend")
+            && ts.eat_phrase(&["mana", "as", "though", "it", "were", "mana", "of", "any"])
             && ts.eat_any_word(&["color", "type"])
             && ts.eat_phrase(&["to", "cast"])
             && eat_cast_obj(ts)
