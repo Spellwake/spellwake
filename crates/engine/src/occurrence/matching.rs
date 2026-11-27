@@ -240,6 +240,11 @@ fn check_intervening_if(
             .characteristics
             .solved_cases
             .contains(&source.object.id()),
+        TriggerCondition::RoomDoorUnlocked(half) => after
+            .characteristics
+            .unlocked_doors
+            .get(&source.object.id())
+            .is_some_and(|doors| doors.is_unlocked(*half)),
         TriggerCondition::SourceIsUnsolved => !after
             .characteristics
             .solved_cases
@@ -4627,14 +4632,16 @@ pub(super) fn match_trigger_event(
         TriggerEvent::DoorUnlocked {
             subject,
             fully_unlocked_only,
+            door,
         } => {
             if let RulesOccurrence::DoorUnlocked {
                 object,
                 player,
+                half,
                 fully_unlocked,
-                ..
             } = value
                 && (!*fully_unlocked_only || *fully_unlocked)
+                && door.is_none_or(|required| required == *half)
                 && after.evaluated.get(*object).is_some_and(|view| {
                     subject.matches_static_characteristics(view, &BTreeSet::new(), || {
                         Some(view.defined.mana_value.clone())

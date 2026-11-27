@@ -2635,6 +2635,47 @@ pub(in super::super) fn strip_triggered_restrictions(
                 }
                 continue;
             }
+            InstructionAst::ScopedDurationText {
+                duration_text,
+                body: inner,
+            } => {
+                let s = strip_triggered_restrictions(inner, spec, grouping, vocabulary);
+                if !(s.is_empty() && !inner.is_empty()) {
+                    stripped_body.push(InstructionAst::ScopedDurationText {
+                        duration_text: duration_text.clone(),
+                        body: s,
+                    });
+                }
+                continue;
+            }
+            InstructionAst::ForEachTargetPlayer {
+                player,
+                any_number,
+                body: inner,
+            } => {
+                let s = strip_triggered_restrictions(inner, spec, grouping, vocabulary);
+                stripped_body.push(InstructionAst::ForEachTargetPlayer {
+                    player: *player,
+                    any_number: *any_number,
+                    body: s,
+                });
+                continue;
+            }
+            InstructionAst::ForEachMatchingPlayer {
+                player,
+                condition_text,
+                condition,
+                body: inner,
+            } => {
+                let s = strip_triggered_restrictions(inner, spec, grouping, vocabulary);
+                stripped_body.push(InstructionAst::ForEachMatchingPlayer {
+                    player: *player,
+                    condition_text: condition_text.clone(),
+                    condition: condition.clone(),
+                    body: s,
+                });
+                continue;
+            }
             _ => {}
         }
         stripped_body.push(ins.clone());
@@ -3282,6 +3323,17 @@ pub(super) fn is_activation_restriction_text(raw: &str) -> bool {
         || low.starts_with("triggers ")
         || low.starts_with("entry_option:")
         || low.starts_with("during ")
+        || low.starts_with("before ")
+        || low.starts_with("not during ")
+        || low.starts_with("you can't activate ")
+        || low.starts_with("you cannot activate ")
+        || matches!(
+            low.as_str(),
+            "while ~ is on the battlefield"
+                | "while this permanent is on the battlefield"
+                | "while ~ is in your graveyard"
+                | "while this card is in your graveyard"
+        )
         || (low.starts_with("atmost") && low.ends_with("timeseachturn"))
         || parse_max_per_turn_activation(&low).is_some()
     {
@@ -3831,6 +3883,53 @@ pub(in super::super) fn strip_activated_restrictions(
                     });
                 }
             }
+            InstructionAst::ScopedDurationText {
+                duration_text,
+                body: inner,
+            } => {
+                let (inner_filtered, inner_r) = strip_activated_restrictions(inner, vocabulary)?;
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                if !(inner_filtered.is_empty() && !inner.is_empty()) {
+                    filtered.push(InstructionAst::ScopedDurationText {
+                        duration_text: duration_text.clone(),
+                        body: inner_filtered,
+                    });
+                }
+            }
+            InstructionAst::ForEachTargetPlayer {
+                player,
+                any_number,
+                body: inner,
+            } => {
+                let (inner_filtered, inner_r) = strip_activated_restrictions(inner, vocabulary)?;
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                filtered.push(InstructionAst::ForEachTargetPlayer {
+                    player: *player,
+                    any_number: *any_number,
+                    body: inner_filtered,
+                });
+            }
+            InstructionAst::ForEachMatchingPlayer {
+                player,
+                condition_text,
+                condition,
+                body: inner,
+            } => {
+                let (inner_filtered, inner_r) = strip_activated_restrictions(inner, vocabulary)?;
+                if let Some(ir) = inner_r {
+                    restriction = Some(combine_activation_restrictions(restriction, ir));
+                }
+                filtered.push(InstructionAst::ForEachMatchingPlayer {
+                    player: *player,
+                    condition_text: condition_text.clone(),
+                    condition: condition.clone(),
+                    body: inner_filtered,
+                });
+            }
             _ => {
                 filtered.push(item.clone());
             }
@@ -4076,6 +4175,47 @@ pub(super) fn parse_max_per_turn_activation(core: &str) -> Option<ActivationRest
     }
 }
 
+fn step_set_activation_cond(steps: &[Step]) -> ActivationRestriction {
+    let mut iter = steps.iter().copied();
+    let first = iter.next().unwrap_or(Step::Untap);
+    let mut sum = ValueExpr::PlayerStat(PlayerStatExpr::IsInStep {
+        step: first,
+        player: None,
+    });
+    for step in iter {
+        sum = ValueExpr::Add(
+            Box::new(sum),
+            Box::new(ValueExpr::PlayerStat(PlayerStatExpr::IsInStep {
+                step,
+                player: None,
+            })),
+        );
+    }
+    ActivationRestriction::Condition(Box::new(ResolutionCondition {
+        left: sum,
+        comparison: Comparison::GreaterOrEqual,
+        right: ValueExpr::literal(1),
+    }))
+}
+
+fn phase_activation_cond(
+    phase: spellwake_engine::program::PhaseCheck,
+    negated: bool,
+) -> ActivationRestriction {
+    ActivationRestriction::Condition(Box::new(ResolutionCondition {
+        left: ValueExpr::PlayerStat(PlayerStatExpr::IsInPhase {
+            phase,
+            player: None,
+        }),
+        comparison: if negated {
+            Comparison::Equal
+        } else {
+            Comparison::GreaterOrEqual
+        },
+        right: ValueExpr::literal(if negated { 0 } else { 1 }),
+    }))
+}
+
 pub(in super::super) fn parse_activation_restriction(
     raw: &str,
 ) -> Result<ActivationRestriction, &'static str> {
@@ -4211,6 +4351,141 @@ pub(in super::super) fn parse_activation_restriction(
     }
     if low == "any player may activate this ability" {
         return Ok(ActivationRestriction::AnyPlayer);
+    }
+    if matches!(
+        low.as_str(),
+        "you can't activate this ability during combat"
+            | "you cannot activate this ability during combat"
+            | "not during combat"
+    ) {
+        return Ok(phase_activation_cond(
+            spellwake_engine::program::PhaseCheck::Combat,
+            true,
+        ));
+    }
+    match core {
+        "before combat" | "before the combat phase" => {
+            return Ok(step_set_activation_cond(&[
+                Step::Untap,
+                Step::Upkeep,
+                Step::Draw,
+                Step::PrecombatMain,
+            ]));
+        }
+        "before attackers are declared" | "before the declare attackers step" => {
+            return Ok(step_set_activation_cond(&[
+                Step::Untap,
+                Step::Upkeep,
+                Step::Draw,
+                Step::PrecombatMain,
+                Step::BeginningCombat,
+            ]));
+        }
+        "before blockers are declared" | "before the declare blockers step" => {
+            return Ok(step_set_activation_cond(&[
+                Step::Untap,
+                Step::Upkeep,
+                Step::Draw,
+                Step::PrecombatMain,
+                Step::BeginningCombat,
+                Step::DeclareAttackers,
+            ]));
+        }
+        "before the combat damage step" => {
+            return Ok(step_set_activation_cond(&[
+                Step::Untap,
+                Step::Upkeep,
+                Step::Draw,
+                Step::PrecombatMain,
+                Step::BeginningCombat,
+                Step::DeclareAttackers,
+                Step::DeclareBlockers,
+            ]));
+        }
+        "before the end of combat step" => {
+            return Ok(step_set_activation_cond(&[
+                Step::Untap,
+                Step::Upkeep,
+                Step::Draw,
+                Step::PrecombatMain,
+                Step::BeginningCombat,
+                Step::DeclareAttackers,
+                Step::DeclareBlockers,
+                Step::CombatDamage,
+            ]));
+        }
+        "before the end step" => {
+            return Ok(phase_activation_cond(
+                spellwake_engine::program::PhaseCheck::Ending,
+                true,
+            ));
+        }
+        "during combat before blockers are declared"
+        | "during combat, before blockers are declared" => {
+            return Ok(step_set_activation_cond(&[
+                Step::BeginningCombat,
+                Step::DeclareAttackers,
+            ]));
+        }
+        "during combat after blockers are declared"
+        | "during combat, after blockers are declared" => {
+            return Ok(step_set_activation_cond(&[
+                Step::DeclareBlockers,
+                Step::CombatDamage,
+                Step::EndCombat,
+            ]));
+        }
+        "during your turn, before the combat damage step"
+        | "during your turn before the combat damage step" => {
+            return Ok(combine_activation_restrictions(
+                Some(ActivationRestriction::DuringYourTurn),
+                step_set_activation_cond(&[
+                    Step::Untap,
+                    Step::Upkeep,
+                    Step::Draw,
+                    Step::PrecombatMain,
+                    Step::BeginningCombat,
+                    Step::DeclareAttackers,
+                    Step::DeclareBlockers,
+                ]),
+            ));
+        }
+        "during an opponent's turn, before attackers are declared"
+        | "during an opponent's turn before attackers are declared" => {
+            return Ok(combine_activation_restrictions(
+                Some(ActivationRestriction::DuringOpponentsTurn),
+                step_set_activation_cond(&[
+                    Step::Untap,
+                    Step::Upkeep,
+                    Step::Draw,
+                    Step::PrecombatMain,
+                    Step::BeginningCombat,
+                ]),
+            ));
+        }
+        "during an opponent's turn, before combat" | "during an opponent's turn before combat" => {
+            return Ok(combine_activation_restrictions(
+                Some(ActivationRestriction::DuringOpponentsTurn),
+                step_set_activation_cond(&[
+                    Step::Untap,
+                    Step::Upkeep,
+                    Step::Draw,
+                    Step::PrecombatMain,
+                ]),
+            ));
+        }
+        "during their draw step" => {
+            return Ok(ActivationRestriction::DuringOwnStep(Step::Draw));
+        }
+        "during their turn before the end step"
+        | "during your turn before the end step"
+        | "during your turn, before the end step" => {
+            return Ok(combine_activation_restrictions(
+                Some(ActivationRestriction::DuringYourTurn),
+                phase_activation_cond(spellwake_engine::program::PhaseCheck::Ending, true),
+            ));
+        }
+        _ => {}
     }
     let has_once = core.contains("once each turn") || core.contains("once per turn");
     if core.contains("sorcery") && has_once {

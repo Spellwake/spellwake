@@ -1670,9 +1670,11 @@ pub(super) fn lower_instruction(
         | InstructionAst::ForEachSubjectPlayer { .. }
         | InstructionAst::Forage
         | InstructionAst::InteractiveChoice(..)
+        | InstructionAst::Learn
         | InstructionAst::LookAtHand { .. }
         | InstructionAst::ManualTabletopAction { .. }
         | InstructionAst::Modal { .. }
+        | InstructionAst::OpenAttraction
         | InstructionAst::Optional(..)
         | InstructionAst::OptionalPlayer { .. }
         | InstructionAst::PayCost(..)

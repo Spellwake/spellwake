@@ -8117,19 +8117,18 @@ fn lower_static_permanent_selectors_with_context(
 }
 
 fn is_spell_keyword_grant_filter(f: &ObjectFilterAst) -> bool {
-    !f.any_permanent
+    matches!(
+        f.zone,
+        Some(
+            ZoneFilter::Stack
+                | ZoneFilter::YourHand
+                | ZoneFilter::YourGraveyard
+                | ZoneFilter::Exile
+                | ZoneFilter::YourLibrary
+        )
+    ) || (!f.any_permanent
         && (f.any_spell
-            || matches!(
-                f.zone,
-                Some(
-                    ZoneFilter::Stack
-                        | ZoneFilter::YourHand
-                        | ZoneFilter::YourGraveyard
-                        | ZoneFilter::Exile
-                        | ZoneFilter::YourLibrary
-                )
-            )
-            || (f.any_types.0 & (AstCardTypeMask::INSTANT.0 | AstCardTypeMask::SORCERY.0)) != 0)
+            || (f.any_types.0 & (AstCardTypeMask::INSTANT.0 | AstCardTypeMask::SORCERY.0)) != 0))
 }
 
 fn lower_spell_keyword_grant(
@@ -8177,6 +8176,12 @@ fn lower_spell_keyword_grant(
         )
     {
         stripped.owner = None;
+    }
+    if stripped.any_permanent {
+        if stripped.any_types.is_empty() {
+            stripped.any_types = AstCardTypeMask::PERMANENT;
+        }
+        stripped.any_permanent = false;
     }
 
     if !any_player
@@ -8247,8 +8252,12 @@ fn lower_spell_keyword_grant(
                 .ok_or("oracle:unsupported-spell-keyword-grant")?;
             affinity_discounts.push(discount_expr);
         } else {
-            let ka = lower_keyword_ability_name(&kw_low)
-                .ok_or("oracle:unsupported-spell-keyword-grant")?;
+            let ka = if kw_low == "jumpstart" {
+                KeywordAbility::JumpStart
+            } else {
+                lower_keyword_ability_name(&kw_low)
+                    .ok_or("oracle:unsupported-spell-keyword-grant")?
+            };
             resolved.push(ka);
         }
     }
@@ -14190,6 +14199,7 @@ pub(super) fn lower_combat_mod_blocking_restriction(
         "can't attack you"
             | "can't attack you or planeswalkers you control"
             | "can't attack you or a planeswalker you control"
+            | "can't attack you or permanents you control"
             | "cantattackyou"
             | "cant_attack:you"
     ) {
@@ -14947,6 +14957,10 @@ pub(super) fn lower_ability_change(
             change
                 .granted_keywords
                 .insert(KeywordAbility::StartYourEngines);
+            continue;
+        }
+        if low == "jumpstart" {
+            change.granted_keywords.insert(KeywordAbility::JumpStart);
             continue;
         }
         if let Some(rest) = low.strip_prefix("landwalk ")

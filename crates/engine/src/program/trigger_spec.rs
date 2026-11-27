@@ -443,6 +443,8 @@ pub enum TriggerCondition {
     TriggeringAbilityNotMana,
     /// Trigger source permanent is not owned by its current controller.
     SourceNotOwnedByController,
+    /// Source Room permanent has the specified door half unlocked (CR 709.5e).
+    RoomDoorUnlocked(super::SplitHalf),
     /// General world-evaluable condition expression (also re-checked on resolution per CR 603.4).
     Eval(Box<super::ResolutionCondition>),
     Not(Box<TriggerCondition>),
@@ -651,6 +653,7 @@ pub enum TriggerEvent {
     DoorUnlocked {
         subject: ObjectFilter,
         fully_unlocked_only: bool,
+        door: Option<super::SplitHalf>,
     },
     /// Universal interactive choice event (modal, villainous choice, dilemma, vote, etc.).
     ChoiceMade {

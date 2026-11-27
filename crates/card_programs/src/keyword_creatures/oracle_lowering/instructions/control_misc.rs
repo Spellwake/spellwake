@@ -1,5 +1,141 @@
 use super::*;
 
+fn instruction_supports_optional_wrapper(op: &Instruction) -> bool {
+    match op {
+        Instruction::ZoneOp(spec) => match &spec.destination {
+            spellwake_engine::toolbox::ZoneDest::Delayed(action) => !matches!(
+                action,
+                spellwake_engine::toolbox::DelayedZoneAction::ReturnChosenXGraveyardCreatures
+                    | spellwake_engine::toolbox::DelayedZoneAction::ReturnGraveyardToHand(_)
+                    | spellwake_engine::toolbox::DelayedZoneAction::ReturnExiledTargetCohort { .. }
+                    | spellwake_engine::toolbox::DelayedZoneAction::ExileObjects(_)
+            ),
+            _ => true,
+        },
+        Instruction::MutateObject(spec) => !matches!(
+            spec.op,
+            spellwake_engine::toolbox::ObjectMutation::ReturnEarthbentCard
+                | spellwake_engine::toolbox::ObjectMutation::ResolveGrowth(_)
+                | spellwake_engine::toolbox::ObjectMutation::ResolveCounterKeyword(_)
+                | spellwake_engine::toolbox::ObjectMutation::SacrificeEvoked
+                | spellwake_engine::toolbox::ObjectMutation::RememberPermanentTarget
+                | spellwake_engine::toolbox::ObjectMutation::ExileDefeatedSiege
+        ),
+        Instruction::MutatePlayer(spec) => !matches!(
+            spec.op,
+            spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                | spellwake_engine::toolbox::PlayerMutation::ChooseRevealedHandCard { .. }
+                | spellwake_engine::toolbox::PlayerMutation::ExtortDrain
+                | spellwake_engine::toolbox::PlayerMutation::OfferSourceCounters { .. }
+                | spellwake_engine::toolbox::PlayerMutation::SacrificeRandomUntilLand
+                | spellwake_engine::toolbox::PlayerMutation::ExileOnePerPlayerUntilSourceLeaves
+        ),
+        Instruction::StackOp(spec) => !matches!(
+            spec.op,
+            spellwake_engine::toolbox::StackOpKind::ChooseFoundSpell
+                | spellwake_engine::toolbox::StackOpKind::CastFoundSpell(_)
+                | spellwake_engine::toolbox::StackOpKind::Encore
+        ),
+        Instruction::DealDamage(spec) => !matches!(
+            spec.recipients,
+            spellwake_engine::toolbox::DamageTargetQuery::FromGrantingPermanent
+        ),
+        Instruction::SearchLibrary { filter } => filter.supports_optional_wrapper(),
+        Instruction::Discard {
+            players: AffectedPlayers::One(_),
+            ..
+        }
+        | Instruction::Sacrifice {
+            players: AffectedPlayers::One(_),
+            ..
+        } => true,
+        Instruction::BranchIfFalse { .. }
+        | Instruction::Jump { .. }
+        | Instruction::OfferDynamicManaPayment { .. }
+        | Instruction::OptionalSequence { .. }
+        | Instruction::OptionalEffect { .. }
+        | Instruction::Sacrifice { .. }
+        | Instruction::Discard { .. } => false,
+        _ => true,
+    }
+}
+
+fn wrap_optional_instructions(
+    ops: &mut Vec<Instruction>,
+    start: usize,
+    chooser: ResolvingPlayer,
+) -> Result<(), &'static str> {
+    let count = ops.len().saturating_sub(start);
+    if count == 0 {
+        return Err("oracle:empty-optional");
+    }
+    let Some(head) = ops.get(start) else {
+        return Err("oracle:empty-optional");
+    };
+    if count == 1 {
+        let already_optional = matches!(head, Instruction::OfferDynamicManaPayment { .. })
+            || matches!(
+                head,
+                Instruction::MutatePlayer(spec)
+                    if matches!(
+                        spec.op,
+                        spellwake_engine::toolbox::PlayerMutation::MayRevealLibraryTop
+                            | spellwake_engine::toolbox::PlayerMutation::ExtortDrain
+                            | spellwake_engine::toolbox::PlayerMutation::OfferSourceCounters { .. }
+                    )
+            )
+            || matches!(
+                head,
+                Instruction::OptionalEffect { chooser: existing }
+                    | Instruction::OptionalSequence { chooser: existing, .. }
+                    if *existing == chooser
+            );
+        if already_optional {
+            return Ok(());
+        }
+        if instruction_supports_optional_wrapper(head) {
+            prepend_instruction_at(ops, start, Instruction::OptionalEffect { chooser });
+            return Ok(());
+        }
+    } else if instruction_supports_optional_wrapper(head)
+        || matches!(head, Instruction::OfferDynamicManaPayment { .. })
+    {
+        prepend_instruction_at(
+            ops,
+            start,
+            Instruction::OptionalSequence {
+                chooser,
+                instructions: count,
+            },
+        );
+        return Ok(());
+    }
+    let mut branch_ops = ops.split_off(start);
+    if start > 0 {
+        let shift = -isize::try_from(start).map_err(|_| "oracle:optional-jump-overflow")?;
+        for op in &mut branch_ops {
+            op.shift_jumps(shift, start);
+        }
+    }
+    ops.push(Instruction::ChooseOption {
+        chooser,
+        options: vec![
+            ChooseOptionBranch {
+                label: "Take optional action".to_owned(),
+                body: ExecutableBody::new(BodyTarget::None, branch_ops),
+            },
+            ChooseOptionBranch {
+                label: "Decline".to_owned(),
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::Jump { destination: 1 }],
+                ),
+            },
+        ],
+    });
+    Ok(())
+}
+
 pub(super) fn lower_control_misc_instruction(
     ins: &InstructionAst,
     builder: &mut BodyBuilder,
@@ -221,6 +357,30 @@ pub(super) fn lower_control_misc_instruction(
                     bound_x,
                 );
             }
+            if let [InstructionAst::PayAnyAmountOfMana { player }] = inner.as_slice() {
+                if try_group_affected_players(*player).is_some() {
+                    return Err("oracle:unsupported-pay-any-mana");
+                }
+                let payer = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+                let offer_idx = builder.instructions.len();
+                builder
+                    .instructions
+                    .push(Instruction::OfferDynamicManaPayment {
+                        payer,
+                        fixed: ManaCost::free(),
+                        extra_generic: ValueExpr::chosen_x(),
+                        paid_destination: offer_idx + 2,
+                        declined_destination: offer_idx + 1,
+                    });
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::bind_resolution_x(
+                            ValueExpr::literal(0),
+                        ),
+                    )));
+                return Ok(());
+            }
             let start = builder.instructions.len();
             lower_instruction_seq(
                 inner,
@@ -231,28 +391,11 @@ pub(super) fn lower_control_misc_instruction(
                 self_pronoun_valid,
                 bound_x,
             )?;
-            let count = builder.instructions.len() - start;
-            if count == 0 {
-                return Err("oracle:empty-optional");
-            }
-            if count == 1 {
-                prepend_instruction_at(
-                    &mut builder.instructions,
-                    start,
-                    Instruction::OptionalEffect {
-                        chooser: ResolvingPlayer::Controller,
-                    },
-                );
-            } else {
-                prepend_instruction_at(
-                    &mut builder.instructions,
-                    start,
-                    Instruction::OptionalSequence {
-                        chooser: ResolvingPlayer::Controller,
-                        instructions: count,
-                    },
-                );
-            }
+            wrap_optional_instructions(
+                &mut builder.instructions,
+                start,
+                ResolvingPlayer::Controller,
+            )?;
             Ok(())
         }
         InstructionAst::OptionalPlayer { player, body } => {
@@ -293,6 +436,9 @@ pub(super) fn lower_control_misc_instruction(
                     | PlayerRefAst::EachOpponent
                     | PlayerRefAst::EachOtherPlayer
             ) {
+                if matches!(body.as_slice(), [InstructionAst::PayAnyAmountOfMana { .. }]) {
+                    return Err("oracle:unsupported-pay-any-mana");
+                }
                 let players = match *player {
                     PlayerRefAst::EachPlayer => AffectedPlayers::EachPlayer,
                     PlayerRefAst::EachOpponent => AffectedPlayers::EachOpponent,
@@ -311,33 +457,48 @@ pub(super) fn lower_control_misc_instruction(
                     self_pronoun_valid,
                     bound_x,
                 )?;
-                let count = sub.instructions.len();
-                if count == 0 {
-                    return Err("oracle:empty-optional");
+                if sub
+                    .instructions
+                    .iter()
+                    .any(|op| matches!(op, Instruction::OfferDynamicManaPayment { .. }))
+                {
+                    return Err("oracle:unsupported-pay-any-mana");
                 }
-                if count == 1 {
-                    prepend_instruction_at(
-                        &mut sub.instructions,
-                        0,
-                        Instruction::OptionalEffect {
-                            chooser: ResolvingPlayer::LoopPlayer,
-                        },
-                    );
-                } else {
-                    prepend_instruction_at(
-                        &mut sub.instructions,
-                        0,
-                        Instruction::OptionalSequence {
-                            chooser: ResolvingPlayer::LoopPlayer,
-                            instructions: count,
-                        },
-                    );
-                }
+                wrap_optional_instructions(&mut sub.instructions, 0, ResolvingPlayer::LoopPlayer)?;
                 builder.instructions.push(Instruction::ForEachPlayerQuery {
                     selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(players)),
                     bind_player: spellwake_engine::toolbox::BindingId::LOOP_PLAYER,
                     body: Box::new(sub),
                 });
+                return Ok(());
+            }
+            if let [InstructionAst::PayAnyAmountOfMana { player: inner_p }] = body.as_slice() {
+                let eff_player = if *inner_p == PlayerRefAst::You {
+                    *player
+                } else {
+                    *inner_p
+                };
+                if try_group_affected_players(eff_player).is_some() {
+                    return Err("oracle:unsupported-pay-any-mana");
+                }
+                let payer = lower_resolving_player_in_context(eff_player, builder, in_trigger)?;
+                let offer_idx = builder.instructions.len();
+                builder
+                    .instructions
+                    .push(Instruction::OfferDynamicManaPayment {
+                        payer,
+                        fixed: ManaCost::free(),
+                        extra_generic: ValueExpr::chosen_x(),
+                        paid_destination: offer_idx + 2,
+                        declined_destination: offer_idx + 1,
+                    });
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::bind_resolution_x(
+                            ValueExpr::literal(0),
+                        ),
+                    )));
                 return Ok(());
             }
             let chooser = lower_resolving_player_in_context(*player, builder, in_trigger)?;
@@ -351,26 +512,7 @@ pub(super) fn lower_control_misc_instruction(
                 self_pronoun_valid,
                 bound_x,
             )?;
-            let count = builder.instructions.len() - start;
-            if count == 0 {
-                return Err("oracle:empty-optional");
-            }
-            if count == 1 {
-                prepend_instruction_at(
-                    &mut builder.instructions,
-                    start,
-                    Instruction::OptionalEffect { chooser },
-                );
-            } else {
-                prepend_instruction_at(
-                    &mut builder.instructions,
-                    start,
-                    Instruction::OptionalSequence {
-                        chooser,
-                        instructions: count,
-                    },
-                );
-            }
+            wrap_optional_instructions(&mut builder.instructions, start, chooser)?;
             Ok(())
         }
         InstructionAst::ChangeLife {
@@ -1122,6 +1264,93 @@ pub(super) fn lower_control_misc_instruction(
                 .push(Instruction::MutatePlayer(Box::new(
                     spellwake_engine::toolbox::MutatePlayerSpec::ring_tempts_you(),
                 )));
+            Ok(())
+        }
+        InstructionAst::OpenAttraction => {
+            builder.instructions.push(Instruction::SideDeckOp(Box::new(
+                spellwake_engine::toolbox::SideDeckOpSpec {
+                    owner: Some(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                        ResolvingPlayer::Controller,
+                    )),
+                    kind: spellwake_engine::toolbox::SideDeckKind::Attraction,
+                    op: spellwake_engine::toolbox::SideDeckOpKind::AdvanceTop,
+                    bind_succeeded: None,
+                },
+            )));
+            Ok(())
+        }
+        InstructionAst::Learn => {
+            let reveal_lesson = ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::SideDeckOp(Box::new(
+                    spellwake_engine::toolbox::SideDeckOpSpec {
+                        owner: Some(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                            ResolvingPlayer::Controller,
+                        )),
+                        kind: spellwake_engine::toolbox::SideDeckKind::Custom(1),
+                        op: spellwake_engine::toolbox::SideDeckOpKind::AdvanceTop,
+                        bind_succeeded: None,
+                    },
+                ))],
+            );
+            let discard_to_draw = ExecutableBody::new(
+                BodyTarget::None,
+                vec![
+                    Instruction::ZoneOp(Box::new(spellwake_engine::toolbox::ZoneOpSpec::simple(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::Hand(Box::new(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                ),
+                            )),
+                            ObjectFilter::any(),
+                        ),
+                        spellwake_engine::toolbox::ZoneSelection::Prompt {
+                            chooser: spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                ResolvingPlayer::Controller,
+                            ),
+                            min: Box::new(ValueExpr::literal(1)),
+                            max: Box::new(ValueExpr::literal(1)),
+                            constraint: None,
+                            category: spellwake_engine::toolbox::ChoiceCategory::Generic,
+                            hidden: true,
+                        },
+                        spellwake_engine::toolbox::ZoneDest::Graveyard {
+                            semantics: spellwake_engine::toolbox::GraveyardSemantics::Discard,
+                        },
+                    ))),
+                    Instruction::BranchIfFalse {
+                        condition: ResolutionCondition {
+                            left: ValueExpr::event(EventValueKind::LastActionSucceeded),
+                            comparison: Comparison::GreaterOrEqual,
+                            right: ValueExpr::literal(1),
+                        },
+                        destination: 3,
+                    },
+                    super::super::toolbox_emit::draw_controller(ValueExpr::literal(1)),
+                ],
+            );
+            let do_nothing =
+                ExecutableBody::new(BodyTarget::None, vec![Instruction::Jump { destination: 1 }]);
+            builder.instructions.push(Instruction::ChooseOption {
+                chooser: ResolvingPlayer::Controller,
+                options: vec![
+                    ChooseOptionBranch {
+                        label:
+                            "Reveal a Lesson card from outside the game and put it into your hand"
+                                .to_owned(),
+                        body: reveal_lesson,
+                    },
+                    ChooseOptionBranch {
+                        label: "Discard a card to draw a card".to_owned(),
+                        body: discard_to_draw,
+                    },
+                    ChooseOptionBranch {
+                        label: "Do nothing".to_owned(),
+                        body: do_nothing,
+                    },
+                ],
+            });
             Ok(())
         }
         InstructionAst::Populate { count } => {

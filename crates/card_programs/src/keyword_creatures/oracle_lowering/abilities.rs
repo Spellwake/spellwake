@@ -10788,6 +10788,7 @@ pub(super) fn lower_trigger_event(
             lower_subject_trigger_event(subject, vocabulary, |subj| TriggerEvent::DoorUnlocked {
                 subject: subj,
                 fully_unlocked_only: false,
+                door: None,
             })?,
             TriggerGrouping::EachOccurrence,
         )),
@@ -10807,6 +10808,7 @@ pub(super) fn lower_trigger_event(
                 TriggerEvent::DoorUnlocked {
                     subject: subj,
                     fully_unlocked_only: true,
+                    door: None,
                 },
                 TriggerGrouping::EachOccurrence,
             ))

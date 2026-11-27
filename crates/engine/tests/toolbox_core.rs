@@ -3157,3 +3157,239 @@ fn phase10_mutate_object_remember_target_and_destroy_gives_controller_token() {
         "target creature must be destroyed into P1's graveyard"
     );
 }
+
+#[test]
+fn phase11_room_split_card_unlock_doors_and_cr709_5e_characteristics() {
+    use spellwake_contracts::names::{EnglishCardName, ObjectNames};
+    use spellwake_engine::{
+        mana::CastingPayment,
+        program::{EnchantmentSubtype, SplitCard, SplitHalf},
+    };
+    use std::collections::BTreeMap;
+
+    let vocab = vocabulary();
+
+    let mut left = Program::enchantment(Some(ManaCost::free()));
+    left.names = ObjectNames::single(EnglishCardName::new("Left Room".into()).unwrap());
+    left.enchantment_subtypes.insert(EnchantmentSubtype::Room);
+    left.triggered.push(TriggeredAbility {
+        id: TriggeredAbilityId(1),
+        condition: TriggerSpec::new(TriggerEvent::DoorUnlocked {
+            subject: ObjectFilter::self_object(),
+            fully_unlocked_only: false,
+            door: None,
+        }),
+        grouping: TriggerGrouping::EachOccurrence,
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                ValueExpr::literal(3),
+            )))],
+        ),
+    });
+
+    let mut right = Program::enchantment(Some(ManaCost::free()));
+    right.names = ObjectNames::single(EnglishCardName::new("Right Room".into()).unwrap());
+    right.enchantment_subtypes.insert(EnchantmentSubtype::Room);
+    right.triggered.push(TriggeredAbility {
+        id: TriggeredAbilityId(1),
+        condition: TriggerSpec::new(TriggerEvent::DoorUnlocked {
+            subject: ObjectFilter::self_object(),
+            fully_unlocked_only: false,
+            door: None,
+        }),
+        grouping: TriggerGrouping::EachOccurrence,
+        body: ExecutableBody::new(
+            BodyTarget::None,
+            vec![Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                ValueExpr::literal(5),
+            )))],
+        ),
+    });
+
+    let room = validated(
+        SplitCard {
+            left,
+            right,
+            aftermath: false,
+        }
+        .into_program()
+        .expect("Room split card must combine"),
+        &vocab,
+    );
+    // Unlock abilities are appended as ActivatedAbilityId(1) (Left) and ActivatedAbilityId(2) (Right).
+    assert_eq!(room.activated.len(), 2);
+
+    let game = init_world(vocab, vec![in_hand(1, P0, room)]);
+    let cast = submit(
+        &game,
+        P0,
+        GameCommand::CastWithResources {
+            spell: object(&game, 1),
+            target: None,
+            payment: CastingPayment {
+                chosen_x: None,
+                hybrid_choices: Vec::new(),
+                fixed_targets: Vec::new(),
+                permanent_targets: Vec::new(),
+                target_division: Vec::new(),
+                modes: Vec::new(),
+                adventure: false,
+                split_half: Some(SplitHalf::Left),
+                disturb: false,
+                modal_back: false,
+                prototype: false,
+                prepare: false,
+                splice: vec![],
+                exile_cast_type: None,
+                alternative_cost_source: None,
+                graveyard_permission: None,
+                use_alternative: false,
+                use_granted_flashback: false,
+                additional: BTreeMap::new(),
+                mana: Some(ManaPayment::default()),
+                restricted_mana: Vec::new(),
+                objects: Vec::new(),
+            },
+        },
+    );
+    // Resolve permanent spell (Left door unlocks and triggers Left's +3 life, NOT Right's +5).
+    let entered = pass_pair(cast.state());
+    let after_left_trigger = pass_pair(entered.state()).into_state();
+    assert_eq!(
+        after_left_trigger.execution().life_total(P0),
+        Some(&RulesInteger::from(23)),
+        "casting Left Room must fire only Left door's unlock trigger (+3 life)"
+    );
+
+    let room_bf = object(&after_left_trigger, 1);
+    let eval_left = after_left_trigger
+        .execution()
+        .evaluated_characteristics()
+        .expect("evaluate characteristics");
+    let view_left = eval_left.get(room_bf).expect("room on battlefield");
+    assert!(
+        view_left
+            .current_names
+            .iter()
+            .any(|n| n.as_str() == "Left Room"),
+        "CR 709.5e: unlocked Left door name must be present on battlefield"
+    );
+    assert!(
+        !view_left
+            .current_names
+            .iter()
+            .any(|n| n.as_str() == "Right Room"),
+        "CR 709.5e: locked Right door name must be absent on battlefield"
+    );
+
+    // Attempting to unlock already-unlocked Left door (ActivatedAbilityId(1)) must fail.
+    let err = attempt(
+        &after_left_trigger,
+        P0,
+        GameCommand::ActivateUntargetedAbility {
+            source: room_bf,
+            ability: ActivatedAbilityId(1),
+            payment: Some(ManaPayment::default()),
+        },
+    );
+    assert!(
+        err.is_err(),
+        "unlocking an already-unlocked door must be rejected"
+    );
+
+    // Unlock locked Right door (ActivatedAbilityId(2)) as a sorcery.
+    let unlock_right = submit(
+        &after_left_trigger,
+        P0,
+        GameCommand::ActivateUntargetedAbility {
+            source: room_bf,
+            ability: ActivatedAbilityId(2),
+            payment: Some(ManaPayment::default()),
+        },
+    );
+    let after_unlock = pass_pair(unlock_right.state());
+    let after_right_trigger = pass_pair(after_unlock.state()).into_state();
+    assert_eq!(
+        after_right_trigger.execution().life_total(P0),
+        Some(&RulesInteger::from(28)),
+        "unlocking Right Room must fire only Right door's unlock trigger (+5 life -> 28)"
+    );
+    let eval_both = after_right_trigger
+        .execution()
+        .evaluated_characteristics()
+        .expect("evaluate both doors");
+    let view_both = eval_both.get(room_bf).expect("room on battlefield");
+    assert!(
+        view_both
+            .current_names
+            .iter()
+            .any(|n| n.as_str() == "Left Room")
+            && view_both
+                .current_names
+                .iter()
+                .any(|n| n.as_str() == "Right Room"),
+        "CR 709.5e: both door names must be present once fully unlocked"
+    );
+}
+
+#[test]
+fn phase11_foreach_player_query_relocates_inner_jumps() {
+    let vocab = vocabulary();
+    // Each player: if loop player's life >= 20, gain 2 life (jump past on false).
+    // First reduce P1's life to 18 so P0 takes the true branch (20 -> 22) and P1 takes the false branch (stays 18).
+    let spell = validated(
+        Program::sorcery(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![
+                    Instruction::AdjustLife(Box::new(AdjustLifeSpec::lose(
+                        PlayerSelector::Group(AffectedPlayers::EachOpponent),
+                        ValueExpr::literal(2),
+                    ))),
+                    Instruction::ForEachPlayerQuery {
+                        selector: Box::new(PlayerSelector::Group(AffectedPlayers::EachPlayer)),
+                        bind_player: BindingId::LOOP_PLAYER,
+                        body: Box::new(ExecutableBody::new(
+                            BodyTarget::None,
+                            vec![
+                                Instruction::BranchCondition {
+                                    condition: Box::new(ConditionExpr::Compare {
+                                        left: Box::new(ValueExpr::PlayerStat(
+                                            spellwake_engine::program::PlayerStatExpr::PlayerLife(
+                                                ResolvingPlayer::LoopPlayer,
+                                            ),
+                                        )),
+                                        op: spellwake_engine::program::Comparison::GreaterOrEqual,
+                                        right: Box::new(ValueExpr::literal(20)),
+                                    }),
+                                    destination: 2,
+                                },
+                                Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                                    PlayerSelector::Resolving(ResolvingPlayer::LoopPlayer),
+                                    ValueExpr::literal(2),
+                                ))),
+                            ],
+                        )),
+                    },
+                ],
+            ),
+        ),
+        &vocab,
+    );
+    let game = init_world(vocab, vec![in_hand(1, P0, spell)]);
+    let resolved = cast_untargeted(&game, 1).into_state();
+    assert_eq!(
+        resolved.execution().life_total(P0),
+        Some(&RulesInteger::from(22)),
+        "P0 (life 20 >= 20) must gain 2 life inside ForEachPlayerQuery"
+    );
+    assert_eq!(
+        resolved.execution().life_total(P1),
+        Some(&RulesInteger::from(18)),
+        "P1 (life 18 < 20) must take relocated skip jump and stay at 18"
+    );
+}

@@ -266,6 +266,10 @@ impl GameObject {
     pub fn controller(&self) -> Option<SeatId> {
         self.controller
     }
+    /// Selected half of a split spell on the stack (CR 709.3).
+    pub(crate) fn split_half(&self) -> Option<crate::program::SplitHalf> {
+        self.split_half
+    }
     /// Malformed appearance probe only; no admitted registry transition uses this.
     #[cfg(test)]
     pub(crate) fn qualification_without_controller(&self) -> Self {

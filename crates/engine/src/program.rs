@@ -3304,40 +3304,356 @@ impl SplitCard {
         }
     }
 
-    /// Combine the two names, mana costs and spell types outside the stack (CR 709.4).
+    /// Whether this split card is a Duskmourn Room permanent with two Room doors (CR 709.5).
+    #[must_use]
+    pub fn is_room(&self) -> bool {
+        !self.aftermath
+            && self.left.permanent().is_some()
+            && self.right.permanent().is_some()
+            && self
+                .left
+                .enchantment_subtypes
+                .contains(&EnchantmentSubtype::Room)
+            && self
+                .right
+                .enchantment_subtypes
+                .contains(&EnchantmentSubtype::Room)
+    }
+
+    /// Combine the two names, mana costs and spell/permanent characteristics outside the stack (CR 709.4, 709.5).
     pub fn into_program(self) -> Option<Program> {
-        let ProgramKind::Spell(left) = &self.left.kind else {
-            return None;
-        };
-        let ProgramKind::Spell(right) = &self.right.kind else {
-            return None;
-        };
-        let mut combined = self.left.clone();
-        let ProgramKind::Spell(spell) = &mut combined.kind else {
-            return None;
-        };
-        spell.cost.generic = left.cost.generic.plus(&right.cost.generic);
-        spell.uncastable_mana_cost = left.uncastable_mana_cost && right.uncastable_mana_cost;
-        for (mana, amount) in &right.cost.required {
-            let total = spell.cost.required.entry(*mana).or_insert_with(|| 0.into());
-            *total = total.plus(amount);
+        match (&self.left.kind, &self.right.kind) {
+            (ProgramKind::Spell(left), ProgramKind::Spell(right)) => {
+                let mut combined = self.left.clone();
+                let ProgramKind::Spell(spell) = &mut combined.kind else {
+                    return None;
+                };
+                spell.cost.generic = left.cost.generic.plus(&right.cost.generic);
+                spell.uncastable_mana_cost =
+                    left.uncastable_mana_cost && right.uncastable_mana_cost;
+                for (mana, amount) in &right.cost.required {
+                    let total = spell.cost.required.entry(*mana).or_insert_with(|| 0.into());
+                    *total = total.plus(amount);
+                }
+                combined.names.add(&self.right.names);
+                combined
+                    .hybrid_symbols
+                    .extend_from_slice(&self.right.hybrid_symbols);
+                combined
+                    .card_types
+                    .extend(self.right.card_types.iter().copied());
+                combined
+                    .spell_subtypes
+                    .extend(self.right.spell_subtypes.iter().copied());
+                combined.x_mana_symbols = self
+                    .left
+                    .x_mana_symbols
+                    .checked_add(self.right.x_mana_symbols)?;
+                combined.split = Some(Box::new(self));
+                Some(combined)
+            }
+            (ProgramKind::Permanent(left_perm), ProgramKind::Permanent(right_perm))
+                if self.is_room() =>
+            {
+                let left_cost = left_perm.casting_cost.clone()?;
+                let right_cost = right_perm.casting_cost.clone()?;
+                let mut combined = self.left.clone();
+                let ProgramKind::Permanent(perm) = &mut combined.kind else {
+                    return None;
+                };
+                let mut total_cost = left_cost.clone();
+                total_cost.generic = total_cost.generic.plus(&right_cost.generic);
+                for (mana, amount) in &right_cost.required {
+                    let entry = total_cost.required.entry(*mana).or_insert_with(|| 0.into());
+                    *entry = entry.plus(amount);
+                }
+                perm.casting_cost = Some(total_cost);
+                if perm.entry_tap.is_none() {
+                    perm.entry_tap = right_perm.entry_tap;
+                }
+                combined.names.add(&self.right.names);
+                combined
+                    .hybrid_symbols
+                    .extend_from_slice(&self.right.hybrid_symbols);
+                combined
+                    .supertypes
+                    .extend(self.right.supertypes.iter().copied());
+                combined
+                    .card_types
+                    .extend(self.right.card_types.iter().copied());
+                combined
+                    .creature_subtypes
+                    .extend(self.right.creature_subtypes.iter().copied());
+                combined
+                    .land_subtypes
+                    .extend(self.right.land_subtypes.iter().copied());
+                combined
+                    .spell_subtypes
+                    .extend(self.right.spell_subtypes.iter().copied());
+                combined
+                    .artifact_subtypes
+                    .extend(self.right.artifact_subtypes.iter().copied());
+                combined
+                    .enchantment_subtypes
+                    .extend(self.right.enchantment_subtypes.iter().copied());
+                combined
+                    .planeswalker_subtypes
+                    .extend(self.right.planeswalker_subtypes.iter().copied());
+                combined
+                    .printed_keywords
+                    .extend(self.right.printed_keywords.iter().copied());
+                combined.x_mana_symbols = self
+                    .left
+                    .x_mana_symbols
+                    .checked_add(self.right.x_mana_symbols)?;
+
+                let gate_static =
+                    |existing: Option<crate::characteristics::StaticSourceCondition>,
+                     half: SplitHalf| {
+                        let door =
+                            crate::characteristics::StaticSourceCondition::RoomDoorUnlocked(half);
+                        match existing {
+                            Some(prev) => crate::characteristics::StaticSourceCondition::And(
+                                Box::new(door),
+                                Box::new(prev),
+                            ),
+                            None => door,
+                        }
+                    };
+                let gate_trigger = |mut trig: TriggeredAbility, half: SplitHalf| {
+                    if let TriggerEvent::DoorUnlocked {
+                        subject,
+                        fully_unlocked_only: false,
+                        door,
+                    } = &mut trig.condition.event
+                        && *subject == ObjectFilter::self_object()
+                    {
+                        *door = Some(half);
+                    } else if trig.condition.zone == TriggerZone::Battlefield {
+                        let req = TriggerCondition::RoomDoorUnlocked(half);
+                        trig.condition.intervening_if = match trig.condition.intervening_if.take() {
+                            Some(prev) => {
+                                Some(TriggerCondition::And(Box::new(req), Box::new(prev)))
+                            }
+                            None => Some(req),
+                        };
+                    }
+                    trig
+                };
+                let gate_activation =
+                    |existing: Option<crate::activated::ActivationRestriction>,
+                     req: crate::activated::ActivationRestriction| {
+                        match existing {
+                            Some(crate::activated::ActivationRestriction::All(mut items)) => {
+                                items.insert(0, req);
+                                crate::activated::ActivationRestriction::All(items)
+                            }
+                            Some(prev) => {
+                                crate::activated::ActivationRestriction::All(vec![req, prev])
+                            }
+                            None => req,
+                        }
+                    };
+
+                // Gate Left static abilities, triggers, and activated abilities on Left door unlocked.
+                let left_static_ids: Vec<_> = combined
+                    .continuous
+                    .iter()
+                    .chain(&combined.additional_battlefield_abilities)
+                    .map(|a| a.id())
+                    .collect();
+                for id in &left_static_ids {
+                    let prev = combined.static_conditions.remove(id);
+                    combined
+                        .static_conditions
+                        .insert(*id, gate_static(prev, SplitHalf::Left));
+                }
+                let mut next_static = left_static_ids
+                    .iter()
+                    .map(|id| id.0)
+                    .max()
+                    .map_or(1, |m| m.saturating_add(1));
+
+                for ability in self
+                    .right
+                    .continuous
+                    .iter()
+                    .chain(&self.right.additional_battlefield_abilities)
+                {
+                    let old_id = ability.id();
+                    let new_id = crate::characteristics::StaticAbilityId(next_static);
+                    next_static = next_static.saturating_add(1);
+                    let shifted = ability.clone().with_component_id(new_id);
+                    if combined.continuous.is_none() {
+                        combined.continuous = Some(shifted);
+                    } else if shifted.allowed_as_additional() {
+                        combined.additional_battlefield_abilities.push(shifted);
+                    } else {
+                        return None;
+                    }
+                    let prev = self.right.static_conditions.get(&old_id).cloned();
+                    combined
+                        .static_conditions
+                        .insert(new_id, gate_static(prev, SplitHalf::Right));
+                }
+
+                // Gate Left triggers and shift + gate Right triggers.
+                combined.triggered = combined
+                    .triggered
+                    .into_iter()
+                    .map(|t| gate_trigger(t, SplitHalf::Left))
+                    .collect();
+                let mut next_trig = combined
+                    .triggered
+                    .iter()
+                    .map(|t| t.id.0)
+                    .max()
+                    .map_or(1, |m| m.saturating_add(1));
+                for mut trig in self.right.triggered.clone() {
+                    trig.id = TriggeredAbilityId(next_trig);
+                    next_trig = next_trig.saturating_add(1);
+                    combined
+                        .triggered
+                        .push(gate_trigger(trig, SplitHalf::Right));
+                }
+
+                // Shift Right mana abilities.
+                let mut next_mana = combined
+                    .mana
+                    .iter()
+                    .map(|m| m.id.0)
+                    .max()
+                    .map_or(1, |m| m.saturating_add(1));
+                for mut mana in self.right.mana.clone() {
+                    mana.id = crate::mana::ManaAbilityId(next_mana);
+                    next_mana = next_mana.saturating_add(1);
+                    combined.mana.push(mana);
+                }
+
+                // Shift Right zone replacements.
+                let mut next_zr = combined
+                    .zone_replacements
+                    .iter()
+                    .map(|z| z.id.0)
+                    .max()
+                    .map_or(1, |m| m.saturating_add(1));
+                for mut zr in self.right.zone_replacements.clone() {
+                    let old_id = zr.id;
+                    let new_id = ZoneReplacementAbilityId(next_zr);
+                    next_zr = next_zr.saturating_add(1);
+                    zr.id = new_id;
+                    combined.zone_replacements.push(zr);
+                    if let Some(extra) = self.right.zone_replacement_extras.get(&old_id) {
+                        combined
+                            .zone_replacement_extras
+                            .insert(new_id, extra.clone());
+                    }
+                }
+
+                // Gate Left activated abilities and shift + gate Right activated abilities.
+                let left_act_ids: Vec<_> = combined.activated.iter().map(|a| a.id).collect();
+                for id in left_act_ids {
+                    let prev = combined.activation_restrictions.remove(&id);
+                    combined.activation_restrictions.insert(
+                        id,
+                        gate_activation(
+                            prev,
+                            crate::activated::ActivationRestriction::RoomDoorUnlocked(
+                                SplitHalf::Left,
+                            ),
+                        ),
+                    );
+                }
+                let mut next_act = combined
+                    .activated
+                    .iter()
+                    .map(|a| a.id.0)
+                    .max()
+                    .map_or(1, |m| m.saturating_add(1));
+                for mut act in self.right.activated.clone() {
+                    let old_id = act.id;
+                    let new_id = crate::activated::ActivatedAbilityId(next_act);
+                    next_act = next_act.saturating_add(1);
+                    act.id = new_id;
+                    combined.activated.push(act);
+                    let prev = self.right.activation_restrictions.get(&old_id).cloned();
+                    combined.activation_restrictions.insert(
+                        new_id,
+                        gate_activation(
+                            prev,
+                            crate::activated::ActivationRestriction::RoomDoorUnlocked(
+                                SplitHalf::Right,
+                            ),
+                        ),
+                    );
+                    if let Some(v) = self.right.activation_modes.get(&old_id) {
+                        combined.activation_modes.insert(new_id, v.clone());
+                    }
+                    if let Some(v) = self.right.activation_hybrid_symbols.get(&old_id) {
+                        combined.activation_hybrid_symbols.insert(new_id, v.clone());
+                    }
+                    if let Some(v) = self.right.extra_activation_costs.get(&old_id) {
+                        combined.extra_activation_costs.insert(new_id, v.clone());
+                    }
+                    if let Some(v) = self.right.activation_cost_reductions.get(&old_id) {
+                        combined
+                            .activation_cost_reductions
+                            .insert(new_id, v.clone());
+                    }
+                    if let Some(v) = self.right.activation_target_cost_reductions.get(&old_id) {
+                        combined
+                            .activation_target_cost_reductions
+                            .insert(new_id, *v);
+                    }
+                    if let Some(v) = self.right.loyalty_costs.get(&old_id) {
+                        combined.loyalty_costs.insert(new_id, *v);
+                    }
+                    if self.right.variable_loyalty_costs.contains(&old_id) {
+                        combined.variable_loyalty_costs.insert(new_id);
+                    }
+                }
+
+                // Append sorcery-speed door unlock abilities for both doors (CR 709.5e).
+                for (half, cost, hybrids) in [
+                    (SplitHalf::Left, left_cost, &self.left.hybrid_symbols),
+                    (SplitHalf::Right, right_cost, &self.right.hybrid_symbols),
+                ] {
+                    let unlock_id = crate::activated::ActivatedAbilityId(next_act);
+                    next_act = next_act.saturating_add(1);
+                    combined.activated.push(crate::activated::ActivatedAbility {
+                        id: unlock_id,
+                        mana_cost: cost,
+                        source_cost: crate::activated::SourceCost::None,
+                        body: ExecutableBody::new(
+                            BodyTarget::None,
+                            vec![Instruction::MutateObject(Box::new(
+                                crate::toolbox::MutateObjectSpec::unlock_door(
+                                    crate::toolbox::ObjectQuery::Source,
+                                    Some(half),
+                                    false,
+                                ),
+                            ))],
+                        ),
+                    });
+                    if !hybrids.is_empty() {
+                        combined
+                            .activation_hybrid_symbols
+                            .insert(unlock_id, hybrids.clone());
+                    }
+                    combined.activation_restrictions.insert(
+                        unlock_id,
+                        crate::activated::ActivationRestriction::All(vec![
+                            crate::activated::ActivationRestriction::Sorcery,
+                            crate::activated::ActivationRestriction::RoomDoorLocked(half),
+                        ]),
+                    );
+                }
+
+                combined.split = Some(Box::new(self));
+                Some(combined)
+            }
+            _ => None,
         }
-        combined.names.add(&self.right.names);
-        combined
-            .hybrid_symbols
-            .extend_from_slice(&self.right.hybrid_symbols);
-        combined
-            .card_types
-            .extend(self.right.card_types.iter().copied());
-        combined
-            .spell_subtypes
-            .extend(self.right.spell_subtypes.iter().copied());
-        combined.x_mana_symbols = self
-            .left
-            .x_mana_symbols
-            .checked_add(self.right.x_mana_symbols)?;
-        combined.split = Some(Box::new(self));
-        Some(combined)
     }
 }
 
@@ -6389,13 +6705,47 @@ impl ExecutableBody {
                     query, body: inner, ..
                 } => {
                     query.validate_vocabulary(vocabulary)?;
-                    let family = validate_toolbox_object_query(
+                    let mut family = validate_toolbox_object_query(
                         query,
                         context,
                         self.target,
                         facts.definitely_exiled_target,
                     )?;
-                    inner.validate(vocabulary)?;
+                    if inner.validate_in(vocabulary, context).is_err() {
+                        if self.target == BodyTarget::None || inner.target != BodyTarget::None {
+                            inner.validate_in(vocabulary, context)?;
+                        } else {
+                            let mut inherited = inner.as_ref().clone();
+                            inherited.target = self.target;
+                            inherited.validate_in(vocabulary, context)?;
+                            let inherited_fam = match self.target {
+                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
+                                    Some(OperandFamily::Player)
+                                }
+                                BodyTarget::SingleCreature
+                                | BodyTarget::SinglePermanent
+                                | BodyTarget::SinglePlaneswalker
+                                | BodyTarget::FilteredPermanent(_) => {
+                                    Some(OperandFamily::Permanent)
+                                }
+                                BodyTarget::SingleAnyTarget
+                                | BodyTarget::SingleCreatureOrPlayer
+                                | BodyTarget::SinglePlayerOrPlaneswalker
+                                | BodyTarget::SingleOpponentOrPlaneswalker => {
+                                    Some(OperandFamily::DamageRecipient)
+                                }
+                                BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
+                                BodyTarget::SingleStackEntry
+                                | BodyTarget::SingleStackObject(_)
+                                | BodyTarget::ControlledAbility { .. }
+                                | BodyTarget::StackEntryTargetingControlledPermanent => {
+                                    Some(OperandFamily::StackEntry)
+                                }
+                                _ => Some(OperandFamily::GraveyardCard),
+                            };
+                            family = merge_family(family, inherited_fam)?;
+                        }
+                    }
                     family
                 }
                 Instruction::ForEachPlayerQuery {
@@ -6404,7 +6754,7 @@ impl ExecutableBody {
                     ..
                 } => {
                     selector.validate_vocabulary(vocabulary)?;
-                    let family = validate_toolbox_player_selector(
+                    let mut family = validate_toolbox_player_selector(
                         selector,
                         context,
                         self.target,
@@ -6461,7 +6811,41 @@ impl ExecutableBody {
                             }
                         }
                     }
-                    inner.validate(vocabulary)?;
+                    if inner.validate_in(vocabulary, context).is_err() {
+                        if self.target == BodyTarget::None || inner.target != BodyTarget::None {
+                            inner.validate_in(vocabulary, context)?;
+                        } else {
+                            let mut inherited = inner.as_ref().clone();
+                            inherited.target = self.target;
+                            inherited.validate_in(vocabulary, context)?;
+                            let inherited_fam = match self.target {
+                                BodyTarget::SinglePlayer | BodyTarget::SingleOpponent => {
+                                    Some(OperandFamily::Player)
+                                }
+                                BodyTarget::SingleCreature
+                                | BodyTarget::SinglePermanent
+                                | BodyTarget::SinglePlaneswalker
+                                | BodyTarget::FilteredPermanent(_) => {
+                                    Some(OperandFamily::Permanent)
+                                }
+                                BodyTarget::SingleAnyTarget
+                                | BodyTarget::SingleCreatureOrPlayer
+                                | BodyTarget::SinglePlayerOrPlaneswalker
+                                | BodyTarget::SingleOpponentOrPlaneswalker => {
+                                    Some(OperandFamily::DamageRecipient)
+                                }
+                                BodyTarget::SingleSpell(_) => Some(OperandFamily::Spell),
+                                BodyTarget::SingleStackEntry
+                                | BodyTarget::SingleStackObject(_)
+                                | BodyTarget::ControlledAbility { .. }
+                                | BodyTarget::StackEntryTargetingControlledPermanent => {
+                                    Some(OperandFamily::StackEntry)
+                                }
+                                _ => Some(OperandFamily::GraveyardCard),
+                            };
+                            family = merge_family(family, inherited_fam)?;
+                        }
+                    }
                     family
                 }
                 Instruction::BindEnv { .. } => None,
@@ -10737,8 +11121,12 @@ impl Program {
             return Err(DefinitionError::UnsupportedPlaneswalker);
         }
         if let Some(split) = &self.split {
+            let is_room = split.is_room();
             for half in [&split.left, &split.right] {
-                if half.split.is_some() || half.adventure.is_some() || half.permanent().is_some() {
+                if half.split.is_some()
+                    || half.adventure.is_some()
+                    || (!is_room && half.permanent().is_some())
+                {
                     return Err(DefinitionError::InvalidInstruction);
                 }
                 half.validate(vocabulary)?;
