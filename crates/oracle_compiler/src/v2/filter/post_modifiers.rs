@@ -24,6 +24,55 @@ pub(super) fn parse_filter_post_modifiers(
     flt: &mut ObjectFilter,
 ) -> PResult<()> {
     loop {
+        if ts.eat_phrase(&["exiled", "from", "their", "hand", "this", "way"])
+            || ts.eat_phrase(&["exiled", "from", "your", "hand", "this", "way"])
+            || ts.eat_phrase(&["exiled", "from", "that", "player's", "hand", "this", "way"])
+        {
+            flt.predicates.push(FilterPredicate::AffectedByPriorAction(
+                PriorActionKind::ExiledThisWay,
+            ));
+            flt.zones.push(ZoneRef {
+                zone: ZoneKind::Hand,
+                owner: ZoneOwner::ThatPlayer,
+            });
+            continue;
+        }
+        if ts.eat_phrase(&[
+            "that",
+            "doesn't",
+            "have",
+            "the",
+            "same",
+            "name",
+            "as",
+            "another",
+            "permanent",
+            "you",
+            "control",
+        ]) {
+            flt.flags = flt.flags.union(FilterFlags::DIFFERENT_NAMES);
+            continue;
+        }
+        {
+            let ncp = ts.checkpoint();
+            if (ts.eat_phrase(&["that", "doesn't", "have"])
+                || ts.eat_phrase(&["that", "don't", "have"]))
+                && (ts.eat_word("a") || ts.eat_word("an"))
+                && let Ok(ck) = try_parse(ts, parse_counter_kind)
+                && (ts.eat_word("counter") || ts.eat_word("counters"))
+                && (ts.eat_phrase(&["on", "it"]) || ts.eat_phrase(&["on", "them"]))
+            {
+                flt.predicates
+                    .push(FilterPredicate::Exclude(Box::new(SubjectRef::Group(
+                        Box::new(ObjectFilter {
+                            predicates: vec![FilterPredicate::HasCounterKind(ck)],
+                            ..Default::default()
+                        }),
+                    ))));
+                continue;
+            }
+            ts.restore(ncp);
+        }
         if ts.eat_phrase(&["not", "cast", "this", "way"])
             || ts.eat_phrase(&["not", "put", "onto", "the", "battlefield", "this", "way"])
         {
@@ -55,6 +104,26 @@ pub(super) fn parse_filter_post_modifiers(
         }
         if ts.eat_phrase(&["defending", "player", "controls"]) {
             flt.controller = Some(ControllerRelation::DefendingPlayer);
+            continue;
+        }
+        if ts.eat_phrase(&["enchanted", "player", "controls"]) {
+            flt.controller = Some(ControllerRelation::Opponent);
+            continue;
+        }
+        if ts.eat_phrase(&["that's", "enchanted", "or", "equipped"])
+            || ts.eat_phrase(&["that", "is", "enchanted", "or", "equipped"])
+            || ts.eat_phrase(&["that's", "equipped", "or", "enchanted"])
+        {
+            flt.predicates.push(FilterPredicate::AnyOf(vec![
+                ObjectFilter {
+                    flags: FilterFlags::ENCHANTED,
+                    ..Default::default()
+                },
+                ObjectFilter {
+                    flags: FilterFlags::EQUIPPED,
+                    ..Default::default()
+                },
+            ]));
             continue;
         }
         if ts.eat_phrase(&["on", "the", "battlefield"]) {

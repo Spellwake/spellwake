@@ -2823,3 +2823,427 @@ fn v2_wave7_compositional_grammar_deep_ir_assertions() {
         Some(StaticAbility::ActivationCostModifier { less: true, .. })
     ));
 }
+
+/// 11. Deep Wave 8 compositional IR assertions (zero new core IR enum variants,
+///     `replacement/` modular split): Necrotic Ooze / Trazyn ability-copying,
+///     Once-each-turn {0} alternate cost (`As Foretold`, `Darksteel Monolith`),
+///     `Silence` / `Alchemist's Refuge` flash/restriction durations, `Command Tower` / `Arcane Signet`,
+///     `Doomsday` / `Gifts Ungiven`, `Giver of Runes`, `Ghyrson Starn` / `Tamanoa`,
+///     `Solphim` / `Lashknife Barrier` / `Szadek` damage replacements, `Grist` / `Maha`,
+///     `Delirium` zero-regression guard, and `Equipment` token creation (`Mabel`).
+#[test]
+fn v2_wave8_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        CastPermissionMode, ConditionExpr, DamageReplacement, Duration, FilterFlags, KeywordKind,
+        KeywordParam, KeywordSpec, LibraryPosition, ManaSpec, ObjectMutation, PlayerMutation,
+        PlayerObjectTriggerKind, PlayerRestrictionKind, PlayerTriggerKind, Replacement,
+        RuleRestrictionKind, StaticAbility, SubjectStaticRule, TriggerEvent, ValueExpr,
+        ZoneMetricKind, ZoneOpKind,
+    };
+    let vocab_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("content")
+        .join("tests")
+        .join("fixtures")
+        .join("creature-vocabulary.input.json");
+    let vocab = Vocabulary::load_from_file(&vocab_path).expect("load CR creature vocabulary");
+
+    let wave8_cards: &[(&str, &str, &str)] = &[
+        (
+            "Necrotic Ooze",
+            "Creature - Ooze",
+            "As long as Necrotic Ooze is on the battlefield, it has all activated abilities of all creature cards in all graveyards.",
+        ),
+        (
+            "As Foretold",
+            "Enchantment",
+            "At the beginning of your upkeep, put a time counter on As Foretold.\nOnce each turn, you may pay {0} rather than pay the mana cost for a spell you cast with mana value X or less, where X is the number of time counters on As Foretold.",
+        ),
+        (
+            "Solphim, Mayhem Dominus",
+            "Legendary Creature - Phyrexian Horror",
+            "If a source you control would deal noncombat damage to an opponent or a permanent an opponent controls, it deals double that damage to that player or permanent instead.\n{1}{R/P}{R/P}, Discard two cards: Put an indestructible counter on Solphim, Mayhem Dominus.",
+        ),
+        (
+            "Lashknife Barrier",
+            "Enchantment",
+            "When Lashknife Barrier enters, draw a card.\nIf a source would deal damage to a creature you control, it deals that much damage minus 1 to that creature instead.",
+        ),
+        (
+            "Szadek, Lord of Secrets",
+            "Legendary Creature - Vampire",
+            "Flying\nIf Szadek, Lord of Secrets would deal combat damage to a player, instead put that many +1/+1 counters on Szadek, Lord of Secrets and that player mills that many cards.",
+        ),
+        (
+            "Silence",
+            "Instant",
+            "Your opponents can't cast spells this turn.",
+        ),
+        (
+            "Alchemist's Refuge",
+            "Land",
+            "{T}: Add {C}.\n{G}{U}, {T}: You may cast spells this turn as though they had flash.",
+        ),
+        (
+            "Due Respect",
+            "Instant",
+            "Permanents enter tapped this turn.\nDraw a card.",
+        ),
+        (
+            "Command Tower",
+            "Land",
+            "{T}: Add one mana of any color in your commander's color identity.",
+        ),
+        (
+            "Arcane Signet",
+            "Artifact",
+            "{T}: Add one mana of any color in your commander's color identity.",
+        ),
+        (
+            "Giver of Runes",
+            "Creature - Kor Cleric",
+            "{T}: Another target creature you control gains protection from colorless or from the color of your choice until end of turn.",
+        ),
+        (
+            "Doomsday",
+            "Sorcery",
+            "Search your library and graveyard for five cards and exile the rest. Put the chosen cards on top of your library in any order. You lose half your life, rounded up.",
+        ),
+        (
+            "Gifts Ungiven",
+            "Instant",
+            "Search your library for up to four cards with different names and reveal them. Target opponent chooses two of those cards. Put the chosen cards into your graveyard and the rest into your hand. Then shuffle.",
+        ),
+        (
+            "Ghyrson Starn, Kelermorph",
+            "Legendary Creature - Tyranid Human",
+            "Ward {2}\nThree Autostubs \u{2014} Whenever another source you control deals exactly 1 damage to a permanent or player, Ghyrson Starn, Kelermorph deals 2 damage to that permanent or player.",
+        ),
+        (
+            "Forbidden Orchard",
+            "Land",
+            "{T}: Add one mana of any color.\nWhenever you tap Forbidden Orchard for mana, target opponent creates a 1/1 colorless Spirit creature token.",
+        ),
+        (
+            "Encroaching Mycosynth",
+            "Artifact",
+            "Nonland permanents you control are artifacts in addition to their other types. The same is true for permanent spells you control and nonland permanent cards you own that aren't on the battlefield.",
+        ),
+        (
+            "Anje, Maid of Dishonor",
+            "Legendary Creature - Vampire",
+            "Whenever Anje, Maid of Dishonor and/or one or more other Vampires you control enter, create a Blood token. This ability triggers only once each turn.\n{2}, Sacrifice another creature or a Blood token: Each opponent loses 2 life and you gain 2 life.",
+        ),
+        (
+            "Trespasser's Curse",
+            "Enchantment - Aura Curse",
+            "Enchant player\nWhenever a creature enchanted player controls enters, that player loses 1 life and you gain 1 life.",
+        ),
+        (
+            "Diffusion Sliver",
+            "Creature - Sliver",
+            "Whenever a Sliver creature you control becomes the target of a spell or ability an opponent controls, counter that spell or ability unless its controller pays {2}.",
+        ),
+        (
+            "Demonfire",
+            "Sorcery",
+            "Demonfire deals X damage to any target. If a creature dealt damage this way would die this turn, exile it instead.\nHellbent \u{2014} If you have no cards in hand, this spell can't be countered and the damage can't be prevented.",
+        ),
+        (
+            "Oko, the Ringleader",
+            "Legendary Planeswalker - Oko",
+            "At the beginning of combat on your turn, Oko, the Ringleader becomes a copy of up to one target creature you control until end of turn, except it has hexproof.\n+1: Draw two cards. If you've committed a crime this turn, discard a card. Otherwise, discard two cards.\n-1: Create a 3/3 green Elk creature token.\n-5: For each other nonland permanent you control, create a token that's a copy of it.",
+        ),
+        (
+            "Grist, the Hunger Tide",
+            "Legendary Planeswalker - Grist",
+            "As long as Grist, the Hunger Tide isn't on the battlefield, it's a 1/1 Insect creature in addition to its other types.\n+1: Create a 1/1 black and green Insect creature token, then mill a card. If an Insect card was milled this way, put a loyalty counter on Grist, the Hunger Tide and repeat this process.\n-2: You may sacrifice a creature. When you do, destroy target creature or planeswalker.\n-5: Each opponent loses life equal to the number of creature cards in your graveyard.",
+        ),
+        (
+            "Maha, Its Feathers Night",
+            "Legendary Creature - Elemental Bird",
+            "Flying, trample\nWard\u{2014}Discard a card.\nCreatures your opponents control have base toughness 1.",
+        ),
+        (
+            "Mabel, Heir to Cragflame",
+            "Legendary Creature - Mouse Soldier",
+            "Other Mice you control get +1/+1.\nWhen Mabel, Heir to Cragflame enters, create Cragflame, a legendary colorless Equipment artifact token with \"Equipped creature gets +1/+1 and has vigilance, trample, and haste\" and equip {2}.",
+        ),
+        (
+            "Jadelight Ranger",
+            "Creature - Merfolk Scout",
+            "When Jadelight Ranger enters, it explores, then it explores again.",
+        ),
+        (
+            "Arcane Bombardment",
+            "Enchantment",
+            "Whenever you cast your first instant or sorcery spell each turn, exile an instant or sorcery card at random from your graveyard. Then copy each card exiled with Arcane Bombardment. You may cast any number of the copies without paying their mana costs.",
+        ),
+        (
+            "Dragon's Rage Channeler",
+            "Creature - Human Shaman",
+            "Whenever you cast a noncreature spell, surveil 1.\nDelirium \u{2014} As long as there are four or more card types among cards in your graveyard, Dragon's Rage Channeler gets +2/+2, has flying, and attacks each combat if able.",
+        ),
+        (
+            "Rosie Cotton of South Lane",
+            "Legendary Creature - Halfling Peasant",
+            "When Rosie Cotton of South Lane enters, create a Food token.\nWhenever you create a token, put a +1/+1 counter on target creature you control other than Rosie Cotton of South Lane.",
+        ),
+    ];
+
+    for (name, type_line, oracle_text) in wave8_cards {
+        let compiled = compile_v2_strict(name, type_line, oracle_text, &vocab);
+        assert!(
+            compiled.strictly_compiled,
+            "Wave 8 card `{name}` failed strict v2 compilation: {:#?}",
+            compiled.faces[0].errors
+        );
+    }
+
+    // Deep typed IR assertions on Wave 8 orthogonal compositions:
+    // 1. Necrotic Ooze -> SubjectStaticRule::CopyActivatedAbilities
+    let ooze = compile_v2_strict(
+        "Necrotic Ooze",
+        "Creature - Ooze",
+        "As long as Necrotic Ooze is on the battlefield, it has all activated abilities of all creature cards in all graveyards.",
+        &vocab,
+    );
+    assert!(matches!(
+        ooze.faces[0].statics.as_slice(),
+        [StaticAbility::SubjectRule {
+            rule: SubjectStaticRule::CopyActivatedAbilities(_),
+            condition: Some(_),
+            ..
+        }]
+    ));
+
+    // 2. Lashknife Barrier -> ModifyDamage with negative add (-1)
+    let barrier = compile_v2_strict(
+        "Lashknife Barrier",
+        "Enchantment",
+        "If a source would deal damage to a creature you control, it deals that much damage minus 1 to that creature instead.",
+        &vocab,
+    );
+    assert!(matches!(
+        barrier.faces[0].replacements.as_slice(),
+        [Replacement::ModifyDamage {
+            add: -1,
+            factor: 1,
+            ..
+        }]
+    ));
+
+    // 3. Szadek zero-regression guard (`instead` restored before `parse_instead_clause`)
+    let szadek = compile_v2_strict(
+        "Szadek, Lord of Secrets",
+        "Legendary Creature - Vampire",
+        "If Szadek, Lord of Secrets would deal combat damage to a player, instead put that many +1/+1 counters on Szadek, Lord of Secrets and that player mills that many cards.",
+        &vocab,
+    );
+    assert!(matches!(
+        szadek.faces[0].replacements.as_slice(),
+        [Replacement::EventInstead {
+            event: TriggerEvent::DealsDamage {
+                combat_only: true,
+                ..
+            },
+            instead,
+        }] if instead.len() == 2
+    ));
+
+    // 4. Silence -> ApplyContinuous(CantCastSpells) with Duration::UntilEndOfTurn
+    let silence = compile_v2_strict(
+        "Silence",
+        "Instant",
+        "Your opponents can't cast spells this turn.",
+        &vocab,
+    );
+    assert!(matches!(
+        silence.faces[0].spell_effects.as_slice(),
+        [Effect::ApplyContinuous {
+            effect,
+            duration: Duration::UntilEndOfTurn,
+        }] if matches!(
+            effect.as_ref(),
+            StaticAbility::PlayerRestriction {
+                restriction: PlayerRestrictionKind::CantCastSpells,
+                ..
+            }
+        )
+    ));
+
+    // 5. Alchemist's Refuge -> CastPermissionMode::AsThoughFlash
+    let refuge = compile_v2_strict(
+        "Alchemist's Refuge",
+        "Land",
+        "{G}{U}, {T}: You may cast spells this turn as though they had flash.",
+        &vocab,
+    );
+    assert!(matches!(
+        refuge.faces[0].abilities.as_slice(),
+        [Ability::Activated { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::Optional { body: inner, .. }]
+                    if matches!(
+                        inner.as_slice(),
+                        [Effect::ApplyContinuous { effect, .. }]
+                            if matches!(
+                                effect.as_ref(),
+                                StaticAbility::ZoneCastPermission {
+                                    mode: CastPermissionMode::AsThoughFlash { .. },
+                                    ..
+                                }
+                            )
+                    )
+            )
+    ));
+
+    // 6. Command Tower -> PlayerMutation::AddMana(ManaSpec::AnyColor)
+    let tower = compile_v2_strict(
+        "Command Tower",
+        "Land",
+        "{T}: Add one mana of any color in your commander's color identity.",
+        &vocab,
+    );
+    assert!(matches!(
+        tower.faces[0].abilities.as_slice(),
+        [Ability::Activated { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::MutatePlayer {
+                    mutation: PlayerMutation::AddMana(ManaSpec::AnyColor { .. }),
+                    ..
+                }]
+            )
+    ));
+
+    // 7. Giver of Runes -> Protection with KeywordParam::ChosenColor
+    let giver = compile_v2_strict(
+        "Giver of Runes",
+        "Creature - Kor Cleric",
+        "{T}: Another target creature you control gains protection from colorless or from the color of your choice until end of turn.",
+        &vocab,
+    );
+    assert!(matches!(
+        giver.faces[0].abilities.as_slice(),
+        [Ability::Activated { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::MutateObject {
+                    mutation: ObjectMutation::GrantKeywords(kws),
+                    ..
+                }] if matches!(
+                    kws.as_slice(),
+                    [KeywordSpec {
+                        kind: KeywordKind::Protection,
+                        param: Some(KeywordParam::ChosenColor),
+                    }]
+                )
+            )
+    ));
+
+    // 8. Forbidden Orchard -> PlayerObjectTriggerKind::TappedForMana
+    let orchard = compile_v2_strict(
+        "Forbidden Orchard",
+        "Land",
+        "Whenever you tap Forbidden Orchard for mana, target opponent creates a 1/1 colorless Spirit creature token.",
+        &vocab,
+    );
+    assert!(matches!(
+        orchard.faces[0].abilities.as_slice(),
+        [Ability::Triggered { trigger, .. }]
+            if matches!(
+                trigger.events.as_slice(),
+                [TriggerEvent::PlayerObjectEvent {
+                    kind: PlayerObjectTriggerKind::TappedForMana,
+                    ..
+                }]
+            )
+    ));
+
+    // 9. Rosie Cotton -> PlayerObjectTriggerKind::CreatesTokens
+    let rosie = compile_v2_strict(
+        "Rosie Cotton of South Lane",
+        "Legendary Creature - Halfling Peasant",
+        "Whenever you create a token, put a +1/+1 counter on target creature you control other than Rosie Cotton of South Lane.",
+        &vocab,
+    );
+    assert!(matches!(
+        rosie.faces[0].abilities.as_slice(),
+        [Ability::Triggered { trigger, .. }]
+            if matches!(
+                trigger.events.as_slice(),
+                [TriggerEvent::PlayerObjectEvent {
+                    kind: PlayerObjectTriggerKind::CreatesTokens,
+                    ..
+                }]
+            )
+    ));
+
+    // 10. Dragon's Rage Channeler Delirium zero-regression guard (`ZoneMetricKind::DistinctCardTypes`)
+    let drc = compile_v2_strict(
+        "Dragon's Rage Channeler",
+        "Creature - Human Shaman",
+        "Delirium \u{2014} As long as there are four or more card types among cards in your graveyard, Dragon's Rage Channeler gets +2/+2, has flying, and attacks each combat if able.",
+        &vocab,
+    );
+    assert!(matches!(
+        drc.faces[0].statics.as_slice(),
+        [StaticAbility::Compound(parts)]
+            if matches!(
+                parts.first(),
+                Some(StaticAbility::ContinuousModifyPT {
+                    condition: Some(ConditionExpr::ZoneMetric {
+                        kind: ZoneMetricKind::DistinctCardTypes,
+                        min_count: 4,
+                        ..
+                    }),
+                    ..
+                })
+            )
+    ));
+
+    // 11. Grist (`~ isn't on the battlefield` -> ConditionExpr::SubjectMatches with NOT_ON_BATTLEFIELD)
+    let grist = compile_v2_strict(
+        "Grist, the Hunger Tide",
+        "Legendary Planeswalker - Grist",
+        "As long as Grist, the Hunger Tide isn't on the battlefield, it's a 1/1 Insect creature in addition to its other types.",
+        &vocab,
+    );
+    assert!(matches!(
+        grist.faces[0].statics.as_slice(),
+        [StaticAbility::Compound(parts)] if !parts.is_empty()
+    ));
+
+    // 12. Diffusion Sliver (`counter that spell or ability unless its controller pays {2}`)
+    let sliver = compile_v2_strict(
+        "Diffusion Sliver",
+        "Creature - Sliver",
+        "Whenever a Sliver creature you control becomes the target of a spell or ability an opponent controls, counter that spell or ability unless its controller pays {2}.",
+        &vocab,
+    );
+    assert!(matches!(
+        sliver.faces[0].abilities.as_slice(),
+        [Ability::Triggered { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::ZoneOp {
+                    op: ZoneOpKind::CounterSpell {
+                        unless_pay: Some(_),
+                    },
+                    ..
+                }] | [Effect::Unless { .. }]
+            )
+    ));
+    let _ = (
+        DamageReplacement::PreventAll {
+            target: SubjectRef::SelfObject,
+        },
+        FilterFlags::NOT_ON_BATTLEFIELD,
+        LibraryPosition::Top,
+        PlayerTriggerKind::LosesGame,
+        RuleRestrictionKind::DamageCantBePrevented,
+        ValueExpr::Const(1),
+    );
+}

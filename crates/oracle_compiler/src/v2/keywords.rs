@@ -553,6 +553,26 @@ fn parse_from_clause(ts: &mut TokenStream<'_>) -> Option<KeywordParam> {
     if ts.eat_phrase(&["the", "color", "of", "your", "choice"])
         || ts.eat_phrase(&["a", "color", "of", "your", "choice"])
         || ts.eat_phrase(&["the", "chosen", "color"])
+        || ts.eat_phrase(&[
+            "colorless",
+            "or",
+            "from",
+            "the",
+            "color",
+            "of",
+            "your",
+            "choice",
+        ])
+        || ts.eat_phrase(&[
+            "colorless",
+            "or",
+            "from",
+            "a",
+            "color",
+            "of",
+            "your",
+            "choice",
+        ])
     {
         return Some(KeywordParam::ChosenColor);
     }

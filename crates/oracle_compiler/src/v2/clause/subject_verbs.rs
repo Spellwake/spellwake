@@ -786,11 +786,12 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         return Ok(out);
     }
 
-    // 4. `<subj> enters tapped` / `<subj> enters with <N> [additional] <kind> counters on it`
+    // 4. `<subj> enters tapped [dur]` / `<subj> enters with <N> [additional] <kind> counters on it`
     if ts.eat_phrase(&["enters", "tapped"]) || ts.eat_phrase(&["enter", "tapped"]) {
+        let duration = parse_trailing_duration(ts).unwrap_or(Duration::Instant);
         return Ok(vec![Effect::ApplyReplacement {
             replacement: Box::new(Replacement::EntersTapped { unless: None }),
-            duration: Duration::Instant,
+            duration,
         }]);
     }
     if ts.eat_phrase(&["enters", "with"]) || ts.eat_phrase(&["enter", "with"]) {
@@ -1064,8 +1065,14 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         }
         if ts.eat_phrase(&["a", "copy", "of"]) || ts.eat_phrase(&["copies", "of"]) {
             let source = parse_subject_ref(ts)?;
-            let exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
-            let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
+            let mut exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
+            let mut duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
+            if exceptions.is_empty() {
+                exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
+                if let Some(d2) = parse_trailing_duration(ts) {
+                    duration = d2;
+                }
+            }
             return Ok(vec![Effect::MutateObject {
                 subject,
                 mutation: ObjectMutation::BecomeCopy {
@@ -1676,6 +1683,20 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
 
     // 9. `<subj> loses/lose [all abilities [and becomes ...] | [your choice of] <kws>] [duration]`
     if ts.eat_word("loses") || ts.eat_word("lose") {
+        if ts.eat_phrase(&["all", "creature", "types"]) {
+            let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+            return Ok(vec![Effect::MutateObject {
+                subject,
+                mutation: ObjectMutation::BecomeCreatureTypes {
+                    subtypes: Vec::new(),
+                    add_types: CardTypeMask::EMPTY,
+                    keep_existing_types: false,
+                    base_pt: None,
+                    keywords: Vec::new(),
+                },
+                duration,
+            }]);
+        }
         if ts.eat_phrase(&["all", "abilities"]) {
             let mut duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
             let mut out = vec![Effect::MutateObject {
@@ -1683,6 +1704,28 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                 mutation: ObjectMutation::RemoveAllAbilities,
                 duration: duration.clone(),
             }];
+            {
+                let ptcp = ts.checkpoint();
+                if (ts.eat_phrase(&["and", "has", "base", "power", "and", "toughness"])
+                    || ts.eat_phrase(&["and", "have", "base", "power", "and", "toughness"]))
+                    && let Some((power, toughness)) = ts.next_base_pt()
+                {
+                    let pdur = parse_trailing_duration(ts).unwrap_or_else(|| duration.clone());
+                    duration = pdur.clone();
+                    out.push(Effect::MutateObject {
+                        subject: subject.clone(),
+                        mutation: ObjectMutation::SetDynamicBasePT {
+                            power: ValueExpr::Const(power),
+                            toughness: ValueExpr::Const(toughness),
+                            add_types: CardTypeMask::EMPTY,
+                            keep_existing_types: true,
+                        },
+                        duration: pdur,
+                    });
+                } else {
+                    ts.restore(ptcp);
+                }
+            }
             {
                 let bcp = ts.checkpoint();
                 if ts.eat_phrase(&["and", "becomes"]) || ts.eat_phrase(&["and", "become"]) {
@@ -1812,6 +1855,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         }]);
     }
     if ts.eat_word("explores") || ts.eat_word("explore") {
+        let _ = ts.eat_word("again");
         let ecp = ts.checkpoint();
         if let Ok(times) = try_parse(ts, parse_value_expr)
             && ts.eat_word("times")

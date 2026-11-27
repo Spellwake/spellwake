@@ -364,54 +364,87 @@ pub(super) fn parse_player_verb_frame(
         ));
     }
 
-    // 3b. `can't cast spells [or activate abilities]`
+    // 3b. `can't cast spells [or activate abilities] [dur]` (`Xantid Swarm`, `Silence`, `Orim's Chant`)
     if ts.eat_phrase(&["can't", "cast", "spells"]) {
+        let mut has_activate = false;
+        if ts.eat_phrase(&["or", "activate", "abilities"]) {
+            if ts.eat_word("of") {
+                let _ = opt(ts, parse_object_filter);
+            }
+            has_activate = true;
+        }
+        let duration = crate::v2::clause::subject_verbs::parse_trailing_duration(ts)
+            .unwrap_or(Duration::UntilEndOfTurn);
         let mut out = vec![Effect::ApplyContinuous {
             effect: Box::new(StaticAbility::PlayerRestriction {
                 player: actor,
                 restriction: PlayerRestrictionKind::CantCastSpells,
                 condition: None,
             }),
-            duration: Duration::UntilEndOfTurn,
+            duration: duration.clone(),
         }];
-        if ts.eat_phrase(&["or", "activate", "abilities"]) {
-            if ts.eat_word("of") {
-                let _ = opt(ts, parse_object_filter);
-            }
+        if has_activate {
             out.push(Effect::ApplyContinuous {
                 effect: Box::new(StaticAbility::PlayerRestriction {
                     player: actor,
                     restriction: PlayerRestrictionKind::CantActivateAbilities,
                     condition: None,
                 }),
-                duration: Duration::UntilEndOfTurn,
+                duration,
             });
         }
         return Ok((out, ()));
     }
 
-    // 3c. `cast(s) <flt> as though they had flash` OR `cast(s) <subj> [from <zone>] [without paying its mana cost] [dur]`
+    // 3c. `cast(s) <flt> [this turn] as though they had flash` OR `cast(s) <subj> [from <zone>] [without paying its mana cost] [dur]`
     if ts.eat_word("cast") || ts.eat_word("casts") {
         let cp = ts.checkpoint();
-        if let Ok(filter) = try_parse(ts, parse_object_filter)
-            && ts.eat_phrase(&["as", "though", "they", "had", "flash"])
-        {
-            return Ok((
-                vec![Effect::ApplyContinuous {
-                    effect: Box::new(StaticAbility::ZoneCastPermission {
-                        player: actor,
-                        filter: Some(filter),
-                        subject: None,
-                        zone: None,
-                        mode: CastPermissionMode::AsThoughFlash { extra_cost: None },
-                        condition: None,
-                    }),
-                    duration: Duration::UntilEndOfTurn,
-                }],
-                (),
-            ));
+        if let Ok(filter) = try_parse(ts, parse_object_filter) {
+            let _ = ts.eat_phrase(&["this", "turn"]);
+            if ts.eat_phrase(&["as", "though", "they", "had", "flash"]) {
+                let _ = ts.eat_phrase(&["this", "turn"]);
+                return Ok((
+                    vec![Effect::ApplyContinuous {
+                        effect: Box::new(StaticAbility::ZoneCastPermission {
+                            player: actor,
+                            filter: Some(filter),
+                            subject: None,
+                            zone: None,
+                            mode: CastPermissionMode::AsThoughFlash { extra_cost: None },
+                            condition: None,
+                        }),
+                        duration: Duration::UntilEndOfTurn,
+                    }],
+                    (),
+                ));
+            }
         }
         ts.restore(cp);
+        // `cast any number of [the] copies [without paying their mana costs]` (`Arcane Bombardment`, `Wizard's Spellbook`)
+        {
+            let acp = ts.checkpoint();
+            if ts.eat_phrase(&["any", "number", "of"])
+                && (ts.eat_phrase(&["the", "copies"]) || ts.eat_word("copies"))
+            {
+                let free = ts.eat_phrase(&["without", "paying", "their", "mana", "costs"])
+                    || ts.eat_phrase(&["without", "paying", "its", "mana", "cost"]);
+                return Ok((
+                    vec![Effect::MutatePlayer {
+                        player: actor,
+                        mutation: PlayerMutation::GrantPlayPermission {
+                            cast_only: true,
+                            subject: Box::new(SubjectRef::Anaphora(
+                                crate::v2::ir::AnaphoraRef::ThatSpell,
+                            )),
+                            free,
+                        },
+                        duration: Duration::UntilEndOfTurn,
+                    }],
+                    (),
+                ));
+            }
+            ts.restore(acp);
+        }
         let cp2 = ts.checkpoint();
         if let Ok(subj) = try_parse(ts, parse_subject_ref) {
             let _ = if ts.eat_word("from") {
@@ -554,6 +587,77 @@ pub(super) fn parse_player_verb_frame(
                 }],
                 (),
             ));
+        }
+        if ts.eat_phrase(&["your", "life", "total", "become"]) {
+            let _ = ts.eat_phrase(&["equal", "to"]);
+            let amount = parse_value_expr(ts)?;
+            return Ok((
+                vec![Effect::AdjustLife {
+                    player: actor,
+                    amount,
+                    op: LifeOp::Set,
+                }],
+                (),
+            ));
+        }
+        // `have the base power [and toughness] of <subj> become [equal to] <val> [dur]` (`Sita Varma`, `Exuberant Wolfbear`)
+        {
+            let bp_cp = ts.checkpoint();
+            if (ts.eat_phrase(&["the", "base", "power", "and", "toughness", "of"])
+                || ts.eat_phrase(&["the", "base", "power", "of"]))
+                && let Ok(subj) = try_parse(ts, parse_subject_ref)
+                && (ts.eat_word("become") || ts.eat_word("becomes"))
+            {
+                let _ = ts.eat_phrase(&["equal", "to"]);
+                if let Ok(val) = try_parse(ts, parse_value_expr) {
+                    let _ = ts.eat_phrase(&["and", "toughness"]);
+                    let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+                    return Ok((
+                        vec![Effect::MutateObject {
+                            subject: subj,
+                            mutation: ObjectMutation::SetDynamicBasePT {
+                                power: val.clone(),
+                                toughness: val,
+                                add_types: crate::ast::CardTypeMask::EMPTY,
+                                keep_existing_types: true,
+                            },
+                            duration,
+                        }],
+                        (),
+                    ));
+                }
+            }
+            ts.restore(bp_cp);
+        }
+        // `have <subj>'s base power [and toughness] become [equal to] <val> [dur]` (`Belligerent Yearling`)
+        {
+            let sp_cp = ts.checkpoint();
+            if let Ok(subj) = try_parse(ts, parse_subject_ref)
+                && ts.eat_word("'s")
+                && (ts.eat_phrase(&["base", "power", "and", "toughness"])
+                    || ts.eat_phrase(&["base", "power"])
+                    || ts.eat_phrase(&["base", "toughness"]))
+                && (ts.eat_word("become") || ts.eat_word("becomes"))
+            {
+                let _ = ts.eat_phrase(&["equal", "to"]);
+                if let Ok(val) = try_parse(ts, parse_value_expr) {
+                    let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
+                    return Ok((
+                        vec![Effect::MutateObject {
+                            subject: subj,
+                            mutation: ObjectMutation::SetDynamicBasePT {
+                                power: val.clone(),
+                                toughness: val,
+                                add_types: crate::ast::CardTypeMask::EMPTY,
+                                keep_existing_types: true,
+                            },
+                            duration,
+                        }],
+                        (),
+                    ));
+                }
+            }
+            ts.restore(sp_cp);
         }
         // Compositional delegation: `have <player> <player_verb_frame>` (`have target player lose 3 life`, `have target opponent discard a card`)
         // OR `have <subj> <any subject verb frame>` (`have it deal damage equal to its power to ...`, `have ~ become a 3/3 ...`)
@@ -772,10 +876,22 @@ pub(super) fn parse_player_verb_frame(
         return Err(ts.err("expected die specification after `roll`"));
     }
 
-    // 3f. `copy(ies) <subj> [for each <expr>] [, except ...]` (`Copy target instant or sorcery spell`, `Donal`, `Tawnos`, `Fork`, `The Sixth Doctor`)
+    // 3f. `copy(ies) <subj> [twice | <N> times] [for each <expr>] [, except ...]` (`Copy target instant or sorcery spell`, `Jaya`, `Donal`, `Tawnos`, `Fork`, `The Sixth Doctor`)
     if ts.eat_word("copy") || ts.eat_word("copies") {
         let subject = parse_subject_ref(ts)?;
-        let count = opt(ts, parse_for_each_expr).unwrap_or(ValueExpr::Const(1));
+        let count = if ts.eat_word("twice") {
+            ValueExpr::Const(2)
+        } else {
+            let ncp = ts.checkpoint();
+            if let Some(n) = ts.next_number(false)
+                && ts.eat_word("times")
+            {
+                ValueExpr::Const(n)
+            } else {
+                ts.restore(ncp);
+                opt(ts, parse_for_each_expr).unwrap_or(ValueExpr::Const(1))
+            }
+        };
         let exceptions = crate::v2::clause::tokens::parse_copy_exceptions(ts);
         return Ok((
             vec![Effect::CopyObject {
@@ -1325,7 +1441,12 @@ pub(super) fn parse_player_verb_frame(
                 (),
             ));
         }
-        if ts.eat_phrase(&["a", "nonland", "card", "name"]) {
+        if ts.eat_phrase(&["a", "nonland", "card", "name"])
+            || (ts.eat_phrase(&["a", "noncreature"]) && {
+                let _ = ts.eat_comma();
+                ts.eat_phrase(&["nonland", "card", "name"])
+            })
+        {
             return Ok((
                 vec![Effect::PromptChoice {
                     chooser: actor,
@@ -1466,9 +1587,10 @@ pub(super) fn parse_player_verb_frame(
         }
     }
 
-    // 24. `counter <subj> [unless its controller pays <cost> [for each <expr>] | unless its controller <effect>]`
+    // 24. `counter <subj> [or ability] [unless its controller pays <cost> [for each <expr>] | unless its controller <effect>]`
     if ts.eat_word("counter") {
         let subject = parse_subject_ref(ts)?;
+        let _ = ts.eat_phrase(&["or", "ability"]);
         {
             let ucp = ts.checkpoint();
             if ts.eat_word("unless") {
@@ -1768,6 +1890,7 @@ fn parse_mana_addition(ts: &mut TokenStream<'_>) -> PResult<ManaSpec> {
         "one", "mana", "of", "any", "of", "the", "exiled", "cards'", "colors",
     ]) || ts.eat_phrase(&["one", "mana", "of", "any", "color"])
     {
+        let _ = ts.eat_phrase(&["in", "your", "commander's", "color", "identity"]);
         return Ok(ManaSpec::AnyColor {
             amount: ValueExpr::Const(1),
             single_color: true,

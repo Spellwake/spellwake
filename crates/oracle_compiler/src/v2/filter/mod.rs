@@ -125,6 +125,10 @@ pub fn parse_player_ref(ts: &mut TokenStream<'_>) -> PResult<PlayerRef> {
         || ts.eat_phrase(&["that", "card's", "owner"])
         || ts.eat_phrase(&["that", "creature's", "owner"])
         || ts.eat_phrase(&["target", "creature's", "controller"])
+        || ts.eat_phrase(&["target", "artifact", "creature's", "controller"])
+        || ts.eat_phrase(&["target", "permanent's", "controller"])
+        || ts.eat_phrase(&["enchanted", "creature's", "controller"])
+        || ts.eat_phrase(&["enchanted", "permanent's", "controller"])
         || ts.eat_phrase(&["target", "creature's", "owner"])
         || ts.eat_phrase(&["target", "permanent's", "owner"])
         || ts.eat_phrase(&["target", "nonland", "permanent's", "owner"])
@@ -370,6 +374,19 @@ pub fn parse_zone_dest(ts: &mut TokenStream<'_>) -> PResult<(ZoneDest, EntryModi
             ZoneDest {
                 zone: ZoneKind::Library,
                 owner: zref.owner,
+                library_position: Some(LibraryPosition::Bottom),
+                library_order: order,
+                under_control: None,
+            },
+            modifiers,
+        ));
+    }
+    if ts.eat_phrase(&["the", "bottom"]) {
+        let order = parse_library_order(ts);
+        return Ok((
+            ZoneDest {
+                zone: ZoneKind::Library,
+                owner: ZoneOwner::Default,
                 library_position: Some(LibraryPosition::Bottom),
                 library_order: order,
                 under_control: None,
@@ -955,6 +972,20 @@ pub fn parse_object_filter(ts: &mut TokenStream<'_>) -> PResult<ObjectFilter> {
                 flt.flags = flt.flags.union(FilterFlags::EQUIPPED);
             }
             "enchanted" => {
+                // Leave `a creature enchanted player controls` for `parse_filter_post_modifiers`!
+                let has_head = flt.any_permanent
+                    || flt.any_card
+                    || flt.any_spell
+                    || flt.is_ability
+                    || !card_types_seen.is_empty()
+                    || saw_subtype;
+                if has_head
+                    && ts.peek_n(1).is_some_and(
+                        |t| matches!(t.kind, TokenKind::Word(w) if w.eq_ignore_ascii_case("player")),
+                    )
+                {
+                    break;
+                }
                 ts.next_word();
                 flt.flags = flt.flags.union(FilterFlags::ENCHANTED);
             }

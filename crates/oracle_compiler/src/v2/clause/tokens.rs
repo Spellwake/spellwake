@@ -284,7 +284,11 @@ pub(crate) fn parse_token_creation(
             let had_comma = ts.eat_comma();
             let had_and = ts.eat_word("and");
             if (had_comma || had_and)
-                && matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Quoted(_)))
+                && (matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Quoted(_)))
+                    || (had_and
+                        && ts
+                            .peek_word()
+                            .is_some_and(|w| w.eq_ignore_ascii_case("equip"))))
             {
                 continue;
             }
