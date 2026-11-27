@@ -41,6 +41,7 @@ pub enum TokenKind<'a> {
     Minus,
     Slash,
     Bang,
+    Pipe,
 }
 
 /// Tokenize normalized MTG Oracle text into a vector of span-tracked [`Token`]s.
@@ -201,6 +202,31 @@ pub fn tokenize(input: &str) -> Result<Vec<Token<'_>>, ParseError> {
             '!' => {
                 tokens.push(Token {
                     kind: TokenKind::Bang,
+                    span: Span { start, end: i + 1 },
+                });
+                i += 1;
+                continue;
+            }
+            '|' => {
+                tokens.push(Token {
+                    kind: TokenKind::Pipe,
+                    span: Span { start, end: i + 1 },
+                });
+                i += 1;
+                continue;
+            }
+            '\u{221E}' => {
+                let end = i + ch.len_utf8();
+                tokens.push(Token {
+                    kind: TokenKind::Word("infinity"),
+                    span: Span { start, end },
+                });
+                i = end;
+                continue;
+            }
+            '&' => {
+                tokens.push(Token {
+                    kind: TokenKind::Word("and"),
                     span: Span { start, end: i + 1 },
                 });
                 i += 1;

@@ -15,7 +15,7 @@ pub fn parse_cost_list(ts: &mut TokenStream<'_>) -> PResult<Vec<Cost>> {
         if s.eat_comma() {
             let _ = s.eat_word("and");
             Ok(())
-        } else if s.eat_word("and") {
+        } else if s.eat_word("and") || s.eat_word("and/or") {
             Ok(())
         } else {
             Err(s.err("expected `,` or `and` between costs"))
@@ -71,6 +71,12 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         if let Some(mana) = ts.eat_mana_cost() {
             return Ok(Cost::Mana(mana));
         }
+        if ts.eat_phrase(&["any", "amount", "of", "life"]) {
+            return Ok(Cost::PayAnyAmountLife);
+        }
+        if ts.eat_phrase(&["any", "amount", "of", "mana"]) {
+            return Ok(Cost::PayAnyAmountMana);
+        }
         let amt = parse_value_expr(ts)?;
         if ts.eat_word("life") {
             return Ok(Cost::PayLife(amt));
@@ -85,20 +91,46 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Err(ts.err("expected `life`, energy, or mana after `pay`"));
     }
 
-    // `Sacrifice ~` / `Sacrifice <N> <filter>`
+    // `Sacrifice ~` / `Sacrifice it` / `Sacrifice [any number of | one or more | N] <filter>`
     if ts.eat_word("sacrifice") {
-        if ts.eat_tilde() {
+        if ts.eat_tilde() || ts.eat_word("it") {
             return Ok(Cost::SacrificeSelf);
         }
-        let count = if let Some(n) = ts.next_number(true) {
-            ValueExpr::Const(n)
-        } else if ts.eat_word("x") {
-            ValueExpr::Var(crate::v2::ir::VarName::X)
-        } else {
-            ValueExpr::Const(1)
-        };
+        let count =
+            if ts.eat_phrase(&["any", "number", "of"]) || ts.eat_phrase(&["one", "or", "more"]) {
+                ValueExpr::Var(crate::v2::ir::VarName::X)
+            } else if let Some(n) = ts.next_number(true) {
+                ValueExpr::Const(n)
+            } else if ts.eat_word("x") {
+                ValueExpr::Var(crate::v2::ir::VarName::X)
+            } else {
+                ValueExpr::Const(1)
+            };
         let filter = parse_object_filter(ts)?;
         return Ok(Cost::Sacrifice { count, filter });
+    }
+
+    // `Forage`
+    if ts.eat_word("forage") {
+        return Ok(Cost::Forage);
+    }
+
+    // `Unattach ~`
+    if ts.eat_word("unattach") && ts.eat_tilde() {
+        return Ok(Cost::UnattachSelf);
+    }
+
+    // `Blight <val>`
+    if ts.eat_word("blight") {
+        let amt = parse_value_expr(ts)?;
+        return Ok(Cost::Blight(amt));
+    }
+
+    // `Waterbend {M}`
+    if ts.eat_word("waterbend")
+        && let Some(mc) = ts.eat_mana_cost()
+    {
+        return Ok(Cost::Waterbend(mc));
     }
 
     // `Exert ~`
@@ -131,7 +163,9 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
                 return Ok(Cost::ExileTop { zone, count });
             }
         }
-        let count = if let Some(n) = ts.next_number(true) {
+        let count = if ts.eat_phrase(&["any", "number", "of"]) {
+            ValueExpr::Var(crate::v2::ir::VarName::X)
+        } else if let Some(n) = ts.next_number(true) {
             ValueExpr::Const(n)
         } else if ts.eat_word("x") {
             ValueExpr::Var(crate::v2::ir::VarName::X)
@@ -150,9 +184,14 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         });
     }
 
-    // `Tap <N> untapped <filter>`
+    // `Tap ~` / `Tap <N> untapped <filter>`
     if ts.eat_word("tap") {
-        let count = if let Some(n) = ts.next_number(true) {
+        if ts.eat_tilde() {
+            return Ok(Cost::TapSelf);
+        }
+        let count = if ts.eat_phrase(&["any", "number", "of"]) {
+            ValueExpr::Var(crate::v2::ir::VarName::X)
+        } else if let Some(n) = ts.next_number(true) {
             ValueExpr::Const(n)
         } else if ts.eat_word("x") {
             ValueExpr::Var(crate::v2::ir::VarName::X)
@@ -168,6 +207,7 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         let subject = parse_subject_ref(ts)?;
         if ts.eat_phrase(&["to", "its", "owner's", "hand"])
             || ts.eat_phrase(&["to", "their", "owners'", "hands"])
+            || ts.eat_phrase(&["to", "their", "owner's", "hand"])
             || ts.eat_phrase(&["to", "your", "hand"])
         {
             return Ok(Cost::ReturnToHand { subject });
@@ -190,7 +230,9 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
                 random: false,
             });
         }
-        let count = if let Some(n) = ts.next_number(true) {
+        let count = if ts.eat_phrase(&["any", "number", "of"]) {
+            ValueExpr::Var(crate::v2::ir::VarName::X)
+        } else if let Some(n) = ts.next_number(true) {
             ValueExpr::Const(n)
         } else if ts.eat_word("x") {
             ValueExpr::Var(crate::v2::ir::VarName::X)
@@ -210,9 +252,12 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         });
     }
 
-    // `Remove <N | all | any number of> [<kind>] counter(s) from [among] <subj>`
+    // `Remove <N | all | any number of | one or more> [<kind>] counter(s) from [among] <subj>`
     if ts.eat_word("remove") {
-        let count = if ts.eat_word("all") || ts.eat_phrase(&["any", "number", "of"]) {
+        let count = if ts.eat_word("all")
+            || ts.eat_phrase(&["any", "number", "of"])
+            || ts.eat_phrase(&["one", "or", "more"])
+        {
             ValueExpr::Var(crate::v2::ir::VarName::X)
         } else if let Some(n) = ts.next_number(true) {
             ValueExpr::Const(n)
@@ -246,23 +291,34 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Err(ts.err("expected `from <subj>` in remove-counter cost"));
     }
 
-    // `Put <N> <kind> counter(s) on <subj>`
+    // `Put <N> <kind> counter(s) on <subj>` OR `Put <subj> <dest>`
     if ts.eat_word("put") {
+        let pcp = ts.checkpoint();
         let count = if let Some(n) = ts.next_number(true) {
             ValueExpr::Const(n)
+        } else if ts.eat_word("x") {
+            ValueExpr::Var(crate::v2::ir::VarName::X)
         } else {
             ValueExpr::Const(1)
         };
-        let kind = parse_counter_kind(ts)?;
-        if (ts.eat_word("counter") || ts.eat_word("counters")) && ts.eat_word("on") {
-            let subject = parse_subject_ref(ts)?;
+        if let Ok(kind) = try_parse(ts, parse_counter_kind)
+            && (ts.eat_word("counter") || ts.eat_word("counters"))
+            && ts.eat_word("on")
+            && let Ok(subject) = try_parse(ts, parse_subject_ref)
+        {
             return Ok(Cost::PutCounters {
                 kind,
                 count,
                 subject,
             });
         }
-        return Err(ts.err("expected `counter(s) on <subj>` in put-counter cost"));
+        ts.restore(pcp);
+        if let Ok(subject) = try_parse(ts, parse_subject_ref)
+            && let Ok((dest, _)) = try_parse(ts, crate::v2::filter::parse_zone_dest)
+        {
+            return Ok(Cost::PutZone { subject, dest });
+        }
+        return Err(ts.err("expected `counter(s) on <subj>` or zone move in put cost"));
     }
 
     // `Mill <N> card(s)`
@@ -278,16 +334,43 @@ pub fn parse_cost_atom(ts: &mut TokenStream<'_>) -> PResult<Cost> {
         return Err(ts.err("expected `card(s)` after `mill` in cost"));
     }
 
-    // `Reveal <N> <filter> from your hand`
+    // `Reveal ~ from your hand` / `Reveal <N> <filter> from your hand`
     if ts.eat_word("reveal") {
+        if ts.eat_tilde() {
+            let _ = ts.eat_phrase(&["from", "your", "hand"]);
+            return Ok(Cost::RevealFromHand {
+                count: ValueExpr::Const(1),
+                filter: ObjectFilter {
+                    any_card: true,
+                    ..Default::default()
+                },
+            });
+        }
         let count = if let Some(n) = ts.next_number(true) {
             ValueExpr::Const(n)
+        } else if ts.eat_word("x") {
+            ValueExpr::Var(crate::v2::ir::VarName::X)
         } else {
             ValueExpr::Const(1)
         };
         let filter = parse_object_filter(ts)?;
         let _ = ts.eat_phrase(&["from", "your", "hand"]);
         return Ok(Cost::RevealFromHand { count, filter });
+    }
+
+    // `Choose <subj1> [or <subj2>]` (e.g. `As an additional cost to cast ~, choose a creature you control or a warped creature card you own in exile`)
+    if ts.eat_word("choose") {
+        let first = parse_subject_ref(ts)?;
+        let cp = ts.checkpoint();
+        if ts.eat_word("or")
+            && let Ok(second) = try_parse(ts, parse_subject_ref)
+        {
+            return Ok(Cost::ChooseObject(crate::v2::ir::SubjectRef::Compound(
+                vec![first, second],
+            )));
+        }
+        ts.restore(cp);
+        return Ok(Cost::ChooseObject(first));
     }
 
     Err(ts.err("expected cost atom"))

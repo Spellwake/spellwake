@@ -24,7 +24,8 @@ pub(super) fn parse_token_creation(
     } else {
         parse_value_expr(ts)?
     };
-    let leading_tapped = ts.eat_word("tapped");
+    let leading_tapped_and_attacking = ts.eat_phrase(&["tapped", "and", "attacking"]);
+    let leading_tapped = leading_tapped_and_attacking || ts.eat_word("tapped");
 
     // Copy token: `tokens that are copies of <src> [and that are tapped and attacking] [, except ...]`
     if (ts.eat_word("token") || ts.eat_word("tokens"))
@@ -32,7 +33,11 @@ pub(super) fn parse_token_creation(
             || ts.eat_phrase(&["that's", "a", "copy", "of"]))
     {
         let source = parse_subject_ref(ts)?;
-        let mut modifiers = EntryModifiers::default();
+        let mut modifiers = EntryModifiers {
+            tapped: leading_tapped,
+            attacking: leading_tapped_and_attacking,
+            ..EntryModifiers::default()
+        };
         if ts.eat_phrase(&["and", "that", "are", "tapped", "and", "attacking"])
             || ts.eat_phrase(&["that's", "tapped", "and", "attacking"])
         {
@@ -43,12 +48,82 @@ pub(super) fn parse_token_creation(
         {
             let cp = ts.checkpoint();
             if ts.eat_comma() && ts.eat_word("except") {
-                if ts.eat_phrase(&["it", "has", "this", "ability"])
-                    || ts.eat_phrase(&["they", "have", "this", "ability"])
-                {
-                    exceptions.push(CopyException::HasThisAbility);
-                } else if ts.eat_phrase(&["it", "has"]) || ts.eat_phrase(&["they", "have"]) {
-                    if let Some(quoted) = ts.next_quoted() {
+                loop {
+                    let item_cp = ts.checkpoint();
+                    if ts.eat_phrase(&["it", "has", "this", "ability"])
+                        || ts.eat_phrase(&["they", "have", "this", "ability"])
+                    {
+                        exceptions.push(CopyException::HasThisAbility);
+                    } else if ts.eat_phrase(&["it", "has"])
+                        || ts.eat_phrase(&["they", "have"])
+                        || ts.eat_word("has")
+                        || ts.eat_word("have")
+                    {
+                        if let Some(quoted) = ts.next_quoted() {
+                            let compiled = compile_face_v2(
+                                FaceInput {
+                                    name: "~",
+                                    type_line: "Permanent",
+                                    oracle_text: quoted,
+                                },
+                                ts.vocab,
+                            );
+                            if compiled.is_ok() {
+                                exceptions.push(CopyException::AddAbility(Box::new(compiled)));
+                            } else {
+                                ts.restore(item_cp);
+                                break;
+                            }
+                        } else if let Ok((kws, _)) =
+                            crate::v2::parser::try_parse(ts, parse_keyword_list)
+                        {
+                            exceptions.push(CopyException::AddKeywords(kws));
+                        } else {
+                            ts.restore(item_cp);
+                            break;
+                        }
+                    } else if ts.eat_phrase(&["it", "isn't", "legendary"])
+                        || ts.eat_phrase(&["it's", "not", "legendary"])
+                        || ts.eat_phrase(&["they", "aren't", "legendary"])
+                        || ts.eat_phrase(&["they're", "not", "legendary"])
+                    {
+                        exceptions.push(CopyException::NotLegendary);
+                    } else if ts.eat_phrase(&["it's", "an"])
+                        || ts.eat_phrase(&["it's", "a"])
+                        || ts.eat_word("it's")
+                        || ts.eat_word("they're")
+                    {
+                        let pt = ts.next_base_pt();
+                        let mut subtypes = Vec::new();
+                        let mut types = CardTypeMask::EMPTY;
+                        while let Some(w) = ts.peek_word() {
+                            let low = w.to_ascii_lowercase();
+                            if let Some(ct) = lookup_card_type(&low) {
+                                ts.next_word();
+                                types = types.union(ct);
+                            } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
+                                ts.next_word();
+                                subtypes.push(sub.to_string());
+                            } else {
+                                break;
+                            }
+                        }
+                        let keep_existing_types = ts
+                            .eat_phrase(&["in", "addition", "to", "its", "other", "types"])
+                            || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"]);
+                        if pt.is_some() || !subtypes.is_empty() || !types.is_empty() {
+                            exceptions.push(CopyException::SetBasePTAndTypes {
+                                power: pt.map(|(p, _)| p),
+                                toughness: pt.map(|(_, t)| t),
+                                subtypes,
+                                types,
+                                keep_existing_types,
+                            });
+                        } else {
+                            ts.restore(item_cp);
+                            break;
+                        }
+                    } else if let Some(quoted) = ts.next_quoted() {
                         let compiled = compile_face_v2(
                             FaceInput {
                                 name: "~",
@@ -60,61 +135,22 @@ pub(super) fn parse_token_creation(
                         if compiled.is_ok() {
                             exceptions.push(CopyException::AddAbility(Box::new(compiled)));
                         } else {
-                            ts.restore(cp);
-                        }
-                    } else {
-                        let (kws, _) = parse_keyword_list(ts)?;
-                        exceptions.push(CopyException::AddKeywords(kws));
-                        if ts.eat_word("and")
-                            && let Some(quoted) = ts.next_quoted()
-                        {
-                            let compiled = compile_face_v2(
-                                FaceInput {
-                                    name: "~",
-                                    type_line: "Permanent",
-                                    oracle_text: quoted,
-                                },
-                                ts.vocab,
-                            );
-                            if compiled.is_ok() {
-                                exceptions.push(CopyException::AddAbility(Box::new(compiled)));
-                            }
-                        }
-                    }
-                } else if ts.eat_phrase(&["it", "isn't", "legendary"])
-                    || ts.eat_phrase(&["they", "aren't", "legendary"])
-                {
-                    exceptions.push(CopyException::NotLegendary);
-                } else if ts.eat_phrase(&["it's", "an"]) || ts.eat_phrase(&["it's", "a"]) {
-                    let pt = ts.next_base_pt();
-                    let mut subtypes = Vec::new();
-                    let mut types = CardTypeMask::EMPTY;
-                    while let Some(w) = ts.peek_word() {
-                        let low = w.to_ascii_lowercase();
-                        if let Some(ct) = lookup_card_type(&low) {
-                            ts.next_word();
-                            types = types.union(ct);
-                        } else if let Some(sub) = ts.vocab.lookup_subtype(&low) {
-                            ts.next_word();
-                            subtypes.push(sub.to_string());
-                        } else {
+                            ts.restore(item_cp);
                             break;
                         }
-                    }
-                    let keep_existing_types =
-                        ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"]);
-                    if pt.is_some() || !subtypes.is_empty() || !types.is_empty() {
-                        exceptions.push(CopyException::SetBasePTAndTypes {
-                            power: pt.map(|(p, _)| p),
-                            toughness: pt.map(|(_, t)| t),
-                            subtypes,
-                            types,
-                            keep_existing_types,
-                        });
                     } else {
-                        ts.restore(cp);
+                        ts.restore(item_cp);
+                        break;
                     }
-                } else {
+                    let sep_cp = ts.checkpoint();
+                    let had_comma = ts.eat_comma();
+                    let had_and = ts.eat_word("and");
+                    if !had_comma && !had_and {
+                        ts.restore(sep_cp);
+                        break;
+                    }
+                }
+                if exceptions.is_empty() {
                     ts.restore(cp);
                 }
             } else {
@@ -196,10 +232,10 @@ pub(super) fn parse_token_creation(
         ts.restore(cp);
     }
 
-    // Creature token: `<P>/<T> [colors] [subtypes...] [card_types...] token(s) [with <kws>] [that are <colors>]`
-    // Also supports `X/X`, `X/1`, `1/X` dynamic P/T tokens!
+    // Creature/artifact token: `[<P>/<T>] [colors] [subtypes...] [card_types...] token(s) [named <Name>] [with <kws|"...">] [that are <colors>]`
+    // Also supports `X/X`, `X/1`, `1/X` dynamic P/T tokens and non-P/T tokens (`black Vampire creature token`, `colorless artifact token named Lotus`)!
     let (power_expr, toughness_expr) = if let Some((p, t)) = ts.next_base_pt() {
-        (ValueExpr::Const(p), ValueExpr::Const(t))
+        (Some(ValueExpr::Const(p)), Some(ValueExpr::Const(t)))
     } else {
         let p_cp = ts.checkpoint();
         let p_val = if ts.eat_word("x") {
@@ -218,26 +254,28 @@ pub(super) fn parse_token_creation(
                 ts.next_number(false).map(ValueExpr::Const)
             };
             if let Some(tv) = t_val {
-                (pv, tv)
+                (Some(pv), Some(tv))
             } else {
                 ts.restore(p_cp);
-                return Err(ts.err("expected P/T or predefined token name"));
+                (None, None)
             }
         } else {
             ts.restore(p_cp);
-            return Err(ts.err("expected P/T or predefined token name"));
+            (None, None)
         }
     };
     let mut colors = ColorMask::EMPTY;
     let mut card_types = CardTypeMask::EMPTY;
     let mut subtypes = Vec::new();
+    let mut saw_token_word = false;
     while let Some(w) = ts.peek_word() {
         let low = w.to_ascii_lowercase();
         if low == "token" || low == "tokens" {
             ts.next_word();
+            saw_token_word = true;
             break;
         }
-        if low == "and" || low == "colorless" {
+        if low == "and" || low == "colorless" || low == "legendary" {
             ts.next_word();
             continue;
         }
@@ -254,33 +292,28 @@ pub(super) fn parse_token_creation(
             return Err(ts.err(format!("unexpected token descriptor `{w}`")));
         }
     }
+    if !saw_token_word || (power_expr.is_none() && card_types.is_empty() && subtypes.is_empty()) {
+        return Err(ts.err("expected P/T or token types before `token`"));
+    }
+    // Optional `named <Capitalized Name>` (e.g. `create a colorless artifact token named Lotus with "..."`)
+    if ts.eat_word("named") {
+        let mut words_eaten = 0usize;
+        while words_eaten < 4
+            && let Some(w) = ts.peek_word()
+            && w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+            && !w.eq_ignore_ascii_case("with")
+        {
+            ts.next_word();
+            words_eaten += 1;
+        }
+    }
 
     let mut keywords = Vec::new();
     let mut abilities = Vec::new();
     if ts.eat_word("with") {
-        if let Some(quoted) = ts.next_quoted() {
-            let compiled = compile_face_v2(
-                FaceInput {
-                    name: "~",
-                    type_line: "Creature",
-                    oracle_text: quoted,
-                },
-                ts.vocab,
-            );
-            if !compiled.is_ok() {
-                return Err(compiled
-                    .errors
-                    .into_iter()
-                    .next()
-                    .unwrap_or_else(|| ts.err("failed to compile token ability text")));
-            }
-            abilities.push(compiled);
-        } else {
-            let (kws, _) = parse_keyword_list(ts)?;
-            keywords = kws;
-            if ts.eat_word("and")
-                && let Some(quoted) = ts.next_quoted()
-            {
+        loop {
+            let wcp = ts.checkpoint();
+            if let Some(quoted) = ts.next_quoted() {
                 let compiled = compile_face_v2(
                     FaceInput {
                         name: "~",
@@ -297,7 +330,26 @@ pub(super) fn parse_token_creation(
                         .unwrap_or_else(|| ts.err("failed to compile token ability text")));
                 }
                 abilities.push(compiled);
+            } else if let Ok((kws, _)) = crate::v2::parser::try_parse(ts, parse_keyword_list) {
+                keywords.extend(kws);
+            } else {
+                ts.restore(wcp);
+                break;
             }
+            // Optional `, and` / `,` / `and` before next quoted ability (checkpointed so we never eat `and` belonging to a later clause!)
+            let sep_cp = ts.checkpoint();
+            let had_comma = ts.eat_comma();
+            let had_and = ts.eat_word("and");
+            if (had_comma || had_and)
+                && matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Quoted(_)))
+            {
+                continue;
+            }
+            ts.restore(sep_cp);
+            break;
+        }
+        if keywords.is_empty() && abilities.is_empty() {
+            return Err(ts.err("expected keyword or quoted ability after `with`"));
         }
     }
 

@@ -325,9 +325,12 @@ impl<'a> TokenStream<'a> {
             }
             Some(TokenKind::Word(w)) => {
                 let low = w.to_ascii_lowercase();
-                if allow_article && (low == "a" || low == "an") {
-                    self.pos += 1;
-                    return Some(1);
+                if low == "a" || low == "an" {
+                    if allow_article {
+                        self.pos += 1;
+                        return Some(1);
+                    }
+                    return None;
                 }
                 let n = parse_number_word(&low)?;
                 self.pos += 1;

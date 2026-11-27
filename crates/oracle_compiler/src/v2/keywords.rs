@@ -65,6 +65,12 @@ pub fn parse_keyword_kind(ts: &mut TokenStream<'_>) -> PResult<KeywordKind> {
     if ts.eat_phrase(&["job", "select"]) {
         return Ok(KeywordKind::JobSelect);
     }
+    if ts.eat_phrase(&["more", "than", "meets", "the", "eye"]) {
+        return Ok(KeywordKind::MoreThanMeetsTheEye);
+    }
+    if ts.eat_phrase(&["living", "metal"]) {
+        return Ok(KeywordKind::LivingMetal);
+    }
     if ts.eat_phrase(&["for", "mirrodin"]) {
         if matches!(ts.peek().map(|t| &t.kind), Some(TokenKind::Bang)) {
             ts.next_tok();
@@ -245,6 +251,25 @@ pub fn parse_keyword_kind(ts: &mut TokenStream<'_>) -> PResult<KeywordKind> {
         "demonstrate" => KeywordKind::Demonstrate,
         "freerunning" => KeywordKind::Freerunning,
         "splice" => KeywordKind::Splice,
+        "soulshift" => KeywordKind::Soulshift,
+        "firebending" => KeywordKind::Firebending,
+        "replicate" => KeywordKind::Replicate,
+        "sneak" => KeywordKind::Sneak,
+        "teamwork" => KeywordKind::Teamwork,
+        "mayhem" => KeywordKind::Mayhem,
+        "amplify" => KeywordKind::Amplify,
+        "gift" => KeywordKind::Gift,
+        "provoke" => KeywordKind::Provoke,
+        "transmute" => KeywordKind::Transmute,
+        "increment" => KeywordKind::Increment,
+        "paradigm" => KeywordKind::Paradigm,
+        "haunt" => KeywordKind::Haunt,
+        "storied" => KeywordKind::Storied,
+        "tiered" => KeywordKind::Tiered,
+        "web-slinging" => KeywordKind::WebSlinging,
+        _ if ts.vocab.lookup_subtype(&low).is_some() && ts.eat_word("offering") => {
+            KeywordKind::Offering
+        }
         other if other.ends_with("cycling") && other.len() > "cycling".len() => {
             KeywordKind::Typecycling
         }
@@ -349,9 +374,63 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
         | KeywordKind::Prowl
         | KeywordKind::LevelUp
         | KeywordKind::Scavenge
-        | KeywordKind::Freerunning => {
+        | KeywordKind::Freerunning
+        | KeywordKind::MoreThanMeetsTheEye
+        | KeywordKind::Replicate
+        | KeywordKind::Sneak
+        | KeywordKind::Mayhem
+        | KeywordKind::Transmute
+        | KeywordKind::WebSlinging => {
             let _ = ts.eat_em_dash();
             opt(ts, parse_cost_list).map(KeywordParam::Cost)
+        }
+        KeywordKind::Gift => {
+            use crate::v2::ir::GiftKind;
+            if ts.eat_phrase(&["a", "card"]) {
+                Some(KeywordParam::Gift(GiftKind::Card))
+            } else if ts.eat_phrase(&["a", "treasure"]) {
+                Some(KeywordParam::Gift(GiftKind::Treasure))
+            } else if ts.eat_phrase(&["a", "food"]) {
+                Some(KeywordParam::Gift(GiftKind::Food))
+            } else if ts.eat_phrase(&["a", "tapped", "fish"]) {
+                Some(KeywordParam::Gift(GiftKind::TappedFish))
+            } else if ts.eat_phrase(&["an", "octopus"]) {
+                Some(KeywordParam::Gift(GiftKind::Octopus))
+            } else if ts.eat_phrase(&["an", "extra", "turn"]) {
+                Some(KeywordParam::Gift(GiftKind::ExtraTurn))
+            } else {
+                None
+            }
+        }
+        KeywordKind::Prototype => {
+            // `Prototype {1}{B} — 1/1`
+            let costs = opt(ts, parse_cost_list).unwrap_or_default();
+            let _ = ts.eat_em_dash();
+            if let Some((p, t)) = ts.next_base_pt() {
+                Some(KeywordParam::CostAndBasePt(costs, p, t))
+            } else if !costs.is_empty() {
+                Some(KeywordParam::Cost(costs))
+            } else {
+                None
+            }
+        }
+        KeywordKind::Craft => {
+            // `Craft with <artifact/creature/one or more ...> {cost}`
+            if ts.eat_word("with") {
+                let _ = ts.eat_phrase(&["one", "or", "more"])
+                    || ts.eat_word("two")
+                    || ts.eat_word("three")
+                    || ts.eat_word("four")
+                    || ts.eat_word("a")
+                    || ts.eat_word("an");
+                let flt = opt(ts, parse_object_filter).unwrap_or_default();
+                let _ = ts.eat_phrase(&["that", "share", "a", "card", "type"])
+                    || ts.eat_phrase(&["with", "different", "names"]);
+                let costs = opt(ts, parse_cost_list).unwrap_or_default();
+                Some(KeywordParam::FilterAndCost(Box::new(flt), costs))
+            } else {
+                None
+            }
         }
         KeywordKind::Crew
         | KeywordKind::Saddle
@@ -379,10 +458,28 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
         | KeywordKind::Poisonous
         | KeywordKind::Hideaway
         | KeywordKind::Devour
-        | KeywordKind::Tribute => ts
-            .next_number(false)
-            .and_then(|n| u16::try_from(n).ok())
-            .map(KeywordParam::Number),
+        | KeywordKind::Tribute
+        | KeywordKind::Soulshift
+        | KeywordKind::Firebending
+        | KeywordKind::Teamwork
+        | KeywordKind::Amplify => {
+            if ts.eat_word("x") {
+                let wcp = ts.checkpoint();
+                if ts.eat_comma()
+                    && ts.eat_phrase(&["where", "x", "is"])
+                    && let Ok(expr) = try_parse(ts, crate::v2::value::parse_value_expr)
+                {
+                    Some(KeywordParam::VariableXBound(Box::new(expr)))
+                } else {
+                    ts.restore(wcp);
+                    Some(KeywordParam::VariableX)
+                }
+            } else {
+                ts.next_number(false)
+                    .and_then(|n| u16::try_from(n).ok())
+                    .map(KeywordParam::Number)
+            }
+        }
         KeywordKind::Splice => {
             if ts.eat_word("onto")
                 && let Ok(flt) = try_parse(ts, parse_object_filter)
@@ -413,7 +510,17 @@ pub fn parse_keyword_spec(ts: &mut TokenStream<'_>) -> PResult<KeywordSpec> {
             opt(ts, parse_object_filter).map(|f| KeywordParam::Filter(Box::new(f)))
         }
         KeywordKind::Partner => {
-            if ts.eat_word("with") {
+            if ts.eat_em_dash() {
+                let mut parts = Vec::new();
+                while let Some(w) = ts.next_word() {
+                    parts.push(w);
+                }
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(KeywordParam::PartnerName(parts.join(" ")))
+                }
+            } else if ts.eat_word("with") {
                 let mut parts = Vec::new();
                 while let Some(w) = ts.next_word() {
                     parts.push(w);

@@ -14,7 +14,7 @@ use crate::v2::cost::parse_cost_list;
 use crate::v2::filter::parse_keyword_list;
 use crate::v2::ir::{
     Ability, ChoiceCount, ChoiceKind, CompiledCardV2, CompiledFaceV2, Effect, LoyaltyDelta,
-    ModalMode, ParseError, ParseStage, PlayerRef, Span, SpreeMode,
+    ModalMode, ParseError, ParseStage, PlayerRef, Span, SpreeMode, StickerPayload, TableRowPayload,
 };
 use crate::v2::lexer::{TokenKind, tokenize};
 use crate::v2::parser::TokenStream;
@@ -55,7 +55,6 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             || face.type_line.contains("Enchantment")
             || face.type_line.contains("Land")
             || face.type_line.contains("Planeswalker"));
-    let is_planeswalker = face.type_line.contains("Planeswalker");
     let is_saga = face.type_line.contains("Saga");
 
     let stripped_full = strip_reminder_multiline(face.oracle_text);
@@ -72,8 +71,116 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
         let line_owned = strip_ability_word_prefix(raw_line);
         let line = line_owned.as_str();
 
+        // 0a. Sticker row (`{TK}{TK} — 1/5` or `{TK}{TK}{TK} — Whenever ~ attacks, ...`)
+        if let Some((ticket_cost, rhs)) = split_sticker_row(line) {
+            if let Some((p, t)) = parse_bare_base_pt(rhs) {
+                out.abilities.push(Ability::StickerRow {
+                    ticket_cost,
+                    payload: StickerPayload::BasePt(p, t),
+                });
+            } else {
+                let compiled = compile_face_v2(
+                    FaceInput {
+                        name: face.name,
+                        type_line: "Permanent",
+                        oracle_text: rhs,
+                    },
+                    vocab,
+                );
+                if compiled.is_ok() {
+                    out.abilities.push(Ability::StickerRow {
+                        ticket_cost,
+                        payload: StickerPayload::Face(Box::new(compiled)),
+                    });
+                } else {
+                    out.errors.extend(compiled.errors);
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        // 0b. Die-roll table / Station threshold row (`1—9 | ...`, `20 | ...`, `9+ | Flying`)
+        if let Some((min, max, open_ended, rhs_raw)) = split_pipe_table_row(line) {
+            let rhs_owned = strip_ability_word_prefix(rhs_raw);
+            let rhs = rhs_owned.as_str();
+            if is_spell || !open_ended {
+                match parse_effect_body_str(rhs, vocab) {
+                    Ok(effs) => out.abilities.push(Ability::TableRow {
+                        min,
+                        max,
+                        open_ended,
+                        payload: TableRowPayload::Effects(effs),
+                    }),
+                    Err(errs) => out.errors.extend(errs),
+                }
+            } else {
+                let compiled = compile_face_v2(
+                    FaceInput {
+                        name: face.name,
+                        type_line: face.type_line,
+                        oracle_text: rhs,
+                    },
+                    vocab,
+                );
+                if compiled.is_ok() {
+                    out.abilities.push(Ability::TableRow {
+                        min,
+                        max,
+                        open_ended,
+                        payload: TableRowPayload::Face(Box::new(compiled)),
+                    });
+                } else if let Ok(effs) = parse_effect_body_str(rhs, vocab) {
+                    out.abilities.push(Ability::TableRow {
+                        min,
+                        max,
+                        open_ended,
+                        payload: TableRowPayload::Effects(effs),
+                    });
+                } else {
+                    out.errors.extend(compiled.errors);
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        // 0c. Case enchantment rows (`To solve — <cond>` / `Solved — <ability>`)
+        if let Some(cond_str) = line.strip_prefix("To solve \u{2014} ") {
+            let cond_trimmed = cond_str.trim().trim_end_matches('.');
+            match tokenize(cond_trimmed).and_then(|toks| {
+                let mut ts = TokenStream::new(cond_trimmed, &toks, vocab, ParseStage::Static);
+                let c = crate::v2::condition::parse_condition(&mut ts)?;
+                ts.expect_eof()?;
+                Ok(c)
+            }) {
+                Ok(c) => out.abilities.push(Ability::CaseSolveCondition(c)),
+                Err(e) => out.errors.push(e),
+            }
+            i += 1;
+            continue;
+        }
+        if let Some(solved_rhs) = line.strip_prefix("Solved \u{2014} ") {
+            let compiled = compile_face_v2(
+                FaceInput {
+                    name: face.name,
+                    type_line: face.type_line,
+                    oracle_text: solved_rhs.trim(),
+                },
+                vocab,
+            );
+            if compiled.is_ok() {
+                out.abilities.push(Ability::CaseSolved(Box::new(compiled)));
+            } else {
+                out.errors.extend(compiled.errors);
+            }
+            i += 1;
+            continue;
+        }
+
         // 0. Spell-or-permanent static rules (`As an additional cost to cast ...`, `This spell/~ costs ...`,
-        //    `This spell can't be countered`, `You may <cost> rather than pay ...`)
+        //    `This spell can't be countered`, `You may <cost> rather than pay ...`), including multi-sentence static rules
+        //    like `This spell costs {1} less to cast ... This effect reduces only the amount of colored mana you pay.`
         let low_line = line.to_ascii_lowercase();
         if (low_line.starts_with("as an additional cost to cast this spell,")
             || low_line.starts_with("as an additional cost to cast ~,")
@@ -81,7 +188,8 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             || low_line.starts_with("~ costs ")
             || low_line.starts_with("this spell can't be countered")
             || low_line.starts_with("~ can't be countered")
-            || (low_line.starts_with("you may ") && low_line.contains("rather than pay")))
+            || low_line.contains("as though it had flash")
+            || low_line.contains("rather than pay"))
             && let Ok(toks) = tokenize(line)
         {
             let mut st_ts = TokenStream::new(line, &toks, vocab, ParseStage::Static);
@@ -89,6 +197,25 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                 out.statics.push(st);
                 i += 1;
                 continue;
+            }
+            if let Some(first_dot) = toks
+                .iter()
+                .position(|t| matches!(t.kind, TokenKind::Period))
+                && first_dot + 1 < toks.len()
+            {
+                let mut head_ts =
+                    TokenStream::new(line, &toks[..first_dot], vocab, ParseStage::Static);
+                let mut tail_ts =
+                    TokenStream::new(line, &toks[first_dot + 1..], vocab, ParseStage::Static);
+                if let (Ok(st1), Ok(st2)) = (
+                    parse_static_ability(&mut head_ts),
+                    parse_static_ability(&mut tail_ts),
+                ) {
+                    out.statics.push(st1);
+                    out.statics.push(st2);
+                    i += 1;
+                    continue;
+                }
             }
         }
 
@@ -207,9 +334,51 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
             continue;
         }
 
-        // 4. Planeswalker loyalty line (`+1: ...`, `-2: ...`, `-7: ...`)
-        if is_planeswalker && let Some((delta_str, body_str)) = split_loyalty_line(line) {
+        // 4. Planeswalker loyalty line (`+1: ...`, `-2: ...`, `-7: ...`, including granted loyalty abilities on Talents/permanents and inline modals!)
+        if !is_spell && let Some((delta_str, body_str)) = split_loyalty_line(line) {
             let delta = parse_loyalty_delta(&delta_str);
+            let next_is_bullet = lines.get(i + 1).is_some_and(|l| l.starts_with(BULLET));
+            if let Some(count) = parse_modal_header(body_str, next_is_bullet) {
+                let mut modes = Vec::new();
+                i += 1;
+                while i < lines.len() && lines[i].starts_with(BULLET) {
+                    let raw_mode = lines[i].trim_start_matches(BULLET).trim();
+                    let mode_text = strip_ability_word_prefix(raw_mode);
+                    match parse_effect_body_str(&mode_text, vocab) {
+                        Ok(body) => modes.push(ModalMode { body }),
+                        Err(errs) => out.errors.extend(errs),
+                    }
+                    i += 1;
+                }
+                match delta {
+                    Some(d) if !modes.is_empty() => out.abilities.push(Ability::Loyalty {
+                        delta: d,
+                        body: vec![Effect::PromptChoice {
+                            chooser: PlayerRef::You,
+                            kind: ChoiceKind::Modal { count, modes },
+                        }],
+                    }),
+                    Some(_) => out.errors.push(ParseError {
+                        span: Span {
+                            start: 0,
+                            end: line.len(),
+                        },
+                        stage: ParseStage::Effect,
+                        message: "modal loyalty ability with zero modes".to_string(),
+                        text: line.to_string(),
+                    }),
+                    None => out.errors.push(ParseError {
+                        span: Span {
+                            start: 0,
+                            end: delta_str.len(),
+                        },
+                        stage: ParseStage::Cost,
+                        message: format!("invalid loyalty delta `{delta_str}`"),
+                        text: line.to_string(),
+                    }),
+                }
+                continue;
+            }
             match (delta, parse_effect_body_str(body_str, vocab)) {
                 (Some(d), Ok(body)) => out.abilities.push(Ability::Loyalty { delta: d, body }),
                 (None, _) => out.errors.push(ParseError {
@@ -240,8 +409,9 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                 let mut modes = Vec::new();
                 i += 1;
                 while i < lines.len() && lines[i].starts_with(BULLET) {
-                    let mode_text = lines[i].trim_start_matches(BULLET).trim();
-                    match parse_effect_body_str(mode_text, vocab) {
+                    let raw_mode = lines[i].trim_start_matches(BULLET).trim();
+                    let mode_text = strip_ability_word_prefix(raw_mode);
+                    match parse_effect_body_str(&mode_text, vocab) {
                         Ok(body) => modes.push(ModalMode { body }),
                         Err(errs) => out.errors.extend(errs),
                     }
@@ -298,8 +468,9 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                 let mut modes = Vec::new();
                 i += 1;
                 while i < lines.len() && lines[i].starts_with(BULLET) {
-                    let mode_text = lines[i].trim_start_matches(BULLET).trim();
-                    match parse_effect_body_str(mode_text, vocab) {
+                    let raw_mode = lines[i].trim_start_matches(BULLET).trim();
+                    let mode_text = strip_ability_word_prefix(raw_mode);
+                    match parse_effect_body_str(&mode_text, vocab) {
                         Ok(body) => modes.push(ModalMode { body }),
                         Err(errs) => out.errors.extend(errs),
                     }
@@ -404,38 +575,60 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                     };
                     if head_rep.is_some() || head_st.is_some() {
                         let mut tail_effects = Vec::new();
+                        let mut tail_statics = Vec::new();
+                        let mut tail_reps = Vec::new();
                         let mut tail_ok = true;
                         let mut cur_start = 0usize;
                         for (idx, tok) in tail_toks.iter().enumerate() {
                             if matches!(tok.kind, TokenKind::Period) {
                                 if idx > cur_start {
-                                    let mut sub = TokenStream::new(
-                                        line,
-                                        &tail_toks[cur_start..idx],
-                                        vocab,
-                                        ParseStage::Effect,
-                                    );
+                                    let sl = &tail_toks[cur_start..idx];
+                                    let mut sub =
+                                        TokenStream::new(line, sl, vocab, ParseStage::Effect);
                                     if let Ok(effs) = parse_effect_sentence(&mut sub) {
                                         tail_effects.extend(effs);
                                     } else {
-                                        tail_ok = false;
-                                        break;
+                                        let mut sts =
+                                            TokenStream::new(line, sl, vocab, ParseStage::Static);
+                                        if let Ok(st) = parse_static_ability(&mut sts) {
+                                            tail_statics.push(st);
+                                        } else {
+                                            let mut rts = TokenStream::new(
+                                                line,
+                                                sl,
+                                                vocab,
+                                                ParseStage::Replacement,
+                                            );
+                                            if let Ok(rp) = parse_replacement(&mut rts) {
+                                                tail_reps.push(rp);
+                                            } else {
+                                                tail_ok = false;
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
                                 cur_start = idx + 1;
                             }
                         }
                         if tail_ok && cur_start < tail_toks.len() {
-                            let mut sub = TokenStream::new(
-                                line,
-                                &tail_toks[cur_start..],
-                                vocab,
-                                ParseStage::Effect,
-                            );
+                            let sl = &tail_toks[cur_start..];
+                            let mut sub = TokenStream::new(line, sl, vocab, ParseStage::Effect);
                             if let Ok(effs) = parse_effect_sentence(&mut sub) {
                                 tail_effects.extend(effs);
                             } else {
-                                tail_ok = false;
+                                let mut sts = TokenStream::new(line, sl, vocab, ParseStage::Static);
+                                if let Ok(st) = parse_static_ability(&mut sts) {
+                                    tail_statics.push(st);
+                                } else {
+                                    let mut rts =
+                                        TokenStream::new(line, sl, vocab, ParseStage::Replacement);
+                                    if let Ok(rp) = parse_replacement(&mut rts) {
+                                        tail_reps.push(rp);
+                                    } else {
+                                        tail_ok = false;
+                                    }
+                                }
                             }
                         }
                         if tail_ok {
@@ -445,6 +638,8 @@ pub fn compile_face_v2(face: FaceInput<'_>, vocab: &Vocabulary) -> CompiledFaceV
                                 out.statics.push(st);
                             }
                             out.spell_effects.extend(tail_effects);
+                            out.statics.extend(tail_statics);
+                            out.replacements.extend(tail_reps);
                             i += 1;
                             continue;
                         }
@@ -501,7 +696,9 @@ fn parse_modal_header(line: &str, allow_no_dash: bool) -> Option<ChoiceCount> {
         "choose up to one" => Some(ChoiceCount::UpTo(1)),
         "choose up to two" => Some(ChoiceCount::UpTo(2)),
         "choose up to three" => Some(ChoiceCount::UpTo(3)),
-        "choose x" => Some(ChoiceCount::VariableX),
+        "choose up to four" => Some(ChoiceCount::UpTo(4)),
+        "choose four" => Some(ChoiceCount::Exact(4)),
+        "choose up to x" | "choose x" => Some(ChoiceCount::VariableX),
         "choose any number" => Some(ChoiceCount::AnyNumber),
         _ => None,
     }
@@ -514,7 +711,7 @@ fn strip_ability_word_prefix(line: &str) -> String {
         return line.to_string();
     };
     let p = prefix.trim();
-    if p.is_empty() || p.len() > 30 || p.contains('{') || p.contains('+') {
+    if p.is_empty() || p.len() > 50 || p.contains('{') || p.contains('+') {
         return line.to_string();
     }
     let low = p.to_ascii_lowercase();
@@ -529,12 +726,12 @@ fn strip_ability_word_prefix(line: &str) -> String {
     {
         return line.to_string();
     }
-    // Only strip recognized CR 207.2c ability words (all words alphabetic/hyphen/digit, <= 3 words)
+    // Only strip recognized CR 207.2c ability words (all words alphabetic/hyphen/digit/quote/bang, <= 7 words)
     let words: Vec<&str> = p.split_whitespace().collect();
-    if words.len() <= 3
+    if words.len() <= 7
         && words.iter().all(|w| {
             w.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '\'' | '!'))
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '\'' | '!' | ','))
         })
         && words
             .first()
@@ -570,11 +767,51 @@ fn parse_loyalty_delta(s: &str) -> Option<LoyaltyDelta> {
     norm.parse::<i16>().ok().map(LoyaltyDelta::Fixed)
 }
 
+fn split_sticker_row(line: &str) -> Option<(u8, &str)> {
+    let (lhs, rhs) = line.split_once(" \u{2014} ")?;
+    let mut rest = lhs.trim();
+    let mut count = 0u8;
+    while let Some(after) = rest.strip_prefix("{TK}") {
+        count = count.saturating_add(1);
+        rest = after;
+    }
+    if count > 0 && rest.is_empty() {
+        Some((count, rhs.trim()))
+    } else {
+        None
+    }
+}
+
+fn parse_bare_base_pt(s: &str) -> Option<(i32, i32)> {
+    let (p, t) = s.trim().split_once('/')?;
+    Some((p.parse().ok()?, t.parse().ok()?))
+}
+
+fn split_pipe_table_row(line: &str) -> Option<(u16, Option<u16>, bool, &str)> {
+    let (lhs, rhs) = line.split_once(" | ")?;
+    let h = lhs.trim();
+    if let Some(num) = h.strip_suffix('+') {
+        let min = num.trim().parse::<u16>().ok()?;
+        return Some((min, None, true, rhs.trim()));
+    }
+    for sep in ["\u{2014}", "\u{2013}", "-"] {
+        if let Some((a, b)) = h.split_once(sep) {
+            let min = a.trim().parse::<u16>().ok()?;
+            let max = b.trim().parse::<u16>().ok()?;
+            return Some((min, Some(max), false, rhs.trim()));
+        }
+    }
+    let min = h.parse::<u16>().ok()?;
+    Some((min, Some(min), false, rhs.trim()))
+}
+
 fn is_trigger_line(line: &str) -> bool {
     let low = line.to_ascii_lowercase();
     low.starts_with("when ")
         || low.starts_with("whenever ")
         || low.starts_with("at the beginning of ")
+        || low.starts_with("at the end of ")
+        || low.starts_with("at end of combat")
 }
 
 fn parse_triggered_line(line: &str, vocab: &Vocabulary) -> Result<Ability, Vec<ParseError>> {
@@ -589,10 +826,42 @@ fn parse_triggered_line(line: &str, vocab: &Vocabulary) -> Result<Ability, Vec<P
     let mut body = Vec::new();
     let mut cur_start = ts.pos;
     for idx in ts.pos..toks.len() {
-        if matches!(toks[idx].kind, TokenKind::Period) {
-            if idx > cur_start {
+        let is_period = matches!(toks[idx].kind, TokenKind::Period);
+        let is_sentence_ending_quote = matches!(toks[idx].kind, TokenKind::Quoted(q) if q.trim_end().ends_with('.'))
+            && toks.get(idx + 1).is_some_and(|next| {
+                matches!(
+                    next.kind,
+                    TokenKind::Word(w)
+                        if matches!(
+                            w,
+                            "It's"
+                                | "They're"
+                                | "Activate"
+                                | "Do"
+                                | "This"
+                                | "Exile"
+                                | "Sacrifice"
+                                | "Return"
+                                | "Draw"
+                                | "Put"
+                                | "You"
+                                | "Each"
+                                | "If"
+                                | "When"
+                                | "Whenever"
+                                | "At"
+                                | "Until"
+                                | "Then"
+                                | "Otherwise"
+                                | "The"
+                        )
+                )
+            });
+        if is_period || is_sentence_ending_quote {
+            let end_idx = if is_period { idx } else { idx + 1 };
+            if end_idx > cur_start {
                 let mut sub =
-                    TokenStream::new(line, &toks[cur_start..idx], vocab, ParseStage::Effect);
+                    TokenStream::new(line, &toks[cur_start..end_idx], vocab, ParseStage::Effect);
                 let effs = parse_effect_sentence(&mut sub).map_err(|e| vec![e])?;
                 body.extend(effs);
             }
