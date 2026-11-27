@@ -784,10 +784,12 @@ fn concession_library_partition_replacement_optional_and_final_order_cuts() {
         })
         .collect::<Vec<_>>();
     let state = fixture(
-        vec![Instruction::Surveil {
-            player: ResolvingPlayer::TargetPlayer,
-            amount: crate::program::ValueExpr::Literal(3.into()),
-        }],
+        vec![Instruction::MutatePlayer(Box::new(
+            crate::toolbox::MutatePlayerSpec::surveil(
+                ResolvingPlayer::TargetPlayer,
+                crate::program::ValueExpr::Literal(3.into()),
+            ),
+        ))],
         BodyTarget::SinglePlayer,
         library.clone(),
     );
@@ -825,10 +827,12 @@ fn concession_library_partition_replacement_optional_and_final_order_cuts() {
         p,
     ));
     let state = fixture(
-        vec![Instruction::Mill {
-            player: ResolvingPlayer::TargetPlayer,
-            amount: crate::program::ValueExpr::Literal(3.into()),
-        }],
+        vec![Instruction::MutatePlayer(Box::new(
+            crate::toolbox::MutatePlayerSpec::mill(
+                ResolvingPlayer::TargetPlayer,
+                crate::program::ValueExpr::Literal(3.into()),
+            ),
+        ))],
         BodyTarget::SinglePlayer,
         cards,
     );

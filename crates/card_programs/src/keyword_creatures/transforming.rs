@@ -627,7 +627,9 @@ fn compile_face(
                 add_trigger(
                     &mut program, spellwake_engine::program::TriggerSpec::status_changed(spellwake_engine::program::ObjectFilter::self_object(), spellwake_engine::program::StatusTriggerKind::Transforms),
                     BodyTarget::OpponentOrPlaneswalkerThenCreature,
-                    vec![DamageOrderedTargets { first: 2.into(), others: 2.into() }],
+                    vec![Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec::ordered_targets(2.into(), 2.into()),
+                    ))],
                 );
                 continue;
             }

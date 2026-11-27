@@ -38,9 +38,9 @@ fn exact(value: &str) -> RulesInteger {
 }
 
 fn multiplier(factor: i64) -> Instruction {
-    Instruction::CreateDamageMultiplier {
-        factor: factor.into(),
-    }
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::damage_multiplier(factor.into()),
+    ))
 }
 
 fn damage(amount: i64) -> Instruction {
@@ -1076,9 +1076,11 @@ fn huge_factor_is_persistent_exact_data_rather_than_a_machine_integer() {
                 A,
                 ExecutableBody::new(
                     BodyTarget::SingleCreature,
-                    vec![Instruction::CreateDamageMultiplier {
-                        factor: exact(HUGE),
-                    }],
+                    vec![Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::damage_multiplier(exact(
+                            HUGE,
+                        )),
+                    ))],
                 ),
             ),
             (

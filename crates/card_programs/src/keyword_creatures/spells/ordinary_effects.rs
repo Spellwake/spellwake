@@ -18,10 +18,12 @@ pub(super) fn spell_body(text: &str, name: &str) -> Option<ExecutableBody> {
     {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AddManaForPlayer {
-                player: ResolvingPlayer::Controller,
-                yield_kind: spellwake_engine::program::EffectManaYield::Fixed(mana.required),
-            }],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                    ResolvingPlayer::Controller,
+                    spellwake_engine::program::EffectManaYield::Fixed(mana.required),
+                ),
+            ))],
         ));
     }
     if let Some(amount) = rules
@@ -31,10 +33,12 @@ pub(super) fn spell_body(text: &str, name: &str) -> Option<ExecutableBody> {
     {
         return Some(ExecutableBody::new(
             BodyTarget::SinglePlayer,
-            vec![Instruction::Mill {
-                player: ResolvingPlayer::TargetPlayer,
-                amount: spellwake_engine::program::ValueExpr::Literal(amount.into()),
-            }],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                    ResolvingPlayer::TargetPlayer,
+                    spellwake_engine::program::ValueExpr::Literal(amount.into()),
+                ),
+            ))],
         ));
     }
     if rules == "Switch target creature's power and toughness until end of turn." {
@@ -228,7 +232,11 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
         return Some(ExecutableBody::new(BodyTarget::None, vec![
             fixed(ObjectFilter::creature().controlled()),
             fixed(ObjectFilter::creature().opposing()),
-            Instruction::CreatureDealsPowerDamageToOther { trample_overflow },
+            Instruction::DealDamage(Box::new(
+                spellwake_engine::toolbox::DealDamageSpec::creature_power_to_other(
+                    trample_overflow,
+                ),
+            )),
         ]));
     }
     if let Some(stats) = lower.trim().strip_prefix("until end of turn, target creature gets ")
@@ -331,16 +339,18 @@ pub(in crate::keyword_creatures) fn body(text: &str, name: &str) -> Option<Execu
                         .with_mana_value(ManaValueFilter::AtMost(limit.parse().ok()?)),
                     true,
                 ),
-                Instruction::AddManaForPlayer {
-                    player: ResolvingPlayer::Controller,
-                    yield_kind: spellwake_engine::program::EffectManaYield::Split {
-                        first,
-                        second,
-                        amount: spellwake_engine::program::ValueExpr::event(
-                            spellwake_engine::program::EventValueKind::DestroyedPermanents,
-                        ),
-                    },
-                },
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::program::EffectManaYield::Split {
+                            first,
+                            second,
+                            amount: spellwake_engine::program::ValueExpr::event(
+                                spellwake_engine::program::EventValueKind::DestroyedPermanents,
+                            ),
+                        },
+                    ),
+                )),
             ],
         ));
     }
@@ -917,10 +927,12 @@ pub(in crate::keyword_creatures) fn exile_followup(
         && next == "manifests the top card of their library."
         && body.target == BodyTarget::SingleCreature
     {
-        body.instructions.push(Instruction::ManifestTop {
-            player: ResolvingPlayer::ExiledTargetController,
-            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        });
+        body.instructions.push(Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::manifest_top(
+                ResolvingPlayer::ExiledTargetController,
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            ),
+        )));
         return Some(body);
     }
     let followup = if !destroyed
@@ -1301,10 +1313,12 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
     {
         return Some((
             BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()),
-            Instruction::GrantChosenProtection {
-                recipients: spellwake_engine::program::ProtectionRecipients::TargetPermanent,
-                duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
-            },
+            Instruction::ApplyContinuous(Box::new(
+                spellwake_engine::toolbox::ApplyContinuousSpec::chosen_color_protection(
+                    spellwake_engine::program::ProtectionRecipients::TargetPermanent,
+                    spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                ),
+            )),
         ));
     }
     if line == "put a +1/+1 counter on target creature" {
@@ -1326,7 +1340,12 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         ));
     }
     if line == "proliferate" {
-        return Some((NoTarget, Instruction::Proliferate));
+        return Some((
+            NoTarget,
+            Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::proliferate(),
+            )),
+        ));
     }
     if line == "goad all creatures you don't control" {
         return Some((
@@ -1813,17 +1832,19 @@ fn instruction(text: &str) -> Option<(BodyTarget, Instruction)> {
         ),
         _ if line.starts_with("scry ") => (
             NoTarget,
-            Instruction::Scry {
-                player: controller,
-                amount: amount(line.strip_prefix("scry ")?)?,
-            },
+            Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                controller,
+                amount(line.strip_prefix("scry ")?)?,
+            ))),
         ),
         _ if line.starts_with("surveil ") => (
             NoTarget,
-            Instruction::Surveil {
-                player: controller,
-                amount: amount(line.strip_prefix("surveil ")?)?,
-            },
+            Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::surveil(
+                    controller,
+                    amount(line.strip_prefix("surveil ")?)?,
+                ),
+            )),
         ),
         _ => return None,
     })
@@ -1921,10 +1942,12 @@ mod tests {
             body.instructions,
             vec![
                 pump(-2, 1, None),
-                Instruction::Scry {
-                    player: ResolvingPlayer::Controller,
-                    amount: spellwake_engine::program::ValueExpr::Literal(1.into())
-                },
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                        ResolvingPlayer::Controller,
+                        spellwake_engine::program::ValueExpr::Literal(1.into()),
+                    ),
+                )),
                 draw(1)
             ]
         );

@@ -6656,7 +6656,9 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
         Instruction::DrawCards(spec) => find_value_expr_cost_object_ref(&spec.amount),
         Instruction::MutateObject(spec) => match &spec.op {
             spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
-            | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. } => {
+            | spellwake_engine::toolbox::ObjectMutation::RemoveCounters { amount, .. }
+            | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+            | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount } => {
                 find_value_expr_cost_object_ref(amount)
             }
             spellwake_engine::toolbox::ObjectMutation::MoveCounters {
@@ -6690,17 +6692,27 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
                 find_value_expr_cost_object_ref(amount)
             }
             _ => None,
-        },
+        }
+        .or_else(|| match &spec.recipients {
+            spellwake_engine::toolbox::DamageTargetQuery::Divided { total, .. } => {
+                find_value_expr_cost_object_ref(total)
+            }
+            _ => None,
+        }),
         Instruction::MutatePlayer(spec) => match &spec.op {
             spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-            | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. } => {
+            | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
+            | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
+            | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
+            | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
+            | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
+            | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
+            | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount } => {
                 find_value_expr_cost_object_ref(amount)
             }
             _ => None,
         },
-        Instruction::Mill { amount, .. }
-        | Instruction::Scry { amount, .. }
-        | Instruction::Surveil { amount, .. } => find_value_expr_cost_object_ref(amount),
         Instruction::CreateTokens { creations } => creations
             .iter()
             .find_map(|c| find_value_expr_cost_object_ref(&c.amount)),
@@ -6817,7 +6829,14 @@ fn resolve_that_player_for_value_expr(
                 Instruction::ChooseValue {
                     domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
                     ..
-                } | Instruction::SelectExtremeLifePlayer { .. }
+                }
+            ) || matches!(
+                op,
+                Instruction::MutatePlayer(spec)
+                    if matches!(
+                        spec.op,
+                        spellwake_engine::toolbox::PlayerMutation::SelectExtremeLife { .. }
+                    )
             ) || matches!(
                 op,
                 Instruction::PromptChoice(spec)
@@ -8307,9 +8326,16 @@ fn lower_value_expr_inner(
                     let prior_exile_non_target = has_prior_exile_non_target(context);
                     let prior_single_sacrifice = has_prior_single_sacrifice(context);
                     let prior_mill = context.is_some_and(|(b, _)| {
-                        b.instructions
-                            .iter()
-                            .any(|op| matches!(op, Instruction::Mill { .. }))
+                        b.instructions.iter().any(|op| {
+                            matches!(
+                                op,
+                                Instruction::MutatePlayer(spec)
+                                    if matches!(
+                                        spec.op,
+                                        spellwake_engine::toolbox::PlayerMutation::Mill(_)
+                                    )
+                            )
+                        })
                     });
                     let prior_discard = context.is_some_and(|(b, _)| {
                         b.instructions.iter().any(|op| {

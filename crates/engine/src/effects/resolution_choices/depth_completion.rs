@@ -1000,7 +1000,9 @@ fn both_actual_optional_damage_orders_retain_locals_and_targets_through_denials_
                         as_emblem: None,
                         emblem_label: None,
                     })),
-                    Instruction::CreateDamageMultiplier { factor: 2.into() },
+                    Instruction::ApplyContinuous(Box::new(
+                        crate::toolbox::ApplyContinuousSpec::damage_multiplier(2.into()),
+                    )),
                     Instruction::OptionalEffect {
                         chooser: ResolvingPlayer::Controller,
                     },

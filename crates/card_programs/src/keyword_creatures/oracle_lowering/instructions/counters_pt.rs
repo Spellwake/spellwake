@@ -311,7 +311,11 @@ pub(super) fn lower_counters_pt_instruction(
                     if last_instruction_created_tokens(&trial.instructions)
                         || matches!(
                             trial.instructions.last(),
-                            Some(Instruction::Incubate { .. })
+                            Some(Instruction::MutatePlayer(spec))
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::PlayerMutation::Incubate { .. }
+                                )
                         )
                         || (has_prior_token_creation(&trial.instructions)
                             && raw.to_ascii_lowercase().contains("token")) =>
@@ -325,7 +329,11 @@ pub(super) fn lower_counters_pt_instruction(
                     if last_instruction_moved_object(&trial.instructions)
                         || matches!(
                             trial.instructions.last(),
-                            Some(Instruction::ManifestTop { .. })
+                            Some(Instruction::MutatePlayer(spec))
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
+                                )
                         ) =>
                 {
                     Some(EffectSubject::LastMoved)
@@ -404,7 +412,11 @@ pub(super) fn lower_counters_pt_instruction(
         InstructionAst::BecomePrepared { subject }
             if is_self_pronoun(subject, builder, self_pronoun_valid) =>
         {
-            builder.instructions.push(Instruction::BecomePreparedSource);
+            builder
+                .instructions
+                .push(Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::set_prepared(),
+                )));
             Ok(())
         }
         InstructionAst::ModifyPT {
@@ -1005,10 +1017,11 @@ pub(super) fn lower_counters_pt_instruction(
                     |ops: &mut Vec<Instruction>,
                      recipients: ProtectionRecipients,
                      dur: ResolvedDuration| {
-                        ops.push(Instruction::GrantChosenProtection {
-                            recipients,
-                            duration: dur,
-                        });
+                        ops.push(Instruction::ApplyContinuous(Box::new(
+                            spellwake_engine::toolbox::ApplyContinuousSpec::chosen_color_protection(
+                                recipients, dur,
+                            ),
+                        )));
                     };
                 let mut handled_prot = false;
                 if matches!(chosen_kind, ChosenQualityGrant::ProtectionColor) {
@@ -1536,10 +1549,12 @@ pub(super) fn lower_counters_pt_instruction(
                                     }]
                                 }
                                 ChoiceTargetKind::TargetAnyNumber => {
-                                    vec![Instruction::ModifyAnyNumberOfPermanents {
-                                        parts,
-                                        duration: dur,
-                                    }]
+                                    vec![Instruction::ApplyContinuous(Box::new(
+                                        spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(
+                                            parts,
+                                            dur,
+                                        ),
+                                    ))]
                                 }
                                 ChoiceTargetKind::AbilitySource => {
                                     vec![
@@ -2140,12 +2155,12 @@ pub(super) fn lower_counters_pt_instruction(
                     let obj =
                         lower_object_filter_in_context(&f_clean, builder, in_trigger, vocabulary)?;
                     builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
-                    builder
-                        .instructions
-                        .push(Instruction::ModifyAnyNumberOfPermanents {
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
+                    builder.instructions.push(Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(
+                            ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                            dur,
+                        ),
+                    )));
                     Ok(())
                 }
                 SubjectRefAst::Player(p)
@@ -2195,15 +2210,24 @@ pub(super) fn lower_counters_pt_instruction(
                 SubjectRefAst::Anaphora(_)
                     if is_permanent_body_target(builder.target)
                         && builder.instructions.iter().any(|op| {
-                            matches!(op, Instruction::ModifyAnyNumberOfPermanents { .. })
+                            matches!(
+                                op,
+                                Instruction::ApplyContinuous(spec)
+                                    if matches!(
+                                        spec.payload,
+                                        spellwake_engine::toolbox::ContinuousPayload::ModifyAnyNumber {
+                                            ..
+                                        }
+                                    )
+                            )
                         }) =>
                 {
-                    builder
-                        .instructions
-                        .push(Instruction::ModifyAnyNumberOfPermanents {
-                            parts: ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
-                            duration: dur,
-                        });
+                    builder.instructions.push(Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(
+                            ResolvedPartsSpec(vec![ResolvedPartSpec::Abilities(ab_change)]),
+                            dur,
+                        ),
+                    )));
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_) | SubjectRefAst::Player(PlayerRefAst::ThatPlayer)
@@ -3751,14 +3775,25 @@ pub(super) fn lower_counters_pt_instruction(
                     if last_instruction_moved_object(&builder.instructions)
                         || matches!(
                             builder.instructions.last(),
-                            Some(Instruction::ManifestTop { .. } | Instruction::ManifestDread)
+                            Some(Instruction::MutatePlayer(spec))
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
+                                        | spellwake_engine::toolbox::PlayerMutation::ManifestDread
+                                )
                         )
                         || matches!(
                             builder.instructions.last(),
                             Some(Instruction::RepeatLoop { body, .. })
                                 if body.instructions.iter().any(|op| matches!(
                                     op,
-                                    Instruction::ManifestTop { .. } | Instruction::ManifestDread
+                                    Instruction::MutatePlayer(spec)
+                                        if matches!(
+                                            spec.op,
+                                            spellwake_engine::toolbox::PlayerMutation::ManifestTop {
+                                                ..
+                                            } | spellwake_engine::toolbox::PlayerMutation::ManifestDread
+                                        )
                                 ))
                         ) =>
                 {
@@ -3946,7 +3981,11 @@ pub(super) fn lower_counters_pt_instruction(
             }
         }
         InstructionAst::Proliferate => {
-            builder.instructions.push(Instruction::Proliferate);
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::proliferate(),
+                )));
             Ok(())
         }
         InstructionAst::RemoveCounters {
@@ -4193,7 +4232,11 @@ pub(super) fn lower_counters_pt_instruction(
             };
             let u = u16::try_from(n.to_usize().ok_or("oracle:bolster-ovf")?)
                 .map_err(|_| "oracle:bolster-ovf")?;
-            builder.instructions.push(Instruction::Bolster(u));
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::bolster(u),
+                )));
             Ok(())
         }
         InstructionAst::Adapt { count } => {
@@ -4232,7 +4275,13 @@ pub(super) fn lower_counters_pt_instruction(
             if is_self_pronoun(subject, builder, self_pronoun_valid) {
                 builder
                     .instructions
-                    .push(Instruction::ExploreSubject(MoveSubjectRef::AbilitySource));
+                    .push(Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::explore(
+                            spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                MoveSubjectRef::AbilitySource,
+                            ),
+                        ),
+                    )));
                 return Ok(());
             }
             match subject.as_ref() {
@@ -4244,25 +4293,49 @@ pub(super) fn lower_counters_pt_instruction(
                     builder.bind_target(bt)?;
                     builder
                         .instructions
-                        .push(Instruction::ExploreSubject(MoveSubjectRef::TargetObject));
+                        .push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::explore(
+                                spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                    MoveSubjectRef::TargetObject,
+                                ),
+                            ),
+                        )));
                     Ok(())
                 }
                 SubjectRefAst::Anaphora(_) if builder.target != BodyTarget::None => {
                     builder
                         .instructions
-                        .push(Instruction::ExploreSubject(MoveSubjectRef::TargetObject));
+                        .push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::explore(
+                                spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                    MoveSubjectRef::TargetObject,
+                                ),
+                            ),
+                        )));
                     Ok(())
                 }
                 SubjectRefAst::TriggerSubject if in_trigger => {
-                    builder.instructions.push(Instruction::ExploreSubject(
-                        MoveSubjectRef::TriggeringObject,
-                    ));
+                    builder
+                        .instructions
+                        .push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::explore(
+                                spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                    MoveSubjectRef::TriggeringObject,
+                                ),
+                            ),
+                        )));
                     Ok(())
                 }
                 SubjectRefAst::AttachedHost(_) if self_pronoun_valid => {
                     builder
                         .instructions
-                        .push(Instruction::ExploreSubject(MoveSubjectRef::AttachedHost));
+                        .push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::explore(
+                                spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                    MoveSubjectRef::AttachedHost,
+                                ),
+                            ),
+                        )));
                     Ok(())
                 }
                 _ => Err("oracle:unsupported-explore"),
@@ -4357,19 +4430,22 @@ pub(super) fn lower_counters_pt_instruction(
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::Blight {
-                        player: ResolvingPlayer::LoopPlayer,
-                        amount: amt,
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::blight(
+                            ResolvingPlayer::LoopPlayer,
+                            amt,
+                        ),
+                    ))],
                     builder,
                 );
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::Blight {
-                player: rp,
-                amount: amt,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::blight(rp, amt),
+                )));
             Ok(())
         }
         InstructionAst::Connive { subject, count } => {
@@ -4749,7 +4825,11 @@ pub(super) fn lower_counters_pt_instruction(
                     if last_instruction_moved_object(&builder.instructions)
                         || matches!(
                             builder.instructions.last(),
-                            Some(Instruction::ManifestTop { .. })
+                            Some(Instruction::MutatePlayer(spec))
+                                if matches!(
+                                    spec.op,
+                                    spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
+                                )
                         ) =>
                 {
                     builder.instructions.push(
@@ -4953,13 +5033,13 @@ pub(super) fn lower_counters_pt_instruction(
             };
             let parts_mut = match last {
                 Instruction::ApplyContinuous(spec) => match &mut spec.payload {
-                    spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) => {
+                    spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts)
+                    | spellwake_engine::toolbox::ContinuousPayload::ModifyAnyNumber { parts } => {
                         Some(&mut parts.0)
                     }
                     _ => None,
                 },
-                Instruction::ModifyAnyNumberOfPermanents { parts, .. }
-                | Instruction::AffectPermanentTargets {
+                Instruction::AffectPermanentTargets {
                     action: PermanentTargetAction::Modify { parts, .. },
                     ..
                 } => Some(&mut parts.0),
@@ -5024,7 +5104,9 @@ pub(super) fn lower_counters_pt_instruction(
             builder.bind_target(bt)?;
             builder
                 .instructions
-                .push(Instruction::DistributeCountersAmongTargets { kind: ck, total });
+                .push(Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::distribute_counters(ck, total),
+                )));
             Ok(())
         }
         InstructionAst::Monstrosity { count } => {
@@ -5036,7 +5118,9 @@ pub(super) fn lower_counters_pt_instruction(
             )?;
             builder
                 .instructions
-                .push(Instruction::Monstrosity { amount: amt });
+                .push(Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::monstrosity(amt),
+                )));
             Ok(())
         }
         InstructionAst::GrantKeywordChoice {
@@ -5644,10 +5728,9 @@ pub(super) fn emit_resolved_parts_for_subject(
             builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
             builder
                 .instructions
-                .push(Instruction::ModifyAnyNumberOfPermanents {
-                    parts,
-                    duration: dur,
-                });
+                .push(Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(parts, dur),
+                )));
             Ok(())
         }
         SubjectRefAst::AttachedHost(_) if self_pronoun_valid || in_trigger => {
@@ -6155,7 +6238,11 @@ pub(super) fn partition_temp_keyword_grants(
                     grouping: TriggerGrouping::EachOccurrence,
                     body: ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::PairWithCreature { entrant_only }],
+                        vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::soulbond_pair(
+                                entrant_only,
+                            ),
+                        ))],
                     ),
                 })));
             }
@@ -6602,11 +6689,13 @@ fn lower_animate_or_set_pt_extended(
         };
         let parts_mut = match last {
             Instruction::ApplyContinuous(spec) => match &mut spec.payload {
-                spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts) => &mut parts.0,
+                spellwake_engine::toolbox::ContinuousPayload::ResolvedParts(parts)
+                | spellwake_engine::toolbox::ContinuousPayload::ModifyAnyNumber { parts } => {
+                    &mut parts.0
+                }
                 _ => return Err("oracle:unsupported-animate-desc"),
             },
-            Instruction::ModifyAnyNumberOfPermanents { parts, .. }
-            | Instruction::AffectPermanentTargets {
+            Instruction::AffectPermanentTargets {
                 action: PermanentTargetAction::Modify { parts, .. },
                 ..
             } => &mut parts.0,

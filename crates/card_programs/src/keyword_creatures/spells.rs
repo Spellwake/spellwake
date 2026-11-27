@@ -131,7 +131,9 @@ pub(super) fn compile(
             fixed_cost(face.mana_cost.as_deref()?)?,
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::WatchNextSpellOrLoyaltyTwice],
+                vec![Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::watch_next_spell_or_loyalty(false),
+                ))],
             ),
         ));
     }
@@ -564,10 +566,12 @@ pub(super) fn compile(
         "Scry 2, then draw two cards." if exile_action.is_some() => ExecutableBody::new(
             BodyTarget::None,
             vec![
-                Instruction::Scry {
-                    player: spellwake_engine::program::ResolvingPlayer::Controller,
-                    amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                },
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                        spellwake_engine::program::ResolvingPlayer::Controller,
+                        spellwake_engine::program::ValueExpr::Literal(2.into()),
+                    ),
+                )),
                 draw(2),
             ],
         ),
@@ -598,10 +602,12 @@ pub(super) fn compile(
         ),
         "Target player mills four cards." if escaped => ExecutableBody::new(
             BodyTarget::SinglePlayer,
-            vec![Instruction::Mill {
-                player: spellwake_engine::program::ResolvingPlayer::TargetPlayer,
-                amount: spellwake_engine::program::ValueExpr::Literal(4.into()),
-            }],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                    spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                    spellwake_engine::program::ValueExpr::Literal(4.into()),
+                ),
+            ))],
         ),
         "Target creature gets -3/-3 until end of turn. If this spell was bargained, that creature gets -5/-5 until end of turn instead."
             if keywords.contains(&KeywordAbility::Bargain) =>

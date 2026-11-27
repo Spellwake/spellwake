@@ -1409,12 +1409,14 @@ fn option_index_choice_bundle_projects_human_labels_and_translates_round_trip() 
     bb.insert(ManaType::Black, 2.into());
     let spell = instant(
         BodyTarget::None,
-        vec![Instruction::AddManaForPlayer {
-            player: spellwake_engine::program::ResolvingPlayer::Controller,
-            yield_kind: EffectManaYield::ChoiceBundle {
-                options: vec![ww, bb],
-            },
-        }],
+        vec![Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                spellwake_engine::program::ResolvingPlayer::Controller,
+                EffectManaYield::ChoiceBundle {
+                    options: vec![ww, bb],
+                },
+            ),
+        ))],
     );
     let source = main_state(vec![card(1, A, ObjectDestination::Hand, spell)]);
     let cast = bridged(&source, viewer_a(), |v| PlayerAction::CastUntargeted {
@@ -1585,20 +1587,24 @@ fn predicate_restricted_mana_projects_enforces_atomically_and_round_trips_wire()
     let producer = instant(
         BodyTarget::None,
         vec![
-            Instruction::AddManaForPlayer {
-                player: spellwake_engine::program::ResolvingPlayer::Controller,
-                yield_kind: EffectManaYield::RestrictedFixed {
-                    bundle: [(ManaType::Red, 2.into())].into(),
-                    restriction: no_generic_rule,
-                },
-            },
-            Instruction::AddManaForPlayer {
-                player: spellwake_engine::program::ResolvingPlayer::Controller,
-                yield_kind: EffectManaYield::RestrictedFixed {
-                    bundle: [(ManaType::Green, 1.into())].into(),
-                    restriction: legendary_rule,
-                },
-            },
+            Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                    EffectManaYield::RestrictedFixed {
+                        bundle: [(ManaType::Red, 2.into())].into(),
+                        restriction: no_generic_rule,
+                    },
+                ),
+            )),
+            Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                    spellwake_engine::program::ResolvingPlayer::Controller,
+                    EffectManaYield::RestrictedFixed {
+                        bundle: [(ManaType::Green, 1.into())].into(),
+                        restriction: legendary_rule,
+                    },
+                ),
+            )),
         ],
     );
     // Costs {1}{R}: cannot be paid with 2 no-generic {R} because generic {1} cannot use disallow_generic mana.
@@ -1787,7 +1793,9 @@ fn populate_auto_resolves_singleton_prompts_on_multiple_and_rejects_invalid_atom
             Instruction::CreateTokens {
                 creations: vec![TokenCreation::one(make_token(1, 1))],
             },
-            Instruction::Populate,
+            Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::populate(),
+            )),
         ],
     );
     let singleton_source = main_state(vec![card(1, A, ObjectDestination::Hand, singleton_spell)]);
@@ -1822,7 +1830,9 @@ fn populate_auto_resolves_singleton_prompts_on_multiple_and_rejects_invalid_atom
             Instruction::CreateTokens {
                 creations: vec![TokenCreation::one(make_token(3, 3))],
             },
-            Instruction::Populate,
+            Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::populate(),
+            )),
         ],
     );
     let source = main_state(vec![

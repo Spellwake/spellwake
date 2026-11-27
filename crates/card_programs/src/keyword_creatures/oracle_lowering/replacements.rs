@@ -9553,10 +9553,12 @@ fn parse_prevent_followup(
         };
         let body = ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::Mill {
-                player: ResolvingPlayer::Controller,
-                amount,
-            }],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                    ResolvingPlayer::Controller,
+                    amount,
+                ),
+            ))],
         );
         if validate_inline_followup_body(&body, vocabulary) {
             return Some(DamagePreventFollowup::InlineBody(Box::new(body)));

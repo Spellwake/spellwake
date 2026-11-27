@@ -961,7 +961,12 @@ impl EffectWindow {
     }
 
     pub(super) fn proliferate_choice(&self) -> Result<ProliferateChoice, EffectError> {
-        if !matches!(self.current_instruction()?, Instruction::Proliferate) {
+        let is_proliferate = matches!(
+            self.current_instruction()?,
+            Instruction::MutatePlayer(spec)
+                if matches!(spec.op, crate::toolbox::PlayerMutation::Proliferate)
+        );
+        if !is_proliferate {
             return Err(EffectError::WrongResolutionFrame);
         }
         let cursor = self

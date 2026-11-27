@@ -156,8 +156,12 @@ fn land_instruction(text: &str) -> Option<Instruction> {
             ),
             spellwake_engine::program::ValueExpr::literal(1),
         ),
-        "surveil 1." | "Surveil 1." => Instruction::Surveil { player, amount },
-        "scry 1." | "Scry 1." => Instruction::Scry { player, amount },
+        "surveil 1." | "Surveil 1." => Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::surveil(player, amount),
+        )),
+        "scry 1." | "Scry 1." => Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::scry(player, amount),
+        )),
         "Draw a card." => {
             crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(amount)
         }

@@ -274,7 +274,9 @@ pub(super) fn compile(
                             maximum: 3,
                             action: spellwake_engine::program::PermanentTargetAction::Destroy,
                         },
-                        Instruction::ReturnCardsDestroyedThisWay,
+                        Instruction::ZoneOp(Box::new(
+                            spellwake_engine::toolbox::ZoneOpSpec::return_destroyed_this_way(),
+                        )),
                     ],
                 ))
             }
@@ -481,9 +483,9 @@ pub(super) fn compile(
                             ),
                             spellwake_engine::program::ValueExpr::literal(2),
                         ),
-                        Instruction::AddManaForPlayer {
-                            player: spellwake_engine::program::ResolvingPlayer::Controller,
-                            yield_kind:
+                        Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                                spellwake_engine::program::ResolvingPlayer::Controller,
                                 spellwake_engine::program::EffectManaYield::RestrictedChoice {
                                     colors: BTreeSet::from([
                                         ManaType::Blue,
@@ -494,7 +496,8 @@ pub(super) fn compile(
                                     restriction:
                                         spellwake_engine::mana::ManaRestriction::NoncreatureSpell,
                                 },
-                        },
+                            ),
+                        )),
                     ],
                 ),
             });
@@ -662,7 +665,7 @@ pub(super) fn compile(
                     ResolvedPartSpec::Abilities(AbilityChange { grants_unblockable:true, ..AbilityChange::grant_keywords([KeywordAbility::Vigilance,KeywordAbility::Indestructible]) })]);
                 (BodyTarget::FilteredPermanent(ObjectFilter::artifact().controlled()),crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(spellwake_engine::toolbox::ObjectQuery::Targets,parts,ResolvedDuration::NoStatedDuration))
             }
-            "Scry 2." => (BodyTarget::None,Instruction::Scry {player:ResolvingPlayer::Controller,amount:spellwake_engine::program::ValueExpr::Literal(2.into())}),
+            "Scry 2." => (BodyTarget::None, Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::scry(ResolvingPlayer::Controller, spellwake_engine::program::ValueExpr::Literal(2.into()))))),
             "Exile target enchantment, tapped artifact, or tapped creature." => (BodyTarget::FilteredPermanent(ObjectFilter::either(ObjectClause::enchantment(), ObjectClause::any().any_types(CardTypeMask::ARTIFACT.union(CardTypeMask::CREATURE)).tapped())),crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()),
             "Search your library for an artifact or creature card, put it onto the battlefield, then shuffle. It gains haste. Return it to your hand at the beginning of the next end step." =>
                 (BodyTarget::None, Instruction::SearchLibrary { filter: Box::new(spellwake_engine::program::LibrarySearch::to_battlefield(
@@ -706,8 +709,8 @@ pub(super) fn compile(
                     true,
                 ),
             ),
-            "Add {R} for each planeswalker you control." => (BodyTarget::None, Instruction::AddManaForPlayer { player: spellwake_engine::program::ResolvingPlayer::Controller, yield_kind: spellwake_engine::program::EffectManaYield::Counted { kind: ManaType::Red, amount: spellwake_engine::program::ValueExpr::controlled_type(CardType::Planeswalker) } }),
-            "Add {R}{R}." => (BodyTarget::None, Instruction::AddManaForPlayer { player: spellwake_engine::program::ResolvingPlayer::Controller, yield_kind: spellwake_engine::program::EffectManaYield::Fixed([(ManaType::Red, 2.into())].into()) }),
+            "Add {R} for each planeswalker you control." => (BodyTarget::None, Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::add_mana(spellwake_engine::program::ResolvingPlayer::Controller, spellwake_engine::program::EffectManaYield::Counted { kind: ManaType::Red, amount: spellwake_engine::program::ValueExpr::controlled_type(CardType::Planeswalker) })))),
+            "Add {R}{R}." => (BodyTarget::None, Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::add_mana(spellwake_engine::program::ResolvingPlayer::Controller, spellwake_engine::program::EffectManaYield::Fixed([(ManaType::Red, 2.into())].into()))))),
             "Create a 1/1 red Wizard creature token with \"{T}: Add {R}. Spend this mana only to cast a planeswalker spell.\"" => {
                 use spellwake_engine::{characteristics::Color, mana::{ManaAbility, ManaAbilityId, ManaOutput, ManaRestriction}, token::{TokenCreation, TokenDefinition, TokenName, TokenSubtype}};
                 let wizard = vocabulary.resolve_label("Wizard")?;
@@ -871,9 +874,15 @@ pub(super) fn compile(
             "Exile target creature with power 4 or greater." => (BodyTarget::FilteredPermanent(ObjectFilter::creature().with_power(PowerFilter::AtLeast(4))), crate::keyword_creatures::oracle_lowering::toolbox_emit::exile_target()),
             "Each player draws a card." => (BodyTarget::None, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_each_player(one())),
             "Target player draws a card." => (BodyTarget::SinglePlayer, crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_target_player(one())),
-            "Target player mills twenty cards." => (BodyTarget::SinglePlayer, Instruction::Mill {
-                player: ResolvingPlayer::TargetPlayer, amount: spellwake_engine::program::ValueExpr::Literal(20.into()),
-            }),
+            "Target player mills twenty cards." => (
+                BodyTarget::SinglePlayer,
+                Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                        ResolvingPlayer::TargetPlayer,
+                        spellwake_engine::program::ValueExpr::Literal(20.into()),
+                    ),
+                )),
+            ),
             _ => return None,
         };
         let id = ActivatedAbilityId(u64::try_from(index).ok()?);
@@ -977,7 +986,9 @@ pub(super) fn loyalty_support(
             source_cost: SourceCost::Tap,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::AdditionalLoyaltyActivation],
+                vec![Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::additional_loyalty_activation(),
+                ))],
             ),
         });
         (

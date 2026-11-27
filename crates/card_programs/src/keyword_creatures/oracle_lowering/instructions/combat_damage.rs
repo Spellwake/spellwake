@@ -410,11 +410,11 @@ pub(super) fn lower_combat_damage_instruction(
                                         vec![Instruction::RememberPermanentTarget],
                                     ),
                                 )));
-                            builder.instructions.push(
-                                Instruction::CreatureDealsPowerDamageToOther {
-                                    trample_overflow: false,
-                                },
-                            );
+                            builder.instructions.push(Instruction::DealDamage(Box::new(
+                                spellwake_engine::toolbox::DealDamageSpec::creature_power_to_other(
+                                    false,
+                                ),
+                            )));
                             return Ok(());
                         }
                         if matches!(source.as_ref(), SubjectRefAst::Anaphora(_))
@@ -452,11 +452,11 @@ pub(super) fn lower_combat_damage_instruction(
                                         vec![Instruction::RememberPermanentTarget],
                                     ),
                                 )));
-                            builder.instructions.push(
-                                Instruction::CreatureDealsPowerDamageToOther {
-                                    trample_overflow: false,
-                                },
-                            );
+                            builder.instructions.push(Instruction::DealDamage(Box::new(
+                                spellwake_engine::toolbox::DealDamageSpec::creature_power_to_other(
+                                    false,
+                                ),
+                            )));
                             return Ok(());
                         }
                     }
@@ -712,13 +712,13 @@ pub(super) fn lower_combat_damage_instruction(
                                         )?,
                                         builder,
                                     );
-                                    builder.instructions.push(
-                                        Instruction::DealDamageToAnnouncedTargets {
-                                            amount: expr,
-                                            min_targets: 0,
-                                            max_targets: 1,
-                                        },
-                                    );
+                                    builder.instructions.push(Instruction::DealDamage(Box::new(
+                                        spellwake_engine::toolbox::DealDamageSpec::announced_targets(
+                                            expr,
+                                            0,
+                                            1,
+                                        ),
+                                    )));
                                     return Ok(());
                                 } else {
                                     return Err("oracle:unsupported-damage-target");
@@ -1642,13 +1642,11 @@ pub(super) fn lower_combat_damage_instruction(
                         builder.x_target_count = true;
                     }
                     let amt_expr = lower_amt(builder)?;
-                    builder
-                        .instructions
-                        .push(Instruction::DealDamageToAnnouncedTargets {
-                            amount: amt_expr,
-                            min_targets: min_t,
-                            max_targets: max_t,
-                        });
+                    builder.instructions.push(Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec::announced_targets(
+                            amt_expr, min_t, max_t,
+                        ),
+                    )));
                     Ok(())
                 }
                 SubjectRefAst::TargetOneOf { options, count } => {
@@ -1672,13 +1670,11 @@ pub(super) fn lower_combat_damage_instruction(
                                         action: PermanentTargetAction::Damage(amt_expr),
                                     });
                             } else {
-                                builder.instructions.push(
-                                    Instruction::DealDamageToAnnouncedTargets {
-                                        amount: amt_expr,
-                                        min_targets: n,
-                                        max_targets: n,
-                                    },
-                                );
+                                builder.instructions.push(Instruction::DealDamage(Box::new(
+                                    spellwake_engine::toolbox::DealDamageSpec::announced_targets(
+                                        amt_expr, n, n,
+                                    ),
+                                )));
                             }
                             Ok(())
                         }
@@ -1692,13 +1688,11 @@ pub(super) fn lower_combat_damage_instruction(
                                         action: PermanentTargetAction::Damage(amt_expr),
                                     });
                             } else {
-                                builder.instructions.push(
-                                    Instruction::DealDamageToAnnouncedTargets {
-                                        amount: amt_expr,
-                                        min_targets: 0,
-                                        max_targets: max,
-                                    },
-                                );
+                                builder.instructions.push(Instruction::DealDamage(Box::new(
+                                    spellwake_engine::toolbox::DealDamageSpec::announced_targets(
+                                        amt_expr, 0, max,
+                                    ),
+                                )));
                             }
                             Ok(())
                         }
@@ -1712,13 +1706,13 @@ pub(super) fn lower_combat_damage_instruction(
                                         action: PermanentTargetAction::Damage(amt_expr),
                                     });
                             } else {
-                                builder.instructions.push(
-                                    Instruction::DealDamageToAnnouncedTargets {
-                                        amount: amt_expr,
-                                        min_targets: 0,
-                                        max_targets: u16::MAX,
-                                    },
-                                );
+                                builder.instructions.push(Instruction::DealDamage(Box::new(
+                                    spellwake_engine::toolbox::DealDamageSpec::announced_targets(
+                                        amt_expr,
+                                        0,
+                                        u16::MAX,
+                                    ),
+                                )));
                             }
                             Ok(())
                         }
@@ -1733,13 +1727,13 @@ pub(super) fn lower_combat_damage_instruction(
                                         action: PermanentTargetAction::Damage(amt_expr),
                                     });
                             } else {
-                                builder.instructions.push(
-                                    Instruction::DealDamageToAnnouncedTargets {
-                                        amount: amt_expr,
-                                        min_targets: 0,
-                                        max_targets: u16::MAX,
-                                    },
-                                );
+                                builder.instructions.push(Instruction::DealDamage(Box::new(
+                                    spellwake_engine::toolbox::DealDamageSpec::announced_targets(
+                                        amt_expr,
+                                        0,
+                                        u16::MAX,
+                                    ),
+                                )));
                             }
                             Ok(())
                         }
@@ -3306,9 +3300,13 @@ pub(super) fn lower_combat_damage_instruction(
                 && low.contains("untap")
                 && low.contains("creatures you control")
             {
-                builder.instructions.push(Instruction::AdditionalCombat {
-                    untap: CombatUntapGroup::ControlledCreatures,
-                });
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::additional_combat(
+                            CombatUntapGroup::ControlledCreatures,
+                        ),
+                    )));
                 Ok(())
             } else if in_trigger
                 && low.contains("additional combat phase")
@@ -3330,9 +3328,13 @@ pub(super) fn lower_combat_damage_instruction(
                         spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
                     ),
                 );
-                builder.instructions.push(Instruction::AdditionalCombat {
-                    untap: CombatUntapGroup::None,
-                });
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::additional_combat(
+                            CombatUntapGroup::None,
+                        ),
+                    )));
                 Ok(())
             } else if low.contains("additional combat phase")
                 && !low.contains("untap")
@@ -3347,9 +3349,13 @@ pub(super) fn lower_combat_damage_instruction(
                 && !low.contains("create")
                 && !low.contains("until end of turn")
             {
-                builder.instructions.push(Instruction::AdditionalCombat {
-                    untap: CombatUntapGroup::None,
-                });
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::additional_combat(
+                            CombatUntapGroup::None,
+                        ),
+                    )));
                 Ok(())
             } else {
                 Err("oracle:unsupported-additional-combat")
@@ -3907,15 +3913,23 @@ pub(super) fn lower_combat_damage_instruction(
                 || low == "you_choose_how_they_block"
                 || low.contains("you choose how those creatures block")
             {
-                builder.instructions.push(Instruction::SetBlockDeclarations(
-                    spellwake_engine::program::BlockDeclarationRule::ControllerChooses,
-                ));
+                builder
+                    .instructions
+                    .push(Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::block_declarations(
+                            spellwake_engine::program::BlockDeclarationRule::ControllerChooses,
+                        ),
+                    )));
                 return Ok(());
             }
             if low.contains("each opponent can't block with more than one creature") {
-                builder.instructions.push(Instruction::SetBlockDeclarations(
-                    spellwake_engine::program::BlockDeclarationRule::EachOpponentOneBlocker,
-                ));
+                builder
+                    .instructions
+                    .push(Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::block_declarations(
+                            spellwake_engine::program::BlockDeclarationRule::EachOpponentOneBlocker,
+                        ),
+                    )));
                 return Ok(());
             }
             if low
@@ -4440,7 +4454,9 @@ pub(super) fn lower_combat_damage_instruction(
                 ))?;
                 builder
                     .instructions
-                    .push(Instruction::ReselectAttackDefender);
+                    .push(Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::reselect_attack_defender(),
+                    )));
                 return Ok(());
             }
             if let Some(kws_raw) = low.strip_prefix("cant_have:") {
@@ -4482,9 +4498,9 @@ pub(super) fn lower_combat_damage_instruction(
                 };
                 if is_controlled_pws {
                     if dur == ResolvedDuration::UntilEndOfTurn {
-                        builder
-                            .instructions
-                            .push(Instruction::AdditionalLoyaltyActivation);
+                        builder.instructions.push(Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::additional_loyalty_activation(),
+                        )));
                     } else {
                         builder.instructions.push(crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_temporary_rule(TemporaryRuleKind::TemporaryStatic(Box::new(
                                 StaticContinuousAbility::Modifier {
@@ -5724,12 +5740,14 @@ pub(super) fn lower_combat_damage_instruction(
                         builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
                         builder
                             .instructions
-                            .push(Instruction::ModifyAnyNumberOfPermanents {
-                                parts: ResolvedPartsSpec(vec![
-                                    ResolvedPartSpec::BlockingRestriction(br),
-                                ]),
-                                duration: br_dur,
-                            });
+                            .push(Instruction::ApplyContinuous(Box::new(
+                                spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(
+                                    ResolvedPartsSpec(vec![ResolvedPartSpec::BlockingRestriction(
+                                        br,
+                                    )]),
+                                    br_dur,
+                                ),
+                            )));
                         return Ok(());
                     }
                     SubjectRefAst::Anaphora(raw)
@@ -6324,24 +6342,21 @@ pub(super) fn lower_combat_damage_instruction(
                         && !x_exact
                         && !x_up_to
                     {
-                        builder
-                            .instructions
-                            .push(Instruction::DivideThreeDamageAmongTargets);
+                        builder.instructions.push(Instruction::DealDamage(Box::new(
+                            spellwake_engine::toolbox::DealDamageSpec::divide_three(),
+                        )));
                     } else {
-                        builder
-                            .instructions
-                            .push(Instruction::DivideDamageExprAmongTargets {
-                                total: ValueExpr::Literal(i64::from(total).into()),
-                                max_targets: None,
-                            });
+                        builder.instructions.push(Instruction::DealDamage(Box::new(
+                            spellwake_engine::toolbox::DealDamageSpec::divided(
+                                ValueExpr::Literal(i64::from(total).into()),
+                                None,
+                            ),
+                        )));
                     }
                 } else {
-                    builder
-                        .instructions
-                        .push(Instruction::DivideDamageExprAmongTargets {
-                            total: amt,
-                            max_targets: cap_opt,
-                        });
+                    builder.instructions.push(Instruction::DealDamage(Box::new(
+                        spellwake_engine::toolbox::DealDamageSpec::divided(amt, cap_opt),
+                    )));
                 }
                 return Ok(());
             }

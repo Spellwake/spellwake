@@ -72,7 +72,9 @@ pub(super) fn compile(
             grouping: TriggerGrouping::EachOccurrence,
             body: ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::PairWithCreature { entrant_only }],
+                vec![Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::soulbond_pair(entrant_only),
+                ))],
             ),
         });
     }

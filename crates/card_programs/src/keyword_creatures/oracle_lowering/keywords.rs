@@ -384,7 +384,11 @@ pub(super) fn lower_keyword(
                     grouping: TriggerGrouping::EachOccurrence,
                     body: ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::PairWithCreature { entrant_only }],
+                        vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::soulbond_pair(
+                                entrant_only,
+                            ),
+                        ))],
                     ),
                 });
             }
@@ -1814,13 +1818,15 @@ pub(super) fn lower_keyword(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::AddManaForPlayer {
-                        player: ResolvingPlayer::Controller,
-                        yield_kind: EffectManaYield::RetainedUntilEndOfCombat {
-                            kind: ManaType::Red,
-                            amount,
-                        },
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                            ResolvingPlayer::Controller,
+                            EffectManaYield::RetainedUntilEndOfCombat {
+                                kind: ManaType::Red,
+                                amount,
+                            },
+                        ),
+                    ))],
                 ),
             });
             Ok(())
@@ -2181,7 +2187,12 @@ pub(super) fn lower_keyword(
                 id: ids.triggered(),
                 condition: TriggerSpec::self_attacks(),
                 grouping: TriggerGrouping::EachOccurrence,
-                body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Enlist]),
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::enlist(),
+                    ))],
+                ),
             });
             Ok(())
         }
@@ -2243,7 +2254,12 @@ pub(super) fn lower_keyword(
                 id: ids.triggered(),
                 condition: TriggerSpec::self_cast(),
                 grouping: TriggerGrouping::EachOccurrence,
-                body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Ripple(n)]),
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::ripple(n),
+                    ))],
+                ),
             });
             Ok(())
         }
@@ -2252,7 +2268,12 @@ pub(super) fn lower_keyword(
                 id: ids.triggered(),
                 condition: TriggerSpec::self_cast(),
                 grouping: TriggerGrouping::EachOccurrence,
-                body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Demonstrate]),
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::demonstrate(),
+                    ))],
+                ),
             });
             Ok(())
         }
@@ -3742,13 +3763,15 @@ fn lower_non_mana_cumulative_upkeep(
             "{c}" => ManaType::Colourless,
             _ => return Err("oracle:cum-upkeep-cost"),
         };
-        vec![Instruction::AddManaForPlayer {
-            player: ResolvingPlayer::Controller,
-            yield_kind: EffectManaYield::Counted {
-                kind: mana_type,
-                amount: age_count,
-            },
-        }]
+        vec![Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                ResolvingPlayer::Controller,
+                EffectManaYield::Counted {
+                    kind: mana_type,
+                    amount: age_count,
+                },
+            ),
+        ))]
     } else if matches!(
         low.as_str(),
         "sacrifice a creature"

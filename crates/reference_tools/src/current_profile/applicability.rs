@@ -294,14 +294,9 @@ native!(ExecutableBody, self, {
     }
     self.instructions.iter().try_for_each(|value| match value {
         Instruction::OfferDynamicManaPayment { .. }
-        | Instruction::CollectEvidence { .. }
-        | Instruction::Blight { .. }
-        | Instruction::Populate
         | Instruction::ChooseObjects { .. }
         | Instruction::ChooseOption { .. }
-        | Instruction::DivideDamageExprAmongTargets { .. }
         | Instruction::BecomeCopy { .. }
-        | Instruction::DistributeCountersAmongTargets { .. }
         | Instruction::PromptChoice(_)
         | Instruction::BranchCondition { .. }
         | Instruction::ForEach { .. }
@@ -312,29 +307,18 @@ native!(ExecutableBody, self, {
         | Instruction::SideDeckOp(_)
         | Instruction::BindResolutionX(_)
         | Instruction::CreateAuraTokenAttached { .. }
-        | Instruction::ExploreSubject(_)
         | Instruction::ScheduleDelayedEventTrigger { .. }
-        | Instruction::AdvanceClassLevel(_)
-        | Instruction::SolveSourceCase
-        | Instruction::BecomePreparedSource
-        | Instruction::ModifyAnyNumberOfPermanents { .. }
         | Instruction::OfferSourceCounters { .. }
         | Instruction::OptionalSequence { .. }
         | Instruction::ReturnExiledTargetCohort { .. }
-        | Instruction::ReturnCardsDestroyedThisWay
         | Instruction::ExileDelayedObjects(_)
         | Instruction::RequireCondition(_)
         | Instruction::Encore
-        | Instruction::SetBlockDeclarations(_)
-        | Instruction::ReselectAttackDefender
-        | Instruction::AdditionalLoyaltyActivation
         | Instruction::Ninjutsu
         | Instruction::Unearth
         | Instruction::Cascade
         | Instruction::CascadeBottom
         | Instruction::Myriad
-        | Instruction::WatchNextSpellOrLoyaltyTwice
-        | Instruction::WatchNextLoyaltyCopy
         | Instruction::CopyCapturedAbility
         | Instruction::CopyOnCast(_)
         | Instruction::MadnessCast
@@ -351,8 +335,6 @@ native!(ExecutableBody, self, {
         | Instruction::ExileUnearthed(_)
         | Instruction::ResolveTransfer(_)
         | Instruction::ExileDefeatedSiege
-        | Instruction::DamageFromPower(_)
-        | Instruction::CreatureDealsPowerDamageToOther { .. }
         | Instruction::ExtortDrain
         | Instruction::ResolveGrowth(_)
         | Instruction::ResolveCounterKeyword(_)
@@ -362,34 +344,22 @@ native!(ExecutableBody, self, {
         | Instruction::ReturnGraveyardCreatureWithCorpse(_)
         | Instruction::PutHandPermanentsOntoBattlefield { .. }
         | Instruction::MayRevealLibraryTop
-        | Instruction::ManifestTop { .. }
         | Instruction::ChooseFoundSpell
         | Instruction::CastFoundSpell(_)
         | Instruction::ReturnChosenXGraveyardCreatures
-        | Instruction::DivideThreeDamageAmongTargets
-        | Instruction::DamageOrderedTargets { .. }
         | Instruction::FixedTargetClause(_)
         | Instruction::SearchLibrary { .. }
         | Instruction::CreateTokenAndAttach { .. }
-        | Instruction::PairWithCreature { .. }
         | Instruction::ScheduleDelayedStepTrigger { .. }
         | Instruction::EmitReflexiveTrigger { .. }
         | Instruction::ChooseRevealedHandCard { .. }
         | Instruction::RememberPermanentTarget
-        | Instruction::AdditionalCombat { .. }
-        | Instruction::Proliferate
-        | Instruction::DamageTargetControllersCreatures { .. }
         | Instruction::ResolvePowerAbility(_)
         | Instruction::Attach(_)
-        | Instruction::Scry { .. }
-        | Instruction::Surveil { .. }
-        | Instruction::Mill { .. }
         | Instruction::AffectPermanentTargets { .. }
         | Instruction::ExileOnePerPlayerUntilSourceLeaves
         | Instruction::ReturnDelayedGraveyardToHand(_)
         | Instruction::DamageFromGrantingPermanent { .. }
-        | Instruction::Bolster(_)
-        | Instruction::Amass { .. }
         | Instruction::Sacrifice { .. }
         | Instruction::SacrificeRandomUntilLand
         | Instruction::Discard { .. } => Err(ApplicabilityError),
@@ -433,7 +403,11 @@ native!(ExecutableBody, self, {
                     })
                 }
                 spellwake_engine::toolbox::ContinuousPayload::DoublePt { .. }
-                | spellwake_engine::toolbox::ContinuousPayload::PlayPermission { .. } => Ok(()),
+                | spellwake_engine::toolbox::ContinuousPayload::PlayPermission { .. }
+                | spellwake_engine::toolbox::ContinuousPayload::DamageMultiplier { .. }
+                | spellwake_engine::toolbox::ContinuousPayload::ChosenColorProtection { .. } => {
+                    Ok(())
+                }
                 spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield { .. } => {
                     if matches!(
                         self.target,
@@ -462,46 +436,75 @@ native!(ExecutableBody, self, {
         {
             Err(ApplicabilityError)
         }
+        Instruction::MutatePlayer(spec)
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::PlayerMutation::CollectEvidence { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::Blight { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::Populate
+                    | spellwake_engine::toolbox::PlayerMutation::AdditionalLoyaltyActivation
+                    | spellwake_engine::toolbox::PlayerMutation::WatchNextSpellOrLoyalty { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::AdditionalCombat { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::Proliferate
+                    | spellwake_engine::toolbox::PlayerMutation::Scry(_)
+                    | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
+                    | spellwake_engine::toolbox::PlayerMutation::Mill(_)
+                    | spellwake_engine::toolbox::PlayerMutation::Bolster(_)
+                    | spellwake_engine::toolbox::PlayerMutation::Amass { .. }
+            ) =>
+        {
+            Err(ApplicabilityError)
+        }
+        Instruction::MutateObject(spec)
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::ObjectMutation::DistributeCounters { .. }
+                    | spellwake_engine::toolbox::ObjectMutation::Explore
+                    | spellwake_engine::toolbox::ObjectMutation::AdvanceClassLevel(_)
+                    | spellwake_engine::toolbox::ObjectMutation::SolveCase
+                    | spellwake_engine::toolbox::ObjectMutation::SetPrepared
+                    | spellwake_engine::toolbox::ObjectMutation::ReselectAttackDefender
+                    | spellwake_engine::toolbox::ObjectMutation::SoulbondPair { .. }
+            ) =>
+        {
+            Err(ApplicabilityError)
+        }
+        Instruction::DealDamage(spec)
+            if matches!(
+                spec.recipients,
+                spellwake_engine::toolbox::DamageTargetQuery::Divided { .. }
+                    | spellwake_engine::toolbox::DamageTargetQuery::FromPower(_)
+                    | spellwake_engine::toolbox::DamageTargetQuery::CreaturePowerToOther { .. }
+                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree
+                    | spellwake_engine::toolbox::DamageTargetQuery::OrderedTargets { .. }
+                    | spellwake_engine::toolbox::DamageTargetQuery::TargetControllersCreatures {
+                        ..
+                    }
+            ) =>
+        {
+            Err(ApplicabilityError)
+        }
         Instruction::BranchIfFalse { .. }
         | Instruction::Jump { .. }
         | Instruction::OptionalEffect { .. }
         | Instruction::ChooseCreatureType { .. }
-        | Instruction::CreateDamageMultiplier { .. }
         | Instruction::ExileTopPlay { .. }
         | Instruction::RepeatLoop { .. }
         | Instruction::RollDie { .. }
         | Instruction::FlipCoins { .. }
         | Instruction::ChooseValue { .. }
-        | Instruction::Vote { .. }
-        | Instruction::Incubate { .. }
         | Instruction::Connive { .. }
         | Instruction::ConniveFinalize { .. }
         | Instruction::Discover { .. }
-        | Instruction::Clash { .. }
-        | Instruction::RingTemptsYou
-        | Instruction::VentureIntoDungeon { .. }
-        | Instruction::TakeInitiative { .. }
-        | Instruction::UnlockDoor { .. }
-        | Instruction::Behold { .. }
-        | Instruction::ManifestDread
-        | Instruction::Monstrosity { .. }
         | Instruction::Fight { .. }
         | Instruction::Exchange(_)
-        | Instruction::Ripple(_)
-        | Instruction::Demonstrate
-        | Instruction::Enlist
         | Instruction::OfferAnyPlayer { .. }
-        | Instruction::DealDamageToAnnouncedTargets { .. }
-        | Instruction::GrantChosenProtection { .. }
         | Instruction::LookTopChooseExt { .. }
         | Instruction::RevealTopTwoPiles { .. }
         | Instruction::RevealUntilMatchExt { .. }
         | Instruction::CreateTokenCopyExt { .. }
-        | Instruction::Earthbend { .. }
         | Instruction::ReturnEarthbentCard
-        | Instruction::AddManaForPlayer { .. }
-        | Instruction::SelectExtremeLifePlayer { .. }
-        | Instruction::ChooseOneLastMoved { .. }
         | Instruction::DrawCards(_)
         | Instruction::MutateObject(_)
         | Instruction::AdjustLife(_)

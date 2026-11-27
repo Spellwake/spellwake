@@ -737,14 +737,14 @@ fn real_chosen_type_and_captured_trigger_counts_reauthorize_the_owned_library_cu
             )
         };
         let body = vec![
-            Instruction::Mill {
-                player: ResolvingPlayer::Controller,
-                amount: amount.clone(),
-            },
-            Instruction::Surveil {
-                player: ResolvingPlayer::Controller,
+            Instruction::MutatePlayer(Box::new(crate::toolbox::MutatePlayerSpec::mill(
+                ResolvingPlayer::Controller,
+                amount.clone(),
+            ))),
+            Instruction::MutatePlayer(Box::new(crate::toolbox::MutatePlayerSpec::surveil(
+                ResolvingPlayer::Controller,
                 amount,
-            },
+            ))),
             gain(3),
         ];
         let redirect = source(vec![

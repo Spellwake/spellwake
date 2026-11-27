@@ -918,7 +918,7 @@ pub enum RulesOccurrence {
         sides: u16,
         result: u16,
     },
-    /// Votes were tallied for a resolving `Instruction::Vote`.
+    /// Votes were tallied for a resolving `PlayerMutation::Vote`.
     VotesCast {
         options: Vec<String>,
         counts: Vec<u16>,
@@ -3356,10 +3356,12 @@ impl TriggerState {
                         controller: *player,
                         body: ExecutableBody::new(
                             crate::program::BodyTarget::None,
-                            vec![crate::program::Instruction::Scry {
-                                player: crate::program::ResolvingPlayer::Controller,
-                                amount: crate::program::ValueExpr::Literal(1.into()),
-                            }],
+                            vec![crate::program::Instruction::MutatePlayer(Box::new(
+                                crate::toolbox::MutatePlayerSpec::scry(
+                                    crate::program::ResolvingPlayer::Controller,
+                                    crate::program::ValueExpr::Literal(1.into()),
+                                ),
+                            ))],
                         ),
                         upkeep_keyword: None,
                     };

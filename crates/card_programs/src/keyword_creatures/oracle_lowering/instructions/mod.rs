@@ -656,7 +656,14 @@ pub(super) fn lower_resolving_player_in_context(
                     Instruction::ChooseValue {
                         domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
                         ..
-                    } | Instruction::SelectExtremeLifePlayer { .. }
+                    }
+                ) || matches!(
+                    op,
+                    Instruction::MutatePlayer(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::PlayerMutation::SelectExtremeLife { .. }
+                        )
                 ) || matches!(
                     op,
                     Instruction::PromptChoice(spec)
@@ -779,7 +786,14 @@ pub(super) fn lower_resolving_player_in_context(
                     Instruction::ChooseValue {
                         domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
                         ..
-                    } | Instruction::SelectExtremeLifePlayer { .. }
+                    }
+                ) || matches!(
+                    op,
+                    Instruction::MutatePlayer(spec)
+                        if matches!(
+                            spec.op,
+                            spellwake_engine::toolbox::PlayerMutation::SelectExtremeLife { .. }
+                        )
                 ) || matches!(
                     op,
                     Instruction::PromptChoice(spec)
@@ -1118,11 +1132,6 @@ fn effect_mana_yield_uses_chosen_x(yield_spec: &EffectManaYield) -> bool {
 
 fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
     body.instructions.iter().any(|op| match op {
-        Instruction::AddManaForPlayer {
-            yield_kind: yield_spec,
-            ..
-        } => effect_mana_yield_uses_chosen_x(yield_spec),
-        Instruction::Earthbend { amount } => value_expr_uses_chosen_x(amount),
         Instruction::ZoneOp(spec) => {
             crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op_any_value_expr(
                 spec,
@@ -1148,7 +1157,11 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
                     spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
                     | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
                         amount, ..
-                    } => value_expr_uses_chosen_x(amount),
+                    }
+                    | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+                    | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount } => {
+                        value_expr_uses_chosen_x(amount)
+                    }
                     spellwake_engine::toolbox::ObjectMutation::MoveCounters { amount, .. } => {
                         amount.as_ref().is_some_and(value_expr_uses_chosen_x)
                     }
@@ -1181,25 +1194,38 @@ fn body_uses_chosen_x(body: &ExecutableBody) -> bool {
             }
             spellwake_engine::toolbox::LifeOp::LoseHalf { .. } => false,
         },
-        Instruction::DealDamage(spec) => matches!(
-            &spec.amount,
-            spellwake_engine::program::DamageAmountSpec::Expr(amount)
-                if value_expr_uses_chosen_x(amount)
-        ),
-        Instruction::MutatePlayer(spec) => matches!(
-            &spec.op,
+        Instruction::DealDamage(spec) => {
+            matches!(
+                &spec.amount,
+                spellwake_engine::program::DamageAmountSpec::Expr(amount)
+                    if value_expr_uses_chosen_x(amount)
+            ) || matches!(
+                &spec.recipients,
+                spellwake_engine::toolbox::DamageTargetQuery::Divided { total, .. }
+                    if value_expr_uses_chosen_x(total)
+            )
+        }
+        Instruction::MutatePlayer(spec) => match &spec.op {
             spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-                | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
-                if value_expr_uses_chosen_x(amount)
-        ),
+            | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
+            | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
+            | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
+            | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
+            | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
+            | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
+            | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
+            | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { minimum: amount } => {
+                value_expr_uses_chosen_x(amount)
+            }
+            spellwake_engine::toolbox::PlayerMutation::AddMana(yield_spec) => {
+                effect_mana_yield_uses_chosen_x(yield_spec)
+            }
+            _ => false,
+        },
         Instruction::BindResolutionX(amount) => value_expr_uses_chosen_x(amount),
-        Instruction::DealDamageToAnnouncedTargets { amount, .. }
-        | Instruction::CreateTokenCopyExt { count: amount, .. }
+        Instruction::CreateTokenCopyExt { count: amount, .. }
         | Instruction::RollDie { count: amount, .. }
-        | Instruction::Mill { amount, .. }
         | Instruction::Discard { amount, .. }
-        | Instruction::Scry { amount, .. }
-        | Instruction::Surveil { amount, .. }
         | Instruction::Sacrifice { amount, .. }
         | Instruction::ExileTopPlay { count: amount, .. }
         | Instruction::LookTopChooseExt { count: amount, .. }

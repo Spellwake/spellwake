@@ -1888,10 +1888,12 @@ pub(super) fn lower_modify_pt_part(
             builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
             builder
                 .instructions
-                .push(Instruction::ModifyAnyNumberOfPermanents {
-                    parts: ResolvedPartsSpec(vec![part]),
-                    duration: dur,
-                });
+                .push(Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(
+                        ResolvedPartsSpec(vec![part]),
+                        dur,
+                    ),
+                )));
             Ok(())
         }
         SubjectRefAst::TargetOneOf {
@@ -1986,10 +1988,12 @@ pub(super) fn lower_modify_pt_part(
             builder.bind_target(BodyTarget::FilteredPermanent(obj))?;
             builder
                 .instructions
-                .push(Instruction::ModifyAnyNumberOfPermanents {
-                    parts: ResolvedPartsSpec(vec![part]),
-                    duration: dur,
-                });
+                .push(Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(
+                        ResolvedPartsSpec(vec![part]),
+                        dur,
+                    ),
+                )));
             Ok(())
         }
         SubjectRefAst::Anaphora(raw)
@@ -2022,17 +2026,24 @@ pub(super) fn lower_modify_pt_part(
                             duration: dur,
                         },
                     });
-            } else if builder
-                .instructions
-                .iter()
-                .any(|op| matches!(op, Instruction::ModifyAnyNumberOfPermanents { .. }))
-            {
+            } else if builder.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::ApplyContinuous(spec)
+                        if matches!(
+                            spec.payload,
+                            spellwake_engine::toolbox::ContinuousPayload::ModifyAnyNumber { .. }
+                        )
+                )
+            }) {
                 builder
                     .instructions
-                    .push(Instruction::ModifyAnyNumberOfPermanents {
-                        parts: ResolvedPartsSpec(vec![part]),
-                        duration: dur,
-                    });
+                    .push(Instruction::ApplyContinuous(Box::new(
+                        spellwake_engine::toolbox::ApplyContinuousSpec::modify_any_number(
+                            ResolvedPartsSpec(vec![part]),
+                            dur,
+                        ),
+                    )));
             } else {
                 builder.instructions.push(
                     crate::keyword_creatures::oracle_lowering::toolbox_emit::apply_continuous_parts(
@@ -2527,10 +2538,9 @@ pub(super) fn lower_resolution_pay_cost_ops(
         ]),
         CostAtomAst::Behold(filter) => {
             let obj = lower_filter_any(filter)?;
-            Ok(vec![Instruction::Behold {
-                filter: Box::new(obj),
-                optional: false,
-            }])
+            Ok(vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::behold(obj, false),
+            ))])
         }
         CostAtomAst::RollDie(sides) => {
             let nz = std::num::NonZeroU16::new(u16::from(*sides)).ok_or("oracle:zero-die-sides")?;
@@ -2796,10 +2806,9 @@ pub(super) fn lower_resolution_pay_cost_ops(
         }
         CostAtomAst::Mill(expr) => {
             let amt = lower_value_expr(resolve_x(expr, bound_x), vocabulary)?;
-            Ok(vec![Instruction::Mill {
-                player,
-                amount: amt,
-            }])
+            Ok(vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::mill(player, amt),
+            ))])
         }
         CostAtomAst::CollectEvidence(_) | CostAtomAst::Blight(_) => {
             Err("oracle:unsupported-pay-cost")
@@ -4938,10 +4947,12 @@ pub(super) fn predefined_token_def(
                 body: ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::Scry {
-                            player: ResolvingPlayer::Controller,
-                            amount: ValueExpr::literal(1),
-                        },
+                        Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                                ResolvingPlayer::Controller,
+                                ValueExpr::literal(1),
+                            ),
+                        )),
                         crate::keyword_creatures::oracle_lowering::toolbox_emit::draw_controller(
                             ValueExpr::literal(1),
                         ),
@@ -5096,7 +5107,13 @@ pub(super) fn predefined_token_def(
                     source_cost: SourceCost::TapSacrifice,
                     body: ExecutableBody::new(
                         BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()),
-                        vec![Instruction::ExploreSubject(MoveSubjectRef::TargetObject)],
+                        vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::explore(
+                                spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                    MoveSubjectRef::TargetObject,
+                                ),
+                            ),
+                        ))],
                     ),
                 }],
             );
@@ -5211,10 +5228,12 @@ pub(super) fn predefined_token_def(
                         grouping: TriggerGrouping::EachOccurrence,
                         body: ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::Scry {
-                                player: ResolvingPlayer::Controller,
-                                amount: ValueExpr::literal(1),
-                            }],
+                            vec![Instruction::MutatePlayer(Box::new(
+                                spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                                    ResolvingPlayer::Controller,
+                                    ValueExpr::literal(1),
+                                ),
+                            ))],
                         ),
                     };
                     push_static_ability(

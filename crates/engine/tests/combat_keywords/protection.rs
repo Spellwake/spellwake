@@ -65,7 +65,9 @@ fn protection_competes_with_shields_and_multipliers_and_prevents_every_damage_re
             instant(
                 5,
                 A,
-                Instruction::CreateDamageMultiplier { factor: 2.into() },
+                Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec::damage_multiplier(2.into()),
+                )),
             ),
         ],
         &[(2, 1)],

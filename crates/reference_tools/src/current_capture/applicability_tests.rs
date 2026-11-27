@@ -234,18 +234,20 @@ fn library_profile_denial_preserves_actual_initializer_cast_and_completed_native
     use spellwake_engine::{effects::Instruction, mana::ManaCost, program::ResolvingPlayer};
     let _reset = Reset;
     for instruction in [
-        Instruction::Scry {
-            player: ResolvingPlayer::Controller,
-            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        },
-        Instruction::Surveil {
-            player: ResolvingPlayer::Controller,
-            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        },
-        Instruction::Mill {
-            player: ResolvingPlayer::Controller,
-            amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-        },
+        Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::scry(
+            ResolvingPlayer::Controller,
+            spellwake_engine::program::ValueExpr::Literal(1.into()),
+        ))),
+        Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::surveil(
+                ResolvingPlayer::Controller,
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            ),
+        )),
+        Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::mill(
+            ResolvingPlayer::Controller,
+            spellwake_engine::program::ValueExpr::Literal(1.into()),
+        ))),
     ] {
         let program = spellwake_engine::program::Program::instant(
             ManaCost::free(),

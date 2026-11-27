@@ -202,6 +202,8 @@ pub enum ObjectQuery {
     AttachedHost,
     /// Objects moved by the preceding instruction in this resolution.
     LastMoved,
+    /// Cards destroyed by the preceding destroy instruction in this resolution.
+    DestroyedThisWay,
     /// Tokens created earlier during this resolution.
     CreatedTokens,
     /// Top/revealed card remembered during this resolution.
@@ -247,6 +249,23 @@ impl ObjectQuery {
         }
     }
 
+    /// Convert a legacy [`crate::program::MoveSubjectRef`] into an orthogonal [`ObjectQuery`].
+    #[must_use]
+    pub fn from_move_subject(subj: crate::program::MoveSubjectRef) -> Self {
+        use crate::program::MoveSubjectRef;
+        match subj {
+            MoveSubjectRef::AbilitySource => Self::Source,
+            MoveSubjectRef::TargetObject => Self::Targets,
+            MoveSubjectRef::AttachedHost => Self::AttachedHost,
+            MoveSubjectRef::TriggeringObject => Self::TriggerSubject,
+            MoveSubjectRef::LastMoved => Self::LastMoved,
+            MoveSubjectRef::CreatedTokens => Self::CreatedTokens,
+            MoveSubjectRef::RevealedCard => Self::Revealed,
+            MoveSubjectRef::RememberedFirst => Self::LinkedTarget { index: 0 },
+            MoveSubjectRef::RememberedSecond => Self::LinkedTarget { index: 1 },
+        }
+    }
+
     /// Whether this query depends on an announced target.
     #[must_use]
     pub fn uses_target(&self) -> bool {
@@ -260,6 +279,7 @@ impl ObjectQuery {
             | Self::TriggerSubject
             | Self::AttachedHost
             | Self::LastMoved
+            | Self::DestroyedThisWay
             | Self::CreatedTokens
             | Self::Revealed
             | Self::LinkedExile { .. } => false,
@@ -307,6 +327,7 @@ impl ObjectQuery {
             | Self::TriggerSubject
             | Self::AttachedHost
             | Self::LastMoved
+            | Self::DestroyedThisWay
             | Self::CreatedTokens
             | Self::Revealed
             | Self::LinkedTarget { .. }

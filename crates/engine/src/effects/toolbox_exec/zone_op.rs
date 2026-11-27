@@ -97,6 +97,33 @@ impl EffectWindow {
     ) -> Result<StepOutcome, EffectError> {
         let controller = entry.controller();
         let source_id = self.entry_source_object(Some(entry));
+        if matches!(spec.source, crate::toolbox::ObjectQuery::DestroyedThisWay)
+            && matches!(spec.destination, ZoneDest::Battlefield { .. })
+        {
+            let cards = std::mem::take(
+                &mut self
+                    .resolution_cursor_mut()
+                    .ok_or(EffectError::WrongResolutionFrame)?
+                    .results
+                    .destroyed_cards_to_graveyard,
+            );
+            self.begin_linked_cohort_return(
+                LinkedReturnOrigin::Graveyard {
+                    player: None,
+                    controller: Some(controller),
+                    subtype_counters: None,
+                    entry_additions: crate::program::EntryAdditions::default(),
+                    entry: entry.id(),
+                    instruction: index,
+                    tapped: false,
+                    forest: false,
+                    corpse: false,
+                },
+                cards,
+                ctx.append,
+            )?;
+            return Ok(StepOutcome::Continue);
+        }
 
         let chosen_library_pos: Option<LibraryOrderPos> = if let ZoneDest::Library {
             position: LibraryOrderPos::ChoiceTopOrBottom { chooser },

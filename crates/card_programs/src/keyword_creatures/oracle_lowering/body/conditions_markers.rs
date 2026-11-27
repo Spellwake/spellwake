@@ -4128,7 +4128,12 @@ pub(super) fn lower_marker_or_action_condition(
                 .iter()
                 .rev()
                 .find_map(|op| match op {
-                    Instruction::Vote { options, .. } => Some(options),
+                    Instruction::MutatePlayer(spec) => match &spec.op {
+                        spellwake_engine::toolbox::PlayerMutation::Vote { options, .. } => {
+                            Some(options)
+                        }
+                        _ => None,
+                    },
                     _ => None,
                 })
                 .ok_or("oracle:unsupported-if-condition")?;
@@ -5481,13 +5486,11 @@ pub(super) fn lower_marker_or_action_condition(
                 | "excess damage was dealt this way" => {
                     let preceded_by_target_damage = matches!(
                         builder.instructions.last(),
-                        Some(Instruction::CreatureDealsPowerDamageToOther { .. })
-                    ) || matches!(
-                        builder.instructions.last(),
                         Some(Instruction::DealDamage(spec))
                             if matches!(
                                 &spec.recipients,
                                 spellwake_engine::toolbox::DamageTargetQuery::Targets
+                                    | spellwake_engine::toolbox::DamageTargetQuery::CreaturePowerToOther { .. }
                                     | spellwake_engine::toolbox::DamageTargetQuery::Objects(
                                         spellwake_engine::toolbox::ObjectQuery::Targets
                                     )

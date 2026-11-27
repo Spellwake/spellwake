@@ -572,10 +572,12 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::SinglePlayer,
-                vec![Instruction::Mill {
-                    player: spellwake_engine::program::ResolvingPlayer::TargetPlayer,
-                    amount: spellwake_engine::program::ValueExpr::Literal(count.into()),
-                }],
+                vec![Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                        spellwake_engine::program::ResolvingPlayer::TargetPlayer,
+                        spellwake_engine::program::ValueExpr::Literal(count.into()),
+                    ),
+                ))],
             ),
             restriction,
         ));
@@ -684,9 +686,13 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::ExploreSubject(
-                    spellwake_engine::program::MoveSubjectRef::AbilitySource,
-                )],
+                vec![Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::explore(
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                            spellwake_engine::program::MoveSubjectRef::AbilitySource,
+                        ),
+                    ),
+                ))],
             ),
             restriction,
         ));
@@ -982,9 +988,11 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::SingleAnyTarget,
-                vec![Instruction::DamageFromPower(
-                    spellwake_engine::program::PowerDamageSource::AbilitySource,
-                )],
+                vec![Instruction::DealDamage(Box::new(
+                    spellwake_engine::toolbox::DealDamageSpec::from_power(
+                        spellwake_engine::program::PowerDamageSource::AbilitySource,
+                    ),
+                ))],
             ),
             restriction,
         ));

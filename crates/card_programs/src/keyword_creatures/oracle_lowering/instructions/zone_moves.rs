@@ -8875,19 +8875,22 @@ pub(super) fn lower_zone_moves_instruction(
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::Mill {
-                        player: ResolvingPlayer::LoopPlayer,
-                        amount: amt,
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                            ResolvingPlayer::LoopPlayer,
+                            amt,
+                        ),
+                    ))],
                     builder,
                 );
                 return Ok(());
             }
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::Mill {
-                player: rp,
-                amount: amt,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::mill(rp, amt),
+                )));
             Ok(())
         }
         InstructionAst::ShuffleLibrary {
@@ -10127,8 +10130,18 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             {
                 return true;
             }
-            Instruction::ChooseOneLastMoved { .. }
-            | Instruction::OptionalEffect { .. }
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::Mill(_)
+                        | spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
+                        | spellwake_engine::toolbox::PlayerMutation::ManifestDread
+                        | spellwake_engine::toolbox::PlayerMutation::Incubate { .. }
+                ) =>
+            {
+                return false;
+            }
+            Instruction::OptionalEffect { .. }
             | Instruction::OptionalSequence { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::AdjustLife(_)
@@ -10136,9 +10149,7 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::BindResolutionX(_)
-            | Instruction::ChooseValue { .. }
-            | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::AddManaForPlayer { .. } => continue,
+            | Instruction::ChooseValue { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(
                     spec.payload,
@@ -10221,7 +10232,9 @@ pub(super) fn has_live_last_moved_producer(
 ) -> bool {
     for op in ops.iter().rev() {
         match op {
-            Instruction::Mill { .. } => {
+            Instruction::MutatePlayer(spec)
+                if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_)) =>
+            {
                 return matches!(
                     expected,
                     LastMovedProducerKind::Any
@@ -10330,13 +10343,27 @@ pub(super) fn has_live_last_moved_producer(
                 return matches!(expected, LastMovedProducerKind::Any);
             }
 
-            Instruction::SearchLibrary { .. }
-            | Instruction::ManifestTop { .. }
-            | Instruction::ManifestDread => {
+            Instruction::SearchLibrary { .. } => {
                 return matches!(expected, LastMovedProducerKind::Any);
             }
-            Instruction::ChooseOneLastMoved { .. }
-            | Instruction::OptionalEffect { .. }
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
+                        | spellwake_engine::toolbox::PlayerMutation::ManifestDread
+                ) =>
+            {
+                return matches!(expected, LastMovedProducerKind::Any);
+            }
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::Incubate { .. }
+                ) =>
+            {
+                return false;
+            }
+            Instruction::OptionalEffect { .. }
             | Instruction::OptionalSequence { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::AdjustLife(_)
@@ -10344,9 +10371,7 @@ pub(super) fn has_live_last_moved_producer(
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::BindResolutionX(_)
-            | Instruction::ChooseValue { .. }
-            | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::AddManaForPlayer { .. } => continue,
+            | Instruction::ChooseValue { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(
                     spec.payload,
@@ -10874,8 +10899,6 @@ fn is_damage_instruction_for_no_regen(op: &Instruction) -> bool {
                 action: PermanentTargetAction::Damage(_),
                 ..
             }
-            | Instruction::DivideDamageExprAmongTargets { .. }
-            | Instruction::CreatureDealsPowerDamageToOther { .. }
     )
 }
 
@@ -10996,14 +11019,27 @@ fn damage_no_regen_object_query(
                 },
                 _ => None,
             },
-            DamageTargetQuery::Players(_) => None,
+            DamageTargetQuery::Divided { .. } | DamageTargetQuery::CreaturePowerToOther { .. } => {
+                if is_permanent_body_target(target) {
+                    Some(ObjectQuery::Targets)
+                } else {
+                    Some(ObjectQuery::filtered(
+                        ObjectQuery::Targets,
+                        ObjectFilter::creature(),
+                    ))
+                }
+            }
+            DamageTargetQuery::Players(_)
+            | DamageTargetQuery::AnnouncedTargets { .. }
+            | DamageTargetQuery::FromPower(_)
+            | DamageTargetQuery::TargetControllersCreatures { .. }
+            | DamageTargetQuery::OrderedTargets { .. }
+            | DamageTargetQuery::DivideThree => None,
         },
         Instruction::AffectPermanentTargets {
             action: PermanentTargetAction::Damage(_),
             ..
-        }
-        | Instruction::DivideDamageExprAmongTargets { .. }
-        | Instruction::CreatureDealsPowerDamageToOther { .. } => {
+        } => {
             if is_permanent_body_target(target) {
                 Some(ObjectQuery::Targets)
             } else {
@@ -11083,15 +11119,22 @@ fn extract_prior_resolving_player_for_shuffle(
             }),
         Instruction::DrawCards(spec) => from_sel(&spec.players),
         Instruction::AdjustLife(spec) => from_sel(&spec.players),
+        Instruction::MutatePlayer(spec)
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::PlayerMutation::Mill(_)
+                    | spellwake_engine::toolbox::PlayerMutation::Scry(_)
+                    | spellwake_engine::toolbox::PlayerMutation::Surveil(_)
+            ) =>
+        {
+            from_sel(&spec.players)
+        }
         Instruction::OptionalEffect { chooser: p }
         | Instruction::OptionalSequence { chooser: p, .. }
         | Instruction::OfferDynamicManaPayment { payer: p, .. }
         | Instruction::RevealUntilMatchExt {
             library_owner: p, ..
         }
-        | Instruction::Mill { player: p, .. }
-        | Instruction::Scry { player: p, .. }
-        | Instruction::Surveil { player: p, .. }
         | Instruction::LookTopChooseExt {
             library_owner: p, ..
         }
@@ -11202,21 +11245,26 @@ fn is_moved_object_instruction(op: &Instruction) -> bool {
         Instruction::ZoneOp(_)
             | Instruction::ForEachPlayerQuery { .. }
             | Instruction::DrawCards(_)
-            | Instruction::ChooseOneLastMoved { .. }
-            | Instruction::ManifestTop { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::ReturnExiledTargetCohort { .. }
-            | Instruction::ReturnCardsDestroyedThisWay
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::ExileTopPlay { .. }
-            | Instruction::Mill { .. }
             | Instruction::Discard { .. }
-            | Instruction::ManifestDread
-            | Instruction::Incubate { .. }
             | Instruction::SearchLibrary { .. }
+    ) || matches!(
+        op,
+        Instruction::MutatePlayer(spec)
+            if matches!(
+                spec.op,
+                spellwake_engine::toolbox::PlayerMutation::ChooseOneLastMoved
+                    | spellwake_engine::toolbox::PlayerMutation::ManifestTop { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::Mill(_)
+                    | spellwake_engine::toolbox::PlayerMutation::ManifestDread
+                    | spellwake_engine::toolbox::PlayerMutation::Incubate { .. }
+            )
     )
 }
 
@@ -11375,8 +11423,7 @@ pub(super) fn has_prior_moved_object(ops: &[Instruction]) -> bool {
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::BindResolutionX(_)
-            | Instruction::ChooseValue { .. }
-            | Instruction::AddManaForPlayer { .. } => continue,
+            | Instruction::ChooseValue { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(
                     spec.payload,

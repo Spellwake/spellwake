@@ -206,7 +206,11 @@ pub(super) fn resolve_prev_anaphora_ref(
         | Instruction::RevealUntilMatchExt { .. }
         | Instruction::LookTopChooseExt { .. } => Some(MatchObjectRef::RevealedTop),
         Instruction::Discard { .. } => Some(MatchObjectRef::DiscardedCard),
-        Instruction::Mill { .. } => Some(MatchObjectRef::MovedLibraryCard),
+        Instruction::MutatePlayer(spec)
+            if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_)) =>
+        {
+            Some(MatchObjectRef::MovedLibraryCard)
+        }
         Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
             if super::super::toolbox_emit::unwrap_zone_op(op).is_some() =>
         {
@@ -2614,7 +2618,11 @@ pub(in super::super) fn lower_resolution_condition(
                 .iter()
                 .rev()
                 .find_map(|op| match op {
-                    Instruction::Clash { .. } => Some(true),
+                    Instruction::MutatePlayer(spec)
+                        if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Clash) =>
+                    {
+                        Some(true)
+                    }
                     Instruction::FlipCoins { .. } => Some(false),
                     _ => None,
                 })
@@ -4665,9 +4673,12 @@ pub(super) fn lower_subject_to_object_query(
                             | Instruction::ForEachPlayerQuery { .. }
                             | Instruction::Sacrifice { .. }
                             | Instruction::Discard { .. }
-                            | Instruction::Mill { .. }
                             | Instruction::ExileTopPlay { .. }
                             | Instruction::LookTopChooseExt { .. }
+                    ) || matches!(
+                        op,
+                        Instruction::MutatePlayer(spec)
+                            if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_))
                     )
                 });
                 if has_zone_op {

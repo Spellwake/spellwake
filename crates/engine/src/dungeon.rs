@@ -110,10 +110,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[1, 2],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Scry {
-                        player: ResolvingPlayer::Controller,
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        crate::toolbox::MutatePlayerSpec::scry(
+                            ResolvingPlayer::Controller,
+                            ValueExpr::literal(1),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -137,7 +139,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
             DungeonRoom {
                 name: "Storeroom",
                 exits: &[6],
-                body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Bolster(1)]),
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::MutatePlayer(Box::new(
+                        crate::toolbox::MutatePlayerSpec::bolster(1),
+                    ))],
+                ),
             },
             DungeonRoom {
                 name: "Dark Pool",
@@ -159,10 +166,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[6],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Scry {
-                        player: ResolvingPlayer::Controller,
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        crate::toolbox::MutatePlayerSpec::scry(
+                            ResolvingPlayer::Controller,
+                            ValueExpr::literal(1),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -198,10 +207,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[2, 3],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Scry {
-                        player: ResolvingPlayer::Controller,
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        crate::toolbox::MutatePlayerSpec::scry(
+                            ResolvingPlayer::Controller,
+                            ValueExpr::literal(1),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -214,10 +225,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[4],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Scry {
-                        player: ResolvingPlayer::Controller,
-                        amount: ValueExpr::literal(1),
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        crate::toolbox::MutatePlayerSpec::scry(
+                            ResolvingPlayer::Controller,
+                            ValueExpr::literal(1),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -225,10 +238,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[5, 6],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Scry {
-                        player: ResolvingPlayer::Controller,
-                        amount: ValueExpr::literal(2),
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        crate::toolbox::MutatePlayerSpec::scry(
+                            ResolvingPlayer::Controller,
+                            ValueExpr::literal(2),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -266,10 +281,12 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
                 exits: &[8],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Scry {
-                        player: ResolvingPlayer::Controller,
-                        amount: ValueExpr::literal(3),
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        crate::toolbox::MutatePlayerSpec::scry(
+                            ResolvingPlayer::Controller,
+                            ValueExpr::literal(3),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {
@@ -382,17 +399,24 @@ pub fn dungeon_rooms(dungeon: DungeonId, vocabulary: &CreatureTypeVocabulary) ->
             DungeonRoom {
                 name: "Forge",
                 exits: &[3, 4],
-                body: ExecutableBody::new(BodyTarget::None, vec![Instruction::Bolster(2)]),
+                body: ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::MutatePlayer(Box::new(
+                        crate::toolbox::MutatePlayerSpec::bolster(2),
+                    ))],
+                ),
             },
             DungeonRoom {
                 name: "Lost Well",
                 exits: &[4, 5],
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Scry {
-                        player: ResolvingPlayer::Controller,
-                        amount: ValueExpr::literal(2),
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        crate::toolbox::MutatePlayerSpec::scry(
+                            ResolvingPlayer::Controller,
+                            ValueExpr::literal(2),
+                        ),
+                    ))],
                 ),
             },
             DungeonRoom {

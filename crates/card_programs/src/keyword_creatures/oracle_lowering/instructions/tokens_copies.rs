@@ -767,11 +767,11 @@ pub(super) fn lower_tokens_copies_instruction(
                     attacking_defender: None,
                 }],
             });
-            builder.instructions.push(Instruction::Amass {
-                army,
-                subtype: sub,
-                amount: u,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::amass(army, sub, u),
+                )));
             Ok(())
         }
         InstructionAst::Manifest {
@@ -787,7 +787,11 @@ pub(super) fn lower_tokens_copies_instruction(
                     _ => return Err("oracle:unsupported-manifest-dread-count"),
                 };
                 for _ in 0..n {
-                    builder.instructions.push(Instruction::ManifestDread);
+                    builder
+                        .instructions
+                        .push(Instruction::MutatePlayer(Box::new(
+                            spellwake_engine::toolbox::MutatePlayerSpec::manifest_dread(),
+                        )));
                 }
                 return Ok(());
             }
@@ -797,10 +801,14 @@ pub(super) fn lower_tokens_copies_instruction(
                 in_trigger,
                 vocabulary,
             )?;
-            builder.instructions.push(Instruction::ManifestTop {
-                player: ResolvingPlayer::Controller,
-                amount: amt,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::manifest_top(
+                        ResolvingPlayer::Controller,
+                        amt,
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::Investigate { player, count } => {
@@ -1006,7 +1014,9 @@ pub(super) fn lower_tokens_copies_instruction(
             )?;
             builder
                 .instructions
-                .push(Instruction::Incubate { count: amt });
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::incubate(amt),
+                )));
             Ok(())
         }
         InstructionAst::BecomeCopy {
@@ -1627,7 +1637,11 @@ pub(super) fn lower_tokens_copies_instruction(
             builder.bind_target(BodyTarget::FilteredPermanent(
                 ObjectFilter::land().controlled(),
             ))?;
-            builder.instructions.push(Instruction::Earthbend { amount });
+            builder
+                .instructions
+                .push(Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::earthbend(amount),
+                )));
             Ok(())
         }
         _ => Err("oracle:unsupported-instruction"),

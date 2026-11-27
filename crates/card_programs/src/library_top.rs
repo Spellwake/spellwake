@@ -107,30 +107,32 @@ pub(super) fn definition(
             "Opt",
             "Scry 1. (Look at the top card of your library. You may put that card on the bottom.)\nDraw a card.",
             BodyTarget::None,
-            Instruction::Scry {
-                player: ResolvingPlayer::Controller,
-                amount: one(),
-            },
+            Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                ResolvingPlayer::Controller,
+                one(),
+            ))),
         ),
         Kind::Surveil => (
             ProgramKey::LibraryTopSurveilDrawSpellV1,
             "Consider",
             "Surveil 1. (Look at the top card of your library. You may put it into your graveyard.)\nDraw a card.",
             BodyTarget::None,
-            Instruction::Surveil {
-                player: ResolvingPlayer::Controller,
-                amount: one(),
-            },
+            Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::surveil(
+                    ResolvingPlayer::Controller,
+                    one(),
+                ),
+            )),
         ),
         Kind::Mill => (
             ProgramKey::LibraryTopMillDrawSpellV1,
             "Thought Scour",
             "Target player mills two cards.\nDraw a card.",
             BodyTarget::SinglePlayer,
-            Instruction::Mill {
-                player: ResolvingPlayer::TargetPlayer,
-                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-            },
+            Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                ResolvingPlayer::TargetPlayer,
+                spellwake_engine::program::ValueExpr::Literal(2.into()),
+            ))),
         ),
         Kind::Island => {
             let mut definition =

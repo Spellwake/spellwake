@@ -156,30 +156,32 @@ fn exact_four_raw_rows_native_source_signatures_and_complete_programs() {
         (
             OPT,
             "Opt",
-            Instruction::Scry {
-                player: ResolvingPlayer::Controller,
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            },
+            Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                ResolvingPlayer::Controller,
+                spellwake_engine::program::ValueExpr::Literal(1.into()),
+            ))),
             BodyTarget::None,
             ProgramKey::LibraryTopScryDrawSpellV1,
         ),
         (
             CONSIDER,
             "Consider",
-            Instruction::Surveil {
-                player: ResolvingPlayer::Controller,
-                amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-            },
+            Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::surveil(
+                    ResolvingPlayer::Controller,
+                    spellwake_engine::program::ValueExpr::Literal(1.into()),
+                ),
+            )),
             BodyTarget::None,
             ProgramKey::LibraryTopSurveilDrawSpellV1,
         ),
         (
             SCOUR,
             "Thought Scour",
-            Instruction::Mill {
-                player: ResolvingPlayer::TargetPlayer,
-                amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-            },
+            Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                ResolvingPlayer::TargetPlayer,
+                spellwake_engine::program::ValueExpr::Literal(2.into()),
+            ))),
             BodyTarget::SinglePlayer,
             ProgramKey::LibraryTopMillDrawSpellV1,
         ),
@@ -454,10 +456,11 @@ fn native_admission_rejects_invalid_amount_and_player_role_but_source_digest_is_
     let ProgramKind::Spell(spell) = &mut actual.kind else {
         panic!("spell")
     };
-    spell.body.instructions[0] = Instruction::Scry {
-        player: ResolvingPlayer::Controller,
-        amount: spellwake_engine::program::ValueExpr::Literal((-1).into()),
-    };
+    spell.body.instructions[0] =
+        Instruction::MutatePlayer(Box::new(spellwake_engine::toolbox::MutatePlayerSpec::scry(
+            ResolvingPlayer::Controller,
+            spellwake_engine::program::ValueExpr::Literal((-1).into()),
+        )));
     assert_eq!(
         actual.validate(&g.vocabulary),
         Err(DefinitionError::InvalidInstruction)

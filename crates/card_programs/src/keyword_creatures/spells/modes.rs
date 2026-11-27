@@ -72,9 +72,11 @@ fn mode_body(
     {
         return Some(ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AdditionalCombat {
-                untap: spellwake_engine::program::CombatUntapGroup::ControlledCreatures,
-            }],
+            vec![Instruction::MutatePlayer(Box::new(
+                spellwake_engine::toolbox::MutatePlayerSpec::additional_combat(
+                    spellwake_engine::program::CombatUntapGroup::ControlledCreatures,
+                ),
+            ))],
         ));
     }
     if let Some(body) = ordinary_effects::body(text, name)

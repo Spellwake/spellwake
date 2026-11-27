@@ -313,10 +313,16 @@ impl EffectWindow {
             return Err(EffectError::IllegalTarget);
         }
         let shared_action = fights
-            || body
-                .instructions
-                .iter()
-                .any(|op| matches!(op, Instruction::CreatureDealsPowerDamageToOther { .. }));
+            || body.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::DealDamage(spec)
+                        if matches!(
+                            spec.recipients,
+                            crate::toolbox::DamageTargetQuery::CreaturePowerToOther { .. }
+                        )
+                )
+            });
         let mut choices = choices.iter();
         let mut instructions = Vec::new();
         let mut segments = Vec::new();

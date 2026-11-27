@@ -765,16 +765,7 @@ impl EffectWindow {
                             .get(&entry)
                             .and_then(StackPayload::instructions)
                             .and_then(|p| p.get(instruction)),
-                        Some(
-                            Instruction::Fight { .. }
-                                | Instruction::DivideDamageExprAmongTargets { .. }
-                                | Instruction::DivideThreeDamageAmongTargets
-                                | Instruction::DamageOrderedTargets { .. }
-                                | Instruction::DamageFromPower(_)
-                                | Instruction::CreatureDealsPowerDamageToOther { .. }
-                                | Instruction::DealDamage(_)
-                                | Instruction::DamageTargetControllersCreatures { .. }
-                        )
+                        Some(Instruction::Fight { .. } | Instruction::DealDamage(_))
                     )
                 {
                     return Err(EffectError::WrongDamageFrame);
@@ -1564,16 +1555,24 @@ impl EffectWindow {
             _ => false,
         };
         let attacks_if_damaged = match origin {
-            DamageOrigin::Resolution { entry, instruction } => matches!(
-                self.payloads
+            DamageOrigin::Resolution { entry, instruction } => {
+                let op = self
+                    .payloads
                     .get(&entry)
                     .and_then(StackPayload::instructions)
-                    .and_then(|body| body.get(instruction)),
-                Some(Instruction::DamageTargetControllersCreatures {
-                    require_damaged_creatures_to_attack: true,
-                    ..
-                })
-            ),
+                    .and_then(|p| p.get(instruction));
+                matches!(
+                    op,
+                    Some(Instruction::DealDamage(spec))
+                        if matches!(
+                            spec.recipients,
+                            crate::toolbox::DamageTargetQuery::TargetControllersCreatures {
+                                require_damaged_creatures_to_attack: true,
+                                ..
+                            }
+                        )
+                )
+            }
             _ => false,
         };
         let before = self.rules_snapshot(None)?;

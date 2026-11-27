@@ -639,10 +639,14 @@ pub(super) fn lower_control_misc_instruction(
                 in_trigger,
                 vocabulary,
             )?;
-            builder.instructions.push(Instruction::CollectEvidence {
-                player: ResolvingPlayer::Controller,
-                minimum: min,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::collect_evidence(
+                        ResolvingPlayer::Controller,
+                        min,
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::Choice(branches) if branches.len() >= 2 => {
@@ -746,10 +750,11 @@ pub(super) fn lower_control_misc_instruction(
         }
         InstructionAst::InteractiveChoice(InteractiveChoiceKind::SecretVote { prompt }) => {
             let options = parse_vote_options(prompt)?;
-            builder.instructions.push(Instruction::Vote {
-                options,
-                secret: true,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::vote(options, true),
+                )));
             Ok(())
         }
         InstructionAst::InteractiveChoice(InteractiveChoiceKind::ChooseFromGroup {
@@ -821,10 +826,11 @@ pub(super) fn lower_control_misc_instruction(
         }
         InstructionAst::Vote { options: raw_opts } => {
             let options = parse_vote_options(raw_opts)?;
-            builder.instructions.push(Instruction::Vote {
-                options,
-                secret: false,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::vote(options, false),
+                )));
             Ok(())
         }
         InstructionAst::RollDie { sides } => {
@@ -1024,15 +1030,23 @@ pub(super) fn lower_control_misc_instruction(
                             | Instruction::LookTopChooseExt { .. }
                             | Instruction::RevealUntilMatchExt { .. }
                             | Instruction::ChooseObjects { .. }
-                            | Instruction::Mill { .. }
                     )
+                )
+                || matches!(
+                    builder.instructions.last(),
+                    Some(Instruction::MutatePlayer(spec))
+                        if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_))
                 ))
                 && let Ok(chooser_rp) =
                     lower_resolving_player_in_context(chooser_ref, builder, in_trigger)
             {
-                builder.instructions.push(Instruction::ChooseOneLastMoved {
-                    chooser: chooser_rp,
-                });
+                builder
+                    .instructions
+                    .push(Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::choose_one_last_moved(
+                            chooser_rp,
+                        ),
+                    )));
                 return Ok(());
             }
             if matches!(
@@ -1079,13 +1093,19 @@ pub(super) fn lower_control_misc_instruction(
             )
         }
         InstructionAst::Clash { .. } => {
-            builder.instructions.push(Instruction::Clash {
-                chooser: ResolvingPlayer::Controller,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::clash(ResolvingPlayer::Controller),
+                )));
             Ok(())
         }
         InstructionAst::RingTemptsYou => {
-            builder.instructions.push(Instruction::RingTemptsYou);
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::ring_tempts_you(),
+                )));
             Ok(())
         }
         InstructionAst::Populate { count } => {
@@ -1095,28 +1115,12 @@ pub(super) fn lower_control_misc_instruction(
             if let Some(players) = try_group_affected_players(*player) {
                 push_for_each_player(
                     players,
-                    vec![Instruction::VentureIntoDungeon {
-                        player: ResolvingPlayer::LoopPlayer,
-                        undercity: false,
-                    }],
-                    builder,
-                );
-                return Ok(());
-            }
-            let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
-            builder.instructions.push(Instruction::VentureIntoDungeon {
-                player: rp,
-                undercity: false,
-            });
-            Ok(())
-        }
-        InstructionAst::TakeInitiative { player } => {
-            if let Some(players) = try_group_affected_players(*player) {
-                push_for_each_player(
-                    players,
-                    vec![Instruction::TakeInitiative {
-                        player: ResolvingPlayer::LoopPlayer,
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::venture_into_dungeon(
+                            ResolvingPlayer::LoopPlayer,
+                            false,
+                        ),
+                    ))],
                     builder,
                 );
                 return Ok(());
@@ -1124,7 +1128,30 @@ pub(super) fn lower_control_misc_instruction(
             let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
             builder
                 .instructions
-                .push(Instruction::TakeInitiative { player: rp });
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::venture_into_dungeon(rp, false),
+                )));
+            Ok(())
+        }
+        InstructionAst::TakeInitiative { player } => {
+            if let Some(players) = try_group_affected_players(*player) {
+                push_for_each_player(
+                    players,
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::take_initiative(
+                            ResolvingPlayer::LoopPlayer,
+                        ),
+                    ))],
+                    builder,
+                );
+                return Ok(());
+            }
+            let rp = lower_resolving_player_in_context(*player, builder, in_trigger)?;
+            builder
+                .instructions
+                .push(Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::take_initiative(rp),
+                )));
             Ok(())
         }
         InstructionAst::UnlockDoor { subject } => {
@@ -1159,11 +1186,17 @@ pub(super) fn lower_control_misc_instruction(
                         max_total_power: None,
                         unchosen_action: None,
                     });
-                    builder.instructions.push(Instruction::UnlockDoor {
-                        subject: MoveSubjectRef::LastMoved,
-                        door: None,
-                        allow_lock: false,
-                    });
+                    builder
+                        .instructions
+                        .push(Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::unlock_door(
+                                spellwake_engine::toolbox::ObjectQuery::from_move_subject(
+                                    MoveSubjectRef::LastMoved,
+                                ),
+                                None,
+                                false,
+                            ),
+                        )));
                     return Ok(());
                 }
             }
@@ -1174,11 +1207,15 @@ pub(super) fn lower_control_misc_instruction(
                 in_trigger,
                 self_pronoun_valid,
             )?;
-            builder.instructions.push(Instruction::UnlockDoor {
-                subject: subj,
-                door: None,
-                allow_lock: false,
-            });
+            builder
+                .instructions
+                .push(Instruction::MutateObject(Box::new(
+                    spellwake_engine::toolbox::MutateObjectSpec::unlock_door(
+                        spellwake_engine::toolbox::ObjectQuery::from_move_subject(subj),
+                        None,
+                        false,
+                    ),
+                )));
             Ok(())
         }
         InstructionAst::AbandonSourceScheme => Err("oracle:scheme-excluded-from-constructed"),
@@ -2439,7 +2476,10 @@ fn try_lower_choose_objects_new_primitives(
                 Instruction::ZoneOp(_)
                     | Instruction::ForEachPlayerQuery { .. }
                     | Instruction::ExileTopPlay { .. }
-                    | Instruction::Mill { .. }
+            ) || matches!(
+                op,
+                Instruction::MutatePlayer(spec)
+                    if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_))
             )
         });
     if prior_moved
@@ -3387,17 +3427,17 @@ pub(super) fn is_allowed_inside_optional_effect(op: &Instruction) -> bool {
             }
             | Instruction::ZoneOp(_)
             | Instruction::ForEachPlayerQuery { .. }
-            | Instruction::Mill { .. }
             | Instruction::MutateObject(_)
             | Instruction::ChooseObjects { .. }
-            | Instruction::Blight { .. }
-            | Instruction::CollectEvidence { .. }
     ) || matches!(
         op,
         Instruction::MutatePlayer(spec)
             if matches!(
                 spec.op,
                 spellwake_engine::toolbox::PlayerMutation::PayCounter { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::Mill(_)
+                    | spellwake_engine::toolbox::PlayerMutation::Blight { .. }
+                    | spellwake_engine::toolbox::PlayerMutation::CollectEvidence { .. }
             )
     ) || matches!(
         op,
@@ -5560,7 +5600,20 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                             rewrite_chosen_to_loop_dg(g);
                         }
                     }
-                    spellwake_engine::toolbox::DamageTargetQuery::Targets => {}
+                    spellwake_engine::toolbox::DamageTargetQuery::Divided { total, .. } => {
+                        rewrite_chosen_to_loop_ve(total);
+                    }
+                    spellwake_engine::toolbox::DamageTargetQuery::Targets
+                    | spellwake_engine::toolbox::DamageTargetQuery::AnnouncedTargets { .. }
+                    | spellwake_engine::toolbox::DamageTargetQuery::FromPower(_)
+                    | spellwake_engine::toolbox::DamageTargetQuery::CreaturePowerToOther {
+                        ..
+                    }
+                    | spellwake_engine::toolbox::DamageTargetQuery::TargetControllersCreatures {
+                        ..
+                    }
+                    | spellwake_engine::toolbox::DamageTargetQuery::OrderedTargets { .. }
+                    | spellwake_engine::toolbox::DamageTargetQuery::DivideThree => {}
                 }
                 if let DamageAmountSpec::Expr(e) = &mut spec.amount {
                     rewrite_chosen_to_loop_ve(e);
@@ -5573,16 +5626,25 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     &rewrite_chosen_to_loop_ap,
                     &rewrite_chosen_to_loop_ve,
                 );
-                if let spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
-                | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. } =
-                    &mut spec.op
-                {
-                    rewrite_chosen_to_loop_ve(amount);
+                match &mut spec.op {
+                    spellwake_engine::toolbox::PlayerMutation::AddCounter { amount, .. }
+                    | spellwake_engine::toolbox::PlayerMutation::PayCounter { amount, .. }
+                    | spellwake_engine::toolbox::PlayerMutation::Scry(amount)
+                    | spellwake_engine::toolbox::PlayerMutation::Surveil(amount)
+                    | spellwake_engine::toolbox::PlayerMutation::Mill(amount)
+                    | spellwake_engine::toolbox::PlayerMutation::ManifestTop { amount }
+                    | spellwake_engine::toolbox::PlayerMutation::Incubate { count: amount }
+                    | spellwake_engine::toolbox::PlayerMutation::Blight { amount }
+                    | spellwake_engine::toolbox::PlayerMutation::CollectEvidence {
+                        minimum: amount,
+                    } => {
+                        rewrite_chosen_to_loop_ve(amount);
+                    }
+                    spellwake_engine::toolbox::PlayerMutation::AddMana(yield_kind) => {
+                        rewrite_chosen_to_loop_mana_yield(yield_kind);
+                    }
+                    _ => {}
                 }
-            }
-            Instruction::AddManaForPlayer { player, yield_kind } => {
-                rewrite_chosen_to_loop_rp(player);
-                rewrite_chosen_to_loop_mana_yield(yield_kind);
             }
             Instruction::ExileTopPlay {
                 count,
@@ -5737,7 +5799,9 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     spellwake_engine::toolbox::ObjectMutation::AddCounters { amount, .. }
                     | spellwake_engine::toolbox::ObjectMutation::RemoveCounters {
                         amount, ..
-                    } => {
+                    }
+                    | spellwake_engine::toolbox::ObjectMutation::BecomeMonstrous { amount }
+                    | spellwake_engine::toolbox::ObjectMutation::Earthbend { amount } => {
                         rewrite_chosen_to_loop_ve(amount);
                     }
                     spellwake_engine::toolbox::ObjectMutation::MoveCounters {
@@ -5810,19 +5874,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     _ => {}
                 }
             }
-            Instruction::Scry { player, amount }
-            | Instruction::Surveil { player, amount }
-            | Instruction::Mill { player, amount }
-            | Instruction::ManifestTop { player, amount }
-            | Instruction::Blight { player, amount } => {
-                rewrite_chosen_to_loop_rp(player);
-                rewrite_chosen_to_loop_ve(amount);
-            }
-            Instruction::CollectEvidence { player, minimum } => {
-                rewrite_chosen_to_loop_rp(player);
-                rewrite_chosen_to_loop_ve(minimum);
-            }
-
             Instruction::ChooseObjects {
                 players,
                 min,
@@ -5868,7 +5919,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
             }
             Instruction::OptionalEffect { chooser }
             | Instruction::OptionalSequence { chooser, .. }
-            | Instruction::Clash { chooser }
             | Instruction::ChooseValue { chooser, .. } => {
                 rewrite_chosen_to_loop_rp(chooser);
             }
@@ -5877,10 +5927,6 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 for br in options {
                     rewrite_chosen_to_loop_ops(&mut br.body.instructions);
                 }
-            }
-            Instruction::VentureIntoDungeon { player: rp, .. }
-            | Instruction::TakeInitiative { player: rp } => {
-                rewrite_chosen_to_loop_rp(rp);
             }
             Instruction::CreateTokens { creations } => {
                 for c in creations {
@@ -5965,9 +6011,7 @@ pub(super) fn rewrite_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_chosen_to_loop_ops(&mut lb.instructions);
                 }
             }
-            Instruction::DealDamageToAnnouncedTargets { amount, .. }
-            | Instruction::Earthbend { amount }
-            | Instruction::BindResolutionX(amount) => {
+            Instruction::BindResolutionX(amount) => {
                 rewrite_chosen_to_loop_ve(amount);
             }
             Instruction::SearchLibrary { filter } => {
@@ -6022,7 +6066,14 @@ pub(in super::super) fn lower_loop_player_sub_body(
             Instruction::ChooseValue {
                 domain: ResolutionChoiceDomain::Player { .. },
                 ..
-            } | Instruction::SelectExtremeLifePlayer { .. }
+            }
+        ) || matches!(
+            op,
+            Instruction::MutatePlayer(spec)
+                if matches!(
+                    spec.op,
+                    spellwake_engine::toolbox::PlayerMutation::SelectExtremeLife { .. }
+                )
         )
     }) {
         return Err("oracle:loop-body-chooses-player");
@@ -6443,8 +6494,11 @@ fn lower_standalone_choose_and_keep(
                     | Instruction::LookTopChooseExt { .. }
                     | Instruction::RevealUntilMatchExt { .. }
                     | Instruction::ExileTopPlay { .. }
-                    | Instruction::Mill { .. }
                     | Instruction::SearchLibrary { .. }
+            ) || matches!(
+                op,
+                Instruction::MutatePlayer(spec)
+                    if matches!(spec.op, spellwake_engine::toolbox::PlayerMutation::Mill(_))
             )
         });
     if !has_pool {
@@ -6697,7 +6751,14 @@ fn is_safe_resolving_player_for_shuffle(
                 Instruction::ChooseValue {
                     domain: spellwake_engine::program::ResolutionChoiceDomain::Player { .. },
                     ..
-                } | Instruction::SelectExtremeLifePlayer { .. }
+                }
+            ) || matches!(
+                op,
+                Instruction::MutatePlayer(spec)
+                    if matches!(
+                        spec.op,
+                        spellwake_engine::toolbox::PlayerMutation::SelectExtremeLife { .. }
+                    )
             ) || matches!(
                 op,
                 Instruction::PromptChoice(spec)
@@ -6826,9 +6887,7 @@ pub(super) fn lower_shuffle_that_player_fallback(
                 }
                 _ => {}
             },
-            Instruction::Scry { player, .. }
-            | Instruction::Surveil { player, .. }
-            | Instruction::OfferDynamicManaPayment { payer: player, .. }
+            Instruction::OfferDynamicManaPayment { payer: player, .. }
             | Instruction::ChooseOption {
                 chooser: player, ..
             } if *player != ResolvingPlayer::Controller

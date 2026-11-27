@@ -706,7 +706,9 @@ fn optional_prevention_shield_creates_one_owned_effect_or_skips() {
 #[test]
 fn optional_multiplier_creates_one_owned_effect_or_skips() {
     for choice in [OptionalEffectChoice::Take, OptionalEffectChoice::Decline] {
-        let state = creature_optional(Instruction::CreateDamageMultiplier { factor: 2.into() });
+        let state = creature_optional(Instruction::ApplyContinuous(Box::new(
+            crate::toolbox::ApplyContinuousSpec::damage_multiplier(2.into()),
+        )));
         let result = take_or_decline(&state, choice);
         assert_tail(&result);
         assert_eq!(
@@ -2403,7 +2405,9 @@ fn optional_damage_preserves_the_real_order_child_and_consumes_the_offer_once() 
             as_emblem: None,
             emblem_label: None,
         })),
-        Instruction::CreateDamageMultiplier { factor: 2.into() },
+        Instruction::ApplyContinuous(Box::new(
+            crate::toolbox::ApplyContinuousSpec::damage_multiplier(2.into()),
+        )),
         Instruction::OptionalEffect {
             chooser: ResolvingPlayer::Controller,
         },

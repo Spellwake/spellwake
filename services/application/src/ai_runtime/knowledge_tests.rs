@@ -989,18 +989,22 @@ fn scry_and_surveil_are_private_to_actor_and_invalidated_by_shuffle() {
     let scry2 = free_instant(
         "Scry Two",
         BodyTarget::None,
-        vec![Instruction::Scry {
-            player: ResolvingPlayer::Controller,
-            amount: ValueExpr::literal(2),
-        }],
+        vec![Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                ResolvingPlayer::Controller,
+                ValueExpr::literal(2),
+            ),
+        ))],
     );
     let surveil2 = free_instant(
         "Surveil Two",
         BodyTarget::None,
-        vec![Instruction::Surveil {
-            player: ResolvingPlayer::Controller,
-            amount: ValueExpr::literal(2),
-        }],
+        vec![Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::surveil(
+                ResolvingPlayer::Controller,
+                ValueExpr::literal(2),
+            ),
+        ))],
     );
     let shuffle = free_instant(
         "Shuffle Self",
@@ -1163,10 +1167,12 @@ fn opponent_scry_invalidates_prior_public_library_top_knowledge_without_leaking_
     let scry2 = free_instant(
         "Scry Two",
         BodyTarget::None,
-        vec![Instruction::Scry {
-            player: ResolvingPlayer::Controller,
-            amount: ValueExpr::literal(2),
-        }],
+        vec![Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                ResolvingPlayer::Controller,
+                ValueExpr::literal(2),
+            ),
+        ))],
     );
     let destroy = free_instant(
         "Destroy Courser",
@@ -1458,10 +1464,12 @@ fn public_and_private_library_searches_scope_reveals_and_invalidate_shuffled_car
     let scry1 = free_instant(
         "Scry One",
         BodyTarget::None,
-        vec![Instruction::Scry {
-            player: ResolvingPlayer::Controller,
-            amount: ValueExpr::literal(1),
-        }],
+        vec![Instruction::MutatePlayer(Box::new(
+            spellwake_engine::toolbox::MutatePlayerSpec::scry(
+                ResolvingPlayer::Controller,
+                ValueExpr::literal(1),
+            ),
+        ))],
     );
     let mut h = Harness::opening_to_main(
         vec![

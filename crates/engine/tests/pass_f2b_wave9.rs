@@ -4,12 +4,12 @@
 //! - `MoveSubjectRef::RevealedCard` (`Chaos Warp` reading opponent's `revealed_top_card`)
 //! - `Instruction::DiscardUpToExt` (filtered up-to/any-number discard, 0 and nonzero counts,
 //!   `last_action_succeeded` and `last_action_count`)
-//! - `Instruction::Earthbend` and `Instruction::ReturnEarthbentCard` (animation, haste,
+//! - `ObjectMutation::Earthbend` and `Instruction::ReturnEarthbentCard` (animation, haste,
 //!   +1/+1 counters, `PlayerTriggerAction::Earthbent`, delayed return tapped on death/exile,
 //!   and watch dropped on bounce to hand)
 //! - `Instruction::SkipNextTurns` (CR 614.10 / CR 614.10a extra-turn consumption, skipping
 //!   normal turns without expiring "until your next turn" effects)
-//! - `Instruction::SelectExtremeLifePlayer` (clear winner, `ControllerChooses` tie choice,
+//! - `PlayerMutation::SelectExtremeLife` (clear winner, `ControllerChooses` tie choice,
 //!   `Skip`, and `DrawGame`)
 //! - `SearchManaValue::ExactManaCostOneOf` (`Urza's Saga` Ch. III exact `{0}`/`{1}` printed cost)
 //! - `StaticPart::ModifyPTPerOwnColor` (per-recipient Layer 7c scaling and Layer 5 interaction)
@@ -24,7 +24,7 @@
 //! - `Instruction::RegenerateSubject`, `PermanentTargetAction::Regenerate`,
 //!   `EffectSubject::MatchingOtherThanTarget` (`Dark Dabbling`), and
 //!   `EffectSubject::TargetAndSharingColorMatching`
-//! - `Instruction::AddManaForPlayer` (fixed and interactive choice for non-controller) and
+//! - `PlayerMutation::AddMana` (fixed and interactive choice for non-controller) and
 //!   CR 605.1b `TriggeredManaRule::EnchantedLandTapped`
 //! - `StatusTriggerKind::Fought` and `RulesOccurrence::PermanentFought` (firing with 0 power)
 //! - `Instruction::AttachChoosingPermanent`, `Instruction::AttachFixedTargets`, and
@@ -586,7 +586,7 @@ fn chaos_warp_reveals_and_puts_opponent_permanent_under_owners_control() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 3. Instruction::Earthbend and Instruction::ReturnEarthbentCard
+// 3. ObjectMutation::Earthbend and Instruction::ReturnEarthbentCard
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -594,7 +594,7 @@ fn chaos_warp_reveals_and_puts_opponent_permanent_under_owners_control() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 5. Instruction::SelectExtremeLifePlayer (winner, ControllerChooses, Skip, DrawGame)
+// 5. PlayerMutation::SelectExtremeLife (winner, ControllerChooses, Skip, DrawGame)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -859,10 +859,12 @@ fn died_this_turn_and_put_into_gy_from_library_graveyard_return() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::None,
-                vec![Instruction::Mill {
-                    player: ResolvingPlayer::Controller,
-                    amount: ValueExpr::literal(1),
-                }],
+                vec![Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                        ResolvingPlayer::Controller,
+                        ValueExpr::literal(1),
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -948,10 +950,12 @@ fn add_mana_for_player_and_cr605_1b_enchanted_land_tapped() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleOpponent,
-                vec![Instruction::AddManaForPlayer {
-                    player: ResolvingPlayer::TargetPlayer,
-                    yield_kind: EffectManaYield::Fixed(BTreeMap::from([(ManaType::Red, 2.into())])),
-                }],
+                vec![Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                        ResolvingPlayer::TargetPlayer,
+                        EffectManaYield::Fixed(BTreeMap::from([(ManaType::Red, 2.into())])),
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -963,13 +967,15 @@ fn add_mana_for_player_and_cr605_1b_enchanted_land_tapped() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleOpponent,
-                vec![Instruction::AddManaForPlayer {
-                    player: ResolvingPlayer::TargetPlayer,
-                    yield_kind: EffectManaYield::Choice {
-                        colors: BTreeSet::from([ManaType::Blue, ManaType::Green]),
-                        amount: ValueExpr::literal(1),
-                    },
-                }],
+                vec![Instruction::MutatePlayer(Box::new(
+                    spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                        ResolvingPlayer::TargetPlayer,
+                        EffectManaYield::Choice {
+                            colors: BTreeSet::from([ManaType::Blue, ManaType::Green]),
+                            amount: ValueExpr::literal(1),
+                        },
+                    ),
+                ))],
             ),
         ),
         &vocab,

@@ -405,10 +405,12 @@ fn concession_combined_instruction_frame_uses_v2_real_cause_and_key() {
         replacement_source(ZoneActionKind::EffectMill),
     ));
     let state = fixture(
-        vec![Instruction::Mill {
-            player: ResolvingPlayer::TargetPlayer,
-            amount: crate::program::ValueExpr::Literal(2.into()),
-        }],
+        vec![Instruction::MutatePlayer(Box::new(
+            crate::toolbox::MutatePlayerSpec::mill(
+                ResolvingPlayer::TargetPlayer,
+                crate::program::ValueExpr::Literal(2.into()),
+            ),
+        ))],
         BodyTarget::SinglePlayer,
         cards,
     );

@@ -67,9 +67,9 @@ fn shield(amount: i64) -> Instruction {
 }
 
 fn multiplier(factor: i64) -> Instruction {
-    Instruction::CreateDamageMultiplier {
-        factor: factor.into(),
-    }
+    Instruction::ApplyContinuous(Box::new(
+        spellwake_engine::toolbox::ApplyContinuousSpec::damage_multiplier(factor.into()),
+    ))
 }
 
 fn pt(power: i64, toughness: i64) -> PowerToughness {

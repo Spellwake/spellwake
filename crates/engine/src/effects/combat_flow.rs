@@ -456,9 +456,12 @@ impl EffectWindow {
         if actor != frame.chooser {
             return Err(EffectError::WrongChooser);
         }
-        if self.current_instruction()? != &Instruction::ReselectAttackDefender
-            || self.attack_defender_frame()?.as_ref() != Some(frame)
-        {
+        let is_reselect = matches!(
+            self.current_instruction()?,
+            Instruction::MutateObject(spec)
+                if matches!(spec.op, crate::toolbox::ObjectMutation::ReselectAttackDefender)
+        );
+        if !is_reselect || self.attack_defender_frame()?.as_ref() != Some(frame) {
             return Err(EffectError::WrongResolutionFrame);
         }
         let mut next = self.clone();

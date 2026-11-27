@@ -1252,9 +1252,13 @@ impl EffectWindow {
             secondary_targets,
             bounds,
             ordered_any: body.ordered_any_target_bounds().is_some(),
-            divides_three_damage: body
-                .instructions
-                .contains(&Instruction::DivideThreeDamageAmongTargets),
+            divides_three_damage: body.instructions.iter().any(|op| {
+                matches!(
+                    op,
+                    Instruction::DealDamage(spec)
+                        if matches!(spec.recipients, crate::toolbox::DamageTargetQuery::DivideThree)
+                )
+            }),
             revision: self.revision,
             boundary: process.boundary,
             event: process.event,

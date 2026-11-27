@@ -2058,8 +2058,12 @@ pub(super) fn lower_static(
                     Box::new(tc.clone()),
                 );
                 let guard = InterveningCondition::from_trigger_condition(&tc);
-                let mut body =
-                    ExecutableBody::new(BodyTarget::None, vec![Instruction::SolveSourceCase]);
+                let mut body = ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![Instruction::MutateObject(Box::new(
+                        spellwake_engine::toolbox::MutateObjectSpec::solve_case(),
+                    ))],
+                );
                 if let Some(g) = guard {
                     prepend_instruction_at(
                         &mut body.instructions,
@@ -14770,7 +14774,11 @@ fn partition_static_keyword_grants(
                     grouping: TriggerGrouping::EachOccurrence,
                     body: ExecutableBody::new(
                         BodyTarget::None,
-                        vec![Instruction::PairWithCreature { entrant_only }],
+                        vec![Instruction::MutateObject(Box::new(
+                            spellwake_engine::toolbox::MutateObjectSpec::soulbond_pair(
+                                entrant_only,
+                            ),
+                        ))],
                     ),
                 })));
             }
@@ -15235,13 +15243,15 @@ pub(super) fn lower_ability_change(
                         grouping: TriggerGrouping::EachOccurrence,
                         body: ExecutableBody::new(
                             BodyTarget::None,
-                            vec![Instruction::AddManaForPlayer {
-                                player: ResolvingPlayer::Controller,
-                                yield_kind: EffectManaYield::RetainedUntilEndOfCombat {
-                                    kind: ManaType::Red,
-                                    amount: ValueExpr::literal(n),
-                                },
-                            }],
+                            vec![Instruction::MutatePlayer(Box::new(
+                                spellwake_engine::toolbox::MutatePlayerSpec::add_mana(
+                                    ResolvingPlayer::Controller,
+                                    EffectManaYield::RetainedUntilEndOfCombat {
+                                        kind: ManaType::Red,
+                                        amount: ValueExpr::literal(n),
+                                    },
+                                ),
+                            ))],
                         ),
                     });
                 } else if raw_trimmed

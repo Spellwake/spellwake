@@ -394,10 +394,12 @@ fn cmm_zones_ghost_of_ramirez_depietro_evades_large_blockers_and_returns_recentl
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SinglePlayer,
-                    Instruction::Mill {
-                        player: ResolvingPlayer::TargetPlayer,
-                        amount: spellwake_engine::program::ValueExpr::Literal(1.into()),
-                    },
+                    Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::mill(
+                            ResolvingPlayer::TargetPlayer,
+                            spellwake_engine::program::ValueExpr::Literal(1.into()),
+                        ),
+                    )),
                 ),
             ),
             named("Island", 5, A, ObjectDestination::Hand),

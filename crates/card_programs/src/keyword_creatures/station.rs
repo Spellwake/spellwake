@@ -66,10 +66,12 @@ pub(super) fn compile(
                 grouping: TriggerGrouping::EachOccurrence,
                 body: ExecutableBody::new(
                     BodyTarget::None,
-                    vec![Instruction::Surveil {
-                        player: ResolvingPlayer::Controller,
-                        amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                    }],
+                    vec![Instruction::MutatePlayer(Box::new(
+                        spellwake_engine::toolbox::MutatePlayerSpec::surveil(
+                            ResolvingPlayer::Controller,
+                            spellwake_engine::program::ValueExpr::Literal(2.into()),
+                        ),
+                    ))],
                 ),
             })
         }
