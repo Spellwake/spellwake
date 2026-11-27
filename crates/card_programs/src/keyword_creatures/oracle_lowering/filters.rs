@@ -35,6 +35,87 @@ fn try_union_any_types_clauses(a: ObjectClause, b: ObjectClause) -> Option<Objec
     }
 }
 
+fn try_union_color_clauses(a: ObjectClause, b: ObjectClause) -> Option<ObjectClause> {
+    let (
+        ObjectColorFilter::Mask {
+            any_of: a_any,
+            none_of: a_none,
+        },
+        ObjectColorFilter::Mask {
+            any_of: b_any,
+            none_of: b_none,
+        },
+    ) = (a.color, b.color)
+    else {
+        return None;
+    };
+    if a_any.is_empty() || b_any.is_empty() || a_none != b_none {
+        return None;
+    }
+    let mut a_norm = a;
+    let mut b_norm = b;
+    a_norm.color = ObjectColorFilter::Any;
+    b_norm.color = ObjectColorFilter::Any;
+    if a_norm == b_norm {
+        a_norm.color = ObjectColorFilter::Mask {
+            any_of: a_any.union(b_any),
+            none_of: a_none,
+        };
+        Some(a_norm)
+    } else {
+        None
+    }
+}
+
+/// Pick one canonical implied bit from `req` for `ObjectClause::any_types` so helpers such as
+/// `guarantees_creature()`, `guarantees_damageable()`, and `allows_instant_or_sorcery()` remain
+/// accurate alongside `ObjectClause::required_types`.
+fn canonical_any_type_for_required(req: CardTypeMask) -> CardTypeMask {
+    if req.contains(CardType::Creature) {
+        CardTypeMask::CREATURE
+    } else if req.contains(CardType::Planeswalker) {
+        CardTypeMask::PLANESWALKER
+    } else if req.contains(CardType::Battle) {
+        CardTypeMask::BATTLE
+    } else if req.contains(CardType::Instant) {
+        CardTypeMask::INSTANT
+    } else if req.contains(CardType::Sorcery) {
+        CardTypeMask::SORCERY
+    } else if req.contains(CardType::Land) {
+        CardTypeMask::LAND
+    } else if req.contains(CardType::Artifact) {
+        CardTypeMask::ARTIFACT
+    } else if req.contains(CardType::Enchantment) {
+        CardTypeMask::ENCHANTMENT
+    } else {
+        req
+    }
+}
+
+fn is_simple_attachment_filter(att_f: &ObjectFilterAst) -> bool {
+    att_f.zone.is_none()
+        && att_f.extra_zones.is_empty()
+        && att_f.predicates.is_empty()
+        && att_f.controller.is_none()
+        && att_f.owner.is_none()
+        && att_f.any_colors.is_empty()
+        && att_f.forbidden_colors.is_empty()
+        && att_f.color_arity.is_none()
+        && att_f.forbidden_types.is_empty()
+        && att_f.required_supertypes.is_empty()
+        && att_f.forbidden_supertypes.is_empty()
+        && att_f.forbidden_subtypes.is_empty()
+        && att_f.combat.is_none()
+        && att_f.tapped.is_none()
+        && att_f.token.is_none()
+        && att_f.required_keywords.is_empty()
+        && att_f.forbidden_keywords.is_empty()
+        && att_f.stat_bounds.is_empty()
+        && att_f.counter_kind.is_none()
+        && att_f.named.is_none()
+        && att_f.flags.0 == 0
+}
+
 fn prior_action_moved_count_zone(f: &ObjectFilterAst) -> Option<ValueZone> {
     let mut inferred: Option<ValueZone> = None;
     for pred in &f.predicates {
@@ -298,10 +379,21 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                 spellwake_engine::characteristics::NameFilter::SharesWithSource
             }
             NameFilterAst::Exact(n) => spellwake_engine::characteristics::NameFilter::Named(
-                EnglishCardName::new(n.clone())
+                EnglishCardName::new(n.trim().to_string())
                     .map_err(|_| "oracle:unsupported-selector-predicate")?,
             ),
-            NameFilterAst::SameAsReferenced | NameFilterAst::SameAs(_) => {
+            NameFilterAst::SameAs(subj) => match peel_battlefield_subject(subj) {
+                SubjectRefAst::SelfObject => {
+                    spellwake_engine::characteristics::NameFilter::SharesWithSource
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
+                {
+                    spellwake_engine::characteristics::NameFilter::SharesWithSource
+                }
+                _ => return Err("oracle:unsupported-selector-predicate"),
+            },
+            NameFilterAst::SameAsReferenced => {
                 return Err("oracle:unsupported-selector-predicate");
             }
         };
@@ -310,6 +402,36 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
         apply_selector_counter_kind(&mut sel, ck_raw)?;
     }
     for sb in &f.stat_bounds {
+        match (sb.stat, sb.op, sb.value.as_ref()) {
+            (
+                StatKind::Toughness,
+                CompareOp::Gt,
+                ValueExprAst::ObjectStat {
+                    subject,
+                    stat: StatKind::Power,
+                },
+            )
+            | (
+                StatKind::Power,
+                CompareOp::Lt,
+                ValueExprAst::ObjectStat {
+                    subject,
+                    stat: StatKind::Toughness,
+                },
+            ) if matches!(
+                subject.as_ref(),
+                SubjectRefAst::Anaphora(raw)
+                    if matches!(
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "its" | "his" | "her" | "their"
+                    )
+            ) =>
+            {
+                sel.toughness_greater_than_power = true;
+                continue;
+            }
+            _ => {}
+        }
         let ValueExprAst::Const(v) = sb.value.as_ref() else {
             return Err("oracle:unsupported-selector-predicate");
         };
@@ -523,8 +645,14 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
             sel.combat_role = Some(spellwake_engine::characteristics::CombatSelector::NotAttacking);
         }
     }
+    let types_match_all = f
+        .predicates
+        .iter()
+        .any(|p| matches!(p, FilterPredicateAst::TypesMatchAll));
     let mut any_types_set = card_type_mask_to_set(f.any_types)?;
-    if any_types_set.len() == 1 {
+    if types_match_all {
+        sel.required_types.extend(any_types_set);
+    } else if any_types_set.len() == 1 {
         if let Some(t) = any_types_set.pop_first() {
             sel.required_types.insert(t);
         }
@@ -532,6 +660,9 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
         sel.any_types = any_types_set;
     }
     sel.forbidden_types = card_type_mask_to_set(f.forbidden_types)?;
+    if !sel.required_types.is_disjoint(&sel.forbidden_types) {
+        return Err("oracle:unsupported-selector-predicate");
+    }
     let req_historic = (f.required_supertypes.0 & AstSupertypeMask::HISTORIC.0) != 0;
     let forb_historic = (f.forbidden_supertypes.0 & AstSupertypeMask::HISTORIC.0) != 0;
     if req_historic && forb_historic {
@@ -672,9 +803,18 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
         ) => Some(OwnerSelector::Opponents),
         _ => return Err("oracle:selector-unsupported-controller"),
     };
+    let set_sel_combat = |sel: &mut PermanentSelector,
+                          role: spellwake_engine::characteristics::CombatSelector|
+     -> Result<(), &'static str> {
+        if sel.combat_role.is_some_and(|prev| prev != role) {
+            return Err("oracle:unsupported-selector-predicate");
+        }
+        sel.combat_role = Some(role);
+        Ok(())
+    };
     for pred in &f.predicates {
         match pred {
-            FilterPredicateAst::SubtypesMatchAny => {}
+            FilterPredicateAst::SubtypesMatchAny | FilterPredicateAst::TypesMatchAll => {}
             FilterPredicateAst::HasBasicLandType => {
                 if sel.land_subtype.is_some() || !sel.any_land_subtypes.is_empty() {
                     return Err("oracle:unsupported-selector-predicate");
@@ -686,6 +826,171 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                     LandType::Mountain,
                     LandType::Forest,
                 ]);
+            }
+            FilterPredicateAst::ColorCountCompare { op, expr } => {
+                let target_color = match (op, expr.as_ref()) {
+                    (CompareOp::Eq | CompareOp::Le, ValueExprAst::Const(0)) => {
+                        ColorFilter::Colorless
+                    }
+                    (CompareOp::Eq, ValueExprAst::Const(1)) => ColorFilter::Monocolored,
+                    (CompareOp::Ge, ValueExprAst::Const(1))
+                    | (CompareOp::Gt, ValueExprAst::Const(0)) => ColorFilter::Colored,
+                    (CompareOp::Ge, ValueExprAst::Const(2))
+                    | (CompareOp::Gt, ValueExprAst::Const(1)) => ColorFilter::Multicolored,
+                    _ => return Err("oracle:unsupported-selector-predicate"),
+                };
+                if sel.color != ColorFilter::Any && sel.color != target_color {
+                    return Err("oracle:unsupported-selector-predicate");
+                }
+                sel.color = target_color;
+            }
+            FilterPredicateAst::HasAbilityKind { kind, negated } => {
+                let norm_kind = kind.trim().to_ascii_lowercase();
+                if norm_kind == "toxic" && !negated {
+                    sel.requires_toxic = true;
+                } else if let Some(kw) = lower_keyword_ability_name(&norm_kind) {
+                    if *negated {
+                        sel.forbidden_keywords.insert(kw);
+                    } else {
+                        apply_selector_required_keyword(&mut sel, &norm_kind, vocabulary)?;
+                    }
+                } else {
+                    return Err("oracle:unsupported-selector-predicate");
+                }
+            }
+            FilterPredicateAst::AttachedBy(att_f) => {
+                let simple_attachment = is_simple_attachment_filter(att_f);
+                if simple_attachment
+                    && att_f.subtypes.len() == 1
+                    && att_f.subtypes[0].eq_ignore_ascii_case("aura")
+                    && (att_f.any_types.is_empty()
+                        || att_f.any_types == AstCardTypeMask::ENCHANTMENT)
+                {
+                    sel.requires_enchanted = true;
+                } else if simple_attachment
+                    && att_f.subtypes.len() == 1
+                    && att_f.subtypes[0].eq_ignore_ascii_case("equipment")
+                    && (att_f.any_types.is_empty() || att_f.any_types == AstCardTypeMask::ARTIFACT)
+                {
+                    sel.equipped_by_at_least = sel.equipped_by_at_least.max(1);
+                } else {
+                    return Err("oracle:unsupported-selector-predicate");
+                }
+            }
+            FilterPredicateAst::AttachedTo(subj) => match peel_battlefield_subject(subj) {
+                SubjectRefAst::SelfObject => {
+                    if subject_is_attached_host {
+                        sel.attached_to_source_host = true;
+                    } else {
+                        sel.attached_to_source_permanent = true;
+                    }
+                }
+                SubjectRefAst::AttachedHost(_) => {
+                    sel.attached_to_source_host = true;
+                }
+                _ => return Err("oracle:unsupported-selector-predicate"),
+            },
+            FilterPredicateAst::Blocking(subj) => match peel_battlefield_subject(subj) {
+                SubjectRefAst::SelfObject => {
+                    set_sel_combat(
+                        &mut sel,
+                        spellwake_engine::characteristics::CombatSelector::BlockingSource,
+                    )?;
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
+                {
+                    set_sel_combat(
+                        &mut sel,
+                        spellwake_engine::characteristics::CombatSelector::BlockingSource,
+                    )?;
+                }
+                _ => return Err("oracle:unsupported-selector-predicate"),
+            },
+            FilterPredicateAst::BlockedBy {
+                blocker,
+                this_turn: false,
+            } => match peel_battlefield_subject(blocker) {
+                SubjectRefAst::SelfObject => {
+                    set_sel_combat(
+                        &mut sel,
+                        spellwake_engine::characteristics::CombatSelector::BlockedBySource,
+                    )?;
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
+                {
+                    set_sel_combat(
+                        &mut sel,
+                        spellwake_engine::characteristics::CombatSelector::BlockedBySource,
+                    )?;
+                }
+                _ => return Err("oracle:unsupported-selector-predicate"),
+            },
+            FilterPredicateAst::BlockedOrBlockedBy {
+                other,
+                this_turn: false,
+            } if filter_represents_self_object(other) => {
+                set_sel_combat(
+                    &mut sel,
+                    spellwake_engine::characteristics::CombatSelector::BlockingOrBlockedBySource,
+                )?;
+            }
+            FilterPredicateAst::DifferentNameFrom(subj) => match peel_battlefield_subject(subj) {
+                SubjectRefAst::SelfObject => {
+                    if !matches!(
+                        sel.name,
+                        spellwake_engine::characteristics::NameFilter::Any
+                            | spellwake_engine::characteristics::NameFilter::DifferentFromSource
+                    ) {
+                        return Err("oracle:unsupported-selector-predicate");
+                    }
+                    sel.name = spellwake_engine::characteristics::NameFilter::DifferentFromSource;
+                }
+                SubjectRefAst::Anaphora(raw)
+                    if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
+                {
+                    if !matches!(
+                        sel.name,
+                        spellwake_engine::characteristics::NameFilter::Any
+                            | spellwake_engine::characteristics::NameFilter::DifferentFromSource
+                    ) {
+                        return Err("oracle:unsupported-selector-predicate");
+                    }
+                    sel.name = spellwake_engine::characteristics::NameFilter::DifferentFromSource;
+                }
+                _ => return Err("oracle:unsupported-selector-predicate"),
+            },
+            FilterPredicateAst::SharesPropertyWith {
+                property,
+                reference,
+                negated,
+            } if matches!(
+                property.trim().to_ascii_lowercase().as_str(),
+                "name" | "a name"
+            ) =>
+            {
+                let is_self = match peel_battlefield_subject(reference) {
+                    SubjectRefAst::SelfObject => true,
+                    SubjectRefAst::Anaphora(raw) => {
+                        is_self_object_anaphora(&raw.trim().to_ascii_lowercase())
+                    }
+                    _ => false,
+                };
+                if !is_self {
+                    return Err("oracle:unsupported-selector-predicate");
+                }
+                let want = if *negated {
+                    spellwake_engine::characteristics::NameFilter::DifferentFromSource
+                } else {
+                    spellwake_engine::characteristics::NameFilter::SharesWithSource
+                };
+                if sel.name != spellwake_engine::characteristics::NameFilter::Any
+                    && sel.name != want
+                {
+                    return Err("oracle:unsupported-selector-predicate");
+                }
+                sel.name = want;
             }
             FilterPredicateAst::ManaValueIn(vals) => {
                 if sel.min_mana_value.is_some() || sel.max_mana_value.is_some() {
@@ -700,44 +1005,199 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                 sel.max_mana_value = Some(v_u32);
             }
             FilterPredicateAst::StateQualification(raw) => {
-                use spellwake_engine::characteristics::CombatSelector;
+                use spellwake_engine::characteristics::{CombatSelector, NameFilter};
                 let norm = raw.trim().to_ascii_lowercase();
                 match norm.as_str() {
                     "that's attacking" | "that is attacking" => {
-                        if sel
-                            .combat_role
-                            .is_some_and(|role| role != CombatSelector::Attacking)
-                        {
-                            return Err("oracle:unsupported-selector-predicate");
-                        }
-                        sel.combat_role = Some(CombatSelector::Attacking);
+                        set_sel_combat(&mut sel, CombatSelector::Attacking)?;
                     }
                     "that's blocking" | "that is blocking" => {
-                        if sel
-                            .combat_role
-                            .is_some_and(|role| role != CombatSelector::Blocking)
-                        {
-                            return Err("oracle:unsupported-selector-predicate");
-                        }
-                        sel.combat_role = Some(CombatSelector::Blocking);
+                        set_sel_combat(&mut sel, CombatSelector::Blocking)?;
                     }
                     "that's attacking or blocking" | "that is attacking or blocking" => {
+                        set_sel_combat(&mut sel, CombatSelector::AttackingOrBlocking)?;
+                    }
+                    "that's blocked" | "that is blocked" => {
+                        set_sel_combat(&mut sel, CombatSelector::Blocked)?;
+                    }
+                    "that's unblocked" | "that is unblocked" => {
+                        set_sel_combat(&mut sel, CombatSelector::Unblocked)?;
+                    }
+                    "that's blocking it" | "blocking it" => {
+                        set_sel_combat(&mut sel, CombatSelector::BlockingSource)?;
+                    }
+                    "that's tapped" | "that is tapped" | "that are tapped" => {
+                        if sel.requires_untapped {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.requires_tapped = true;
+                    }
+                    "that's untapped" | "that is untapped" | "that are untapped" => {
+                        if sel.requires_tapped {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.requires_untapped = true;
+                    }
+                    "that's equipped" | "that is equipped" | "that are equipped" => {
+                        sel.equipped_by_at_least = sel.equipped_by_at_least.max(1);
+                    }
+                    "that's enchanted" | "that is enchanted" | "that are enchanted" => {
+                        sel.requires_enchanted = true;
+                    }
+                    "that's modified" | "that is modified" | "that are modified" => {
+                        sel.requires_modified = true;
+                    }
+                    "that attacked this turn" | "you attacked with this turn" => {
+                        if sel.attacked_this_turn == Some(false) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.attacked_this_turn = Some(true);
+                    }
+                    "that didn't attack this turn" => {
+                        if sel.attacked_this_turn == Some(true) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.attacked_this_turn = Some(false);
+                    }
+                    "that entered this turn" | "that entered the battlefield this turn" => {
+                        sel.entered_this_turn = true;
+                    }
+                    "that was dealt damage this turn"
+                    | "that were dealt damage this turn"
+                    | "that has been dealt damage this turn"
+                    | "that have been dealt damage this turn" => {
+                        sel.dealt_damage_this_turn = true;
+                    }
+                    "that's historic" | "historic" => {
+                        if sel.historic == Some(false) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.historic = Some(true);
+                    }
+                    "that's not historic" | "not historic" => {
+                        if sel.historic == Some(true) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.historic = Some(false);
+                    }
+                    "that's a commander" | "commander" => {
+                        if sel.commander == Some(false) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.commander = Some(true);
+                    }
+                    "that isn't a commander" | "that aren't commanders" | "noncommander" => {
+                        if sel.commander == Some(true) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.commander = Some(false);
+                    }
+                    "face down" | "face-down" | "that's face down" | "that is face down"
+                    | "that are face down" => {
+                        if sel.face_down == Some(false) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.face_down = Some(true);
+                    }
+                    "face up" | "face-up" | "that's face up" | "that is face up"
+                    | "that are face up" => {
+                        if sel.face_down == Some(true) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.face_down = Some(false);
+                    }
+                    "that's toxic" | "with toxic" => {
+                        sel.requires_toxic = true;
+                    }
+                    "that's one or more colors" | "that are one or more colors" => {
+                        if sel.color != ColorFilter::Any && sel.color != ColorFilter::Colored {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.color = ColorFilter::Colored;
+                    }
+                    "with a +1/+1 counter on it"
+                    | "that has a +1/+1 counter on it"
+                    | "that have a +1/+1 counter on them"
+                    | "with a +1/+1 counter on them"
+                    | "with +1/+1 counters on them"
+                    | "with one or more +1/+1 counters on it" => {
+                        sel.plus_one_counter = true;
+                    }
+                    "with a -1/-1 counter on it"
+                    | "that have -1/-1 counters on them"
+                    | "that has a -1/-1 counter on it"
+                    | "with -1/-1 counters on them"
+                    | "with a -1/-1 counter on them" => {
+                        sel.minus_one_counter = true;
+                    }
+                    "with a counter on it"
+                    | "with counters on it"
+                    | "with a counter on them"
+                    | "with counters on them"
+                    | "with one or more counters on it"
+                    | "with one or more counters on them"
+                    | "that has a counter on it"
+                    | "that have a counter on them" => {
+                        sel.any_counter = true;
+                    }
+                    "without counters on it"
+                    | "with no counters on it"
+                    | "that has no counters on it"
+                    | "that have no counters on them"
+                    | "without counters on them"
+                    | "with no counters on them"
+                    | "that doesn't have a counter on it"
+                    | "that don't have counters on them" => {
+                        sel.without_counters = true;
+                    }
+                    "with toughness greater than its power"
+                    | "with toughness greater than their power"
+                    | "whose toughness is greater than its power"
+                    | "toughness_greater_than_power" => {
+                        sel.toughness_greater_than_power = true;
+                    }
+                    "with the same name as ~"
+                    | "that has the same name as ~"
+                    | "that have the same name as ~" => {
+                        if !matches!(sel.name, NameFilter::Any | NameFilter::SharesWithSource) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.name = NameFilter::SharesWithSource;
+                    }
+                    "that don't have the same name as ~"
+                    | "that doesn't have the same name as ~"
+                    | "with a different name than ~" => {
+                        if !matches!(sel.name, NameFilter::Any | NameFilter::DifferentFromSource) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.name = NameFilter::DifferentFromSource;
+                    }
+                    "you own" => {
                         if sel
-                            .combat_role
-                            .is_some_and(|role| role != CombatSelector::AttackingOrBlocking)
+                            .owner
+                            .is_some_and(|o| o != OwnerSelector::SourceController)
+                            || matches!(
+                                sel.controller,
+                                ControllerSelector::OwnerIsSourceController
+                                    | ControllerSelector::OwnerIsOpponent
+                            )
                         {
                             return Err("oracle:unsupported-selector-predicate");
                         }
-                        sel.combat_role = Some(CombatSelector::AttackingOrBlocking);
+                        sel.owner = Some(OwnerSelector::SourceController);
                     }
-                    "with a +1/+1 counter on it" => {
-                        sel.plus_one_counter = true;
-                    }
-                    "with a -1/-1 counter on it" | "that have -1/-1 counters on them" => {
-                        sel.minus_one_counter = true;
-                    }
-                    "with toughness greater than its power" => {
-                        sel.toughness_greater_than_power = true;
+                    "you own and control" => {
+                        if !matches!(
+                            sel.controller,
+                            ControllerSelector::Any | ControllerSelector::SourceController
+                        ) || sel
+                            .owner
+                            .is_some_and(|o| o != OwnerSelector::SourceController)
+                        {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.controller = ControllerSelector::SourceController;
+                        sel.owner = Some(OwnerSelector::SourceController);
                     }
                     "kicked" => {
                         sel.kicked = true;
@@ -781,6 +1241,10 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                             apply_selector_counter_kind(&mut sel, ck_raw)?;
                         } else if let Some(rest) = other.strip_prefix("with ") {
                             apply_selector_required_keyword(&mut sel, rest, vocabulary)?;
+                        } else if let Some(rest) = other.strip_prefix("without ")
+                            && let Some(kw) = lower_keyword_ability_name(rest)
+                        {
+                            sel.forbidden_keywords.insert(kw);
                         } else {
                             return Err("oracle:unsupported-selector-predicate");
                         }
@@ -788,13 +1252,20 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                 }
             }
             FilterPredicateAst::Exclude(subj)
-                if matches!(subj.as_ref(), SubjectRefAst::SelfObject) =>
+                if matches!(peel_battlefield_subject(subj), SubjectRefAst::SelfObject)
+                    || matches!(
+                        peel_battlefield_subject(subj),
+                        SubjectRefAst::Anaphora(raw)
+                            if is_self_object_anaphora(&raw.trim().to_ascii_lowercase())
+                    ) =>
             {
                 sel.exclude_source = true;
             }
             FilterPredicateAst::Exclude(subj)
                 if matches!(subj.as_ref(), SubjectRefAst::Group(_)) =>
             {
+                use spellwake_engine::characteristics::NameFilter;
+                use spellwake_oracle_compiler::ast::NameFilterAst;
                 let SubjectRefAst::Group(excl) = subj.as_ref() else {
                     unreachable!();
                 };
@@ -809,16 +1280,13 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                     && excl.combat.is_none()
                     && excl.stat_bounds.is_empty()
                     && excl.counter_kind.is_none()
-                    && excl.named.is_none()
                     && excl.forbidden_types.0 == 0
                     && excl.forbidden_supertypes.0 == 0
                     && excl.forbidden_subtypes.is_empty()
                     && excl.forbidden_colors.0 == 0
                     && excl.forbidden_keywords.is_empty()
-                    && excl.color_arity.is_none()
                     && !excl.any_spell
                     && !excl.is_ability
-                    && excl.flags.0 == 0
                     && preds_only_subtype_any;
                 if !excl_simple_shell || excl.tapped == Some(false) || excl.token == Some(false) {
                     return Err("oracle:unsupported-selector-predicate");
@@ -830,14 +1298,20 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                 let dim_token = excl.token == Some(true);
                 let dim_kws = !excl.required_keywords.is_empty();
                 let dim_colors = excl.any_colors.0 != 0;
+                let dim_arity = excl.color_arity.is_some();
+                let dim_named = excl.named.is_some();
+                let dim_flags = excl.flags.0 != 0;
                 let active_dims = usize::from(dim_types)
                     + usize::from(dim_supers)
                     + usize::from(dim_subs)
                     + usize::from(dim_tapped)
                     + usize::from(dim_token)
                     + usize::from(dim_kws)
-                    + usize::from(dim_colors);
-                if active_dims != 1 || dim_colors {
+                    + usize::from(dim_colors)
+                    + usize::from(dim_arity)
+                    + usize::from(dim_named)
+                    + usize::from(dim_flags);
+                if active_dims != 1 {
                     return Err("oracle:unsupported-selector-predicate");
                 }
                 if dim_subs {
@@ -884,6 +1358,63 @@ pub(super) fn lower_filter_to_permanent_selector_with_host_context(
                         for st in supertype_mask_to_set(excl.required_supertypes)? {
                             sel.forbidden_supertypes.insert(st);
                         }
+                    }
+                } else if dim_colors {
+                    let bits = ast_color_mask_to_bits(excl.any_colors);
+                    sel.color = match sel.color {
+                        ColorFilter::Any => {
+                            lower_color_filter(AstColorMask::EMPTY, excl.any_colors, None)
+                                .map_err(|_| "oracle:unsupported-selector-predicate")?
+                        }
+                        ColorFilter::Lacks(c) => ColorFilter::LacksAll(c.bit() | bits),
+                        ColorFilter::LacksAll(prev) => ColorFilter::LacksAll(prev | bits),
+                        _ => return Err("oracle:unsupported-selector-predicate"),
+                    };
+                } else if dim_arity {
+                    let negated_color = match excl.color_arity {
+                        Some(ColorArity::Colorless) => ColorFilter::Colored,
+                        Some(ColorArity::Colored) => ColorFilter::Colorless,
+                        _ => return Err("oracle:unsupported-selector-predicate"),
+                    };
+                    if sel.color != ColorFilter::Any && sel.color != negated_color {
+                        return Err("oracle:unsupported-selector-predicate");
+                    }
+                    sel.color = negated_color;
+                } else if dim_named {
+                    if !matches!(excl.named, Some(NameFilterAst::SelfName))
+                        || !matches!(sel.name, NameFilter::Any | NameFilter::DifferentFromSource)
+                    {
+                        return Err("oracle:unsupported-selector-predicate");
+                    }
+                    sel.name = NameFilter::DifferentFromSource;
+                } else if dim_flags {
+                    if excl.flags == AstFilterFlags::IS_COMMANDER {
+                        if sel.commander == Some(true) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.commander = Some(false);
+                    } else if excl.flags == AstFilterFlags::FACE_DOWN {
+                        if sel.face_down == Some(true) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.face_down = Some(false);
+                    } else if excl.flags == AstFilterFlags::FACE_UP {
+                        if sel.face_down == Some(false) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.face_down = Some(true);
+                    } else if excl.flags == AstFilterFlags::ATTACKED_THIS_TURN {
+                        if sel.attacked_this_turn == Some(true) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.attacked_this_turn = Some(false);
+                    } else if excl.flags == AstFilterFlags::DID_NOT_ATTACK_THIS_TURN {
+                        if sel.attacked_this_turn == Some(false) {
+                            return Err("oracle:unsupported-selector-predicate");
+                        }
+                        sel.attacked_this_turn = Some(true);
+                    } else {
+                        return Err("oracle:unsupported-selector-predicate");
                     }
                 } else if dim_token {
                     if sel.token == Some(true) {
@@ -3499,12 +4030,31 @@ fn intersect_object_clauses(
         set_clause_source_relation(&mut source_relation, extra.source_relation)
             .map_err(|_| "oracle:unsupported-filter-predicate")?;
     }
-    let color = if base.color == ObjectColorFilter::Any {
-        extra.color
-    } else if extra.color == ObjectColorFilter::Any || base.color == extra.color {
-        base.color
-    } else {
-        return Err("oracle:unsupported-filter-predicate");
+    let color = match (base.color, extra.color) {
+        (ObjectColorFilter::Any, c) | (c, ObjectColorFilter::Any) => c,
+        (a, b) if a == b => a,
+        (
+            ObjectColorFilter::Mask {
+                any_of: a_any,
+                none_of: a_none,
+            },
+            ObjectColorFilter::Mask {
+                any_of: b_any,
+                none_of: b_none,
+            },
+        ) if a_any.is_empty() || b_any.is_empty() || a_any == b_any => {
+            let any_of = if a_any.is_empty() { b_any } else { a_any };
+            let none_of = a_none.union(b_none);
+            if !any_of.is_empty()
+                && !Color::ALL
+                    .iter()
+                    .any(|&c| any_of.contains(c) && !none_of.contains(c))
+            {
+                return Err("oracle:unsupported-filter-predicate");
+            }
+            ObjectColorFilter::Mask { any_of, none_of }
+        }
+        _ => return Err("oracle:unsupported-filter-predicate"),
     };
     let combat = if base.combat == CombatFilter::Any {
         extra.combat
@@ -3669,8 +4219,8 @@ pub(super) fn lower_object_filter(
                 )?;
             }
             NameFilterAst::Exact(name) => {
-                let key =
-                    ExactNameKey::from_name(name).ok_or("oracle:unsupported-object-filter")?;
+                let key = ExactNameKey::from_name(name.trim())
+                    .ok_or("oracle:unsupported-object-filter")?;
                 clause.exact_name = Some(key);
             }
             NameFilterAst::SameAs(subj) => match peel_battlefield_subject(subj) {
@@ -3700,8 +4250,21 @@ pub(super) fn lower_object_filter(
             }
         }
     }
-    clause.any_types = lower_card_type_mask(f.any_types)?;
+    let types_match_all = f
+        .predicates
+        .iter()
+        .any(|p| matches!(p, FilterPredicateAst::TypesMatchAll));
+    if types_match_all {
+        let req_types = lower_card_type_mask(f.any_types)?;
+        clause.required_types = req_types;
+        clause.any_types = canonical_any_type_for_required(req_types);
+    } else {
+        clause.any_types = lower_card_type_mask(f.any_types)?;
+    }
     clause.forbidden_types = lower_card_type_mask(f.forbidden_types)?;
+    if (clause.required_types.bits() & clause.forbidden_types.bits()) != 0 {
+        return Err("oracle:unsupported-object-filter");
+    }
 
     // Supertypes (Historic maps to ObjectFilterFlags::HISTORIC)
     let mut req_sup = SupertypeMask::EMPTY;
@@ -4284,9 +4847,16 @@ pub(super) fn lower_object_filter(
             return Err("oracle:unsupported-object-filter");
         }
         let ck = ck_raw.trim().to_ascii_lowercase();
-        let ck_clean = ck
+        let ck_trimmed = ck
             .trim_end_matches(" counters")
             .trim_end_matches(" counter")
+            .trim();
+        let ck_clean = ck_trimmed
+            .strip_prefix("one or more ")
+            .or_else(|| ck_trimmed.strip_prefix("any "))
+            .or_else(|| ck_trimmed.strip_prefix("a "))
+            .or_else(|| ck_trimmed.strip_prefix("an "))
+            .unwrap_or(ck_trimmed)
             .trim();
         if has_without_flag {
             match ck_clean {
@@ -4519,27 +5089,7 @@ pub(super) fn lower_object_filter(
                 clause.color = target_color;
             }
             FilterPredicateAst::AttachedBy(att_f) => {
-                let simple_attachment = att_f.zone.is_none()
-                    && att_f.extra_zones.is_empty()
-                    && att_f.predicates.is_empty()
-                    && att_f.controller.is_none()
-                    && att_f.owner.is_none()
-                    && att_f.any_colors.is_empty()
-                    && att_f.forbidden_colors.is_empty()
-                    && att_f.color_arity.is_none()
-                    && att_f.forbidden_types.is_empty()
-                    && att_f.required_supertypes.is_empty()
-                    && att_f.forbidden_supertypes.is_empty()
-                    && att_f.forbidden_subtypes.is_empty()
-                    && att_f.combat.is_none()
-                    && att_f.tapped.is_none()
-                    && att_f.token.is_none()
-                    && att_f.required_keywords.is_empty()
-                    && att_f.forbidden_keywords.is_empty()
-                    && att_f.stat_bounds.is_empty()
-                    && att_f.counter_kind.is_none()
-                    && att_f.named.is_none()
-                    && att_f.flags.0 == 0;
+                let simple_attachment = is_simple_attachment_filter(att_f);
                 if simple_attachment
                     && att_f.subtypes.len() == 1
                     && att_f.subtypes[0].eq_ignore_ascii_case("aura")
@@ -4638,88 +5188,145 @@ pub(super) fn lower_object_filter(
                 negated: false,
             } => {
                 let prop_raw = property.trim().to_ascii_lowercase();
-                let prop = match prop_raw.as_str() {
-                    "color" | "a color" => "color",
-                    "creature_type" | "creature type" | "a creature type" => "creature_type",
-                    "card_type" | "card type" | "a card type" => "card_type",
-                    "name" | "a name" => "name",
-                    _ => return Err("oracle:unsupported-filter-predicate"),
-                };
-                let flag = match peel_battlefield_subject(reference) {
-                    SubjectRefAst::SelfObject => match prop {
-                        "color" => ObjectFilterFlags::SHARES_COLOR_WITH_SOURCE,
-                        "creature_type" => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_SOURCE,
-                        "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_SOURCE,
-                        "name" => ObjectFilterFlags::SAME_NAME_AS_SOURCE,
+                if matches!(prop_raw.as_str(), "mana_value" | "mana value") {
+                    let anchor = lower_anchor(&ValueExprAst::ObjectStat {
+                        subject: reference.clone(),
+                        stat: StatKind::ManaValue,
+                    })
+                    .ok_or("oracle:unsupported-filter-predicate")?;
+                    if clause.mana_value != ManaValueFilter::Any || mana_value_pair.is_some() {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.mana_value = ManaValueFilter::CompareAnchor {
+                        op: Comparison::Equal,
+                        anchor,
+                    };
+                } else if prop_raw == "power" {
+                    let anchor = lower_anchor(&ValueExprAst::ObjectStat {
+                        subject: reference.clone(),
+                        stat: StatKind::Power,
+                    })
+                    .ok_or("oracle:unsupported-filter-predicate")?;
+                    if clause.power != PowerFilter::Any {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.power = PowerFilter::CompareAnchor {
+                        op: Comparison::Equal,
+                        anchor,
+                    };
+                } else if prop_raw == "toughness" {
+                    let anchor = lower_anchor(&ValueExprAst::ObjectStat {
+                        subject: reference.clone(),
+                        stat: StatKind::Toughness,
+                    })
+                    .ok_or("oracle:unsupported-filter-predicate")?;
+                    if clause.toughness != ToughnessFilter::Any {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.toughness = ToughnessFilter::CompareAnchor {
+                        op: Comparison::Equal,
+                        anchor,
+                    };
+                } else {
+                    let prop = match prop_raw.as_str() {
+                        "color" | "a color" => "color",
+                        "creature_type" | "creature type" | "a creature type" => "creature_type",
+                        "card_type" | "card type" | "a card type" => "card_type",
+                        "name" | "a name" => "name",
                         _ => return Err("oracle:unsupported-filter-predicate"),
-                    },
-                    SubjectRefAst::Anaphora(raw)
-                        if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
-                    {
-                        match prop {
+                    };
+                    let flag = match peel_battlefield_subject(reference) {
+                        SubjectRefAst::SelfObject => match prop {
                             "color" => ObjectFilterFlags::SHARES_COLOR_WITH_SOURCE,
                             "creature_type" => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_SOURCE,
                             "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_SOURCE,
                             "name" => ObjectFilterFlags::SAME_NAME_AS_SOURCE,
                             _ => return Err("oracle:unsupported-filter-predicate"),
-                        }
-                    }
-                    SubjectRefAst::TargetObject {
-                        count: TargetCountAst::Exact(1),
-                        ..
-                    } => match prop {
-                        "color" => ObjectFilterFlags::SHARES_COLOR_WITH_TARGET,
-                        "creature_type" => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TARGET,
-                        "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TARGET,
-                        "name" => ObjectFilterFlags::SAME_NAME_AS_TARGET,
-                        _ => return Err("oracle:unsupported-filter-predicate"),
-                    },
-                    SubjectRefAst::Anaphora(raw) => {
-                        let low = raw.trim().to_ascii_lowercase();
-                        if low.contains("target") {
+                        },
+                        SubjectRefAst::Anaphora(raw)
+                            if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
+                        {
                             match prop {
-                                "color" => ObjectFilterFlags::SHARES_COLOR_WITH_TARGET,
+                                "color" => ObjectFilterFlags::SHARES_COLOR_WITH_SOURCE,
                                 "creature_type" => {
-                                    ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TARGET
+                                    ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_SOURCE
                                 }
-                                "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TARGET,
-                                "name" => ObjectFilterFlags::SAME_NAME_AS_TARGET,
+                                "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_SOURCE,
+                                "name" => ObjectFilterFlags::SAME_NAME_AS_SOURCE,
                                 _ => return Err("oracle:unsupported-filter-predicate"),
                             }
-                        } else if (low.contains("sacrificed creature")
-                            || low.contains("sacrificed permanent")
-                            || low.contains("sacrificed card"))
-                            && prop == "color"
-                        {
-                            ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED
-                        } else {
-                            return Err("oracle:unsupported-filter-predicate");
                         }
+                        SubjectRefAst::TargetObject {
+                            count: TargetCountAst::Exact(1),
+                            ..
+                        } => match prop {
+                            "color" => ObjectFilterFlags::SHARES_COLOR_WITH_TARGET,
+                            "creature_type" => ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TARGET,
+                            "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TARGET,
+                            "name" => ObjectFilterFlags::SAME_NAME_AS_TARGET,
+                            _ => return Err("oracle:unsupported-filter-predicate"),
+                        },
+                        SubjectRefAst::Anaphora(raw) => {
+                            let low = raw.trim().to_ascii_lowercase();
+                            if low.contains("target") {
+                                match prop {
+                                    "color" => ObjectFilterFlags::SHARES_COLOR_WITH_TARGET,
+                                    "creature_type" => {
+                                        ObjectFilterFlags::SHARES_CREATURE_TYPE_WITH_TARGET
+                                    }
+                                    "card_type" => ObjectFilterFlags::SHARES_CARD_TYPE_WITH_TARGET,
+                                    "name" => ObjectFilterFlags::SAME_NAME_AS_TARGET,
+                                    _ => return Err("oracle:unsupported-filter-predicate"),
+                                }
+                            } else if (low.contains("sacrificed creature")
+                                || low.contains("sacrificed permanent")
+                                || low.contains("sacrificed card"))
+                                && prop == "color"
+                            {
+                                ObjectFilterFlags::SHARES_COLOR_WITH_LAST_SACRIFICED
+                            } else {
+                                return Err("oracle:unsupported-filter-predicate");
+                            }
+                        }
+                        _ => return Err("oracle:unsupported-filter-predicate"),
+                    };
+                    clause.flags = clause.flags.union(flag);
+                }
+            }
+            FilterPredicateAst::SharesPropertyWith {
+                property,
+                reference,
+                negated: true,
+            } if matches!(
+                property.trim().to_ascii_lowercase().as_str(),
+                "name" | "a name"
+            ) =>
+            {
+                let is_self = match peel_battlefield_subject(reference) {
+                    SubjectRefAst::SelfObject => true,
+                    SubjectRefAst::Anaphora(raw) => {
+                        is_self_object_anaphora(&raw.trim().to_ascii_lowercase())
                     }
-                    _ => return Err("oracle:unsupported-filter-predicate"),
+                    _ => false,
                 };
-                clause.flags = clause.flags.union(flag);
+                if !is_self
+                    || clause
+                        .flags
+                        .contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
+                    || matches!(
+                        clause.source_relation,
+                        SourceRelation::SharingNameWithAbilitySource
+                            | SourceRelation::OtherThanAbilitySourceSharingName
+                    )
+                {
+                    return Err("oracle:unsupported-filter-predicate");
+                }
+                clause.flags = clause
+                    .flags
+                    .union(ObjectFilterFlags::DIFFERENT_NAME_FROM_SOURCE);
             }
             FilterPredicateAst::DifferentNameFrom(subj) => match peel_battlefield_subject(subj) {
                 SubjectRefAst::SelfObject => {
-                    if clause
-                        .flags
-                        .contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
-                        || matches!(
-                            clause.source_relation,
-                            SourceRelation::SharingNameWithAbilitySource
-                                | SourceRelation::OtherThanAbilitySourceSharingName
-                        )
-                    {
-                        return Err("oracle:unsupported-filter-predicate");
-                    }
-                    clause.flags = clause
-                        .flags
-                        .union(ObjectFilterFlags::DIFFERENT_NAME_FROM_SOURCE);
-                }
-                SubjectRefAst::Anaphora(raw)
-                    if is_self_object_anaphora(&raw.trim().to_ascii_lowercase()) =>
-                {
                     if clause
                         .flags
                         .contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
@@ -4806,6 +5413,7 @@ pub(super) fn lower_object_filter(
             FilterPredicateAst::SubtypesMatchAny => {
                 subtypes_match_any = true;
             }
+            FilterPredicateAst::TypesMatchAll => {}
             FilterPredicateAst::HasBasicLandType => {
                 if clause.subtypes == SubtypeFilter::Any {
                     use spellwake_engine::program::{SingleSubtype, SubtypeList};
@@ -4894,7 +5502,9 @@ pub(super) fn lower_object_filter(
                     };
                     let mut merged = false;
                     for existing in &mut clauses {
-                        if let Some(u) = try_union_any_types_clauses(*existing, sub_clause) {
+                        if let Some(u) = try_union_any_types_clauses(*existing, sub_clause)
+                            .or_else(|| try_union_color_clauses(*existing, sub_clause))
+                        {
                             *existing = u;
                             merged = true;
                             break;
@@ -4915,7 +5525,12 @@ pub(super) fn lower_object_filter(
                 }
             }
             FilterPredicateAst::Exclude(subj)
-                if matches!(subj.as_ref(), SubjectRefAst::SelfObject) =>
+                if matches!(peel_battlefield_subject(subj), SubjectRefAst::SelfObject)
+                    || matches!(
+                        peel_battlefield_subject(subj),
+                        SubjectRefAst::Anaphora(raw)
+                            if is_self_object_anaphora(&raw.trim().to_ascii_lowercase())
+                    ) =>
             {
                 set_clause_source_relation(
                     &mut clause.source_relation,
@@ -4925,11 +5540,12 @@ pub(super) fn lower_object_filter(
             FilterPredicateAst::Exclude(subj)
                 if matches!(subj.as_ref(), SubjectRefAst::Group(_)) =>
             {
+                use spellwake_oracle_compiler::ast::NameFilterAst;
                 let SubjectRefAst::Group(excl) = subj.as_ref() else {
                     unreachable!();
                 };
                 // Pure single-dimension negation: fold into forbidden_types / forbidden_subtypes /
-                // forbidden_supertypes / color / tapped / token / forbidden_keyword without
+                // forbidden_supertypes / color / tapped / token / forbidden_keyword / flags without
                 // distorting multi-attribute conjunctions (De Morgan safety).
                 let preds_only_subtype_any = excl
                     .predicates
@@ -4942,16 +5558,13 @@ pub(super) fn lower_object_filter(
                     && excl.combat.is_none()
                     && excl.stat_bounds.is_empty()
                     && excl.counter_kind.is_none()
-                    && excl.named.is_none()
                     && excl.forbidden_types.0 == 0
                     && excl.forbidden_supertypes.0 == 0
                     && excl.forbidden_subtypes.is_empty()
                     && excl.forbidden_colors.0 == 0
                     && excl.forbidden_keywords.is_empty()
-                    && excl.color_arity.is_none()
                     && !excl.any_spell
                     && !excl.is_ability
-                    && excl.flags.0 == 0
                     && preds_only_subtype_any;
                 if !excl_simple_shell {
                     return Err("oracle:unsupported-filter-predicate");
@@ -4960,6 +5573,9 @@ pub(super) fn lower_object_filter(
                 let dim_supers = excl.required_supertypes.0 != 0;
                 let dim_subs = !excl.subtypes.is_empty();
                 let dim_colors = excl.any_colors.0 != 0;
+                let dim_arity = excl.color_arity.is_some();
+                let dim_named = excl.named.is_some();
+                let dim_flags = excl.flags.0 != 0;
                 let dim_tapped = excl.tapped == Some(true);
                 let dim_token = excl.token == Some(true);
                 let dim_kws = !excl.required_keywords.is_empty();
@@ -4970,6 +5586,9 @@ pub(super) fn lower_object_filter(
                     + usize::from(dim_supers)
                     + usize::from(dim_subs)
                     + usize::from(dim_colors)
+                    + usize::from(dim_arity)
+                    + usize::from(dim_named)
+                    + usize::from(dim_flags)
                     + usize::from(dim_tapped)
                     + usize::from(dim_token)
                     + usize::from(dim_kws);
@@ -4989,15 +5608,22 @@ pub(super) fn lower_object_filter(
                     let ft = lower_card_type_mask(excl.any_types)?;
                     clause.forbidden_types = clause.forbidden_types.union(ft);
                 } else if dim_supers {
-                    if (excl.required_supertypes.0 & AstSupertypeMask::HISTORIC.0) != 0
-                        || excl.required_supertypes.0.count_ones() != 1
-                    {
-                        return Err("oracle:unsupported-filter-predicate");
-                    }
-                    for st in supertype_mask_to_set(excl.required_supertypes)? {
-                        clause.forbidden_supertypes = clause
-                            .forbidden_supertypes
-                            .union(SupertypeMask::from_supertype(st));
+                    if (excl.required_supertypes.0 & AstSupertypeMask::HISTORIC.0) != 0 {
+                        if excl.required_supertypes.0 != AstSupertypeMask::HISTORIC.0
+                            || clause.flags.contains(ObjectFilterFlags::HISTORIC)
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::NON_HISTORIC);
+                    } else {
+                        if excl.required_supertypes.0.count_ones() != 1 {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        for st in supertype_mask_to_set(excl.required_supertypes)? {
+                            clause.forbidden_supertypes = clause
+                                .forbidden_supertypes
+                                .union(SupertypeMask::from_supertype(st));
+                        }
                     }
                 } else if dim_colors {
                     let cm = lower_color_mask(excl.any_colors);
@@ -5015,6 +5641,66 @@ pub(super) fn lower_object_filter(
                             };
                         }
                         _ => return Err("oracle:unsupported-filter-predicate"),
+                    }
+                } else if dim_arity {
+                    let negated_color = match excl.color_arity {
+                        Some(ColorArity::Colorless) => ObjectColorFilter::Colored,
+                        Some(ColorArity::Colored) => ObjectColorFilter::Colorless,
+                        _ => return Err("oracle:unsupported-filter-predicate"),
+                    };
+                    if clause.color != ObjectColorFilter::Any && clause.color != negated_color {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.color = negated_color;
+                } else if dim_named {
+                    if !matches!(excl.named, Some(NameFilterAst::SelfName))
+                        || clause
+                            .flags
+                            .contains(ObjectFilterFlags::SAME_NAME_AS_SOURCE)
+                        || matches!(
+                            clause.source_relation,
+                            SourceRelation::SharingNameWithAbilitySource
+                                | SourceRelation::OtherThanAbilitySourceSharingName
+                        )
+                    {
+                        return Err("oracle:unsupported-filter-predicate");
+                    }
+                    clause.flags = clause
+                        .flags
+                        .union(ObjectFilterFlags::DIFFERENT_NAME_FROM_SOURCE);
+                } else if dim_flags {
+                    if excl.flags == AstFilterFlags::IS_COMMANDER {
+                        if clause.flags.contains(ObjectFilterFlags::COMMANDER_ONLY) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::NOT_COMMANDER);
+                    } else if excl.flags == AstFilterFlags::FACE_DOWN {
+                        if clause.flags.contains(ObjectFilterFlags::FACE_DOWN) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::FACE_UP);
+                    } else if excl.flags == AstFilterFlags::FACE_UP {
+                        if clause.flags.contains(ObjectFilterFlags::FACE_UP) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::FACE_DOWN);
+                    } else if excl.flags == AstFilterFlags::ATTACKED_THIS_TURN {
+                        if clause.flags.contains(ObjectFilterFlags::ATTACKED_THIS_TURN) {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN);
+                    } else if excl.flags == AstFilterFlags::DID_NOT_ATTACK_THIS_TURN {
+                        if clause
+                            .flags
+                            .contains(ObjectFilterFlags::DID_NOT_ATTACK_THIS_TURN)
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::ATTACKED_THIS_TURN);
+                    } else {
+                        return Err("oracle:unsupported-filter-predicate");
                     }
                 } else if dim_token {
                     if clause.token.is_some_and(|v| v) {
@@ -5059,14 +5745,25 @@ pub(super) fn lower_object_filter(
                 _ => return Err("oracle:unsupported-filter-predicate"),
             },
             FilterPredicateAst::Blocking(subj)
-                if matches!(subj.as_ref(), SubjectRefAst::SelfObject) =>
+                if matches!(peel_battlefield_subject(subj), SubjectRefAst::SelfObject)
+                    || matches!(
+                        peel_battlefield_subject(subj),
+                        SubjectRefAst::Anaphora(raw)
+                            if is_self_object_anaphora(&raw.trim().to_ascii_lowercase())
+                    ) =>
             {
                 set_clause_combat_filter(&mut clause.combat, CombatFilter::BlockingSource)?;
             }
             FilterPredicateAst::BlockedBy {
                 blocker,
                 this_turn: false,
-            } if matches!(blocker.as_ref(), SubjectRefAst::SelfObject) => {
+            } if matches!(peel_battlefield_subject(blocker), SubjectRefAst::SelfObject)
+                || matches!(
+                    peel_battlefield_subject(blocker),
+                    SubjectRefAst::Anaphora(raw)
+                        if is_self_object_anaphora(&raw.trim().to_ascii_lowercase())
+                ) =>
+            {
                 set_clause_combat_filter(&mut clause.combat, CombatFilter::BlockedBySource)?;
             }
             FilterPredicateAst::BlockedOrBlockedBy {
@@ -5383,6 +6080,23 @@ pub(super) fn lower_object_filter(
                             .flags
                             .union(ObjectFilterFlags::PUT_INTO_GY_FROM_LIBRARY_THIS_TURN);
                     }
+                    "from among cards in graveyards that were put there from libraries this turn" =>
+                    {
+                        if !zone_compatible_with_graveyard {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause
+                            .flags
+                            .union(ObjectFilterFlags::PUT_INTO_GY_FROM_LIBRARY_THIS_TURN);
+                    }
+                    "that were put there from anywhere this turn"
+                    | "that was put there this turn"
+                    | "that were put there this turn" => {
+                        if !in_graveyard_context {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.flags = clause.flags.union(ObjectFilterFlags::PUT_INTO_GY_THIS_TURN);
+                    }
                     "adventure" => {
                         if clause.subtypes != SubtypeFilter::Any {
                             return Err("oracle:unsupported-filter-predicate");
@@ -5466,7 +6180,7 @@ pub(super) fn lower_object_filter(
                         }
                         clause.owner = ControllerFilter::You;
                     }
-                    "exiled with ~" => {
+                    "exiled with ~" | "that was exiled with ~" | "that were exiled with ~" => {
                         clause.flags = clause.flags.union(ObjectFilterFlags::EXILED_WITH_SELF);
                     }
                     "suspended" => {
@@ -5645,6 +6359,7 @@ pub(super) fn lower_object_filter(
                     }
                     "power_greater_than_toughness"
                     | "with power greater than its toughness"
+                    | "with power greater than their toughness"
                     | "whose power is greater than its toughness" => {
                         clause.flags = clause
                             .flags
@@ -5652,10 +6367,68 @@ pub(super) fn lower_object_filter(
                     }
                     "toughness_greater_than_power"
                     | "with toughness greater than its power"
+                    | "with toughness greater than their power"
                     | "whose toughness is greater than its power" => {
                         clause.flags = clause
                             .flags
                             .union(ObjectFilterFlags::TOUGHNESS_GREATER_THAN_POWER);
+                    }
+                    "that's one or more colors" | "that are one or more colors" => {
+                        if clause.color != ObjectColorFilter::Any
+                            && clause.color != ObjectColorFilter::Colored
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        clause.color = ObjectColorFilter::Colored;
+                    }
+                    "with mana value 1 or 2" => {
+                        if clause.mana_value != ManaValueFilter::Any
+                            || mana_value_pair.is_some()
+                            || any_of_pair.is_some()
+                        {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        mana_value_pair = Some((1, 2));
+                    }
+                    "that's a cleric, rogue, warrior, and/or wizard" => {
+                        if clause.subtypes != SubtypeFilter::Any {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        use spellwake_engine::program::{SingleSubtype, SubtypeList};
+                        let roles = resolve_party_roles(vocabulary)
+                            .ok_or("oracle:unsupported-filter-predicate")?;
+                        let atoms = [
+                            SingleSubtype::Creature(roles[0]),
+                            SingleSubtype::Creature(roles[1]),
+                            SingleSubtype::Creature(roles[2]),
+                            SingleSubtype::Creature(roles[3]),
+                        ];
+                        let list = SubtypeList::from_slice(&atoms)
+                            .ok_or("oracle:unsupported-filter-predicate")?;
+                        clause.subtypes = SubtypeFilter::AnyOfList(list);
+                    }
+                    "that are instant cards, sorcery cards, and/or have an adventure"
+                    | "that are instant cards, are sorcery cards, and/or have an adventure" => {
+                        if any_of_pair.is_some() || mana_value_pair.is_some() {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        any_of_pair = Some((
+                            ObjectClause::any()
+                                .any_types(CardTypeMask::INSTANT.union(CardTypeMask::SORCERY)),
+                            ObjectClause::any().with_flags(ObjectFilterFlags::HAS_ADVENTURE),
+                        ));
+                    }
+                    "that are oozes or are named ~" => {
+                        if any_of_pair.is_some() || mana_value_pair.is_some() {
+                            return Err("oracle:unsupported-filter-predicate");
+                        }
+                        let ooze = vocabulary
+                            .resolve_label("Ooze")
+                            .ok_or("oracle:unsupported-filter-predicate")?;
+                        any_of_pair = Some((
+                            ObjectClause::any().with_subtype(ooze),
+                            ObjectClause::any().with_flags(ObjectFilterFlags::SAME_NAME_AS_SOURCE),
+                        ));
                     }
                     "with no abilities" | "that has no abilities" | "that have no abilities" => {
                         clause.flags = clause.flags.union(ObjectFilterFlags::NO_ABILITIES);
@@ -6120,7 +6893,8 @@ pub(super) fn lower_spell_filter(
                 match norm.as_str() {
                     "cast from a graveyard"
                     | "cast from your graveyard"
-                    | "cast from any graveyard" => {
+                    | "cast from any graveyard"
+                    | "cast_from_graveyard" => {
                         if !matches!(
                             cast_zone,
                             SpellCastZoneFilter::Any | SpellCastZoneFilter::Graveyard
@@ -6130,7 +6904,39 @@ pub(super) fn lower_spell_filter(
                         cast_zone = SpellCastZoneFilter::Graveyard;
                         stripped_spell_pred = true;
                     }
-                    "that wasn't cast from its owner's hand" => {
+                    "cast from exile" => {
+                        if !matches!(
+                            cast_zone,
+                            SpellCastZoneFilter::Any | SpellCastZoneFilter::Exile
+                        ) {
+                            return Err("oracle:spell-filter-zone");
+                        }
+                        cast_zone = SpellCastZoneFilter::Exile;
+                        stripped_spell_pred = true;
+                    }
+                    "cast from your library" => {
+                        if !matches!(
+                            cast_zone,
+                            SpellCastZoneFilter::Any | SpellCastZoneFilter::OwnLibrary
+                        ) {
+                            return Err("oracle:spell-filter-zone");
+                        }
+                        cast_zone = SpellCastZoneFilter::OwnLibrary;
+                        stripped_spell_pred = true;
+                    }
+                    "cast from your hand" | "cast from a hand" => {
+                        if !matches!(
+                            cast_zone,
+                            SpellCastZoneFilter::Any | SpellCastZoneFilter::Hand
+                        ) {
+                            return Err("oracle:spell-filter-zone");
+                        }
+                        cast_zone = SpellCastZoneFilter::Hand;
+                        stripped_spell_pred = true;
+                    }
+                    "that wasn't cast from its owner's hand"
+                    | "cast from outside hand"
+                    | "cast from anywhere other than your hand" => {
                         if !matches!(
                             cast_zone,
                             SpellCastZoneFilter::Any | SpellCastZoneFilter::NotOwnersHand
@@ -6241,7 +7047,10 @@ fn try_bind_target_object_filter(filter: &ObjectFilterAst) -> Option<BodyTarget>
         || filter.is_ability
         || filter.named.is_some()
         || !filter.subtypes.is_empty()
-        || !filter.predicates.is_empty()
+        || !filter
+            .predicates
+            .iter()
+            .all(|p| matches!(p, FilterPredicateAst::TypesMatchAll))
         || !filter.stat_bounds.is_empty()
     {
         return None;
@@ -6290,8 +7099,21 @@ fn try_bind_target_object_filter(filter: &ObjectFilterAst) -> Option<BodyTarget>
     if (filter.flags.0 & AstFilterFlags::EXCLUDE_SELF.0) != 0 {
         clause.source_relation = SourceRelation::OtherThanAbilitySource;
     }
-    clause.any_types = lower_card_type_mask(filter.any_types).ok()?;
+    if filter
+        .predicates
+        .iter()
+        .any(|p| matches!(p, FilterPredicateAst::TypesMatchAll))
+    {
+        let req_types = lower_card_type_mask(filter.any_types).ok()?;
+        clause.required_types = req_types;
+        clause.any_types = canonical_any_type_for_required(req_types);
+    } else {
+        clause.any_types = lower_card_type_mask(filter.any_types).ok()?;
+    }
     clause.forbidden_types = lower_card_type_mask(filter.forbidden_types).ok()?;
+    if (clause.required_types.bits() & clause.forbidden_types.bits()) != 0 {
+        return None;
+    }
     clause.color = if let Some(arity) = filter.color_arity {
         if !filter.any_colors.is_empty() || !filter.forbidden_colors.is_empty() {
             return None;
@@ -9410,5 +10232,127 @@ mod wave12_adventure_filter_tests {
             negated: false,
         }];
         assert!(lower_object_filter(&filter, &vocabulary).is_err());
+    }
+
+    #[test]
+    fn phase12_types_match_all_and_honest_predicates() {
+        let vocabulary = CreatureTypeVocabulary::new(
+            "phase12-filters".into(),
+            [0; 32],
+            vec![
+                "Cleric".into(),
+                "Human".into(),
+                "Ooze".into(),
+                "Rogue".into(),
+                "Warrior".into(),
+                "Wizard".into(),
+            ],
+        )
+        .expect("test vocabulary");
+
+        // Conjunctive multi-type filters (artifact creature / enchantment creature)
+        let mut art_creature = ObjectFilterAst {
+            any_types: AstCardTypeMask::ARTIFACT.union(AstCardTypeMask::CREATURE),
+            ..Default::default()
+        };
+        art_creature
+            .predicates
+            .push(FilterPredicateAst::TypesMatchAll);
+        let lowered = lower_object_filter(&art_creature, &vocabulary)
+            .expect("artifact creature filter should lower");
+        let (clause, second) = lowered.clauses();
+        assert!(second.is_none());
+        assert_eq!(
+            clause.required_types,
+            CardTypeMask::ARTIFACT.union(CardTypeMask::CREATURE)
+        );
+        assert_eq!(clause.any_types, CardTypeMask::CREATURE);
+        assert!(lowered.guarantees_creature());
+
+        let sel = lower_filter_to_permanent_selector(&art_creature, &vocabulary)
+            .expect("artifact creature selector should lower");
+        assert!(sel.required_types.contains(&CardType::Artifact));
+        assert!(sel.required_types.contains(&CardType::Creature));
+        assert!(sel.any_types.is_empty());
+
+        // SharesPropertyWith mana_value against source
+        let mut same_mv = ObjectFilterAst {
+            any_types: AstCardTypeMask::CREATURE,
+            ..Default::default()
+        };
+        same_mv
+            .predicates
+            .push(FilterPredicateAst::SharesPropertyWith {
+                property: "mana_value".into(),
+                reference: Box::new(SubjectRefAst::SelfObject),
+                negated: false,
+            });
+        let same_mv_lowered =
+            lower_object_filter(&same_mv, &vocabulary).expect("same mana value should lower");
+        assert_eq!(
+            same_mv_lowered.clauses().0.mana_value,
+            ManaValueFilter::CompareAnchor {
+                op: Comparison::Equal,
+                anchor: spellwake_engine::program::DynamicStatAnchor::SourceManaValue,
+            }
+        );
+
+        // Spell cast-zone state qualifications
+        let mut gy_spell = ObjectFilterAst {
+            any_spell: true,
+            ..Default::default()
+        };
+        gy_spell
+            .predicates
+            .push(FilterPredicateAst::StateQualification(
+                "cast_from_graveyard".into(),
+            ));
+        let sf = lower_spell_filter(&gy_spell, &vocabulary).expect("cast_from_graveyard lowers");
+        assert_eq!(
+            sf.cast_zone,
+            spellwake_engine::program::SpellCastZoneFilter::Graveyard
+        );
+
+        let mut outside_hand = ObjectFilterAst {
+            any_spell: true,
+            ..Default::default()
+        };
+        outside_hand
+            .predicates
+            .push(FilterPredicateAst::StateQualification(
+                "cast from outside hand".into(),
+            ));
+        let sf_out =
+            lower_spell_filter(&outside_hand, &vocabulary).expect("cast from outside hand lowers");
+        assert_eq!(
+            sf_out.cast_zone,
+            spellwake_engine::program::SpellCastZoneFilter::NotOwnersHand
+        );
+
+        // Fail closed on genuine engine gaps (AttachedTo arbitrary host filter, dealt_damage_this_way)
+        let mut aura_on_land = ObjectFilterAst {
+            subtypes: vec!["Aura".into()],
+            ..Default::default()
+        };
+        aura_on_land
+            .predicates
+            .push(FilterPredicateAst::AttachedTo(Box::new(
+                SubjectRefAst::Group(Box::new(ObjectFilterAst {
+                    any_types: AstCardTypeMask::LAND,
+                    ..Default::default()
+                })),
+            )));
+        assert!(lower_object_filter(&aura_on_land, &vocabulary).is_err());
+
+        let mut dealt_this_way = ObjectFilterAst {
+            any_types: AstCardTypeMask::CREATURE,
+            ..Default::default()
+        };
+        dealt_this_way
+            .predicates
+            .push(FilterPredicateAst::PriorActionZoneRef {
+                kind: "dealt_damage_this_way".into(),
+            });
+        assert!(lower_object_filter(&dealt_this_way, &vocabulary).is_err());
     }
 }

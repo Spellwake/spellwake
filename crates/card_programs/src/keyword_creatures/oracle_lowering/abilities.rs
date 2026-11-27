@@ -416,7 +416,7 @@ pub(super) fn lower_ability(
                 }
                 return Ok(());
             }
-            let (filtered_ins, mut restriction, mut cost_reduction) =
+            let (mut filtered_ins, mut restriction, mut cost_reduction) =
                 strip_activated_restrictions_ext(body, entry_tap, true, vocabulary)?;
             if is_boast {
                 restriction = Some(combine_activation_restrictions(
@@ -429,8 +429,17 @@ pub(super) fn lower_ability(
                 (!cost_on_battlefield && body_returns_self_from_graveyard_ext(&filtered_ins))
                     .then_some("graveyard")
             });
-            let (mut mana_cost, mut source_cost, mut hybrids, mut extra_costs) =
-                lower_activation_cost_full(cost, effective_zone, vocabulary)?;
+            let ((mut mana_cost, mut source_cost, mut hybrids, mut extra_costs), cost_meta) =
+                lower_activation_cost_for_ability(cost, effective_zone, vocabulary)?;
+            if cost_meta.requires_x_nonzero {
+                restriction = Some(combine_activation_restrictions(
+                    restriction,
+                    ActivationRestriction::XNonZero,
+                ));
+            }
+            if cost_meta.rewrites_counter_prior_to_x {
+                rewrite_cost_counter_prior_to_chosen_x(&mut filtered_ins);
+            }
             let anaphora_ref = if extra_costs.is_empty() {
                 match source_cost {
                     SourceCost::SacrificeSelected {
@@ -654,8 +663,8 @@ pub(super) fn lower_ability(
                 && !extra_costs.iter().any(extra_cost_requires_battlefield)
                 && body_contains_graveyard_self_return_instruction(&exec_body)
             {
-                let (gy_mc, gy_sc, gy_hybs, gy_extra) =
-                    lower_activation_cost_full(cost, Some("graveyard"), vocabulary)?;
+                let ((gy_mc, gy_sc, gy_hybs, gy_extra), _) =
+                    lower_activation_cost_for_ability(cost, Some("graveyard"), vocabulary)?;
                 mana_cost = gy_mc;
                 source_cost = gy_sc;
                 hybrids = gy_hybs;
@@ -4627,6 +4636,303 @@ pub(super) fn lower_activation_cost_full(
     lower_activation_cost_composite(cost, zone, vocabulary)
 }
 
+#[derive(Clone, Copy, Default)]
+struct ActivationCostMeta {
+    requires_x_nonzero: bool,
+    rewrites_counter_prior_to_x: bool,
+}
+
+fn strip_or_more_counter_kind(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("or more ") {
+        Some(trimmed[8..].trim())
+    } else if trimmed.eq_ignore_ascii_case("or more") {
+        Some("")
+    } else {
+        None
+    }
+}
+
+fn cost_atom_consumes_x(atom: &CostAtomAst) -> bool {
+    match atom {
+        CostAtomAst::PayMana(raw) => raw.contains("{X}") || raw.contains("{x}"),
+        CostAtomAst::PayManaChoice(choices) => choices
+            .iter()
+            .any(|raw| raw.contains("{X}") || raw.contains("{x}")),
+        CostAtomAst::PayLife(expr)
+        | CostAtomAst::PayEnergyExpr(expr)
+        | CostAtomAst::Mill(expr)
+        | CostAtomAst::CollectEvidence(expr)
+        | CostAtomAst::Blight(expr) => matches!(expr.as_ref(), ValueExprAst::ChosenX),
+        CostAtomAst::Sacrifice { count, min_one, .. } => {
+            *min_one || matches!(count.as_ref(), ValueExprAst::ChosenX)
+        }
+        CostAtomAst::SacrificeAnyNumber(_) => true,
+        CostAtomAst::Discard {
+            count, any_number, ..
+        } => *any_number || matches!(count.as_ref(), ValueExprAst::ChosenX),
+        CostAtomAst::Exile {
+            count,
+            any_number,
+            min_one,
+            ..
+        } => *any_number || *min_one || matches!(count.as_ref(), ValueExprAst::ChosenX),
+        CostAtomAst::ExileTopLibrary { count, .. } | CostAtomAst::ExileTopZone { count, .. } => {
+            matches!(count.as_ref(), ValueExprAst::ChosenX)
+        }
+        CostAtomAst::TapPermanent {
+            count, any_number, ..
+        } => *any_number || matches!(count.as_ref(), ValueExprAst::ChosenX),
+        CostAtomAst::UntapPermanent { count, .. } | CostAtomAst::PutCounters { count, .. } => {
+            matches!(count.as_ref(), ValueExprAst::ChosenX)
+        }
+        CostAtomAst::RemoveCounters {
+            all: false,
+            count,
+            counter_kind,
+            ..
+        } => {
+            matches!(count.as_deref(), Some(ValueExprAst::ChosenX))
+                || (matches!(count.as_deref(), None | Some(ValueExprAst::Const(1)))
+                    && (counter_kind.trim().eq_ignore_ascii_case("x")
+                        || strip_or_more_counter_kind(counter_kind).is_some()))
+        }
+        CostAtomAst::RemoveCountersFromAmong {
+            all: false,
+            min_one,
+            count,
+            counter_kind,
+            ..
+        } => {
+            *min_one
+                || matches!(count.as_deref(), Some(ValueExprAst::ChosenX))
+                || (matches!(count.as_deref(), None | Some(ValueExprAst::Const(1)))
+                    && counter_kind.trim().eq_ignore_ascii_case("x"))
+        }
+        CostAtomAst::Or(a, b) => cost_atom_consumes_x(a) || cost_atom_consumes_x(b),
+        _ => false,
+    }
+}
+
+fn lower_activation_cost_for_ability(
+    cost: &[CostAtomAst],
+    zone: Option<&str>,
+    vocabulary: &CreatureTypeVocabulary,
+) -> Result<(LoweredActivationCost, ActivationCostMeta), &'static str> {
+    let mut has_min_one = false;
+    let mut rewrites_counter_prior_to_x = false;
+    let mut min_one_sacrifice = false;
+    for atom in cost {
+        match atom {
+            CostAtomAst::RemoveCountersFromAmong {
+                all: false,
+                min_one: true,
+                count: None,
+                ..
+            } => {
+                has_min_one = true;
+                rewrites_counter_prior_to_x = true;
+            }
+            CostAtomAst::RemoveCounters {
+                all: false,
+                count,
+                counter_kind,
+                ..
+            } if matches!(count.as_deref(), None | Some(ValueExprAst::Const(1)))
+                && strip_or_more_counter_kind(counter_kind).is_some() =>
+            {
+                has_min_one = true;
+                rewrites_counter_prior_to_x = true;
+            }
+            CostAtomAst::Sacrifice {
+                up_to: false,
+                min_one: true,
+                ..
+            } => {
+                has_min_one = true;
+                min_one_sacrifice = true;
+            }
+            _ => {}
+        }
+    }
+    if !has_min_one {
+        return Ok((
+            lower_activation_cost_full(cost, zone, vocabulary)?,
+            ActivationCostMeta::default(),
+        ));
+    }
+    // Fail closed if more than one cost atom consumes X to avoid binding collisions.
+    if cost.iter().filter(|a| cost_atom_consumes_x(a)).count() != 1 {
+        return Err("oracle:unsupported-activation-cost");
+    }
+    let mut normalized = Vec::with_capacity(cost.len());
+    for atom in cost {
+        match atom {
+            CostAtomAst::RemoveCountersFromAmong {
+                all: false,
+                min_one: true,
+                count: None,
+                counter_kind,
+                filter,
+            } => {
+                normalized.push(CostAtomAst::RemoveCountersFromAmong {
+                    all: false,
+                    min_one: false,
+                    count: Some(Box::new(ValueExprAst::ChosenX)),
+                    counter_kind: counter_kind.clone(),
+                    filter: filter.clone(),
+                });
+            }
+            CostAtomAst::RemoveCounters {
+                all: false,
+                count,
+                counter_kind,
+                subject,
+            } if matches!(count.as_deref(), None | Some(ValueExprAst::Const(1)))
+                && strip_or_more_counter_kind(counter_kind).is_some() =>
+            {
+                let real_kind = strip_or_more_counter_kind(counter_kind).unwrap_or("");
+                normalized.push(CostAtomAst::RemoveCounters {
+                    all: false,
+                    count: Some(Box::new(ValueExprAst::ChosenX)),
+                    counter_kind: if real_kind.is_empty() {
+                        "any".to_string()
+                    } else {
+                        real_kind.to_string()
+                    },
+                    subject: subject.clone(),
+                });
+            }
+            CostAtomAst::Sacrifice {
+                filter,
+                up_to: false,
+                min_one: true,
+                ..
+            } => {
+                normalized.push(CostAtomAst::SacrificeAnyNumber(filter.clone()));
+            }
+            other => normalized.push(other.clone()),
+        }
+    }
+    let lowered = lower_activation_cost_full(&normalized, zone, vocabulary)?;
+    if min_one_sacrifice {
+        let (_, ref sc, _, ref extras) = lowered;
+        let selected_extras = extras.iter().filter(|c| c.uses_selected_objects()).count();
+        if selected_extras != 1 || sc.uses_selected_cost_origin() {
+            return Err("oracle:unsupported-activation-cost");
+        }
+    }
+    Ok((
+        lowered,
+        ActivationCostMeta {
+            requires_x_nonzero: true,
+            rewrites_counter_prior_to_x,
+        },
+    ))
+}
+
+fn replace_prior_counter_expr(expr: &mut ValueExprAst) {
+    if matches!(
+        expr,
+        ValueExprAst::PriorResult | ValueExprAst::CountersRemovedThisWay
+    ) {
+        *expr = ValueExprAst::ChosenX;
+    }
+}
+
+fn replace_prior_counter_in_subject(subject: &mut SubjectRefAst) {
+    match subject {
+        SubjectRefAst::TargetObject { filter, .. }
+        | SubjectRefAst::Group(filter)
+        | SubjectRefAst::All(filter)
+        | SubjectRefAst::Each(filter) => {
+            for bound in &mut filter.stat_bounds {
+                replace_prior_counter_expr(bound.value.as_mut());
+            }
+        }
+        SubjectRefAst::InZone { subject, .. } => replace_prior_counter_in_subject(subject),
+        SubjectRefAst::Compound(items) => {
+            for item in items {
+                replace_prior_counter_in_subject(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rewrite_cost_counter_prior_to_chosen_x(ops: &mut Vec<InstructionAst>) {
+    if ops.len() == 1
+        && let InstructionAst::BindX { x_expr, .. } = &ops[0]
+        && matches!(
+            x_expr.as_ref(),
+            ValueExprAst::PriorResult | ValueExprAst::CountersRemovedThisWay
+        )
+        && let Some(InstructionAst::BindX { body, .. }) = ops.pop()
+    {
+        *ops = body;
+    }
+    let Some(first) = ops.first_mut() else {
+        return;
+    };
+    match first {
+        InstructionAst::GainControl { subject, .. }
+        | InstructionAst::Destroy { subject, .. }
+        | InstructionAst::Exile { subject, .. }
+        | InstructionAst::TapPermanent { subject, .. }
+        | InstructionAst::UntapPermanent { subject, .. }
+        | InstructionAst::ReturnZone { subject, .. }
+        | InstructionAst::MoveZone { subject, .. } => {
+            replace_prior_counter_in_subject(subject);
+        }
+        InstructionAst::DealDamage { target, amount, .. } => {
+            replace_prior_counter_in_subject(target);
+            replace_prior_counter_expr(amount);
+        }
+        InstructionAst::AddMana {
+            mana:
+                ManaSpecAst::ScaledSymbol { amount, .. }
+                | ManaSpecAst::AnyColor { amount, .. }
+                | ManaSpecAst::DifferentColors { amount }
+                | ManaSpecAst::CombinationOf { amount, .. },
+            ..
+        } => {
+            replace_prior_counter_expr(amount);
+        }
+        InstructionAst::Draw { count, .. }
+        | InstructionAst::Scry { count, .. }
+        | InstructionAst::Surveil { count, .. }
+        | InstructionAst::Mill { count, .. } => {
+            replace_prior_counter_expr(count);
+        }
+        InstructionAst::ChangeLife { delta, .. } => {
+            replace_prior_counter_expr(delta);
+        }
+        InstructionAst::PutCounters { subject, count, .. } => {
+            replace_prior_counter_in_subject(subject);
+            replace_prior_counter_expr(count);
+        }
+        InstructionAst::PreventDamage { amount, target, .. } => {
+            replace_prior_counter_in_subject(target);
+            replace_prior_counter_expr(amount);
+        }
+        InstructionAst::CreateToken { token, .. } => match token {
+            TokenSpecAst::Predefined { count, .. }
+            | TokenSpecAst::Copy { count, .. }
+            | TokenSpecAst::Creature { count, .. } => {
+                replace_prior_counter_expr(count);
+            }
+            TokenSpecAst::Role { .. } => {}
+        },
+        InstructionAst::ModifyPT { subject, scale, .. } => {
+            replace_prior_counter_in_subject(subject);
+            if let Some(sc) = scale {
+                replace_prior_counter_expr(sc);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn lower_activation_cost_fast(
     cost: &[CostAtomAst],
     zone: Option<&str>,
@@ -5778,6 +6084,208 @@ pub(super) fn lower_trigger_spec(
                                 })));
                             handled_single = true;
                         }
+                        "whenever an opponent who controls an artifact named ~ draws a card during their turn"
+                        | "an opponent who controls an artifact named ~ draws a card during their turn" =>
+                        {
+                            events.push(TriggerEvent::PlayerAction {
+                                player: PlayerRelation::Opponent,
+                                action: PlayerTriggerAction::DrewCard {
+                                    nth_each_turn: None,
+                                },
+                            });
+                            extra_cond = Some(TriggerCondition::And(
+                                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                    left: ValueExpr::PlayerStat(
+                                        PlayerStatExpr::PlayerIsActivePlayer(
+                                            ResolvingPlayer::UniqueRelatedPlayer,
+                                        ),
+                                    ),
+                                    comparison: Comparison::Equal,
+                                    right: ValueExpr::literal(1),
+                                }))),
+                                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                    left: ValueExpr::count_player_battlefield(
+                                        ResolvingPlayer::UniqueRelatedPlayer,
+                                        ObjectFilter::artifact().sharing_name_with_source(),
+                                    ),
+                                    comparison: Comparison::GreaterOrEqual,
+                                    right: ValueExpr::literal(1),
+                                }))),
+                            ));
+                            handled_single = true;
+                        }
+                        "whenever an opponent who controls an artifact named ~ gains life during their turn"
+                        | "an opponent who controls an artifact named ~ gains life during their turn" =>
+                        {
+                            events.push(TriggerEvent::LifeChanged {
+                                kind: LifeChangeKind::Gain,
+                                player: PlayerRelation::Opponent,
+                            });
+                            extra_cond = Some(TriggerCondition::And(
+                                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                    left: ValueExpr::PlayerStat(
+                                        PlayerStatExpr::PlayerIsActivePlayer(
+                                            ResolvingPlayer::UniqueRelatedPlayer,
+                                        ),
+                                    ),
+                                    comparison: Comparison::Equal,
+                                    right: ValueExpr::literal(1),
+                                }))),
+                                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                    left: ValueExpr::count_player_battlefield(
+                                        ResolvingPlayer::UniqueRelatedPlayer,
+                                        ObjectFilter::artifact().sharing_name_with_source(),
+                                    ),
+                                    comparison: Comparison::GreaterOrEqual,
+                                    right: ValueExpr::literal(1),
+                                }))),
+                            ));
+                            handled_single = true;
+                        }
+                        "a player casts a spell they don't own" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(
+                                    PlayerRelation::AnyParticipant,
+                                ),
+                                filter: SpellFilter::any(),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond =
+                                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                    left: ValueExpr::ObjectMatches {
+                                        subject: MatchObjectRef::TriggerSubject,
+                                        filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                                            flags: ObjectFilterFlags::NOT_OWNED_BY_CONTROLLER,
+                                            ..ObjectClause::any()
+                                        })),
+                                    },
+                                    comparison: Comparison::GreaterOrEqual,
+                                    right: ValueExpr::literal(1),
+                                })));
+                            handled_single = true;
+                        }
+                        "you cast a spell with power, toughness, or mana value 4" => {
+                            events.push(TriggerEvent::SpellCast {
+                                caster: TriggerPlayerScope::Relation(PlayerRelation::Controller),
+                                filter: SpellFilter::any(),
+                                self_cast: false,
+                                include_copy: false,
+                                min_mana_value: None,
+                            });
+                            extra_cond = Some(TriggerCondition::Or(
+                                Box::new(TriggerCondition::Or(
+                                    Box::new(TriggerCondition::Eval(Box::new(
+                                        ResolutionCondition {
+                                            left: ValueExpr::ObjectStat {
+                                                subject: ValueObjectRef::TriggerSubject,
+                                                stat: ObjectStatKind::ManaValue,
+                                            },
+                                            comparison: Comparison::Equal,
+                                            right: ValueExpr::literal(4),
+                                        },
+                                    ))),
+                                    Box::new(TriggerCondition::Eval(Box::new(
+                                        ResolutionCondition {
+                                            left: ValueExpr::ObjectMatches {
+                                                subject: MatchObjectRef::TriggerSubject,
+                                                filter: Box::new(
+                                                    ObjectFilter::creature()
+                                                        .with_power(PowerFilter::Equal(4)),
+                                                ),
+                                            },
+                                            comparison: Comparison::GreaterOrEqual,
+                                            right: ValueExpr::literal(1),
+                                        },
+                                    ))),
+                                )),
+                                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                    left: ValueExpr::ObjectMatches {
+                                        subject: MatchObjectRef::TriggerSubject,
+                                        filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                                            toughness: ToughnessFilter::Equal(4),
+                                            ..ObjectClause::creature()
+                                        })),
+                                    },
+                                    comparison: Comparison::GreaterOrEqual,
+                                    right: ValueExpr::literal(1),
+                                }))),
+                            ));
+                            handled_single = true;
+                        }
+                        "you cast a spell that's exactly two colors" => {
+                            let all_colors = [
+                                Color::White,
+                                Color::Blue,
+                                Color::Black,
+                                Color::Red,
+                                Color::Green,
+                            ];
+                            let mut pair_cond: Option<TriggerCondition> = None;
+                            for i in 0..all_colors.len() {
+                                for j in (i + 1)..all_colors.len() {
+                                    let c1 = all_colors[i];
+                                    let c2 = all_colors[j];
+                                    let mut none_of = ColorMask::EMPTY;
+                                    for (k, &ck) in all_colors.iter().enumerate() {
+                                        if k != i && k != j {
+                                            none_of = none_of.union(ColorMask::from_color(ck));
+                                        }
+                                    }
+                                    let has_c1_no_others =
+                                        TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                            left: ValueExpr::ObjectMatches {
+                                                subject: MatchObjectRef::TriggerSubject,
+                                                filter: Box::new(ObjectFilter::any().with_color(
+                                                    ObjectColorFilter::Mask {
+                                                        any_of: ColorMask::from_color(c1),
+                                                        none_of,
+                                                    },
+                                                )),
+                                            },
+                                            comparison: Comparison::GreaterOrEqual,
+                                            right: ValueExpr::literal(1),
+                                        }));
+                                    let has_c2 =
+                                        TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                            left: ValueExpr::ObjectMatches {
+                                                subject: MatchObjectRef::TriggerSubject,
+                                                filter: Box::new(
+                                                    ObjectFilter::any()
+                                                        .with_color(ObjectColorFilter::has(c2)),
+                                                ),
+                                            },
+                                            comparison: Comparison::GreaterOrEqual,
+                                            right: ValueExpr::literal(1),
+                                        }));
+                                    let exact_pair = TriggerCondition::And(
+                                        Box::new(has_c1_no_others),
+                                        Box::new(has_c2),
+                                    );
+                                    pair_cond = Some(match pair_cond {
+                                        Some(prev) => TriggerCondition::Or(
+                                            Box::new(prev),
+                                            Box::new(exact_pair),
+                                        ),
+                                        None => exact_pair,
+                                    });
+                                }
+                            }
+                            if let Some(cond) = pair_cond {
+                                events.push(TriggerEvent::SpellCast {
+                                    caster: TriggerPlayerScope::Relation(
+                                        PlayerRelation::Controller,
+                                    ),
+                                    filter: SpellFilter::any(),
+                                    self_cast: false,
+                                    include_copy: false,
+                                    min_mana_value: None,
+                                });
+                                extra_cond = Some(cond);
+                                handled_single = true;
+                            }
+                        }
                         "whenever ~ saddles a mount or crews a vehicle during your main phase"
                         | "~ saddles a mount or crews a vehicle during your main phase" => {
                             events.push(TriggerEvent::AnyOf(vec![
@@ -5904,11 +6412,49 @@ pub(super) fn lower_trigger_spec(
                                 }
                             }
                             if !handled_single
-                                && let Some(mid) = low.strip_prefix("the first ").and_then(|r| {
-                                    r.strip_suffix(" of a turn is cast")
-                                        .or_else(|| r.strip_suffix(" of the turn is cast"))
-                                        .or_else(|| r.strip_suffix(" each turn is cast"))
-                                })
+                                && let Some(ord_raw) =
+                                    low.strip_prefix("you roll your ").and_then(|r| {
+                                        r.strip_suffix(" die each turn")
+                                            .or_else(|| r.strip_suffix(" die in a turn"))
+                                    })
+                                && let Some(ord_n) = match ord_raw.trim() {
+                                    "first" | "1st" => Some(1i64),
+                                    "second" | "2nd" => Some(2i64),
+                                    "third" | "3rd" => Some(3i64),
+                                    "fourth" | "4th" => Some(4i64),
+                                    "fifth" | "5th" => Some(5i64),
+                                    _ => None,
+                                }
+                            {
+                                events.push(TriggerEvent::PlayerAction {
+                                    player: PlayerRelation::Controller,
+                                    action: PlayerTriggerAction::RolledDie { exact: None },
+                                });
+                                extra_cond =
+                                    Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                                        left: ValueExpr::PlayerStat(
+                                            PlayerStatExpr::DiceRolledThisTurn,
+                                        ),
+                                        comparison: Comparison::Equal,
+                                        right: ValueExpr::literal(ord_n),
+                                    })));
+                                handled_single = true;
+                            }
+                            if !handled_single
+                                && let Some(after_the) = low.strip_prefix("the ")
+                                && let Some((ord_word, rest_after_ord)) = after_the.split_once(' ')
+                                && let Some(ord_n) = match ord_word.trim() {
+                                    "first" | "1st" => Some(1i64),
+                                    "second" | "2nd" => Some(2i64),
+                                    "third" | "3rd" => Some(3i64),
+                                    "fourth" | "4th" => Some(4i64),
+                                    "fifth" | "5th" => Some(5i64),
+                                    _ => None,
+                                }
+                                && let Some(mid) = rest_after_ord
+                                    .strip_suffix(" of a turn is cast")
+                                    .or_else(|| rest_after_ord.strip_suffix(" of the turn is cast"))
+                                    .or_else(|| rest_after_ord.strip_suffix(" each turn is cast"))
                                 && mid.trim().ends_with("spell")
                             {
                                 let spell_phrase = mid.trim();
@@ -5960,7 +6506,7 @@ pub(super) fn lower_trigger_spec(
                                                 },
                                             ),
                                             comparison: Comparison::Equal,
-                                            right: ValueExpr::literal(1),
+                                            right: ValueExpr::literal(ord_n),
                                         },
                                     )));
                                     handled_single = true;
@@ -6546,6 +7092,19 @@ pub(super) fn lower_trigger_spec(
                 } if is_self_subj(subject)
             )
         };
+        let is_self_in_gy_or_bf = |c: &ConditionAst| {
+            matches!(
+                c,
+                ConditionAst::PlayerActionThisTurn {
+                    player: PlayerRefAst::You,
+                    action,
+                } if matches!(
+                    action.trim().trim_end_matches('.').to_ascii_lowercase().as_str(),
+                    "~ is in your graveyard or on the battlefield"
+                        | "~ is on the battlefield or in your graveyard"
+                )
+            )
+        };
         let is_self_in_exile = |c: &ConditionAst| match c {
             ConditionAst::Marker(GameMarker::InZone {
                 subject,
@@ -6636,6 +7195,9 @@ pub(super) fn lower_trigger_spec(
         } else if is_self_in_gy(cond) {
             spec = spec.in_zone(spellwake_engine::program::TriggerZone::Graveyard);
             None
+        } else if is_self_in_gy_or_bf(cond) {
+            spec = spec.in_zone(spellwake_engine::program::TriggerZone::Any);
+            Some(cond)
         } else if is_self_in_exile(cond) {
             apply_exile_zone(&mut spec);
             None
@@ -6646,6 +7208,9 @@ pub(super) fn lower_trigger_spec(
             } else if is_self_in_gy(b) {
                 spec = spec.in_zone(spellwake_engine::program::TriggerZone::Graveyard);
                 Some(a.as_ref())
+            } else if is_self_in_gy_or_bf(a) || is_self_in_gy_or_bf(b) {
+                spec = spec.in_zone(spellwake_engine::program::TriggerZone::Any);
+                Some(cond)
             } else if is_self_in_exile(a) {
                 apply_exile_zone(&mut spec);
                 Some(b.as_ref())
@@ -11777,6 +12342,14 @@ fn try_lower_specialized_trigger_condition(
                                 | "that land"
                                 | "that card"
                                 | "that spell"
+                                | "that token"
+                                | "that planeswalker"
+                                | "that battle"
+                                | "that equipment"
+                                | "that aura"
+                                | "that vehicle"
+                                | "that mount"
+                                | "that saga"
                         )
                 ) =>
         {
@@ -11960,6 +12533,14 @@ fn try_lower_specialized_trigger_condition(
                             | "that artifact"
                             | "that enchantment"
                             | "that land"
+                            | "that token"
+                            | "that planeswalker"
+                            | "that battle"
+                            | "that equipment"
+                            | "that aura"
+                            | "that vehicle"
+                            | "that mount"
+                            | "that saga"
                     )
             ) =>
         {
@@ -12176,21 +12757,13 @@ fn try_lower_specialized_trigger_condition(
             value,
         } => {
             let obj = lower_object_filter(filter, vocabulary).ok()?;
-            match (op, *value) {
-                (CompareOp::Eq, 0) => Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
-                    left: ValueExpr::count_battlefield(obj),
-                    comparison: Comparison::Equal,
-                    right: ValueExpr::literal(0),
-                }))),
-                (CompareOp::Ge, 1) | (CompareOp::Gt, 0) => {
-                    Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
-                        left: ValueExpr::count_battlefield(obj),
-                        comparison: Comparison::GreaterOrEqual,
-                        right: ValueExpr::literal(1),
-                    })))
-                }
-                _ => None,
-            }
+            let rc = ResolutionCondition {
+                left: ValueExpr::count_battlefield(obj),
+                comparison: lower_comparison(*op),
+                right: ValueExpr::literal(i64::from(*value)),
+            };
+            rc.is_trigger_world_evaluable()
+                .then(|| TriggerCondition::Eval(Box::new(rc)))
         }
         ConditionAst::ControlsCount {
             player: PlayerRefAst::AnyOpponent | PlayerRefAst::EachOpponent,
@@ -12740,7 +13313,8 @@ fn try_lower_specialized_trigger_condition(
                     right: ValueExpr::literal(5),
                 })))
             }
-            "~ is in your graveyard or on the battlefield" => Some(TriggerCondition::Or(
+            "~ is in your graveyard or on the battlefield"
+            | "~ is on the battlefield or in your graveyard" => Some(TriggerCondition::Or(
                 Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
                     left: ValueExpr::SourceState(SourceStateExpr::InZone(
                         spellwake_engine::program::SourceZoneKind::Graveyard,
@@ -12756,6 +13330,231 @@ fn try_lower_specialized_trigger_condition(
                     right: ValueExpr::literal(1),
                 }))),
             )),
+            "~ is still on the battlefield" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::SourceState(SourceStateExpr::InZone(
+                        spellwake_engine::program::SourceZoneKind::Battlefield,
+                    )),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "~ is enchanted, equipped, and has a counter on it" => Some(
+                TriggerCondition::SourceMatches(Box::new(ObjectFilter::Clause(ObjectClause {
+                    flags: ObjectFilterFlags::ENCHANTED
+                        .union(ObjectFilterFlags::EQUIPPED)
+                        .union(ObjectFilterFlags::WITH_ANY_COUNTER),
+                    ..ObjectClause::any()
+                }))),
+            ),
+            "a player other than you lost life this turn" => {
+                Some(TriggerCondition::OpponentLostLifeAtLeast(1))
+            }
+            "they control fewer lands than you" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_player_battlefield(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                        ObjectFilter::land(),
+                    ),
+                    comparison: Comparison::Less,
+                    right: ValueExpr::count_battlefield(ObjectFilter::land().controlled()),
+                })))
+            }
+            "they control two or more basic lands" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_player_battlefield(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                        ObjectFilter::Clause(ObjectClause {
+                            required_supertypes: SupertypeMask::BASIC,
+                            ..ObjectClause::land()
+                        }),
+                    ),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(2),
+                })))
+            }
+            "they control a commander" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_player_battlefield(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                        ObjectFilter::Clause(ObjectClause {
+                            flags: ObjectFilterFlags::COMMANDER_ONLY,
+                            ..ObjectClause::any()
+                        }),
+                    ),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "at least one creature is blocking ~" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_battlefield(ObjectFilter::Clause(ObjectClause {
+                        combat: CombatFilter::BlockingSource,
+                        ..ObjectClause::creature()
+                    })),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "exactly one creature is attacking" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_battlefield(ObjectFilter::Clause(ObjectClause {
+                        combat: CombatFilter::Attacking,
+                        ..ObjectClause::creature()
+                    })),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "enchanted creature is attacking alone" => Some(TriggerCondition::And(
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectMatches {
+                        subject: MatchObjectRef::AttachedHost,
+                        filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                            combat: CombatFilter::Attacking,
+                            ..ObjectClause::creature()
+                        })),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                }))),
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::count_battlefield(ObjectFilter::Clause(ObjectClause {
+                        combat: CombatFilter::Attacking,
+                        ..ObjectClause::creature()
+                    })),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(1),
+                }))),
+            )),
+            "three or more creatures attacked this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::AttackedMatchingThisTurn {
+                        players: AffectedPlayers::EachPlayer,
+                        filter: Box::new(ObjectFilter::creature()),
+                    }),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(3),
+                })))
+            }
+            "that creature has greater power or toughness than ~" => Some(TriggerCondition::Or(
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectStat {
+                        subject: ValueObjectRef::TriggerSubject,
+                        stat: ObjectStatKind::Power,
+                    },
+                    comparison: Comparison::Greater,
+                    right: ValueExpr::ObjectStat {
+                        subject: ValueObjectRef::AbilitySource,
+                        stat: ObjectStatKind::Power,
+                    },
+                }))),
+                Box::new(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectStat {
+                        subject: ValueObjectRef::TriggerSubject,
+                        stat: ObjectStatKind::Toughness,
+                    },
+                    comparison: Comparison::Greater,
+                    right: ValueExpr::ObjectStat {
+                        subject: ValueObjectRef::AbilitySource,
+                        stat: ObjectStatKind::Toughness,
+                    },
+                }))),
+            )),
+            "it was the second spell you cast this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::ControllerSpellsCastThisTurn),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(2),
+                })))
+            }
+            "you cast it from anywhere other than your hand" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::SourceState(SourceStateExpr::CastFromOutsideHand),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "that player had another land enter the battlefield under their control this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::LandsEnteredThisTurn(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                    )),
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(2),
+                })))
+            }
+            "that card has the chosen name" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectMatches {
+                        subject: MatchObjectRef::TriggerSubject,
+                        filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                            flags: ObjectFilterFlags::MATCHES_CHOSEN_NAME,
+                            ..ObjectClause::any()
+                        })),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "it was dealt damage this turn" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectMatches {
+                        subject: MatchObjectRef::TriggerSubject,
+                        filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                            flags: ObjectFilterFlags::DEALT_DAMAGE_THIS_TURN,
+                            ..ObjectClause::any()
+                        })),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "its mana value is even" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectMatches {
+                        subject: MatchObjectRef::TriggerSubject,
+                        filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                            flags: ObjectFilterFlags::EVEN_MANA_VALUE,
+                            ..ObjectClause::any()
+                        })),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "its mana value is odd" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectMatches {
+                        subject: MatchObjectRef::TriggerSubject,
+                        filter: Box::new(ObjectFilter::Clause(ObjectClause {
+                            flags: ObjectFilterFlags::ODD_MANA_VALUE,
+                            ..ObjectClause::any()
+                        })),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "it entered under your control" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::ObjectMatches {
+                        subject: MatchObjectRef::TriggerSubject,
+                        filter: Box::new(ObjectFilter::any().controlled()),
+                    },
+                    comparison: Comparison::GreaterOrEqual,
+                    right: ValueExpr::literal(1),
+                })))
+            }
+            "no cards are in that graveyard" => {
+                Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                    left: ValueExpr::PlayerStat(PlayerStatExpr::PlayerGraveyardSize(
+                        ResolvingPlayer::UniqueRelatedPlayer,
+                    )),
+                    comparison: Comparison::Equal,
+                    right: ValueExpr::literal(0),
+                })))
+            }
             "that land was nonbasic" => {
                 Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
                     left: ValueExpr::ObjectMatches {
@@ -13243,25 +14042,49 @@ fn try_lower_specialized_trigger_condition(
             Some(TriggerCondition::SourceMatches(Box::new(obj)))
         }
         ConditionAst::MatchesFilter { subject, filter }
-            if matches!(
-                subject.as_ref(),
-                SubjectRefAst::AttachedHost(_) | SubjectRefAst::TriggerSubject
-            ) || matches!(
-                subject.as_ref(),
-                SubjectRefAst::Anaphora(a)
-                    if matches!(
-                        a.trim().to_ascii_lowercase().as_str(),
-                        "that creature"
-                            | "that permanent"
-                            | "that artifact"
-                            | "that enchantment"
-                            | "that land"
-                            | "that card"
-                            | "that spell"
-                    )
-            ) =>
+            if {
+                let inner = match subject.as_ref() {
+                    SubjectRefAst::InZone {
+                        subject: inner,
+                        zone: ZoneFilter::Battlefield,
+                    } => inner.as_ref(),
+                    other => other,
+                };
+                matches!(
+                    inner,
+                    SubjectRefAst::AttachedHost(_) | SubjectRefAst::TriggerSubject
+                ) || matches!(
+                    inner,
+                    SubjectRefAst::Anaphora(a)
+                        if matches!(
+                            a.trim().to_ascii_lowercase().as_str(),
+                            "that creature"
+                                | "that permanent"
+                                | "that artifact"
+                                | "that enchantment"
+                                | "that land"
+                                | "that card"
+                                | "that spell"
+                                | "that token"
+                                | "that planeswalker"
+                                | "that battle"
+                                | "that equipment"
+                                | "that aura"
+                                | "that vehicle"
+                                | "that mount"
+                                | "that saga"
+                        )
+                )
+            } =>
         {
-            let match_ref = if matches!(subject.as_ref(), SubjectRefAst::AttachedHost(_)) {
+            let inner = match subject.as_ref() {
+                SubjectRefAst::InZone {
+                    subject: inner,
+                    zone: ZoneFilter::Battlefield,
+                } => inner.as_ref(),
+                other => other,
+            };
+            let match_ref = if matches!(inner, SubjectRefAst::AttachedHost(_)) {
                 MatchObjectRef::AttachedHost
             } else {
                 MatchObjectRef::TriggerSubject
@@ -13295,6 +14118,14 @@ fn try_lower_specialized_trigger_condition(
                                 | "that land"
                                 | "that card"
                                 | "that spell"
+                                | "that token"
+                                | "that planeswalker"
+                                | "that battle"
+                                | "that equipment"
+                                | "that aura"
+                                | "that vehicle"
+                                | "that mount"
+                                | "that saga"
                         )
             ) =>
         {
@@ -13331,6 +14162,28 @@ fn try_lower_specialized_trigger_condition(
                 };
                 rc.is_trigger_world_evaluable()
                     .then(|| TriggerCondition::Eval(Box::new(rc)))
+            }
+        }
+        ConditionAst::Marker(GameMarker::RemainsOnBattlefield) => {
+            Some(TriggerCondition::Eval(Box::new(ResolutionCondition {
+                left: ValueExpr::SourceState(SourceStateExpr::InZone(
+                    spellwake_engine::program::SourceZoneKind::Battlefield,
+                )),
+                comparison: Comparison::Equal,
+                right: ValueExpr::literal(1),
+            })))
+        }
+        ConditionAst::EventOccurredThisTurn { event } => {
+            match event
+                .trim()
+                .trim_end_matches('.')
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "you didn't activate a loyalty ability of a planeswalker this turn" => {
+                    Some(TriggerCondition::NoLoyaltyActivationThisTurn)
+                }
+                _ => None,
             }
         }
         ConditionAst::Marker(GameMarker::NotManaAbility) => {
