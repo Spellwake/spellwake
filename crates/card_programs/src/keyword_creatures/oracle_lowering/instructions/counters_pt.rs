@@ -4277,21 +4277,7 @@ pub(super) fn lower_counters_pt_instruction(
             self_pronoun_valid,
             bound_x,
         ),
-        InstructionAst::Empower {
-            planeswalker,
-            count,
-        } => {
-            if !planeswalker.eq_ignore_ascii_case("jace") {
-                return Err("oracle:unsupported-empower-planeswalker");
-            }
-            let resolved_count = resolve_x(count, bound_x);
-            let expr =
-                lower_value_expr_in_context(resolved_count, builder, in_trigger, vocabulary)?;
-            builder
-                .instructions
-                .push(Instruction::EmpowerJace { count: expr });
-            Ok(())
-        }
+        InstructionAst::Empower { .. } => Err("oracle:unsupported-instruction"),
         InstructionAst::GainPlayerCounters {
             player,
             counter_kind,

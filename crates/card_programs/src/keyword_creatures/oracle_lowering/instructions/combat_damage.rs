@@ -3012,20 +3012,10 @@ pub(super) fn lower_combat_damage_instruction(
                 false,
                 had_perm_target,
             )?;
-            if !builder.up_to_one_target
-                && first == MoveSubjectRef::AbilitySource
-                && second == MoveSubjectRef::TargetObject
-                && builder.target.guarantees_creature()
-            {
-                builder
-                    .instructions
-                    .push(Instruction::FightSourceWithTarget);
-            } else {
-                builder.instructions.push(Instruction::Fight {
-                    first: Box::new(first),
-                    second: Box::new(second),
-                });
-            }
+            builder.instructions.push(Instruction::Fight {
+                first: Box::new(first),
+                second: Box::new(second),
+            });
             Ok(())
         }
         InstructionAst::PreventAllDamageFrom {
@@ -3309,9 +3299,22 @@ pub(super) fn lower_combat_damage_instruction(
                 && !low.contains("at the beginning of")
                 && !low.contains("beginning of that combat")
             {
-                builder
-                    .instructions
-                    .push(Instruction::AdditionalCombatAfterUntappingAttackers);
+                builder.instructions.push(
+                    crate::keyword_creatures::oracle_lowering::toolbox_emit::mutate_all(
+                        spellwake_engine::toolbox::ObjectQuery::zone(
+                            spellwake_engine::toolbox::QueryZone::BattlefieldControlledBy(
+                                Box::new(spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::Controller,
+                                )),
+                            ),
+                            ObjectFilter::creature().attacking(),
+                        ),
+                        spellwake_engine::toolbox::ObjectMutation::SetTapped(false),
+                    ),
+                );
+                builder.instructions.push(Instruction::AdditionalCombat {
+                    untap: CombatUntapGroup::None,
+                });
                 Ok(())
             } else if low.contains("additional combat phase")
                 && !low.contains("untap")

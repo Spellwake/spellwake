@@ -543,7 +543,7 @@ pub(crate) fn rewrite_player_selector(
     match sel {
         PlayerSelector::Resolving(rp) => map_rp(rp),
         PlayerSelector::Group(ap) => map_ap(ap),
-        PlayerSelector::Bound(_) => {}
+        PlayerSelector::Bound(_) | PlayerSelector::Fixed(_) => {}
         PlayerSelector::OwnersOf(q) | PlayerSelector::ControllersOf(q) => {
             rewrite_object_query(q, map_rp, map_ap, map_ve);
         }
@@ -717,26 +717,6 @@ pub(crate) fn exile_until_next_end_step() -> Instruction {
             viewer: None,
             link_to_source: false,
             delayed_return: Some(DelayedReturnTiming::NextEndStep),
-            link_group: None,
-        },
-    ))
-}
-
-#[must_use]
-pub(crate) fn exile_top_face_down() -> Instruction {
-    zone_op(ZoneOpSpec::move_all(
-        ObjectQuery::ZoneScan {
-            zone: QueryZone::Library(Box::new(PlayerSelector::Resolving(
-                ResolvingPlayer::Controller,
-            ))),
-            filter: Box::new(ObjectFilter::any()),
-            slice: QuerySlice::Top(Box::new(ValueExpr::literal(1))),
-        },
-        ZoneDest::Exile {
-            face_down: true,
-            viewer: Some(PlayerSelector::Resolving(ResolvingPlayer::Controller)),
-            link_to_source: true,
-            delayed_return: None,
             link_group: None,
         },
     ))

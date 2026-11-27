@@ -25,7 +25,6 @@ pub(super) struct TokenEntryWork {
     entry_choices: BTreeMap<TokenBatchMember, crate::land::EntryChoice>,
     entry_controllers: BTreeMap<TokenBatchMember, SeatId>,
     aura_hosts: BTreeMap<TokenBatchMember, TargetRef>,
-    fight_pairs: Vec<(TokenBatchMember, ObjectId)>,
     copy_pool: entry_copy::EntryCopyPool,
     used_intrinsic_copies: BTreeMap<TokenBatchMember, Vec<crate::program::EntryCopyRule>>,
     used_battlefield_copies: BTreeMap<TokenBatchMember, BTreeSet<ObjectId>>,
@@ -34,24 +33,6 @@ pub(super) struct TokenEntryWork {
 }
 
 impl EffectWindow {
-    pub(super) fn entering_copy_candidate(&self) -> Result<Option<&Program>, EffectError> {
-        let entry = self
-            .window
-            .resolving()
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        let trigger = self
-            .execution_bindings(entry.id())
-            .and_then(|b| b.trigger.as_ref())
-            .ok_or(EffectError::InconsistentProgram)?;
-        if self
-            .triggers
-            .optional_trigger_effect_used(trigger, entry.controller())
-        {
-            return Ok(None);
-        }
-        self.trigger_entrant_definition(trigger)
-    }
-
     fn token_player_relation_matches(
         &self,
         rel: crate::program::PlayerRelation,
@@ -549,53 +530,6 @@ impl EffectWindow {
         Ok(out)
     }
 
-    pub(super) fn trigger_entrant_definition(
-        &self,
-        trigger: &crate::occurrence::TriggerBinding,
-    ) -> Result<Option<&Program>, EffectError> {
-        use crate::occurrence::TriggerRelated;
-        let [member] = trigger.causes.members() else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let after = match &member.related {
-            TriggerRelated::ZoneChange { after, .. }
-            | TriggerRelated::TokenCreated { after, .. } => after,
-            _ => return Err(EffectError::InconsistentProgram),
-        };
-        let donor = after.object.id();
-        let copied = self
-            .window
-            .cards()
-            .get(donor)
-            .filter(|card| card.zone() == ObjectZone::Battlefield)
-            .and_then(|_| self.copiable_program(donor))
-            .or_else(|| self.departed_copy_sources.get(&donor));
-        Ok(copied.filter(|program| program.permanent().is_some()))
-    }
-
-    pub(super) fn copy_entering_permanent_once(&mut self) -> Result<(), EffectError> {
-        let Some(program) = self.entering_copy_candidate()?.cloned() else {
-            return self.advance_instruction();
-        };
-        let entry = self
-            .window
-            .resolving()
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        let controller = entry.controller();
-        let trigger = self
-            .execution_bindings(entry.id())
-            .and_then(|b| b.trigger.as_ref())
-            .ok_or(EffectError::InconsistentProgram)?;
-        let (source, grant, definition) = (
-            trigger.source.object.id(),
-            trigger.granting_effect,
-            trigger.definition,
-        );
-        self.triggers
-            .use_optional_trigger_effect(source, grant, definition, controller);
-        self.begin_materialized_token_entries(vec![(controller, 1, program, false)], None, false)
-    }
-
     pub(super) fn begin_token_entries(
         &mut self,
         creations: &[TokenCreation],
@@ -869,35 +803,7 @@ impl EffectWindow {
                 encore_defenders.extend(std::iter::repeat_n(opponent, *count));
             }
         }
-        let fight_opponents = if !groups.is_empty()
-            && matches!(
-                self.current_instruction()?,
-                Instruction::CreateTokensToFight(_)
-            ) {
-            let entry = self.window.resolving().ok_or(EffectError::WrongPhase)?;
-            let captured = self
-                .effect_group(
-                    entry,
-                    crate::program::EffectSubject::Matching(
-                        crate::program::ObjectFilter::creature().opposing(),
-                    ),
-                )?
-                .into_iter()
-                .collect::<Vec<_>>();
-            if captured.len() != groups.len() {
-                return Err(EffectError::InconsistentProgram);
-            }
-            captured
-        } else {
-            Vec::new()
-        };
-        let mut fight_pairs = Vec::new();
-        for (index, (creator, count, definition, enters_tapped)) in groups.into_iter().enumerate() {
-            if count > 0
-                && let Some(&opponent) = fight_opponents.get(index)
-            {
-                fight_pairs.push((TokenBatchMember::new(members.len()), opponent));
-            }
+        for (creator, count, definition, enters_tapped) in groups {
             for _ in 0..count {
                 members.push(TokenEntryPreview {
                     enters_tapped,
@@ -967,7 +873,6 @@ impl EffectWindow {
             entry_choices: BTreeMap::new(),
             entry_controllers: BTreeMap::new(),
             aura_hosts: BTreeMap::new(),
-            fight_pairs,
             copy_pool,
             used_intrinsic_copies: BTreeMap::new(),
             used_battlefield_copies: BTreeMap::new(),
@@ -1674,7 +1579,6 @@ impl EffectWindow {
             entry_choices,
             entry_controllers,
             aura_hosts,
-            fight_pairs,
             copied,
             original_definitions,
             ..
@@ -1890,19 +1794,6 @@ impl EffectWindow {
                     .collect()
             },
         )?;
-        if !fight_pairs.is_empty() {
-            let pairs = fight_pairs
-                .into_iter()
-                .filter_map(|(member, opponent)| {
-                    by_member.get(&member).map(|token| (*token, opponent))
-                })
-                .collect();
-            let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry) else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            payload.body.instructions[instruction] = Instruction::FightPairedCreatures(pairs);
-            return Ok(None);
-        }
         if !encore_defenders.is_empty() {
             let entry = self
                 .window

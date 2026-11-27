@@ -226,25 +226,6 @@ impl EffectWindow {
                 payload.sacrificed_permanent_mana_value = mana_value;
             }
         }
-        if work.action == ZoneActionKind::ExileCost
-            && matches!(
-                self.stack_body(entry)
-                    .map(|body| body.instructions.as_slice()),
-                Some([Instruction::CopyCreatureExiledForAbility])
-            )
-        {
-            let [object] = work.objects.as_slice() else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            let donor = self
-                .copiable_program(*object)
-                .ok_or(EffectError::InconsistentProgram)?
-                .clone();
-            let Some(StackPayload::Instructions(payload)) = self.payloads.get_mut(&entry) else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            payload.exiled_activation_copy = Some(Box::new(donor));
-        }
         let exiled_cost_power =
             if work.action == ZoneActionKind::ExileCost && work.objects.len() == 1 {
                 self.evaluated_characteristics()?

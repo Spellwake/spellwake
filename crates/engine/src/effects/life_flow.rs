@@ -1,9 +1,7 @@
 use super::*;
 use crate::{
-    characteristics::{ResolvedDuration, ResolvedPart, ResolvedParts},
     life::LifeAdjustment,
     occurrence::{EventCause, RulesOccurrence},
-    stack_window::StackEntry,
 };
 
 impl EffectWindow {
@@ -699,67 +697,6 @@ impl EffectWindow {
             adjustments.insert(controller, value.clone());
         }
         self.adjust_players_at_cut(entry, instruction, adjustments, append)
-    }
-
-    pub(super) fn exchange_life_with_source_toughness(
-        &mut self,
-        entry: &StackEntry,
-        instruction: usize,
-        append: &mut RulesJournal,
-    ) -> Result<(), EffectError> {
-        let StackKind::ActivatedAbility { source } = entry.kind() else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let before = self.rules_snapshot(None)?;
-        let current = &before.view().evaluated;
-        let source = source.id();
-        let Some(toughness) = current
-            .get(source)
-            .filter(|object| object.zone == ObjectZone::Battlefield && object.is_creature())
-            .and_then(|object| object.power_toughness.as_ref())
-            .map(|stats| stats.derived.toughness.clone())
-        else {
-            return Ok(());
-        };
-        let controller = entry.controller();
-        let Some(life) = self.life.get(controller).cloned() else {
-            return Ok(());
-        };
-        if toughness > life && self.life_gain_prohibitions(current)?.contains(&controller) {
-            return Ok(());
-        }
-        let effect = self.characteristics.add_effect(
-            entry.id(),
-            source,
-            ResolvedParts(vec![ResolvedPart::SetToughness(life)]),
-            ResolvedDuration::NoStatedDuration,
-        )?;
-        let life_changes = self
-            .life
-            .apply_adjustments(&[(controller, LifeAdjustment::Set(toughness))].into())
-            .map_err(|_| EffectError::InconsistentProgram)?;
-        self.emit_from(
-            EventCause::Instruction {
-                entry: entry.id(),
-                instruction,
-            },
-            &before,
-            None,
-            append,
-            |old, new, _| {
-                let appearances =
-                    characteristic_appearance_changes(old, new, effect.affected.iter().copied())?;
-                let mut occurrences = life_changes
-                    .into_iter()
-                    .map(RulesOccurrence::LifeChanged)
-                    .collect::<Vec<_>>();
-                occurrences.push(RulesOccurrence::ContinuousEffectCreated {
-                    effect,
-                    appearances,
-                });
-                Ok(occurrences)
-            },
-        )
     }
 
     pub(super) fn adjust_players_at_cut(

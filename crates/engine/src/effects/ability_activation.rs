@@ -1011,10 +1011,6 @@ impl EffectWindow {
                         .permanent_target_bounds()
                         .ok_or(EffectError::InconsistentProgram)?;
                     let bound_target = selected.body.target.with_ability_source(source);
-                    let mut controllers = BTreeSet::new();
-                    if selected.body.instructions == [Instruction::ReturnOneNonlandPerOpponent] && targets.iter().any(|target| {
-                        !matches!(target,TargetRef::Object(id) if evaluated.get(*id).and_then(|value|value.controller).is_some_and(|player|controllers.insert(player)))
-                    }) {return Err(EffectError::IllegalTarget);}
                     if !(min..=max).contains(&targets.len()) || targets.iter().any(|target|
                         (matches!(selected.body.target, BodyTarget::FilteredPermanent(filter) if filter.excludes_ability_source()) && *target == TargetRef::Object(source)) ||
                         Self::protected_target(*target,&protection::ProtectionSource::from(current).with_ability_controller(actor),&evaluated)
@@ -1788,33 +1784,6 @@ impl EffectWindow {
                     .clone_from(&current.current_planeswalker_subtypes);
             }
             value.spell_target_mana_value = spell_target_mana_value;
-            if value.body.instructions == [Instruction::ReturnOneNonlandPerOpponent]
-                && let crate::activated::ActivationOrigin::PermanentTargets(targets) = &origin
-            {
-                for (index, target) in targets.iter().enumerate() {
-                    let TargetRef::Object(object) = target else {
-                        return Err(EffectError::IllegalTarget);
-                    };
-                    value.target_controllers.insert(
-                        TargetId(index.try_into().map_err(|_| EffectError::IllegalTarget)?),
-                        evaluated
-                            .get(*object)
-                            .and_then(|p| p.controller)
-                            .ok_or(EffectError::IllegalTarget)?,
-                    );
-                }
-            }
-        }
-        if let StackPayload::Instructions(value) = &mut payload
-            && value.body.instructions == [Instruction::DestroyNonlandsAtSourceChargeCount]
-        {
-            value.source_charge_count = Some(
-                next.characteristics
-                    .charge
-                    .get(&source)
-                    .cloned()
-                    .unwrap_or_else(|| 0.into()),
-            );
         }
         if let StackPayload::Instructions(value) = &mut payload
             && value.body.instructions == [Instruction::Encore]

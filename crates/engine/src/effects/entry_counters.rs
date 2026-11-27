@@ -166,8 +166,7 @@ fn body_uses_damage_pairs(body: &crate::program::ExecutableBody) -> bool {
                 }
                 _ => false,
             },
-            Instruction::EmpowerJace { .. }
-            | Instruction::CounterMatchingStackObjects { .. }
+            Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. } => false,
             Instruction::DealDamage(spec) => {
                 let amount_uses = matches!(

@@ -618,62 +618,6 @@ impl EffectWindow {
             power,
         )))
     }
-    pub(super) fn reflected_attached_damage(
-        &self,
-        entry: StackEntryId,
-    ) -> Result<Option<DamageInput>, EffectError> {
-        use crate::occurrence::TriggerRelated;
-        let binding = self
-            .execution_bindings(entry)
-            .and_then(|bindings| bindings.trigger.as_ref())
-            .ok_or(EffectError::InconsistentProgram)?;
-        let causes = binding.causes.members();
-        let Some(TriggerRelated::AttachedCreatureDamaged { creature, .. }) =
-            causes.first().map(|member| &member.related)
-        else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let amount =
-            causes
-                .iter()
-                .try_fold(RulesInteger::from(0), |total, member| {
-                    match &member.related {
-                        TriggerRelated::AttachedCreatureDamaged {
-                            creature: same,
-                            amount,
-                            ..
-                        } if same == creature => Ok(total.plus(amount)),
-                        _ => Err(EffectError::InconsistentProgram),
-                    }
-                })?;
-        let current = self
-            .window
-            .cards()
-            .get(*creature)
-            .filter(|card| card.zone() == ObjectZone::Battlefield);
-        let Some(object) = current.or_else(|| {
-            self.departed_damage_sources
-                .get(creature)
-                .map(|source| &source.object)
-        }) else {
-            return Ok(None);
-        };
-        let Some(controller) = object
-            .controller()
-            .filter(|player| self.window.participants().contains(player))
-        else {
-            return Ok(None);
-        };
-        Ok(Some(DamageInput {
-            source: DamageSource::Object {
-                object: object.clone(),
-                controller,
-            },
-            target: DamageRecipient::Player(controller),
-            amount,
-        }))
-    }
-
     pub(super) fn resolution_damage_source(
         &self,
         entry: &crate::stack_window::StackEntry,
@@ -823,11 +767,7 @@ impl EffectWindow {
                             .and_then(|p| p.get(instruction)),
                         Some(
                             Instruction::Fight { .. }
-                                | Instruction::FightSourceWithTarget
                                 | Instruction::FightFixedTargets
-                                | Instruction::FightPairedCreatures(_)
-                                | Instruction::ImpulseCastOrDamage(_)
-                                | Instruction::ExileNonlandsToHandAndDamage { .. }
                                 | Instruction::DivideDamageAmongTargets { .. }
                                 | Instruction::DivideDamageExprAmongTargets { .. }
                                 | Instruction::DivideThreeDamageAmongTargets
@@ -835,9 +775,6 @@ impl EffectWindow {
                                 | Instruction::DamageFromPower(_)
                                 | Instruction::CreatureDealsPowerDamageToOther { .. }
                                 | Instruction::DealDamage(_)
-                                | Instruction::DamagePlayersHalfLife
-                                | Instruction::ReflectAttachedCreatureDamage
-                                | Instruction::AddCounterAndDischargeOnResolution(_)
                                 | Instruction::DamageTargetControllersCreatures { .. }
                         )
                     )

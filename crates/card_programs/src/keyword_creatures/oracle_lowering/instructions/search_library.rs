@@ -2334,24 +2334,74 @@ pub(super) fn lower_search_library_group(
                 return Err("oracle:unsupported-gain-control");
             };
             let perm_bt = lower_battlefield_body_target(filter, vocabulary)?;
+            const RECIPIENT_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(936);
+            const PERM_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(937);
+            const RECIPIENT_EXEC_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(938);
+            const NOOP_BIND: spellwake_engine::toolbox::BindingId =
+                spellwake_engine::toolbox::BindingId(939);
             builder
                 .instructions
                 .push(Instruction::FixedTargetClause(Box::new(
                     ExecutableBody::new(
                         player_bt,
-                        vec![super::super::toolbox_emit::draw_target_player(
-                            ValueExpr::literal(0),
-                        )],
+                        vec![Instruction::ForEachPlayerQuery {
+                            selector: Box::new(
+                                spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                    ResolvingPlayer::TargetPlayer,
+                                ),
+                            ),
+                            bind_player: RECIPIENT_BIND,
+                            body: Box::new(ExecutableBody::new(
+                                BodyTarget::None,
+                                vec![Instruction::BindEnv {
+                                    binding: NOOP_BIND,
+                                    value: Box::new(spellwake_engine::toolbox::ExecValue::Bool(
+                                        true,
+                                    )),
+                                }],
+                            )),
+                        }],
                     ),
                 )));
             builder
                 .instructions
                 .push(Instruction::FixedTargetClause(Box::new(
-                    ExecutableBody::new(perm_bt, vec![Instruction::RememberPermanentTarget]),
+                    ExecutableBody::new(
+                        perm_bt,
+                        vec![Instruction::ForEach {
+                            query: Box::new(spellwake_engine::toolbox::ObjectQuery::EffectSubject(
+                                Box::new(EffectSubject::TargetObject),
+                            )),
+                            bind_item: PERM_BIND,
+                            body: Box::new(ExecutableBody::new(
+                                BodyTarget::None,
+                                vec![Instruction::BindEnv {
+                                    binding: NOOP_BIND,
+                                    value: Box::new(spellwake_engine::toolbox::ExecValue::Bool(
+                                        true,
+                                    )),
+                                }],
+                            )),
+                        }],
+                    ),
                 )));
-            builder
-                .instructions
-                .push(Instruction::GiveFixedTargetControl { duration: dur });
+            builder.instructions.push(Instruction::ForEachPlayerQuery {
+                selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Bound(
+                    RECIPIENT_BIND,
+                )),
+                bind_player: RECIPIENT_EXEC_BIND,
+                body: Box::new(ExecutableBody::new(
+                    BodyTarget::None,
+                    vec![super::super::toolbox_emit::gain_control(
+                        spellwake_engine::toolbox::ObjectQuery::Bound(PERM_BIND),
+                        spellwake_engine::toolbox::PlayerSelector::Bound(RECIPIENT_EXEC_BIND),
+                        dur,
+                    )],
+                )),
+            });
             Ok(())
         }
         InstructionAst::GainControl {
@@ -2858,23 +2908,104 @@ pub(super) fn lower_search_library_group(
                         att_f, &trial, in_trigger, vocabulary,
                     )?;
                     if is_permanent_body_target(att_bt) {
-                        trial
-                            .instructions
-                            .push(Instruction::FixedTargetClause(Box::new(
-                                ExecutableBody::new(
-                                    att_bt,
-                                    vec![Instruction::RememberPermanentTarget],
-                                ),
-                            )));
-                        trial
-                            .instructions
-                            .push(Instruction::FixedTargetClause(Box::new(
-                                ExecutableBody::new(
-                                    host_bt,
-                                    vec![Instruction::RememberPermanentTarget],
-                                ),
-                            )));
-                        trial.instructions.push(Instruction::AttachFixedTargets);
+                        if matches!(
+                            host_bt,
+                            BodyTarget::SinglePlayer | BodyTarget::SingleOpponent
+                        ) {
+                            const ATT_BIND: spellwake_engine::toolbox::BindingId =
+                                spellwake_engine::toolbox::BindingId(940);
+                            const HOST_PLAYER_BIND: spellwake_engine::toolbox::BindingId =
+                                spellwake_engine::toolbox::BindingId(941);
+                            const NOOP_BIND: spellwake_engine::toolbox::BindingId =
+                                spellwake_engine::toolbox::BindingId(942);
+                            trial
+                                .instructions
+                                .push(Instruction::FixedTargetClause(Box::new(
+                                    ExecutableBody::new(
+                                        att_bt,
+                                        vec![Instruction::ForEach {
+                                        query: Box::new(
+                                            spellwake_engine::toolbox::ObjectQuery::EffectSubject(
+                                                Box::new(EffectSubject::TargetObject),
+                                            ),
+                                        ),
+                                        bind_item: ATT_BIND,
+                                        body: Box::new(ExecutableBody::new(
+                                            BodyTarget::None,
+                                            vec![Instruction::BindEnv {
+                                                binding: NOOP_BIND,
+                                                value: Box::new(
+                                                    spellwake_engine::toolbox::ExecValue::Bool(
+                                                        true,
+                                                    ),
+                                                ),
+                                            }],
+                                        )),
+                                    }],
+                                    ),
+                                )));
+                            trial
+                                .instructions
+                                .push(Instruction::FixedTargetClause(Box::new(
+                                    ExecutableBody::new(
+                                        host_bt,
+                                        vec![Instruction::ForEachPlayerQuery {
+                                        selector: Box::new(
+                                            spellwake_engine::toolbox::PlayerSelector::Resolving(
+                                                ResolvingPlayer::TargetPlayer,
+                                            ),
+                                        ),
+                                        bind_player: HOST_PLAYER_BIND,
+                                        body: Box::new(ExecutableBody::new(
+                                            BodyTarget::None,
+                                            vec![Instruction::BindEnv {
+                                                binding: NOOP_BIND,
+                                                value: Box::new(
+                                                    spellwake_engine::toolbox::ExecValue::Bool(
+                                                        true,
+                                                    ),
+                                                ),
+                                            }],
+                                        )),
+                                    }],
+                                    ),
+                                )));
+                            trial
+                                .instructions
+                                .push(super::super::toolbox_emit::attach_to_player(
+                                    spellwake_engine::toolbox::ObjectQuery::Bound(ATT_BIND),
+                                    spellwake_engine::toolbox::PlayerSelector::Bound(
+                                        HOST_PLAYER_BIND,
+                                    ),
+                                ));
+                        } else {
+                            trial
+                                .instructions
+                                .push(Instruction::FixedTargetClause(Box::new(
+                                    ExecutableBody::new(
+                                        att_bt,
+                                        vec![Instruction::RememberPermanentTarget],
+                                    ),
+                                )));
+                            trial
+                                .instructions
+                                .push(Instruction::FixedTargetClause(Box::new(
+                                    ExecutableBody::new(
+                                        host_bt,
+                                        vec![Instruction::RememberPermanentTarget],
+                                    ),
+                                )));
+                            trial
+                                .instructions
+                                .push(super::super::toolbox_emit::attach_query(
+                                    spellwake_engine::toolbox::ObjectQuery::LinkedTarget {
+                                        index: 0,
+                                    },
+                                    spellwake_engine::toolbox::ObjectQuery::LinkedTarget {
+                                        index: 1,
+                                    },
+                                ));
+                        }
                         *builder = trial;
                         return Ok(());
                     }

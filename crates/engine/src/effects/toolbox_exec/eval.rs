@@ -160,6 +160,11 @@ impl EffectWindow {
     ) -> Result<Vec<SeatId>, EffectError> {
         let mut out = Vec::new();
         match selector {
+            PlayerSelector::Fixed(seat) => {
+                if self.window.participants().contains(seat) {
+                    out.push(*seat);
+                }
+            }
             PlayerSelector::Resolving(role) | PlayerSelector::Group(AffectedPlayers::One(role)) => {
                 if let Ok(seat) = self.resolving_player_at(*role, cursor) {
                     out.push(seat);

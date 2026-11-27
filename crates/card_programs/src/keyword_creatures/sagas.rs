@@ -80,63 +80,10 @@ fn chapter_body(
         ));
     }
     match text {
-        "Exile up to two target cards from graveyards. For each creature card exiled this way, you gain 1 life." => {
-            Some(ExecutableBody::new(
-                BodyTarget::AnyGraveyardCard,
-                vec![Instruction::ExileUpToTwoGraveyardTargetsGainLife],
-            ))
-        }
         "For each player, exile up to one target non-Saga, nonland permanent that player controls until this Saga leaves the battlefield." => {
             Some(ExecutableBody::new(
                 BodyTarget::FilteredPermanent(ObjectFilter::nonland().non_saga()),
                 vec![Instruction::ExileOnePerPlayerUntilSourceLeaves],
-            ))
-        }
-        "Choose any number of artifact tokens and/or creature tokens you control with different names. For each of them, create a token that's a copy of it." => {
-            Some(ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::CopyDifferentlyNamedTokens],
-            ))
-        }
-        "Mill two cards, then you may return a creature card from your graveyard to your hand." => {
-            Some(ExecutableBody::new(
-                BodyTarget::None,
-                vec![
-                    Instruction::Mill {
-                        player: spellwake_engine::program::ResolvingPlayer::Controller,
-                        amount: spellwake_engine::program::ValueExpr::Literal(2.into()),
-                    },
-                    Instruction::ReturnUpToOneOwnGraveyardCreatureToHand,
-                ],
-            ))
-        }
-        "Return all land cards from your graveyard to the battlefield, then shuffle your graveyard into your library." => {
-            Some(ExecutableBody::new(
-                BodyTarget::None,
-                vec![
-                    Instruction::ReturnGraveyardCohort(
-                        spellwake_engine::program::GraveyardCohortReturn::own(
-                            spellwake_engine::program::GraveyardReturnFilter::CardType(
-                                CardType::Land,
-                            ),
-                        ),
-                    ),
-                    crate::keyword_creatures::oracle_lowering::toolbox_emit::zone_op(
-                        spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                            spellwake_engine::toolbox::ObjectQuery::zone(
-                                spellwake_engine::toolbox::QueryZone::Graveyard(Box::new(
-                                    spellwake_engine::toolbox::PlayerSelector::Resolving(
-                                        spellwake_engine::program::ResolvingPlayer::Controller,
-                                    ),
-                                )),
-                                ObjectFilter::any(),
-                            ),
-                            spellwake_engine::toolbox::ZoneDest::Library {
-                                position: spellwake_engine::toolbox::LibraryOrderPos::ShuffleInto,
-                            },
-                        ),
-                    ),
-                ],
             ))
         }
         "Put target creature or planeswalker card from a graveyard onto the battlefield under your control." => {

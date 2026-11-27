@@ -223,42 +223,6 @@ pub(super) fn parse(
         ));
     }
     let (paid, rest) = line.split_once(": ")?;
-    if paid == "{X}"
-        && rest
-            == "Destroy each nonland permanent with mana value X whose controller was dealt combat damage by this creature this turn. Activate only once each turn."
-    {
-        return Some((
-            ManaCost::free(),
-            SourceCost::GenericX {
-                symbols: 1,
-                tap_source: false,
-            },
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::DestroyDamagedPlayersNonlandsAtX],
-            ),
-            Some(ActivationRestriction::OnceEachTurn),
-        ));
-    }
-    if paid == "{X}, {T}"
-        && let Some(reference) = rest
-            .strip_prefix("You may cast a spell with mana value X from among cards exiled with ")
-            .and_then(|s| s.strip_suffix(" without paying its mana cost."))
-        && (reference == name || Some(reference) == name.split_once(", ").map(|(short, _)| short))
-    {
-        return Some((
-            ManaCost::free(),
-            SourceCost::GenericX {
-                symbols: 1,
-                tap_source: true,
-            },
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::CastLinkedSpellMatchingX],
-            ),
-            None,
-        ));
-    }
     if let Some(price) = paid.strip_suffix(", {T}")
         && !price.is_empty()
         && price.replace("{X}", "").is_empty()
@@ -595,21 +559,6 @@ pub(super) fn parse(
             restriction,
         ));
     }
-    if let Some(limit) = rest
-        .strip_prefix("Until end of turn, whenever a creature you control with power ")
-        .and_then(|s| s.strip_suffix(" or less deals combat damage to a player, draw a card."))
-        .and_then(|s| s.parse().ok())
-    {
-        return Some((
-            mana_cost,
-            source_cost,
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::WatchSmallCreatureCombatDraw(limit)],
-            ),
-            restriction,
-        ));
-    }
     if let Some(count) = rest
         .strip_prefix("Target player mills ")
         .and_then(|text| {
@@ -692,85 +641,6 @@ pub(super) fn parse(
                         BTreeSet::new(),
                     ),
                 ],
-            ),
-            restriction,
-        ));
-    }
-    if rest
-        == "Exile target creature card from a graveyard. Create a token that's a copy of it, except it's a 4/4 black Zombie."
-    {
-        return Some((
-            mana_cost,
-            source_cost,
-            ExecutableBody::new(
-                BodyTarget::AnyGraveyardCreature,
-                vec![Instruction::ExileForBlackToken {
-                    subtype: vocabulary.resolve_label("Zombie")?,
-                    size: 4,
-                    add_types: false,
-                }],
-            ),
-            restriction,
-        ));
-    }
-    if rest
-        == "Each player mills three cards. Exile up to two creature cards put into graveyards this way. Create an X/X blue Zombie creature token, where X is the total power of the cards exiled this way."
-    {
-        let Instruction::CreateTokens { mut creations } =
-            super::ordinary_text::create_tokens("a 0/0 blue Zombie creature token", vocabulary)?
-        else {
-            return None;
-        };
-        creations.first_mut()?.base_size = Some(spellwake_engine::token::TokenSize::AtCreation(
-            spellwake_engine::program::ValueExpr::event(
-                spellwake_engine::program::EventValueKind::ExiledMilledCreaturePower,
-            ),
-        ));
-        let body = ExecutableBody::new(
-            BodyTarget::None,
-            vec![
-                Instruction::ForEachPlayerQuery {
-                    selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(
-                        spellwake_engine::program::AffectedPlayers::EachPlayer,
-                    )),
-                    bind_player: spellwake_engine::toolbox::BindingId(905),
-                    body: Box::new(ExecutableBody::new(
-                        BodyTarget::None,
-                        vec![Instruction::ZoneOp(Box::new(
-                            spellwake_engine::toolbox::ZoneOpSpec::move_all(
-                                spellwake_engine::toolbox::ObjectQuery::ZoneScan {
-                                    zone: spellwake_engine::toolbox::QueryZone::Library(Box::new(
-                                        spellwake_engine::toolbox::PlayerSelector::Bound(
-                                            spellwake_engine::toolbox::BindingId(905),
-                                        ),
-                                    )),
-                                    filter: Box::new(ObjectFilter::any()),
-                                    slice: spellwake_engine::toolbox::QuerySlice::Top(Box::new(
-                                        spellwake_engine::program::ValueExpr::literal(3),
-                                    )),
-                                },
-                                spellwake_engine::toolbox::ZoneDest::Graveyard {
-                                    semantics: spellwake_engine::toolbox::GraveyardSemantics::Mill,
-                                },
-                            ),
-                        ))],
-                    )),
-                },
-                Instruction::ExileMilledCreatures { maximum: 2 },
-                Instruction::CreateTokens { creations },
-            ],
-        );
-        return Some((mana_cost, source_cost, body, restriction));
-    }
-    if rest
-        == "Until end of turn, creatures you control have base power and toughness X/X, where X is the number of cards in your hand."
-    {
-        return Some((
-            mana_cost,
-            source_cost,
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::SetControlledCreatureSizeToHand],
             ),
             restriction,
         ));
@@ -932,23 +802,6 @@ pub(super) fn parse(
             restriction,
         ));
     }
-    if rest
-        .strip_prefix("Attach all Equipment you control to ")
-        .and_then(|s| s.strip_suffix('.'))
-        .is_some_and(source_reference)
-    {
-        return Some((
-            mana_cost,
-            source_cost,
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::AttachControlledToSource {
-                    optional_auras_and_equipment: false,
-                }],
-            ),
-            restriction,
-        ));
-    }
     if let Some(consequence) = rest.strip_prefix("Flip a coin. If you win the flip, ") {
         let mut body = super::spells::ordinary_effects::body(consequence, name)?;
         if body.target != BodyTarget::None
@@ -1024,52 +877,6 @@ pub(super) fn parse(
                         ),
                     ),
                 ],
-            ),
-            restriction,
-        ));
-    }
-    if let Some((source, tail)) = rest
-        .strip_prefix("Put a +1/+1 counter on ")
-        .and_then(|text| text.split_once(". If this is the "))
-        && (source == name
-            || name
-                .strip_prefix(source)
-                .is_some_and(|tail| tail.starts_with(" the ") || tail.starts_with(','))
-            || source == "this creature")
-        && let Some((ordinal, tail)) = tail.split_once(
-            " time this ability has resolved this turn, remove all +1/+1 counters from ",
-        )
-        && tail.strip_suffix(", and it deals that much damage to each creature and each player.")
-            == Some(source)
-        && let Some(ordinal) = (match ordinal {
-            "first" => Some(1),
-            "second" => Some(2),
-            "third" => Some(3),
-            _ => None,
-        })
-    {
-        return Some((
-            mana_cost,
-            source_cost,
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::AddCounterAndDischargeOnResolution(ordinal)],
-            ),
-            restriction,
-        ));
-    }
-    if matches!(
-        rest,
-        "Destroy each nonland permanent with mana value equal to the number of charge counters on this land."
-            | "Destroy each nonland permanent with mana value equal to the number of charge counters on this artifact."
-    ) && source_cost == SourceCost::TapSacrifice
-    {
-        return Some((
-            mana_cost,
-            source_cost,
-            ExecutableBody::new(
-                BodyTarget::None,
-                vec![Instruction::DestroyNonlandsAtSourceChargeCount],
             ),
             restriction,
         ));
@@ -1285,17 +1092,6 @@ pub(super) fn parse(
                     spellwake_engine::program::SpellFilter::instant_or_sorcery().controlled(),
                 ),
                 vec![Instruction::CopySpell],
-            ),
-            restriction,
-        ));
-    }
-    if rest == "Create a token that's a copy of target creature you control." {
-        return Some((
-            mana_cost,
-            source_cost,
-            ExecutableBody::new(
-                BodyTarget::FilteredPermanent(ObjectFilter::creature().controlled()),
-                vec![Instruction::CopyCreatureAsToken],
             ),
             restriction,
         ));

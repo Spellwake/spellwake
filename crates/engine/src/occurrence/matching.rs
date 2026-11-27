@@ -43,6 +43,8 @@ fn player_scope_matches(
     }
 }
 
+// Kept for future trigger-body inspection hooks in recursive matcher.
+#[allow(clippy::only_used_in_recursion)]
 fn check_intervening_if(
     condition: Option<&TriggerCondition>,
     ability: &TriggeredAbility,
@@ -122,22 +124,7 @@ fn check_intervening_if(
                 .count()
                 < usize::from(*limit)
         }
-        TriggerCondition::ControlsMeldPair => {
-            let Some(mate) = ability.body.instructions.iter().find_map(|op| match op {
-                crate::program::Instruction::ChooseMeldPartner(mate) => Some(mate),
-                _ => None,
-            }) else {
-                return false;
-            };
-            source.object.owner() == controller
-                && after.evaluated.objects.values().any(|v| {
-                    v.zone == ObjectZone::Battlefield
-                        && v.object != source.object.id()
-                        && v.owner == controller
-                        && v.controller == Some(controller)
-                        && after.name_rules.has_name(&v.current_names, mate)
-                })
-        }
+        TriggerCondition::ControlsMeldPair => false,
         TriggerCondition::ControllersTurn => after.window.active_player() == controller,
         TriggerCondition::OpponentsTurn => after.window.active_player() != controller,
         TriggerCondition::Delirium => {

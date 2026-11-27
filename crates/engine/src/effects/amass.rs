@@ -3,11 +3,9 @@
 use super::*;
 use crate::{
     characteristics::{
-        Color, ResolvedDuration, ResolvedPart, ResolvedParts, SubtypeOperation, TypeChange,
-        TypeOperation,
+        ResolvedDuration, ResolvedPart, ResolvedParts, SubtypeOperation, TypeChange, TypeOperation,
     },
     occurrence::EventCause,
-    token::{TokenDefinition, TokenName, TokenSubtype},
 };
 
 impl EffectWindow {
@@ -28,28 +26,6 @@ impl EffectWindow {
             })
             .map(|object| object.object)
             .collect())
-    }
-
-    pub(super) fn create_army(
-        &mut self,
-        controller: SeatId,
-        army: CreatureTypeId,
-        subtype: CreatureTypeId,
-    ) -> Result<(), EffectError> {
-        let mut program = Program::creature(None, 0.into(), 0.into(), [army, subtype].into());
-        program.effect_defined_colors = Some([Color::Black].into());
-        let mut ordered_subtypes = vec![TokenSubtype::Creature(subtype)];
-        if subtype != army {
-            ordered_subtypes.push(TokenSubtype::Creature(army));
-        }
-        let definition = TokenDefinition::new(
-            program,
-            TokenName::Default { ordered_subtypes },
-            &self.creature_vocabulary,
-        )
-        .and_then(|token| token.materialize(&self.creature_vocabulary))
-        .map_err(|_| EffectError::InconsistentProgram)?;
-        self.begin_materialized_token_entries(vec![(controller, 1, definition, false)], None, false)
     }
 
     pub(super) fn grow_army(

@@ -11447,7 +11447,6 @@ pub(in super::super) fn lower_instruction_seq(
         }
         // Unwrap Optional([LookTopLibrary | RevealUntil | ExileOrRevealTopUntil, ...]) where the inner slice lowers cleanly
         // to LookTopChoose or RevealUntilMatch (+ optional ShuffleOwnLibrary).
-        // Never wrap LookTopOneRestBottom / LookTopOneRestGraveyard in OptionalEffect (program.rs rejects them).
         if let InstructionAst::Optional(inner) = &ins[i]
             && inner.len() >= 2
             && matches!(
@@ -11473,31 +11472,7 @@ pub(in super::super) fn lower_instruction_seq(
             .is_ok()
                 && sub.target == BodyTarget::None
             {
-                let converted: Vec<Instruction> = sub
-                    .instructions
-                    .into_iter()
-                    .map(|op| match op {
-                        Instruction::LookTopOneRestGraveyard { count } => {
-                            Instruction::LookTopChoose {
-                                count: ValueExpr::literal(i64::from(count)),
-                                library_owner: ResolvingPlayer::Controller,
-                                filter: None,
-                                reveal: false,
-                                reveal_only: false,
-                                to_battlefield: false,
-                                enters_tapped: false,
-                                take_all_matching: false,
-                                max_picks: 1,
-                                rest_to_graveyard: true,
-                                rest_to_exile: false,
-                                rest_to_top: false,
-                                random_rest_order: false,
-                                secondary: None,
-                            }
-                        }
-                        other => other,
-                    })
-                    .collect();
+                let converted = sub.instructions;
                 if matches!(
                     converted.as_slice(),
                     [Instruction::LookTopChoose { .. }

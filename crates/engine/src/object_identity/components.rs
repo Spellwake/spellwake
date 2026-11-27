@@ -55,63 +55,6 @@ impl GameObject {
 }
 
 impl GameObjects {
-    /// Put two previously authorized matching meld cards onto the battlefield as one
-    /// permanent. A copy or token cannot serve as either physical card (CR 713.3).
-    ///
-    /// # Errors
-    /// Both exact incarnations must still be distinct cards in exile with the same owner.
-    /// A rejected operation preserves the registry including both card indices.
-    pub(crate) fn meld_from_exile(
-        &mut self,
-        cards: [ObjectId; 2],
-        controller: SeatId,
-        definition: Program,
-    ) -> Result<GameObject, ObjectIdentityError> {
-        let [first, second] = cards;
-        let first_object = self.get(first).ok_or(ObjectIdentityError::UnknownObject)?;
-        let second_object = self.get(second).ok_or(ObjectIdentityError::UnknownObject)?;
-        if first == second
-            || first_object.zone != ObjectZone::Exile
-            || second_object.zone != ObjectZone::Exile
-            || first_object.owner != second_object.owner
-            || first_object.card_id().is_none()
-            || definition.permanent().is_none()
-        {
-            return Err(ObjectIdentityError::InvalidCombination);
-        }
-        let other_card = second_object
-            .card_id()
-            .ok_or(ObjectIdentityError::InvalidCombination)?;
-        let first_card = first_object
-            .card_id()
-            .ok_or(ObjectIdentityError::InvalidCombination)?;
-        let additional = vec![second_object.origin.clone()];
-        let mut arrival = self
-            .apply_zone_move(
-                self.revision,
-                first,
-                ObjectDestination::Battlefield { controller },
-            )?
-            .require_moved()?;
-        let permanent = arrival
-            .next
-            .current
-            .get_mut(&arrival.after.id)
-            .ok_or(ObjectIdentityError::UnknownObject)?;
-        permanent.combined = Some(Box::new(CombinedPermanent {
-            additional,
-            top_face: Box::new(definition.clone()),
-            definition,
-            mutations: 0,
-            meld_face: Some([first_card, other_card]),
-        }));
-        let permanent = permanent.clone();
-        arrival.next.current.remove(&second);
-        arrival.next.by_card.insert(other_card, permanent.id);
-        *self = arrival.next;
-        Ok(permanent)
-    }
-
     /// Merge an already-authorized resolving spell with a battlefield object. The
     /// host keeps its incarnation, controller, tap state and all object-bound work.
     /// `definition` contains the complete copiable result at the merge cut.
@@ -220,54 +163,6 @@ mod tests {
     fn creature() -> Program {
         Program::creature(None, 3.into(), 3.into(), BTreeSet::new())
     }
-    #[test]
-    fn meld_materializes_one_permanent_and_returns_both_real_cards_to_exile() {
-        let a = SeatId(1);
-        let mut cards = GameObjects::new(0);
-        let first = card(1, a, ObjectDestination::Exile, &mut cards);
-        let second = card(2, a, ObjectDestination::Exile, &mut cards);
-        let before = cards.clone();
-        assert_eq!(
-            cards.meld_from_exile([first, first], a, creature()),
-            Err(ObjectIdentityError::InvalidCombination)
-        );
-        assert_eq!(before, cards);
-        let joined = cards
-            .meld_from_exile([first, second], a, creature())
-            .unwrap();
-        assert_eq!(cards.iter().count(), 1);
-        assert_eq!(cards.current_identity(CardId(1)), Some(joined.id()));
-        assert_eq!(cards.current_identity(CardId(2)), Some(joined.id()));
-        let result = cards
-            .apply_zone_move(cards.revision(), joined.id(), ObjectDestination::Exile)
-            .unwrap()
-            .require_moved()
-            .unwrap();
-        let ids = ObjectMovement {
-            before: result.before.clone().unwrap(),
-            after: result.after.clone(),
-        }
-        .arrivals()
-        .collect::<Vec<_>>();
-        let arrived = result.next;
-        assert_eq!(
-            ids,
-            vec![
-                arrived.current_identity(CardId(1)).unwrap(),
-                arrived.current_identity(CardId(2)).unwrap()
-            ]
-        );
-        assert_eq!(arrived.iter().count(), 2);
-        assert_ne!(
-            arrived.current_identity(CardId(1)),
-            arrived.current_identity(CardId(2))
-        );
-        for object in arrived.iter() {
-            assert_eq!(object.zone(), ObjectZone::Exile);
-            assert_eq!(object.component_origins().count(), 1);
-        }
-    }
-
     #[test]
     fn mutate_keeps_the_host_for_multiple_merges_and_each_component_leaves_once() {
         let a = SeatId(1);

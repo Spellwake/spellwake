@@ -1,8 +1,6 @@
 //! Self-cast triggers that may return a targeted creature from the controller's graveyard.
 use super::*;
-use spellwake_engine::program::{
-    DelayedGraveyardReturn, ObjectFilter, ResolvingPlayer, TriggerGrouping,
-};
+use spellwake_engine::program::{ObjectFilter, ResolvingPlayer, TriggerGrouping};
 
 pub(super) fn compile(
     card: &InventoryCard,
@@ -16,21 +14,6 @@ pub(super) fn compile(
         return None;
     }
     let text = without_reminder(face.oracle_text.as_deref()?)?;
-    let name = face.name.split(',').next()?;
-    if text.trim().strip_prefix("Whenever a creature with power 1 or less is put into your graveyard from the battlefield, you may return that card to the battlefield at the beginning of the next end step if ")
-        .and_then(|rest| rest.strip_suffix(" is still on the battlefield.")) == Some(name)
-    {
-        let mut program = ordinary_creature(card, vocabulary, profile, Some("")).ok()?;
-        program.triggered.push(TriggeredAbility {
-            id: TriggeredAbilityId(0),
-            condition: spellwake_engine::program::TriggerSpec::new(spellwake_engine::program::TriggerEvent::Dies { subject: spellwake_engine::program::ObjectFilter::creature().with_power(spellwake_engine::program::PowerFilter::AtMost(1_u16)), mode: spellwake_engine::program::DiesTriggerMode::ToControllerGraveyard }),
-            grouping: TriggerGrouping::EachOccurrence,
-            body: ExecutableBody::new(BodyTarget::None, vec![Instruction::ScheduleGraveyardReturnAtEndStep(
-                DelayedGraveyardReturn::DyingCreatureWhileSourceRemains,
-            )]),
-        });
-        return Some(program);
-    }
     if text.trim()
         == "When this creature dies, you draw X cards and you lose X life, where X is the number of creature cards in target player's graveyard."
     {

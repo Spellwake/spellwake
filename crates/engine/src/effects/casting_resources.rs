@@ -30,59 +30,6 @@ impl EffectWindow {
             })
     }
 
-    pub(super) fn revealed_exile_subjects(
-        &self,
-        instruction: &Instruction,
-    ) -> Result<BTreeSet<ObjectId>, EffectError> {
-        let entry = self
-            .window
-            .resolving()
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        let Some(StackPayload::Instructions(payload)) = self.payloads.get(&entry.id()) else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let cost = payload
-            .revealed_cost_card
-            .as_ref()
-            .ok_or(EffectError::InconsistentProgram)?;
-        let current = self.evaluated_characteristics()?;
-        match instruction {
-            Instruction::ExileCreatureAtMostRevealedPower => {
-                let TargetRef::Object(id) = self.instruction_target(entry)?.choice().target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let power = current
-                    .get(cost.object)
-                    .and_then(|o| o.power_toughness.as_ref())
-                    .map_or(&cost.last_power, |stats| &stats.derived.power);
-                Ok(current
-                    .get(id)
-                    .filter(|o| {
-                        o.is_creature()
-                            && o.power_toughness
-                                .as_ref()
-                                .is_some_and(|stats| stats.derived.power <= *power)
-                    })
-                    .map(|o| o.object)
-                    .into_iter()
-                    .collect())
-            }
-            Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue => Ok(current
-                .objects
-                .values()
-                .filter(|o| {
-                    o.zone == ObjectZone::Battlefield
-                        && (o.is_creature() || o.has_type(CardType::Planeswalker))
-                        && self
-                            .permanent_mana_value(o.object)
-                            .is_some_and(|mv| mv < cost.mana_value)
-                })
-                .map(|o| o.object)
-                .collect()),
-            _ => Err(EffectError::InconsistentProgram),
-        }
-    }
-
     pub(crate) fn pending_cast_cost_decision(&self) -> Option<EffectDecision> {
         let work = self.cast_cost_replacement.as_ref()?;
         if let Some(frame) = work.batch.frame(self.revision) {

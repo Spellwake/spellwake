@@ -27,7 +27,6 @@ pub(crate) fn is_inline_replacement_body_supported(body: &ExecutableBody) -> boo
         | Instruction::AdjustLife(_)
         | Instruction::MutatePlayer(_)
         | Instruction::Mill { .. }
-        | Instruction::BecomeMonarch(_)
         | Instruction::ExileTopPlay { .. } => true,
         Instruction::ZoneOp(spec) => {
             matches!(spec.selection, crate::toolbox::ZoneSelection::All)
@@ -1600,14 +1599,6 @@ impl EffectWindow {
                         rep,
                         event_amount,
                         cause.clone(),
-                        append,
-                    )?;
-                }
-                Instruction::BecomeMonarch(player) => {
-                    self.become_monarch(
-                        synthetic_entry,
-                        synthetic_index,
-                        player.unwrap_or(rep.controller),
                         append,
                     )?;
                 }

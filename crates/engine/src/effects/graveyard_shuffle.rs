@@ -3,7 +3,6 @@ use super::*;
 use crate::{
     occurrence::{EventCause, RulesOccurrence, ZoneReason},
     program::ZoneActionKind,
-    targets::TargetLegality,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,37 +16,8 @@ pub(super) struct GraveyardShuffleWork {
     ability_source: Option<ObjectId>,
     objects: Vec<ObjectId>,
     ready: bool,
-    continue_reveals: bool,
 }
 impl EffectWindow {
-    pub(super) fn begin_targeted_graveyard_shuffle(&mut self) -> Result<(), EffectError> {
-        let assessment = self
-            .window
-            .target_assessment()
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        let Some(primary) = assessment
-            .get(TargetId(0))
-            .filter(|target| target.legality == TargetLegality::Legal)
-        else {
-            return self.advance_instruction();
-        };
-        let TargetRef::Player(player) = primary.choice.target else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let cards = assessment
-            .results()
-            .iter()
-            .filter(|row| {
-                row.choice.clause == TargetClauseId(1) && row.legality == TargetLegality::Legal
-            })
-            .map(|row| match row.choice.target {
-                TargetRef::Object(id) => Ok(id),
-                _ => Err(EffectError::InconsistentProgram),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        self.begin_shuffle_with_cards(player, false, Some(cards), None)
-    }
-
     pub(super) fn begin_library_shuffles(
         &mut self,
         mut seats: std::collections::VecDeque<SeatId>,
@@ -81,114 +51,11 @@ impl EffectWindow {
                 ability_source: None,
                 objects: Vec::new(),
                 ready: false,
-                continue_reveals: false,
             },
         )));
         Ok(())
     }
 
-    pub(super) fn begin_shuffle(
-        &mut self,
-        player: SeatId,
-        continue_reveals: bool,
-    ) -> Result<(), EffectError> {
-        self.begin_shuffle_with_cards(player, continue_reveals, None, None)
-    }
-
-    fn begin_shuffle_with_cards(
-        &mut self,
-        player: SeatId,
-        continue_reveals: bool,
-        targets: Option<Vec<ObjectId>>,
-        ability_source: Option<ObjectId>,
-    ) -> Result<(), EffectError> {
-        self.begin_shuffle_with_owner_batches(
-            player,
-            continue_reveals,
-            targets,
-            ability_source,
-            std::collections::VecDeque::new(),
-        )
-    }
-
-    fn begin_shuffle_with_owner_batches(
-        &mut self,
-        player: SeatId,
-        continue_reveals: bool,
-        targets: Option<Vec<ObjectId>>,
-        ability_source: Option<ObjectId>,
-        remaining_owner_batches: std::collections::VecDeque<(SeatId, Vec<ObjectId>)>,
-    ) -> Result<(), EffectError> {
-        let cursor = self
-            .resolution_cursor()
-            .ok_or(EffectError::WrongResolutionFrame)?
-            .clone();
-        let is_each_hand_gy = false;
-        let collective = false;
-        let mut remaining_players = std::collections::VecDeque::new();
-        let player = if is_each_hand_gy {
-            remaining_players = self.window.apnap_players()?.collect();
-            remaining_players
-                .pop_front()
-                .ok_or(EffectError::WrongResolutionFrame)?
-        } else {
-            player
-        };
-        let objects = if let Some(targets) = targets {
-            targets
-        } else if is_each_hand_gy {
-            self.window
-                .cards()
-                .iter()
-                .filter(|card| {
-                    matches!(card.zone(), ObjectZone::Hand(_) | ObjectZone::Graveyard(_))
-                        && card.card_id().is_some()
-                })
-                .map(GameObject::id)
-                .collect()
-        } else if continue_reveals
-            || matches!(
-                self.current_instruction()?,
-                Instruction::ZoneOp(spec) if spec.shuffle_library.is_some()
-            )
-        {
-            vec![]
-        } else {
-            self.window.cards().graveyard(player).to_vec()
-        };
-        let batch = self.begin_zone_replacements(zone_replacement::AuthorizedZoneBatch {
-            cause: EventCause::Instruction {
-                entry: cursor.entry,
-                instruction: cursor.instruction,
-            },
-            action: shuffle_action(ability_source),
-            intents: objects
-                .iter()
-                .map(|id| zone_replacement::ZoneMoveIntent {
-                    before: *id,
-                    reason: shuffle_reason(collective, ability_source),
-                })
-                .collect(),
-        })?;
-        if !matches!(self.pending_work, Some(PendingWork::Resolution(_))) {
-            return Err(EffectError::WrongResolutionFrame);
-        }
-        self.pending_work = Some(PendingWork::GraveyardShuffle(Box::new(
-            GraveyardShuffleWork {
-                cursor,
-                batch,
-                player,
-                remaining_players,
-                remaining_owner_batches,
-                collective,
-                ability_source,
-                objects,
-                ready: false,
-                continue_reveals,
-            },
-        )));
-        Ok(())
-    }
     pub(super) fn graveyard_shuffle_frame(
         &self,
         work: &GraveyardShuffleWork,
@@ -405,22 +272,7 @@ impl EffectWindow {
             work.cursor.results.shuffled_source_owner = Some(work.player);
         }
         self.pending_work = Some(PendingWork::Resolution(work.cursor));
-        if work.continue_reveals {
-            let state = &mut self
-                .resolution_cursor_mut()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .impulse;
-            if let Some(rewrite) = state.rewrite.as_mut() {
-                if rewrite.owners.pop_front() != Some(work.player) {
-                    return Err(EffectError::InconsistentProgram.into());
-                }
-            } else {
-                state.transformed_controllers.pop_front();
-                state.shuffle_after_reveal = false;
-            }
-        } else {
-            self.advance_instruction()?;
-        }
+        self.advance_instruction()?;
         Ok((
             self.progress_rules(
                 DamageJournal::default(),

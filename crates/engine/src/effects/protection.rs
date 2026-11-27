@@ -367,8 +367,7 @@ impl EffectWindow {
             StackKind::DelayedCopy { .. } => match self.payloads.get(&entry.id()) {
                 Some(StackPayload::Instructions(p)) => match &p.delayed_copy_action {
                     Some(
-                        crate::occurrence::DelayedCopyAction::Draw(_, colors)
-                        | crate::occurrence::DelayedCopyAction::SpellTwice(_, colors)
+                        crate::occurrence::DelayedCopyAction::SpellTwice(_, colors)
                         | crate::occurrence::DelayedCopyAction::AbilityTwice(_, colors),
                     ) => colors.clone(),
                     _ => BTreeSet::new(),

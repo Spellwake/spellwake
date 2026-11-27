@@ -676,23 +676,6 @@ pub struct ResolutionSelectionFrame {
     custom_minimum: Option<usize>,
 }
 impl EffectWindow {
-    fn creatures_not_kept(
-        &self,
-        kept: &BTreeSet<ObjectId>,
-    ) -> Result<BTreeSet<ObjectId>, EffectError> {
-        Ok(self
-            .evaluated_characteristics()?
-            .objects
-            .values()
-            .filter(|view| {
-                view.zone == ObjectZone::Battlefield
-                    && view.is_creature()
-                    && !kept.contains(&view.object)
-            })
-            .map(|view| view.object)
-            .collect())
-    }
-
     /// Show only the already chosen battlefield permanents in this mixed-zone choice.
     pub fn prior_public_exile_choices(&self) -> impl Iterator<Item = (SeatId, ObjectId)> + '_ {
         self.resolution_selection_state()
@@ -974,28 +957,6 @@ impl ResolutionSelectionWork {
 }
 
 impl EffectWindow {
-    fn attached_enchantment_subtype_subjects(
-        &self,
-        kind: crate::program::EnchantmentSubtype,
-    ) -> Result<BTreeSet<ObjectId>, EffectError> {
-        let controller = self
-            .window
-            .resolving()
-            .ok_or(EffectError::WrongResolutionFrame)?
-            .controller();
-        let evaluated = self.evaluated_characteristics()?;
-        Ok(evaluated
-            .objects
-            .values()
-            .filter(|card| {
-                card.zone == ObjectZone::Battlefield
-                    && card.current_enchantment_subtypes.contains(&kind)
-                    && card.attached_to == Some(TargetRef::Player(controller))
-            })
-            .map(|card| card.object)
-            .collect())
-    }
-
     pub(super) fn selection_players(
         &self,
         players: AffectedPlayers,
@@ -1218,46 +1179,6 @@ impl EffectWindow {
         }
         entry.controller()
     }
-    fn nonlands_at_resolution_value(
-        &self,
-        instruction: &Instruction,
-    ) -> Result<BTreeSet<ObjectId>, EffectError> {
-        let entry = self
-            .window
-            .resolving()
-            .ok_or(EffectError::InconsistentProgram)?;
-        let Some(StackPayload::Instructions(payload)) = self.payloads.get(&entry.id()) else {
-            return Err(EffectError::InconsistentProgram);
-        };
-        let restricted = matches!(instruction, Instruction::DestroyDamagedPlayersNonlandsAtX);
-        let (required, players) = if restricted {
-            let StackKind::ActivatedAbility { source } = entry.kind() else {
-                return Err(EffectError::InconsistentProgram);
-            };
-            (
-                entry.chosen_x(),
-                self.combat_damaged_players_by_source.get(&source.id()),
-            )
-        } else {
-            (payload.source_charge_count.as_ref(), None)
-        };
-        let required = required.ok_or(EffectError::InconsistentProgram)?;
-        Ok(self
-            .evaluated_characteristics()?
-            .objects
-            .values()
-            .filter(|o| {
-                o.zone == ObjectZone::Battlefield
-                    && !o.has_type(CardType::Land)
-                    && (!restricted
-                        || o.controller.is_some_and(|player| {
-                            players.is_some_and(|damaged| damaged.contains(&player))
-                        }))
-                    && self.permanent_mana_value(o.object).as_ref() == Some(required)
-            })
-            .map(|o| o.object)
-            .collect())
-    }
     pub(super) fn opposing_sacrifice_prohibited(
         &self,
         evaluated: &EvaluatedCharacteristics,
@@ -1355,57 +1276,6 @@ impl EffectWindow {
         // the same replacement, physical-owner ordering and simultaneous commit.
         let all;
         let (players, amount, operation) = match instruction {
-            Instruction::PayLifeOrSacrificeCreatures => {
-                all = ValueExpr::chosen_x();
-                let controller = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                let cost = self.resolve_value_expr(controller, &all)?;
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::PayLifeToSaveCreatures {
-                        cost,
-                        saved: BTreeMap::new(),
-                    },
-                )
-            }
-            Instruction::ExileFromHandOrBattlefield(amount) => (
-                AffectedPlayers::EachPlayer,
-                amount,
-                ResolutionSelectionOperation::ExileFromHand {
-                    allow_battlefield: true,
-                },
-            ),
-            Instruction::ExileRelatedHandCardForPlay => {
-                if !self
-                    .window
-                    .participants()
-                    .contains(&self.captured_related_player()?)
-                {
-                    self.advance_instruction()?;
-                    return Ok(true);
-                }
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::One(ResolvingPlayer::UniqueRelatedPlayer),
-                    &all,
-                    ResolutionSelectionOperation::ExileFromHand {
-                        allow_battlefield: false,
-                    },
-                )
-            }
-            Instruction::ExileUpToTwoGraveyardTargetsGainLife => {
-                let objects = self.legal_permanent_targets()?;
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ExileGraveyardTargets { objects },
-                )
-            }
             Instruction::ChooseRevealedHandCard {
                 minimum_mana_value,
                 nonland_only,
@@ -1452,43 +1322,12 @@ impl EffectWindow {
                     },
                 )
             }
-            Instruction::ReturnUpToOneOwnGraveyardCreatureToHand => {
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
-                    &all,
-                    ResolutionSelectionOperation::GraveyardCreatureToHand,
-                )
-            }
             Instruction::ReturnDelayedPermanentToHand(object) => {
                 all = ValueExpr::Literal(1.into());
                 (
                     AffectedPlayers::EachPlayer,
                     &all,
                     ResolutionSelectionOperation::ReturnSingle { object: *object },
-                )
-            }
-            Instruction::ShuffleOnePermanentPerPlayer => {
-                let objects = self.legal_permanent_targets()?;
-                self.capture_library_rewrite(&objects)?;
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ShuffleAnnouncedTargets { objects },
-                )
-            }
-            Instruction::ReturnOneNonlandPerOpponent => {
-                let objects = if self.window.target_assessment().is_none() {
-                    BTreeSet::new()
-                } else {
-                    self.legal_permanent_targets()?
-                };
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ReturnAnnouncedTargets { objects },
                 )
             }
             Instruction::ExileDefeatedSiege => {
@@ -1512,36 +1351,6 @@ impl EffectWindow {
                     },
                 )
             }
-            Instruction::ImprintTargetLand
-            | Instruction::ImprintTargetCreature
-            | Instruction::ExileTargetAsAbilityDonor
-            | Instruction::ExileTargetUntilOpponentMonarch => {
-                if self.zone_replacement_sources()?.sources.is_empty() {
-                    return Ok(false);
-                }
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let target = self.instruction_target(entry)?.choice().target;
-                let TargetRef::Object(object) = target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let source: Option<ObjectId> = None;
-                let monarch_controller =
-                    matches!(instruction, Instruction::ExileTargetUntilOpponentMonarch)
-                        .then_some(entry.controller());
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ExileSingle {
-                        object,
-                        source,
-                        monarch_controller,
-                    },
-                )
-            }
             Instruction::ExileDelayedObjects(ids) => {
                 let objects: BTreeSet<_> = ids
                     .iter()
@@ -1560,100 +1369,9 @@ impl EffectWindow {
                     ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
                 )
             }
-            Instruction::ExileCreatureAtMostRevealedPower
-            | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue => {
-                let objects = self.revealed_exile_subjects(instruction)?;
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
-                )
-            }
-            Instruction::ExileUntilOtherTargetLeaves => {
-                let (object, source) = self
-                    .legal_linked_targets()?
-                    .ok_or(EffectError::InconsistentProgram)?;
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ExileSingle {
-                        object,
-                        source: Some(source),
-                        monarch_controller: None,
-                    },
-                )
-            }
-            Instruction::DestroyNonlandsAtSourceChargeCount
-            | Instruction::DestroyDamagedPlayersNonlandsAtX => {
-                let objects = self.nonlands_at_resolution_value(instruction)?;
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
-                )
-            }
-            Instruction::ReturnFixedTargets => {
-                let objects = self.legal_permanent_targets()?;
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ReturnAnnouncedTargets { objects },
-                )
-            }
-            Instruction::DestroyAttachedEnchantmentSubtype(kind) => {
-                let objects = self.attached_enchantment_subtype_subjects(*kind)?;
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
-                )
-            }
-            Instruction::DestroyFixedTargets => {
-                let objects = self.legal_permanent_targets()?;
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
-                )
-            }
-            Instruction::ExileMeldPair => {
-                let Some(pair) = self.resolution_cursor().and_then(|c| c.meld_pair) else {
-                    self.advance_instruction()?;
-                    return Ok(true);
-                };
-                let objects = pair.into_iter().map(|(id, _)| id).collect::<BTreeSet<_>>();
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
-                )
-            }
             Instruction::BindOrderedPermanents { .. } => {
                 self.advance_instruction()?;
                 return Ok(true);
-            }
-            Instruction::ExileOrderedPermanent(position) => {
-                let Some(object) = self.ordered_permanent(*position)? else {
-                    self.advance_instruction()?;
-                    return Ok(true);
-                };
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ExileSingle {
-                        object,
-                        source: None,
-                        monarch_controller: None,
-                    },
-                )
             }
             Instruction::AffectPermanentTargets {
                 action:
@@ -1663,36 +1381,6 @@ impl EffectWindow {
                 ..
             } => {
                 let objects = self.legal_permanent_targets()?;
-                if self.resolution_cursor().is_some_and(|cursor| {
-                    self.payloads
-                        .get(&cursor.entry)
-                        .and_then(StackPayload::instructions)
-                        .and_then(|ops| ops.get(cursor.instruction + 1))
-                        == Some(&Instruction::RevealCreatureForEachTargetController)
-                }) {
-                    let evaluated = self.evaluated_characteristics()?;
-                    let controllers = self
-                        .window
-                        .apnap_players()?
-                        .flat_map(|seat| {
-                            std::iter::repeat_n(
-                                seat,
-                                objects
-                                    .iter()
-                                    .filter(|&&id| {
-                                        evaluated
-                                            .get(id)
-                                            .is_some_and(|card| card.controller == Some(seat))
-                                    })
-                                    .count(),
-                            )
-                        })
-                        .collect();
-                    self.resolution_cursor_mut()
-                        .ok_or(EffectError::InconsistentProgram)?
-                        .impulse
-                        .transformed_controllers = controllers;
-                }
                 all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
                 let operation = match action {
                     crate::program::PermanentTargetAction::Destroy => {
@@ -1706,35 +1394,6 @@ impl EffectWindow {
                 (AffectedPlayers::EachPlayer, &all, operation)
             }
             Instruction::AffectPermanentTargets { .. } => return Ok(false),
-            Instruction::PutLibraryCohortIntoGraveyard(cohort) => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let index = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .instruction;
-                let (player, cards) = self.library_cohort(&entry, index, *cohort)?;
-                if *cohort == crate::program::LibraryCohort::DefendingPlayerRevealsThroughLand {
-                    self.reveal_library_cohort_and_boost_attacker(&entry, &cards, append)?;
-                }
-                self.resolution_cursor_mut()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .results
-                    .moved_library_types
-                    .clear();
-                all = ValueExpr::Literal(RulesInteger::from_usize(cards.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::LibraryCohortToGraveyard {
-                        player,
-                        cards: cards.into_iter().collect(),
-                    },
-                )
-            }
             Instruction::ExileOnePerPlayerUntilSourceLeaves => {
                 let entry = self
                     .window
@@ -1762,102 +1421,6 @@ impl EffectWindow {
                     AffectedPlayers::EachPlayer,
                     &all,
                     ResolutionSelectionOperation::ExileLinkedTargets { objects, source },
-                )
-            }
-            Instruction::AttachBattlefieldAurasToSource
-            | Instruction::EnterHandOrGraveyardAurasAttachedToSource => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let (StackKind::TriggeredAbility { source }
-                | StackKind::ActivatedAbility { source }) = entry.kind()
-                else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                let source = source.id();
-                let target = TargetRef::Object(source);
-                let actor = entry.controller();
-                let evaluated = self.evaluated_characteristics()?;
-                let is_entry = matches!(
-                    instruction,
-                    Instruction::EnterHandOrGraveyardAurasAttachedToSource
-                );
-                let eligible = evaluated.objects.values().filter(|view| {
-                    if is_entry {
-                        matches!(view.zone, ObjectZone::Hand(player) | ObjectZone::Graveyard(player) if player == actor)
-                            && self.linked_aura_domain(view.object, actor, &evaluated).is_some_and(|domain| domain.contains(&target))
-                    } else {
-                        view.zone == ObjectZone::Battlefield
-                            && matches!(self.attachment_kind(view.object), Some(crate::attachment::AttachmentKind::Aura(_)))
-                            && self.attachment_permitted(view, Some(target), &evaluated)
-                    }
-                }).map(|view| view.object).collect::<BTreeSet<_>>();
-                all = ValueExpr::Literal(RulesInteger::from_usize(eligible.len()));
-                let operation = if is_entry {
-                    ResolutionSelectionOperation::EnterAurasAttachedToSource { source, eligible }
-                } else {
-                    ResolutionSelectionOperation::AttachToSource {
-                        source,
-                        eligible,
-                        optional: true,
-                    }
-                };
-                (
-                    AffectedPlayers::One(ResolvingPlayer::Controller),
-                    &all,
-                    operation,
-                )
-            }
-            Instruction::AttachControlledToSource {
-                optional_auras_and_equipment,
-            } => {
-                use crate::attachment::AttachmentKind;
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let source = match entry.kind() {
-                    StackKind::TriggeredAbility { source }
-                    | StackKind::ActivatedAbility { source } => source.id(),
-                    _ => return Err(EffectError::InconsistentProgram),
-                };
-                let current = self.evaluated_characteristics()?;
-                let host = TargetRef::Object(source);
-                let eligible = current
-                    .objects
-                    .values()
-                    .filter(|view| {
-                        view.zone == ObjectZone::Battlefield
-                            && view.controller == Some(entry.controller())
-                            && match self.attachment_kind(view.object) {
-                                Some(AttachmentKind::Equipment) => true,
-                                Some(AttachmentKind::Aura(_)) => *optional_auras_and_equipment,
-                                _ => false,
-                            }
-                            && self.attachment_permitted(view, Some(host), &current)
-                    })
-                    .map(|p| p.object)
-                    .collect::<BTreeSet<_>>();
-                all = ValueExpr::Literal(RulesInteger::from_usize(eligible.len()));
-                (
-                    AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
-                    &all,
-                    ResolutionSelectionOperation::AttachToSource {
-                        source,
-                        eligible,
-                        optional: *optional_auras_and_equipment,
-                    },
-                )
-            }
-            Instruction::CopyDifferentlyNamedTokens => {
-                all = ValueExpr::Literal(RulesInteger::from_usize(
-                    self.window.cards().iter().count(),
-                ));
-                (
-                    AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
-                    &all,
-                    ResolutionSelectionOperation::CopyDifferentlyNamedTokens,
                 )
             }
             Instruction::Populate => {
@@ -1920,78 +1483,6 @@ impl EffectWindow {
                     },
                 )
             }
-            Instruction::UntapUpTo { kind, maximum } => {
-                all = ValueExpr::Literal(i64::from(*maximum).into());
-                (
-                    AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
-                    &all,
-                    ResolutionSelectionOperation::Untap { kind: *kind },
-                )
-            }
-            Instruction::ChooseCreaturesToKeep => {
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ChooseCreaturesToKeep,
-                )
-            }
-            Instruction::DestroyOtherCreatures => {
-                let kept = &self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .vowed_creatures;
-                let objects = self.creatures_not_kept(kept)?;
-                all = ValueExpr::Literal(RulesInteger::from_usize(objects.len()));
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
-                )
-            }
-            Instruction::ChooseVowedCreatures => {
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::ChooseVow,
-                )
-            }
-            Instruction::SacrificeOtherCreatures => {
-                all = ValueExpr::Literal(RulesInteger::from_usize(
-                    self.window.cards().iter().count(),
-                ));
-                let kept = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .vowed_creatures
-                    .clone();
-                (
-                    AffectedPlayers::EachPlayer,
-                    &all,
-                    ResolutionSelectionOperation::SacrificeExceptVowed { kept },
-                )
-            }
-            Instruction::ChooseOtherControlledCreature {
-                sacrifice,
-                or_exile_source,
-            } => {
-                let Some(StackKind::TriggeredAbility { source }) =
-                    self.window.resolving().map(StackEntry::kind)
-                else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::One(ResolvingPlayer::Controller),
-                    &all,
-                    ResolutionSelectionOperation::OtherControlledCreature {
-                        source: source.id(),
-                        sacrifice: *sacrifice,
-                        or_exile_source: *or_exile_source,
-                    },
-                )
-            }
             Instruction::Sacrifice {
                 players,
                 amount,
@@ -2003,26 +1494,6 @@ impl EffectWindow {
                     filter: filter.clone(),
                 },
             ),
-            Instruction::SacrificeCombatContributor => {
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::One(ResolvingPlayer::Controller),
-                    &all,
-                    ResolutionSelectionOperation::SacrificeContributor {
-                        eligible: self.combat_contributors()?,
-                    },
-                )
-            }
-            Instruction::SacrificeToContinue { filter } => {
-                all = ValueExpr::Literal(1.into());
-                (
-                    AffectedPlayers::One(ResolvingPlayer::Controller),
-                    &all,
-                    ResolutionSelectionOperation::Sacrifice {
-                        filter: filter.clone(),
-                    },
-                )
-            }
             Instruction::SacrificeRandomUntilLand => {
                 let object = self
                     .resolution_cursor()
@@ -2121,12 +1592,10 @@ impl EffectWindow {
             | Instruction::OfferManaPayment { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::SetControlledCreatureSizeToHand
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
             | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
-            | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
             | Instruction::BecomeCopyFixedTargets { .. }
             | Instruction::DistributeCountersAmongTargets { .. }
@@ -2173,147 +1642,65 @@ impl EffectWindow {
             | Instruction::RepeatLoop { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ResolvePowerAbility(_)
-            | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::CreateTokenAndAttach { .. }
-            | Instruction::CreateTokensToFight(_)
-            | Instruction::FightPairedCreatures(_)
-            | Instruction::OfferOpponentsDamage
-            | Instruction::TemptWithTokens { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::CreateAttackingTokens { .. }
-            | Instruction::ExchangeLifeWithSourceToughness
-            | Instruction::ChooseTypeThenDestroyUnchosen
-            | Instruction::OrderArtifactCreatureLandSacrifices
             | Instruction::ChooseCreatureType { .. }
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::AdditionalCombat { .. }
-            | Instruction::AdditionalCombatAfterUntappingAttackers
-            | Instruction::RemoveCreatureCounters { .. }
-            | Instruction::ChooseAndReturnOwnGraveyardCardsByType
-            | Instruction::ReflectAttachedCreatureDamage
             | Instruction::GrantFlashback(_)
-            | Instruction::TapTargetWhileControllingSource
-            | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::Proliferate
-            | Instruction::DamagePlayersHalfLife
             | Instruction::DamageTargetControllersCreatures { .. }
-            | Instruction::RepeatOpponentLifeLoss
             | Instruction::CreatePreventionShield { .. }
-            | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
             | Instruction::OfferSourceCounters { .. }
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnGraveyardCohort(_)
             | Instruction::DivideThreeDamageAmongTargets
-            | Instruction::DistributePlusOneCounters { .. }
             | Instruction::DamageOrderedTargets { .. }
             | Instruction::FixedTargetClause(_)
             | Instruction::FightFixedTargets
-            | Instruction::PutTargetOwnedExiledLandsOntoBattlefield
-            | Instruction::LookOpponentExileForCast { .. }
-            | Instruction::ExileFromTargetLibrary
-            | Instruction::OfferVariablePayment { .. }
-            | Instruction::DrawEachPlayerForPayments
-            | Instruction::CreateReflexiveGraveyardReturn
             | Instruction::ReturnGraveyardCreatureWithCorpse(_)
-            | Instruction::ReturnRandomLinkedExile
-            | Instruction::ReturnLinkedSearchCards
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
-            | Instruction::RevealSharedTypeCreatureCastOrBottom
-            | Instruction::RevealOddCastOrDraw
             | Instruction::MayRevealLibraryTop
             | Instruction::ManifestTop { .. }
-            | Instruction::ExileNonlandsToHandAndDamage { .. }
-            | Instruction::RevealTopHandLoseManaValue { .. }
-            | Instruction::RevealUntilLandKind
-            | Instruction::RevealOpponentChoosesCreature
-            | Instruction::RevealToNameAfterSourceShuffle(_)
-            | Instruction::WatchSmallCreatureCombatDraw(_)
-            | Instruction::WatchTargetCombatDamageDraw
-            | Instruction::ChooseOwnCommanderToCast
-            | Instruction::ChooseMatchingHandSpellToCast
-            | Instruction::SearchEachLibraryForFreeCast
             | Instruction::ChooseFoundSpell
             | Instruction::CastFoundSpell(_)
-            | Instruction::LookTopOneRestGraveyard { .. }
-            | Instruction::RevealTopHandRestGraveyard { .. }
-            | Instruction::LookTopCreatureSharingAttachedSubtype { .. }
-            | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
-            | Instruction::RevealHandAndBottomPiles
-            | Instruction::RevealDividePiles
-            | Instruction::DivideTargetPermanentsAndSacrificePile
-            | Instruction::LookTopPlaneswalkers
-            | Instruction::RevealTopPermanentOrHand
-            | Instruction::LookTopLandBattlefieldTapped
-            | Instruction::LookTopReveal { .. }
-            | Instruction::LookTopTakeOne { .. }
             | Instruction::SearchLibrary { .. }
-            | Instruction::BecomeMonarch(_)
             | Instruction::RequireCondition(_)
-            | Instruction::PutEquipmentFromHandOrGraveyard
-            | Instruction::EquipNewToken
             | Instruction::Encore
-            | Instruction::RequireAttackSourceNextTurn
-            | Instruction::ChooseAttackDirection
             | Instruction::ReselectAttackDefender
             | Instruction::SetBlockDeclarations(_)
             | Instruction::AdditionalLoyaltyActivation
-            | Instruction::ImpulseCastOrDamage(_)
-            | Instruction::RevealCreatureOfSacrificedType
-            | Instruction::ExileMilledCreatures { .. }
-            | Instruction::VoteForGraveyardCards { .. }
-            | Instruction::ExileNonlandForFormerControllers
             | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::RevealCreatureForEachTargetController
-            | Instruction::ReturnOddGraveyardPermanentIfPaid { .. }
-            | Instruction::PutGraveyardCreatureAtMostX
-            | Instruction::PutLandFromExiledCohort
-            | Instruction::ExileTopForEachSpellType(_)
             | Instruction::ExileTopForPlay { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::ScheduleCreatedTokenExile(_)
             | Instruction::ScheduleCreatedTokenSacrifice
-            | Instruction::RegisterTokenLinkedExile
-            | Instruction::ReturnTokenLinkedExile
             | Instruction::AddMana(_)
-            | Instruction::CreateNonlegendaryLoyaltyCopy
-            | Instruction::WeakenOpposingAttackersUntilNextTurn
-            | Instruction::PhaseOtherPlaneswalkersNextEndStep
-            | Instruction::ChooseMeldPartner(_)
-            | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::DrawRevealRemoveLoyalty
-            | Instruction::CreateReflexiveDiscardDamage
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::FlipCoin { .. }
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::Myriad
-            | Instruction::CopyForOtherCreatures
-            | Instruction::CopyResolvingSpell
             | Instruction::WatchNextSpellOrLoyaltyTwice
             | Instruction::WatchNextLoyaltyCopy
-            | Instruction::ChoosePlaneswalkerTypeForCopies
             | Instruction::CopyCapturedAbility
             | Instruction::CopyOnCast(_)
             | Instruction::MadnessCast
             | Instruction::MiracleCast(_)
             | Instruction::CastDefeatedSiege
-            | Instruction::CastTargetGraveyardInstant
             | Instruction::ReboundCast(_)
             | Instruction::EndStepCast { .. }
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
-            | Instruction::ScheduleGraveyardReturnAtEndStep(_)
-            | Instruction::ReturnDyingCreatureAsForest
             | Instruction::ReturnDelayedGraveyardCard(_)
             | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedExileWithCounters(_)
@@ -2328,46 +1715,25 @@ impl EffectWindow {
             | Instruction::CounterWardSource
             | Instruction::CounterTriggeringStackObject
             | Instruction::Attach(_)
-            | Instruction::FightSourceWithTarget
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
-            | Instruction::ReturnUpToOneRecentGraveyardCard
-            | Instruction::ExileTargetUntilNonlandForFreeCast
-            | Instruction::ExileTopRepeatOnPermanentEntry
-            | Instruction::ShuffleTargetGraveyardCards { .. }
             | Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::ExileForBlackToken { .. }
-            | Instruction::ExileForSubtypeToken(_)
-            | Instruction::GiveEquippedCreatureToUpkeepPlayer
-            | Instruction::CopyCreatureExiledForAbility
             | Instruction::DamageFromGrantingPermanent { .. }
-            | Instruction::CopyEntrantAsArtifact
-            | Instruction::ReplaceSourceCreatedTokens
-            | Instruction::CopyEntrantOnceEachTurn
-            | Instruction::CopyCreatureAsToken
-            | Instruction::CopyOtherControlledNontokensAsEntryHost
-            | Instruction::CastLinkedSpellMatchingX
-            | Instruction::AddCounterAndDischargeOnResolution(_)
             | Instruction::CounterSpellToExile
             | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget
-            | Instruction::LoseLifeEqualToTargetSpellManaValue
             | Instruction::ChooseNewTargets
             | Instruction::CopyAbility
             | Instruction::CopySpell
-            | Instruction::CopyOtherTargetAsArtifact
             | Instruction::CopyTargetToSource { .. }
-            | Instruction::AnimateTargetAsCountedCreature { .. }
             | Instruction::GrantProtectionChosenColor(_)
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
-            | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
-            | Instruction::CreateArmyIfAbsent { .. }
             | Instruction::ForEachPlayer { .. }
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
@@ -2377,14 +1743,12 @@ impl EffectWindow {
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
-            | Instruction::EmpowerJace { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::Earthbend { .. }
             | Instruction::ReturnEarthbentCard
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::AttachFixedTargets
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_)
             | Instruction::AdjustLife(_)
@@ -3185,60 +2549,8 @@ impl EffectWindow {
                         self.advance_instruction()?;
                         return Ok(None);
                     }
-                    if let ResolutionSelectionOperation::Untap { kind } = operation {
-                        let [selection] = accepted.as_slice() else {
-                            return Err(EffectError::InconsistentSelectionWork);
-                        };
-                        let entry = self
-                            .window
-                            .resolving()
-                            .filter(|e| {
-                                e.id() == cursor.entry && e.controller() == selection.player
-                            })
-                            .ok_or(EffectError::WrongResolutionFrame)?;
-                        let Some(Instruction::UntapUpTo {
-                            kind: printed,
-                            maximum,
-                        }) = self
-                            .stack_body(entry.id())
-                            .and_then(|b| b.instructions.get(cursor.instruction))
-                        else {
-                            return Err(EffectError::InconsistentProgram);
-                        };
-                        if kind != *printed || selection.objects.len() > usize::from(*maximum) {
-                            return Err(EffectError::InconsistentSelectionWork);
-                        }
-                        let before = self.rules_snapshot(None)?;
-                        let mut tapped = Vec::new();
-                        for id in &selection.objects {
-                            if !before.view().evaluated.get(*id).is_some_and(|p| {
-                                p.zone == ObjectZone::Battlefield && p.has_type(kind)
-                            }) {
-                                return Err(EffectError::InconsistentSelectionWork);
-                            }
-                            if self.window.cards().get(*id).and_then(GameObject::tapped)
-                                == Some(true)
-                            {
-                                tapped.push(*id);
-                            }
-                        }
-                        if !tapped.is_empty() {
-                            let occurrences =
-                                self.untap_for_effect_with_stun(cursor.entry, &tapped)?;
-                            self.emit_from(
-                                EventCause::Instruction {
-                                    entry: cursor.entry,
-                                    instruction: cursor.instruction,
-                                },
-                                &before,
-                                None,
-                                append,
-                                |_, _, _| Ok(occurrences),
-                            )?;
-                        }
-                        self.pending_work = Some(PendingWork::Resolution(cursor));
-                        self.advance_instruction()?;
-                        return Ok(None);
+                    if let ResolutionSelectionOperation::Untap { .. } = operation {
+                        return Err(EffectError::InconsistentProgram);
                     }
                     if let ResolutionSelectionOperation::TapOrUntapControlled { tap, .. } =
                         operation
@@ -3862,15 +3174,6 @@ impl EffectWindow {
                     }
                     #[cfg(test)]
                     let observed = (cursor.entry, cursor.instruction);
-                    let skip_rest =
-                        matches!(operation, ResolutionSelectionOperation::Sacrifice { .. })
-                            && batch.logical.is_empty()
-                            && self
-                                .stack_body(cursor.entry)
-                                .and_then(|b| b.instructions.get(cursor.instruction))
-                                .is_some_and(|op| {
-                                    matches!(op, Instruction::SacrificeToContinue { .. })
-                                });
                     if matches!(
                         operation,
                         ResolutionSelectionOperation::OtherControlledCreature {
@@ -3880,14 +3183,6 @@ impl EffectWindow {
                     ) && !batch.logical.is_empty()
                     {
                         cursor.instruction += 1;
-                    }
-                    if skip_rest {
-                        cursor.instruction = self
-                            .stack_body(cursor.entry)
-                            .ok_or(EffectError::InconsistentProgram)?
-                            .instructions
-                            .len()
-                            - 1;
                     }
                     self.pending_work = Some(PendingWork::Resolution(cursor));
                     self.advance_instruction()?;
@@ -4232,39 +3527,11 @@ impl EffectWindow {
         let exile_source = false;
         let delay_exile_return = false;
         let delay_cohort_return = false;
-        let imprint = matches!(
-            actual,
-            Instruction::ImprintTargetLand | Instruction::ImprintTargetCreature
-        );
-        let inherit_from_exile = *actual == Instruction::ExileTargetAsAbilityDonor;
-        let play_exiled_card =
-            (*actual == Instruction::ExileRelatedHandCardForPlay).then(|| entry.controller());
+        let imprint = false;
+        let inherit_from_exile = false;
+        let play_exiled_card: Option<SeatId> = None;
         let independent_link: Option<(ObjectId, crate::program::LinkedExileGroup)> = None;
         let players = match (operation, actual) {
-            (
-                ResolutionSelectionOperation::PayLifeToSaveCreatures { cost, .. },
-                Instruction::PayLifeOrSacrificeCreatures,
-            ) if *cost
-                == self.resolve_value_expr_at(
-                    entry.controller(),
-                    &ValueExpr::chosen_x(),
-                    Some(cursor),
-                )? =>
-            {
-                AffectedPlayers::EachPlayer
-            }
-            (
-                ResolutionSelectionOperation::ExileFromHand {
-                    allow_battlefield: true,
-                },
-                Instruction::ExileFromHandOrBattlefield(_),
-            ) => AffectedPlayers::EachPlayer,
-            (
-                ResolutionSelectionOperation::ExileFromHand {
-                    allow_battlefield: false,
-                },
-                Instruction::ExileRelatedHandCardForPlay,
-            ) => AffectedPlayers::One(ResolvingPlayer::UniqueRelatedPlayer),
             (
                 ResolutionSelectionOperation::RevealedHand {
                     chooser,
@@ -4291,21 +3558,6 @@ impl EffectWindow {
                 AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
             }
             (
-                ResolutionSelectionOperation::GraveyardCreatureToHand,
-                Instruction::ReturnUpToOneOwnGraveyardCreatureToHand,
-            ) => AffectedPlayers::One(crate::program::ResolvingPlayer::Controller),
-            (
-                ResolutionSelectionOperation::LibraryCohortToGraveyard { player, cards },
-                Instruction::PutLibraryCohortIntoGraveyard(cohort),
-            ) if self
-                .library_cohort(entry, cursor.instruction, *cohort)
-                .is_ok_and(|(owner, objects)| {
-                    owner == *player && objects.into_iter().collect::<BTreeSet<_>>() == *cards
-                }) =>
-            {
-                AffectedPlayers::EachPlayer
-            }
-            (
                 ResolutionSelectionOperation::ExileLinkedTargets { objects, source },
                 Instruction::ExileOnePerPlayerUntilSourceLeaves,
             ) if *objects == self.legal_permanent_targets()?
@@ -4316,31 +3568,6 @@ impl EffectWindow {
             {
                 AffectedPlayers::EachPlayer
             }
-            (
-                ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
-                actual @ (Instruction::DestroyNonlandsAtSourceChargeCount
-                | Instruction::DestroyDamagedPlayersNonlandsAtX),
-            ) if *objects == self.nonlands_at_resolution_value(actual)? => {
-                AffectedPlayers::EachPlayer
-            }
-            (
-                ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
-                Instruction::ExileMeldPair,
-            ) if *objects
-                == cursor
-                    .meld_pair
-                    .into_iter()
-                    .flatten()
-                    .map(|(object, _)| object)
-                    .collect() =>
-            {
-                AffectedPlayers::EachPlayer
-            }
-            (
-                ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
-                actual @ (Instruction::ExileCreatureAtMostRevealedPower
-                | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue),
-            ) if *objects == self.revealed_exile_subjects(actual)? => AffectedPlayers::EachPlayer,
             (
                 ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
                 Instruction::ExileDelayedObjects(ids),
@@ -4359,18 +3586,6 @@ impl EffectWindow {
                 AffectedPlayers::EachPlayer
             }
             (
-                ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
-                Instruction::DestroyAttachedEnchantmentSubtype(kind),
-            ) if *objects == self.attached_enchantment_subtype_subjects(*kind)? => {
-                AffectedPlayers::EachPlayer
-            }
-            (
-                ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
-                Instruction::DestroyOtherCreatures,
-            ) if *objects == self.creatures_not_kept(&cursor.vowed_creatures)? => {
-                AffectedPlayers::EachPlayer
-            }
-            (
                 ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
                 Instruction::AffectPermanentTargets {
                     action: crate::program::PermanentTargetAction::Exile,
@@ -4379,22 +3594,10 @@ impl EffectWindow {
             )
             | (
                 ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
-                Instruction::DestroyFixedTargets,
-            )
-            | (
-                ResolutionSelectionOperation::DestroyAnnouncedTargets { objects },
                 Instruction::AffectPermanentTargets {
                     action: crate::program::PermanentTargetAction::Destroy,
                     ..
                 },
-            )
-            | (
-                ResolutionSelectionOperation::ShuffleAnnouncedTargets { objects },
-                Instruction::ShuffleOnePermanentPerPlayer,
-            )
-            | (
-                ResolutionSelectionOperation::ReturnAnnouncedTargets { objects },
-                Instruction::ReturnFixedTargets | Instruction::ReturnOneNonlandPerOpponent,
             )
             | (
                 ResolutionSelectionOperation::ReturnAnnouncedTargets { objects },
@@ -4407,26 +3610,6 @@ impl EffectWindow {
                 ResolutionSelectionOperation::ReturnSingle { object },
                 Instruction::ReturnDelayedPermanentToHand(expected),
             ) if object == expected => AffectedPlayers::EachPlayer,
-            (
-                ResolutionSelectionOperation::ExileSingle {
-                    object,
-                    source: None,
-                    monarch_controller: None,
-                },
-                Instruction::ExileOrderedPermanent(position),
-            ) if self.ordered_permanent(*position)? == Some(*object) => AffectedPlayers::EachPlayer,
-            (
-                ResolutionSelectionOperation::ExileSingle {
-                    object,
-                    source,
-                    monarch_controller,
-                },
-                Instruction::ExileUntilOtherTargetLeaves,
-            ) if monarch_controller.is_none()
-                && self.legal_linked_targets()? == source.map(|source| (*object, source)) =>
-            {
-                AffectedPlayers::EachPlayer
-            }
             (
                 ResolutionSelectionOperation::Sacrifice { filter },
                 Instruction::SacrificeDelayedObjects(objects),
@@ -4459,52 +3642,6 @@ impl EffectWindow {
                 AffectedPlayers::One(crate::program::ResolvingPlayer::Controller)
             }
             (
-                ResolutionSelectionOperation::SacrificeContributor { eligible },
-                Instruction::SacrificeCombatContributor,
-            ) if *eligible == self.combat_contributors()? => {
-                AffectedPlayers::One(ResolvingPlayer::Controller)
-            }
-            (
-                ResolutionSelectionOperation::Sacrifice { .. },
-                Instruction::DivideTargetPermanentsAndSacrificePile,
-            ) if cursor
-                .revealed_piles
-                .as_ref()
-                .and_then(|work| work.hand.as_ref())
-                .is_some_and(|pile| {
-                    batch
-                        .logical
-                        .iter()
-                        .all(|selection| pile.contains(&selection.object))
-                }) =>
-            {
-                AffectedPlayers::One(ResolvingPlayer::TargetPlayer)
-            }
-            (
-                ResolutionSelectionOperation::SacrificeExceptVowed { kept },
-                Instruction::SacrificeOtherCreatures,
-            ) if kept == &cursor.vowed_creatures => AffectedPlayers::EachPlayer,
-            (
-                ResolutionSelectionOperation::OtherControlledCreature {
-                    source,
-                    sacrifice,
-                    or_exile_source,
-                },
-                Instruction::ChooseOtherControlledCreature {
-                    sacrifice: expected,
-                    or_exile_source: alternative,
-                },
-            ) if sacrifice == expected
-                && or_exile_source == alternative
-                && matches!(entry.kind(), StackKind::TriggeredAbility { source: origin } if origin.id() == *source) =>
-            {
-                AffectedPlayers::One(ResolvingPlayer::Controller)
-            }
-            (
-                ResolutionSelectionOperation::Sacrifice { filter },
-                Instruction::SacrificeToContinue { filter: expected },
-            ) if filter == expected => AffectedPlayers::One(ResolvingPlayer::Controller),
-            (
                 ResolutionSelectionOperation::RandomSacrifice { object },
                 Instruction::SacrificeRandomUntilLand,
             ) if cursor.random_selection == Some(*object) => {
@@ -4514,10 +3651,6 @@ impl EffectWindow {
                 *players
             }
             (
-                ResolutionSelectionOperation::ExileGraveyardTargets { objects },
-                Instruction::ExileUpToTwoGraveyardTargetsGainLife,
-            ) if *objects == self.legal_permanent_targets()? => AffectedPlayers::EachPlayer,
-            (
                 ResolutionSelectionOperation::ExileSingle {
                     object,
                     source: None,
@@ -4525,35 +3658,6 @@ impl EffectWindow {
                 },
                 Instruction::ExileDefeatedSiege,
             ) if matches!(entry.kind(), StackKind::TriggeredAbility {source} | StackKind::ActivatedAbility {source} if *object==source.id()) => {
-                AffectedPlayers::EachPlayer
-            }
-            (
-                ResolutionSelectionOperation::ExileSingle {
-                    object,
-                    source,
-                    monarch_controller,
-                },
-                Instruction::ImprintTargetLand
-                | Instruction::ImprintTargetCreature
-                | Instruction::ExileTargetAsAbilityDonor
-                | Instruction::ExileTargetUntilOpponentMonarch,
-            ) if self
-                .instruction_target_at(entry, Some(cursor.instruction))?
-                .choice()
-                .target
-                == TargetRef::Object(*object)
-                && match actual {
-                    Instruction::ImprintTargetLand
-                    | Instruction::ImprintTargetCreature
-                    | Instruction::ExileTargetAsAbilityDonor => {
-                        source.is_none() && monarch_controller.is_none()
-                    }
-                    Instruction::ExileTargetUntilOpponentMonarch => {
-                        source.is_none() && *monarch_controller == Some(entry.controller())
-                    }
-                    _ => false,
-                } =>
-            {
                 AffectedPlayers::EachPlayer
             }
             (

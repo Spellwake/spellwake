@@ -71,54 +71,6 @@ pub(super) fn compile(
         )?;
         return Some(program);
     }
-    if text.trim()
-        == "Flying\nWhenever a nontoken creature an opponent controls enters, create a token that's a copy of that creature except it's an artifact in addition to its other types. Then exile all other tokens created with this creature."
-    {
-        let mut program =
-            ordinary_creature(card, vocabulary, Profile::Current, Some("Flying")).ok()?;
-        program.triggered.push(TriggeredAbility {
-            id: TriggeredAbilityId(0),
-            condition: spellwake_engine::program::TriggerSpec::enters(
-                spellwake_engine::program::ObjectFilter::creature()
-                    .opposing()
-                    .nontoken(),
-            ),
-            grouping: TriggerGrouping::EachOccurrence,
-            body: ExecutableBody::new(
-                BodyTarget::None,
-                vec![
-                    Instruction::CopyEntrantAsArtifact,
-                    Instruction::ReplaceSourceCreatedTokens,
-                ],
-            ),
-        });
-        return Some(program);
-    }
-    if text.trim()
-        == "Whenever an enchantment you control enters, you may create a token that's a copy of it. Do this only once each turn."
-    {
-        let mut program = ordinary_creature(card, vocabulary, Profile::Current, Some("")).ok()?;
-        program.triggered.push(TriggeredAbility {
-            id: TriggeredAbilityId(0),
-            condition: spellwake_engine::program::TriggerSpec::enters(
-                spellwake_engine::program::ObjectFilter::any_types(
-                    spellwake_engine::program::CardTypeMask::from_card_type(CardType::Enchantment),
-                )
-                .controlled(),
-            ),
-            grouping: TriggerGrouping::EachOccurrence,
-            body: ExecutableBody::new(
-                BodyTarget::None,
-                vec![
-                    Instruction::OptionalEffect {
-                        chooser: ResolvingPlayer::Controller,
-                    },
-                    Instruction::CopyEntrantOnceEachTurn,
-                ],
-            ),
-        });
-        return Some(program);
-    }
     if types == "Enchantment"
         && text.trim()
             == "Constellation — Whenever this enchantment or another enchantment you control enters, put a blessing counter on this enchantment.\nCreatures you control get +1/+1 for each blessing counter on this enchantment."

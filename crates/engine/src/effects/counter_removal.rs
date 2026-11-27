@@ -62,13 +62,6 @@ impl EffectWindow {
             .filter(|entry| entry.id() == cursor.entry)
             .ok_or(EffectError::WrongResolutionFrame)?;
         let (object, minimum, maximum, kind_filter) = match self.current_instruction()? {
-            Instruction::RemoveCreatureCounters { maximum } => {
-                let TargetRef::Object(object) = self.instruction_target(entry)?.choice().target
-                else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                (object, 0, *maximum, None)
-            }
             Instruction::MoveCounters {
                 from,
                 kind,

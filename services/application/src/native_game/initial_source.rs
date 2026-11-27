@@ -334,44 +334,7 @@ impl NativeProgramSource {
                 Registry::from_resolution_selection_natural_mana_inventory(&inventory, &native)?
             }
         };
-        let mut meld_results = std::collections::BTreeMap::new();
-        for card in inventory.cards.iter().filter(|row| row.layout == "meld") {
-            let Some(raw) = card.oracle_id.as_ref() else {
-                continue;
-            };
-            let Some(set) = inventory.meld_set(raw) else {
-                continue;
-            };
-            let id = OracleId::try_from(raw.clone()).map_err(|_| NativeInitialError::Invalid)?;
-            if !registry.resolve(&id).is_some_and(|bound| {
-                bound.program().triggered.iter().any(|ability| {
-                    ability.body.instructions.iter().any(|op| {
-                        matches!(
-                            op,
-                            spellwake_engine::program::Instruction::MeldExiledPair(_)
-                        )
-                    })
-                })
-            }) {
-                continue;
-            }
-            let result = inventory
-                .cards
-                .iter()
-                .find(|row| row.layout == "meld" && row.name == set.result)
-                .ok_or(NativeInitialError::Invalid)?;
-            let [face] = result.faces.as_slice() else {
-                return Err(NativeInitialError::Invalid);
-            };
-            let result_id = OracleId::try_from(
-                result
-                    .oracle_id
-                    .clone()
-                    .ok_or(NativeInitialError::Invalid)?,
-            )
-            .map_err(|_| NativeInitialError::Invalid)?;
-            meld_results.insert(id, (result_id, face.clone()));
-        }
+        let meld_results = std::collections::BTreeMap::new();
         let catalogue = catalogue::retain(&inventory.cards, &registry)?;
         let commander_inventory = (pool == NativeProgramPool::KeywordGameplay).then_some(inventory);
         let names = Arc::new(NameRules::literal_names());

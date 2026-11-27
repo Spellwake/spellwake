@@ -21,7 +21,7 @@ impl PrintedCardIndex {
     pub(super) fn build(
         catalogue: &BTreeMap<OracleId, InventoryCard>,
         registry: &Registry,
-        meld_results: &BTreeMap<OracleId, (OracleId, spellwake_content::CatalogFace)>,
+        _meld_results: &BTreeMap<OracleId, (OracleId, spellwake_content::CatalogFace)>,
     ) -> Self {
         let mut missing_binding = false;
         let mut has_unsupported_placement = false;
@@ -62,19 +62,6 @@ impl PrintedCardIndex {
             }
             if let Some(prepare) = root.prepare_spell.as_deref() {
                 record(prepare, oracle);
-            }
-            if meld_results.contains_key(oracle) {
-                for op in root
-                    .triggered
-                    .iter()
-                    .map(|a| &a.body.instructions)
-                    .chain(root.activated.iter().map(|a| &a.body.instructions))
-                    .flatten()
-                {
-                    if let spellwake_engine::program::Instruction::MeldExiledPair(back) = op {
-                        record(back.as_ref(), oracle);
-                    }
-                }
             }
         }
         Self {
@@ -221,41 +208,7 @@ impl NativeProgramSource {
             if bound.scope() == spellwake_card_programs::Scope::SeededVanillaBattlefieldOnly {
                 return Err(RegistryError::UnsupportedPlacement.into());
             }
-            if let Some((joined, face)) = self.meld_results.get(oracle)
-                && bound
-                    .program()
-                    .triggered
-                    .iter()
-                    .map(|a| &a.body.instructions)
-                    .chain(
-                        bound
-                            .program()
-                            .activated
-                            .iter()
-                            .map(|a| &a.body.instructions),
-                    )
-                    .flatten()
-                    .any(|op| {
-                        matches!(
-                            op,
-                            spellwake_engine::program::Instruction::MeldExiledPair(back)
-                                if back.as_ref() == program
-                        )
-                    })
-            {
-                if primary.is_some() {
-                    return Err(NativeInitialError::Invalid);
-                }
-                primary = Some(NativePrintedCard {
-                    oracle: joined,
-                    characteristics: face_characteristics(
-                        face,
-                        program.printed_loyalty.as_ref(),
-                        program.printed_defense.as_ref(),
-                    )?,
-                });
-                continue;
-            }
+            let _ = self.meld_results.get(oracle);
             let (is_primary, face) = if bound.program() == program
                 || bound.program().prototype.as_deref() == Some(program)
             {

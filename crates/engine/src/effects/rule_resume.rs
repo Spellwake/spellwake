@@ -23,16 +23,6 @@ impl EffectWindow {
                 self.resume_pile_entry(expected, frame, actor, reply)
             }
             EffectDecision::ResolutionSelect(frame)
-                if frame.operation() == ResolutionSelectionKind::ExileMilledCreatures =>
-            {
-                self.resume_milled_exile(expected, frame, actor, reply)
-            }
-            EffectDecision::ResolutionSelect(frame)
-                if frame.operation() == ResolutionSelectionKind::VoteForCard =>
-            {
-                self.resume_graveyard_vote(expected, frame, actor, reply)
-            }
-            EffectDecision::ResolutionSelect(frame)
                 if frame.operation() == ResolutionSelectionKind::FoundSpellToCast =>
             {
                 self.resume_found_spell(expected, frame, actor, reply)
@@ -45,16 +35,6 @@ impl EffectWindow {
                 ) =>
             {
                 self.resume_token_equipment(expected, frame, actor, reply)
-            }
-            EffectDecision::ResolutionSelect(frame)
-                if frame.operation() == ResolutionSelectionKind::UnattachControlledEquipment =>
-            {
-                self.resume_equipment_protection(expected, frame, actor, reply)
-            }
-            EffectDecision::ResolutionSelect(frame)
-                if frame.operation() == ResolutionSelectionKind::MeldPartner =>
-            {
-                self.resume_meld(expected, frame, actor, reply)
             }
             EffectDecision::ResolutionSelect(frame)
                 if frame.operation() == ResolutionSelectionKind::Soulbond =>
@@ -104,74 +84,8 @@ impl EffectWindow {
                 };
                 self.resume_attack_defender(expected, bound, actor, choice)
             }
-            EffectDecision::PlaneswalkerType(bound) => {
-                let revision = self.next_revision(expected)?;
-                let DecisionReply::PlaneswalkerType(kind) = reply else {
-                    return Err(EffectError::WrongDecisionKind);
-                };
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                if actor != bound.chooser || actor != entry.controller() {
-                    return Err(EffectError::WrongChooser);
-                }
-                if bound.revision != self.revision
-                    || bound.entry != entry.id()
-                    || Some(bound.instruction) != self.instruction_index()
-                    || self.current_instruction()? != &Instruction::ChoosePlaneswalkerTypeForCopies
-                {
-                    return Err(EffectError::WrongResolutionFrame);
-                }
-                let mut next = self.clone();
-                next.revision = revision;
-                next.watch_ability_copy(
-                    entry,
-                    crate::occurrence::AbilityCopyWatch::PlaneswalkerType(kind),
-                )?;
-                next.advance_instruction()?;
-                next.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    RulesJournal::default(),
-                )
-            }
-            EffectDecision::AttackDirection(bound) => {
-                let revision = self.next_revision(expected)?;
-                let DecisionReply::AttackDirection(direction) = reply else {
-                    return Err(EffectError::WrongDecisionKind);
-                };
-                let cursor = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                if actor != bound.chooser || actor != entry.controller() {
-                    return Err(EffectError::WrongChooser);
-                }
-                if bound.revision != self.revision
-                    || bound.entry != entry.id()
-                    || bound.instruction != cursor.instruction
-                    || self.current_instruction()? != &Instruction::ChooseAttackDirection
-                {
-                    return Err(EffectError::WrongResolutionFrame);
-                }
-                let mut next = self.clone();
-                next.revision = revision;
-                next.attack_directions.push((actor, direction));
-                next.advance_instruction()?;
-                next.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    RulesJournal::default(),
-                )
-            }
+            EffectDecision::PlaneswalkerType(_) => Err(EffectError::WrongResolutionFrame),
+            EffectDecision::AttackDirection(_) => Err(EffectError::WrongResolutionFrame),
             actual @ (EffectDecision::DrawReplacement(_)
             | EffectDecision::ZoneReplacement(_)
             | EffectDecision::OptionalEffect(_))
@@ -209,19 +123,12 @@ impl EffectWindow {
                     || cursor.chosen_opponent.is_some()
                     || !matches!(
                         self.current_instruction()?,
-                        Instruction::LookTopOneRestGraveyard { .. }
-                            | Instruction::RevealTopHandRestGraveyard { .. }
-                            | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
-                            | Instruction::RevealHandAndBottomPiles
-                            | Instruction::RevealDividePiles
-                            | Instruction::RevealOpponentChoosesCreature
-                            | Instruction::ChooseValue {
-                                domain: crate::program::ResolutionChoiceDomain::Player {
-                                    opponents_only: true,
-                                },
-                                ..
-                            }
-                            | Instruction::Clash { .. }
+                        Instruction::ChooseValue {
+                            domain: crate::program::ResolutionChoiceDomain::Player {
+                                opponents_only: true,
+                            },
+                            ..
+                        } | Instruction::Clash { .. }
                     )
                     || self
                         .combat_rules
@@ -314,41 +221,7 @@ impl EffectWindow {
                     RulesJournal::default(),
                 )
             }
-            EffectDecision::LoyaltyRemoval(bound) => {
-                let revision = self.next_revision(expected)?;
-                let DecisionReply::SelectResolution(objects) = reply else {
-                    return Err(EffectError::WrongDecisionKind);
-                };
-                let cursor = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                if bound.revision != self.revision
-                    || bound.entry != cursor.entry
-                    || bound.instruction != cursor.instruction
-                    || bound.chooser != actor
-                    || !matches!(
-                        self.current_instruction()?,
-                        Instruction::RemoveLoyaltyExileTopForPlay
-                    )
-                    || cursor.chosen_loyalty_removals.is_some()
-                    || objects.iter().copied().collect::<BTreeSet<_>>().len() != objects.len()
-                    || objects.iter().any(|id| !bound.objects.contains(id))
-                {
-                    return Err(EffectError::WrongResolutionFrame);
-                }
-                let mut next = self.clone();
-                next.revision = revision;
-                next.resolution_cursor_mut()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .chosen_loyalty_removals = Some(objects);
-                next.progress_rules(
-                    DamageJournal::default(),
-                    vec![],
-                    vec![],
-                    DrawJournal::default(),
-                    RulesJournal::default(),
-                )
-            }
+            EffectDecision::LoyaltyRemoval(_) => Err(EffectError::WrongResolutionFrame),
             EffectDecision::ResolutionManaColor(bound) => {
                 let revision = self.next_revision(expected)?;
                 let cursor = self
@@ -1567,12 +1440,7 @@ impl EffectWindow {
                 next.revision = revision;
                 let mut journal = DamageJournal::default();
                 let mut append = RulesJournal::default();
-                if matches!(
-                    next.current_instruction()?,
-                    Instruction::CopyForOtherCreatures
-                        | Instruction::CopyResolvingSpell
-                        | Instruction::CopyOnCast(_)
-                ) {
+                if matches!(next.current_instruction()?, Instruction::CopyOnCast(_)) {
                     next.add_copy_choice(entry.id(), actor, choice)?;
                     return next.progress_rules(
                         journal,

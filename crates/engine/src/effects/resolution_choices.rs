@@ -1127,32 +1127,17 @@ impl EffectWindow {
             return Err(EffectError::InconsistentProgram);
         }
         match instruction {
-            Instruction::LookTopCreatureSharingAttachedSubtype { .. } => {
-                let player =
-                    self.resolving_player_identity_at(ResolvingPlayer::Controller, None)?;
-                Ok(!self.window.cards().library(player).is_empty())
-            }
             Instruction::AffectPermanentTargets { .. }
-            | Instruction::ModifyAnyNumberOfPermanents { .. }
-            | Instruction::ReturnOneNonlandPerOpponent
-            | Instruction::ExileForSubtypeToken(_) => Ok(self.window.target_assessment().is_some()
-                && !self.legal_permanent_targets()?.is_empty()),
+            | Instruction::ModifyAnyNumberOfPermanents { .. } => {
+                Ok(self.window.target_assessment().is_some()
+                    && !self.legal_permanent_targets()?.is_empty())
+            }
             Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource => Ok(true),
             Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::ExileForBlackToken { .. }
-            | Instruction::CopyCreatureExiledForAbility
-            | Instruction::DamageFromGrantingPermanent { .. }
-            | Instruction::CopyEntrantAsArtifact
-            | Instruction::ReplaceSourceCreatedTokens => Err(EffectError::InconsistentProgram),
-            Instruction::ChooseTypeThenDestroyUnchosen => Err(EffectError::InconsistentProgram),
-            Instruction::GiveEquippedCreatureToUpkeepPlayer => {
-                Ok(self.equipped_creature_for_control()?.is_some())
-            }
-            Instruction::CopyEntrantOnceEachTurn => Ok(self.entering_copy_candidate()?.is_some()),
-            Instruction::ReturnDyingCreatureAsForest => {
-                Ok(self.captured_graveyard_card()?.is_some())
+            | Instruction::DamageFromGrantingPermanent { .. } => {
+                Err(EffectError::InconsistentProgram)
             }
             Instruction::ReturnDelayedGraveyardCardTransformed(object) => {
                 Ok(self.delayed_transformed_return_player(*object).is_some())
@@ -1160,20 +1145,10 @@ impl EffectWindow {
             Instruction::ReturnDelayedGraveyardCard(object) => {
                 Ok(self.delayed_graveyard_return_player(*object).is_some())
             }
-            Instruction::SacrificeCombatContributor => Ok(!self.combat_contributors()?.is_empty()),
             Instruction::ScheduleCreatedTokenExile(_)
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
-            | Instruction::TapTargetWhileControllingSource
-            | Instruction::GrantFlashback(_)
-            | Instruction::DestroyAttachedEnchantmentSubtype(_)
-            | Instruction::ReflectAttachedCreatureDamage
-            | Instruction::ChooseAndReturnOwnGraveyardCardsByType => {
-                Err(EffectError::InconsistentProgram)
-            }
-            Instruction::ExileOrderedPermanent(position) => {
-                Ok(self.ordered_permanent(*position)?.is_some())
-            }
+            | Instruction::GrantFlashback(_) => Err(EffectError::InconsistentProgram),
             Instruction::AdjustLife(spec) => {
                 if let crate::toolbox::LifeOp::Pay(amount) = &spec.op {
                     let entry = self
@@ -1312,21 +1287,6 @@ impl EffectWindow {
             | Instruction::OfferManaPayment { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::FixedTargetClause(_) => Ok(true),
-            Instruction::FightSourceWithTarget => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let source_ok = matches!(
-                    entry.kind(),
-                    StackKind::TriggeredAbility { source } | StackKind::ActivatedAbility { source }
-                        if self.window.cards().get(source.id()).is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-                );
-                let target_ok = self.instruction_target(entry).is_ok_and(|bound| {
-                    matches!(bound.choice().target, TargetRef::Object(id) if self.window.cards().get(id).is_some_and(|card| card.zone() == ObjectZone::Battlefield))
-                });
-                Ok(source_ok && target_ok)
-            }
             Instruction::Sacrifice {
                 players: crate::program::AffectedPlayers::One(role),
                 amount,
@@ -1370,7 +1330,6 @@ impl EffectWindow {
             | Instruction::ChooseOption { .. }
             | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
-            | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
             | Instruction::BecomeCopyFixedTargets { .. }
             | Instruction::DistributeCountersAmongTargets { .. }
@@ -1559,16 +1518,11 @@ impl EffectWindow {
                     && (!requested.is_positive()
                         || !self.window.cards().library(player).is_empty()))
             }
-            Instruction::UntapUpTo { .. }
-            | Instruction::AddManaForPlayer { .. }
+            Instruction::AddManaForPlayer { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::AttachFixedTargets
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
-            | Instruction::BecomeMonarch(_)
             | Instruction::RequireCondition(_)
-            | Instruction::RequireAttackSourceNextTurn
-            | Instruction::ChooseAttackDirection
             | Instruction::ReselectAttackDefender
             | Instruction::SetBlockDeclarations(_)
             | Instruction::AdditionalLoyaltyActivation
@@ -1579,21 +1533,17 @@ impl EffectWindow {
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::Myriad
-            | Instruction::CopyForOtherCreatures
             | Instruction::WatchNextSpellOrLoyaltyTwice
             | Instruction::WatchNextLoyaltyCopy
-            | Instruction::ChoosePlaneswalkerTypeForCopies
             | Instruction::CopyCapturedAbility
             | Instruction::CopyOnCast(_)
             | Instruction::MadnessCast
             | Instruction::MiracleCast(_)
             | Instruction::CastDefeatedSiege
-            | Instruction::CastTargetGraveyardInstant
             | Instruction::ReboundCast(_)
             | Instruction::EndStepCast { .. }
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
-            | Instruction::ScheduleGraveyardReturnAtEndStep(_)
             | Instruction::ReturnDelayedPermanentToHand(_)
             | Instruction::ReturnDelayedExileWithCounters(_)
             | Instruction::ReturnDelayedExile(_)
@@ -1601,29 +1551,11 @@ impl EffectWindow {
             | Instruction::SacrificeStateTriggerSource
             | Instruction::CounterWardSource
             | Instruction::CounterTriggeringStackObject => Ok(true),
-            Instruction::AdditionalCombat { .. }
-            | Instruction::AdditionalCombatAfterUntappingAttackers => Ok(true),
-            Instruction::PutLibraryCohortIntoGraveyard(_)
-            | Instruction::ExileOnePerPlayerUntilSourceLeaves
-            | Instruction::AttachControlledToSource { .. }
-            | Instruction::AttachBattlefieldAurasToSource
-            | Instruction::EnterHandOrGraveyardAurasAttachedToSource
-            | Instruction::CopyCreatureAsToken
-            | Instruction::CopyDifferentlyNamedTokens
+            Instruction::AdditionalCombat { .. } => Ok(true),
+            Instruction::ExileOnePerPlayerUntilSourceLeaves
             | Instruction::Populate
-            | Instruction::CopyOtherControlledNontokensAsEntryHost
-            | Instruction::CreateArmyIfAbsent { .. }
-            | Instruction::ChooseVowedCreatures
-            | Instruction::ChooseCreaturesToKeep
-            | Instruction::DestroyOtherCreatures
-            | Instruction::SacrificeOtherCreatures
-            | Instruction::ExileFromHandOrBattlefield(_)
-            | Instruction::ExileRelatedHandCardForPlay
-            | Instruction::PayLifeOrSacrificeCreatures
-            | Instruction::ChooseOtherControlledCreature { .. }
             | Instruction::Sacrifice { .. }
             | Instruction::SacrificeRandomUntilLand
-            | Instruction::SacrificeToContinue { .. }
             | Instruction::Discard { .. } => Err(EffectError::InconsistentProgram),
             Instruction::SearchLibrary { filter } => {
                 if let Some(host) = filter.curse_host() {
@@ -1632,31 +1564,12 @@ impl EffectWindow {
                     Ok(self.resolving_player(filter.searcher).is_ok())
                 }
             }
-            Instruction::OfferVariablePayment { .. }
-            | Instruction::DrawEachPlayerForPayments
-            | Instruction::CreateReflexiveGraveyardReturn
-            | Instruction::ReturnGraveyardCreatureWithCorpse(_) => {
+            Instruction::ReturnGraveyardCreatureWithCorpse(_) => {
                 Err(EffectError::InconsistentProgram)
             }
-            Instruction::ReturnRandomLinkedExile | Instruction::ReturnLinkedSearchCards => {
-                Ok(!self.exiled_search_results()?.is_empty())
-            }
-            Instruction::CopyResolvingSpell => Ok(self.window.resolving().is_some_and(|entry| {
-                matches!(
-                    entry.kind(),
-                    StackKind::CardSpell(_) | StackKind::SpellCopy { .. }
-                )
-            })),
             Instruction::ResolveTransfer(_) => Ok(true),
-            Instruction::ExchangeLifeWithSourceToughness
-            | Instruction::SetControlledCreatureSizeToHand
-            | Instruction::ResolvePowerAbility(_)
-            | Instruction::UnattachEquipmentAndProtectHost
+            Instruction::ResolvePowerAbility(_)
             | Instruction::CreateTokenAndAttach { .. }
-            | Instruction::CreateTokensToFight(_)
-            | Instruction::FightPairedCreatures(_)
-            | Instruction::OfferOpponentsDamage
-            | Instruction::TemptWithTokens { .. }
             | Instruction::CreateTokens { .. }
             | Instruction::CreateAttackingTokens { .. }
             | Instruction::ForEachPlayer { .. }
@@ -1668,7 +1581,6 @@ impl EffectWindow {
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
-            | Instruction::EmpowerJace { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. } => Ok(true),
             Instruction::ChooseCreatureType { excluding, .. } => {
@@ -1705,68 +1617,19 @@ impl EffectWindow {
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::RememberPermanentTarget
-            | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
             | Instruction::ExileDefeatedSiege
-            | Instruction::RemoveCreatureCounters { .. }
-            | Instruction::RevealTopAndRemoveAttackerIfForest
-            | Instruction::DamagePlayersHalfLife
-            | Instruction::RepeatOpponentLifeLoss
             | Instruction::CreatePreventionShield { .. }
-            | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnGraveyardCohort(_)
             | Instruction::DivideThreeDamageAmongTargets
-            | Instruction::DistributePlusOneCounters { .. }
             | Instruction::DamageOrderedTargets { .. }
-            | Instruction::ExileUntilOtherTargetLeaves
-            | Instruction::CopyOtherTargetAsArtifact
-            | Instruction::DestroyFixedTargets
-            | Instruction::ReturnFixedTargets
             | Instruction::FightFixedTargets
             | Instruction::BindOrderedPermanents { .. }
-            | Instruction::PutTargetOwnedExiledLandsOntoBattlefield
-            | Instruction::LookOpponentExileForCast { .. }
-            | Instruction::ExileFromTargetLibrary
-            | Instruction::RevealSharedTypeCreatureCastOrBottom
-            | Instruction::RevealOddCastOrDraw
             | Instruction::MayRevealLibraryTop
-            | Instruction::ExileNonlandsToHandAndDamage { .. }
-            | Instruction::RevealTopHandLoseManaValue { .. }
-            | Instruction::RevealUntilLandKind
-            | Instruction::RevealOpponentChoosesCreature
-            | Instruction::RevealToNameAfterSourceShuffle(_)
-            | Instruction::WatchSmallCreatureCombatDraw(_)
-            | Instruction::WatchTargetCombatDamageDraw
-            | Instruction::ChooseOwnCommanderToCast
-            | Instruction::ChooseMatchingHandSpellToCast
-            | Instruction::SearchEachLibraryForFreeCast
             | Instruction::ChooseFoundSpell
-            | Instruction::LookTopOneRestGraveyard { .. }
-            | Instruction::RevealTopHandRestGraveyard { .. }
-            | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
-            | Instruction::RevealHandAndBottomPiles
-            | Instruction::RevealDividePiles
-            | Instruction::DivideTargetPermanentsAndSacrificePile
-            | Instruction::LookTopPlaneswalkers
-            | Instruction::RevealTopPermanentOrHand
-            | Instruction::LookTopLandBattlefieldTapped
-            | Instruction::LookTopReveal { .. }
-            | Instruction::LookTopTakeOne { .. }
-            | Instruction::PutEquipmentFromHandOrGraveyard
-            | Instruction::EquipNewToken
             | Instruction::Encore
-            | Instruction::CreateNonlegendaryLoyaltyCopy
-            | Instruction::WeakenOpposingAttackersUntilNextTurn
-            | Instruction::PhaseOtherPlaneswalkersNextEndStep
-            | Instruction::ChooseMeldPartner(_)
-            | Instruction::ExileMeldPair
-            | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::DrawRevealRemoveLoyalty
-            | Instruction::CreateReflexiveDiscardDamage
-            | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::FlipCoin { .. }
             | Instruction::CastFoundSpell(_)
             | Instruction::ExtortDrain
@@ -1774,32 +1637,14 @@ impl EffectWindow {
             | Instruction::ResolveCounterKeyword(_)
             | Instruction::SacrificeEvoked
             | Instruction::Attach(_)
-            | Instruction::ReturnUpToOneRecentGraveyardCard
-            | Instruction::ExileUpToTwoGraveyardTargetsGainLife
             | Instruction::ChooseRevealedHandCard { .. }
-            | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
-            | Instruction::ExileTargetUntilNonlandForFreeCast
-            | Instruction::ExileTopRepeatOnPermanentEntry
-            | Instruction::ShuffleTargetGraveyardCards { .. }
-            | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
-            | Instruction::CastLinkedSpellMatchingX
-            | Instruction::DestroyDamagedPlayersNonlandsAtX
-            | Instruction::DestroyNonlandsAtSourceChargeCount
-            | Instruction::AddCounterAndDischargeOnResolution(_)
-            | Instruction::ExileCreatureAtMostRevealedPower
-            | Instruction::ImprintTargetLand
-            | Instruction::ImprintTargetCreature
-            | Instruction::ExileTargetAsAbilityDonor
-            | Instruction::ExileTargetUntilOpponentMonarch
             | Instruction::CounterSpellToExile
             | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget
-            | Instruction::LoseLifeEqualToTargetSpellManaValue
             | Instruction::CopyAbility
             | Instruction::CopySpell
-            | Instruction::AnimateTargetAsCountedCreature { .. }
             | Instruction::Earthbend { .. }
             | Instruction::GrantProtectionChosenColor(_) => {
                 let entry = self
@@ -1810,22 +1655,8 @@ impl EffectWindow {
                 self.operation_available(instruction, bound.choice().target)
             }
             Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::RegisterTokenLinkedExile
-            | Instruction::ReturnTokenLinkedExile
             | Instruction::ReturnEarthbentCard
-            | Instruction::RevealCreatureOfSacrificedType
-            | Instruction::ExileNonlandForFormerControllers
-            | Instruction::ExileMilledCreatures { .. }
-            | Instruction::VoteForGraveyardCards { .. }
-            | Instruction::ShuffleOnePermanentPerPlayer
             | Instruction::ReturnExiledTargetCohort { .. }
-            | Instruction::RevealCreatureForEachTargetController
-            | Instruction::ReturnOddGraveyardPermanentIfPaid { .. }
-            | Instruction::PutGraveyardCreatureAtMostX
-            | Instruction::PutLandFromExiledCohort
-            | Instruction::ExileTopForEachSpellType(_)
-            | Instruction::ImpulseCastOrDamage(_)
-            | Instruction::OrderArtifactCreatureLandSacrifices
             | Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
             | Instruction::OfferSourceCounters { .. } => Err(EffectError::InconsistentProgram),
@@ -1882,115 +1713,8 @@ impl EffectWindow {
         instruction: &Instruction,
         append: &mut RulesJournal,
     ) -> Result<bool, EffectError> {
-        if matches!(
-            instruction,
-            Instruction::RevealSharedTypeCreatureCastOrBottom
-                | Instruction::RevealOddCastOrDraw
-                | Instruction::ImpulseCastOrDamage(_)
-        ) && self
-            .resolution_cursor()
-            .is_some_and(|cursor| cursor.impulse.decided)
-        {
-            return Ok(false);
-        }
         match instruction {
-            Instruction::TemptWithTokens { creation, phase } => {
-                self.progress_token_offer(creation, *phase)?
-            }
-            Instruction::ChooseAndReturnOwnGraveyardCardsByType => {
-                let cursor = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let chooser = self.resolving_player(ResolvingPlayer::Controller)?;
-                self.pending_work =
-                    Some(PendingWork::OptionalEffect(Box::new(OptionalEffectWork {
-                        cursor,
-                        chooser,
-                        options: [
-                            CardType::Artifact,
-                            CardType::Battle,
-                            CardType::Creature,
-                            CardType::Enchantment,
-                            CardType::Land,
-                            CardType::Planeswalker,
-                        ]
-                        .into_iter()
-                        .map(OptionalEffectChoice::PermanentType)
-                        .collect(),
-                        rebound_or_buyback: false,
-                        cast: None,
-                    })));
-            }
-            Instruction::OrderArtifactCreatureLandSacrifices => {
-                use CardType::{Artifact, Creature, Land};
-                let cursor = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let chooser = self.resolving_player(ResolvingPlayer::Controller)?;
-                self.pending_work =
-                    Some(PendingWork::OptionalEffect(Box::new(OptionalEffectWork {
-                        cursor,
-                        chooser,
-                        options: [
-                            [Artifact, Creature, Land],
-                            [Artifact, Land, Creature],
-                            [Creature, Artifact, Land],
-                            [Creature, Land, Artifact],
-                            [Land, Artifact, Creature],
-                            [Land, Creature, Artifact],
-                        ]
-                        .into_iter()
-                        .map(OptionalEffectChoice::PermanentTypeOrder)
-                        .collect(),
-                        rebound_or_buyback: false,
-                        cast: None,
-                    })));
-            }
-            Instruction::OfferOpponentsDamage => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let mut cursor = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                if cursor.damage_offer_opponents.is_none() {
-                    let opponents = self
-                        .combat_rules
-                        .opponents(self.window.participants(), entry.controller())?;
-                    cursor.damage_offer_opponents = Some(
-                        self.window
-                            .apnap_players()?
-                            .filter(|p| opponents.contains(p))
-                            .collect(),
-                    );
-                }
-                if let Some(chooser) = cursor
-                    .damage_offer_opponents
-                    .as_ref()
-                    .and_then(|players| players.front())
-                    .copied()
-                {
-                    self.pending_work =
-                        Some(PendingWork::OptionalEffect(Box::new(OptionalEffectWork {
-                            cursor,
-                            chooser,
-                            options: [OptionalEffectChoice::Take, OptionalEffectChoice::Decline]
-                                .into(),
-                            rebound_or_buyback: false,
-                            cast: None,
-                        })));
-                } else {
-                    self.set_instruction(cursor.instruction + 3)?;
-                }
-            }
-            Instruction::RevealSharedTypeCreatureCastOrBottom
-            | Instruction::RevealOddCastOrDraw
-            | Instruction::ImpulseCastOrDamage(_)
-            | Instruction::ResolveCounterKeyword(
+            Instruction::ResolveCounterKeyword(
                 crate::program::CounterKeyword::SuspendLastCounter,
             )
             | Instruction::FlipCoin { .. }
@@ -2000,7 +1724,6 @@ impl EffectWindow {
             | Instruction::MiracleCast(_)
             | Instruction::CastFoundSpell(_)
             | Instruction::CastDefeatedSiege
-            | Instruction::CastTargetGraveyardInstant
             | Instruction::ReboundCast(_)
             | Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
@@ -2086,40 +1809,7 @@ impl EffectWindow {
                         if matches!(instruction, Instruction::Cascade) {
                             self.exile_for_cascade(&cursor, append)?;
                         }
-                        if matches!(
-                            instruction,
-                            Instruction::RevealSharedTypeCreatureCastOrBottom
-                                | Instruction::RevealOddCastOrDraw
-                        ) {
-                            let player = self.resolving_player(ResolvingPlayer::Controller)?;
-                            if let Some(&id) = self.window.cards().library(player).first() {
-                                self.resolution_cursor_mut()
-                                    .ok_or(EffectError::WrongResolutionFrame)?
-                                    .impulse
-                                    .revealed_library_card = Some(id);
-                                let object = self
-                                    .window
-                                    .cards()
-                                    .get(id)
-                                    .ok_or(EffectError::UnknownObject)?
-                                    .clone();
-                                let before = self.rules_snapshot(None)?;
-                                self.emit_from(crate::occurrence::EventCause::Instruction {entry:cursor.entry,instruction:cursor.instruction},&before,None,append,|_,_,_|Ok(vec![crate::occurrence::RulesOccurrence::LibraryCardRevealed {object}]))?;
-                            }
-                        }
                         let Some(cast) = self.exiled_cast_offer(instruction)? else {
-                            if matches!(
-                                instruction,
-                                Instruction::RevealSharedTypeCreatureCastOrBottom
-                                    | Instruction::RevealOddCastOrDraw
-                                    | Instruction::ImpulseCastOrDamage(_)
-                            ) {
-                                self.resolution_cursor_mut()
-                                    .ok_or(EffectError::WrongResolutionFrame)?
-                                    .impulse
-                                    .decided = true;
-                                return Ok(true);
-                            }
                             if matches!(instruction, Instruction::MadnessCast) {
                                 self.finish_declined_madness(&cursor, append)?;
                             }
@@ -2142,51 +1832,6 @@ impl EffectWindow {
                         options,
                     })));
                 self.skip_unpayable_optional_after_departure()?;
-            }
-            Instruction::OfferVariablePayment { each_player } => {
-                let controller = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .controller();
-                let mut cursor = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                if cursor.impulse.contribution_seats.is_none() {
-                    let mut seats = self.window.apnap_players()?.collect::<Vec<_>>();
-                    let start = seats
-                        .iter()
-                        .position(|player| *player == controller)
-                        .ok_or(EffectError::WrongResolutionFrame)?;
-                    seats.rotate_left(start);
-                    if !each_player {
-                        seats.truncate(1);
-                    }
-                    cursor.impulse.contribution_seats = Some(seats.into());
-                }
-                let payer = *cursor
-                    .impulse
-                    .contribution_seats
-                    .as_ref()
-                    .and_then(|seats| seats.front())
-                    .ok_or(EffectError::WrongResolutionFrame)?;
-                let index = cursor.instruction;
-                self.start_resolution_payment(
-                    ResolutionPaymentWork {
-                        variable: true,
-                        defines_x: false,
-                        x_factor: 1.into(),
-                        record_last_action: false,
-                        restricted_colors: None,
-                        cursor,
-                        payer,
-                        cost: ManaCost::generic(0.into()),
-                        paid_destination: index + 1,
-                        declined_destination: if *each_player { index + 1 } else { index + 2 },
-                    },
-                    append,
-                )?;
             }
             Instruction::OfferDynamicManaPayment {
                 payer,
@@ -2273,59 +1918,29 @@ impl EffectWindow {
                 )?;
             }
             Instruction::Myriad
-            | Instruction::CopyForOtherCreatures
-            | Instruction::CopyResolvingSpell
             | Instruction::WatchNextSpellOrLoyaltyTwice
             | Instruction::WatchNextLoyaltyCopy
-            | Instruction::ChoosePlaneswalkerTypeForCopies
             | Instruction::CopyCapturedAbility
             | Instruction::CopyOnCast(_)
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::AffectPermanentTargets { .. }
-            | Instruction::PutLibraryCohortIntoGraveyard(_)
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
-            | Instruction::AttachControlledToSource { .. }
-            | Instruction::AttachBattlefieldAurasToSource
-            | Instruction::EnterHandOrGraveyardAurasAttachedToSource
             | Instruction::ReturnDelayedGraveyardToHand(_)
-            | Instruction::ExileForBlackToken { .. }
-            | Instruction::ExileForSubtypeToken(_)
-            | Instruction::GiveEquippedCreatureToUpkeepPlayer
-            | Instruction::CopyCreatureExiledForAbility
             | Instruction::DamageFromGrantingPermanent { .. }
-            | Instruction::CopyEntrantAsArtifact
-            | Instruction::ReplaceSourceCreatedTokens
-            | Instruction::CopyEntrantOnceEachTurn
-            | Instruction::CopyCreatureAsToken
-            | Instruction::CopyDifferentlyNamedTokens
             | Instruction::Populate
-            | Instruction::CopyOtherControlledNontokensAsEntryHost
             | Instruction::Bolster(_)
-            | Instruction::CreateArmyIfAbsent { .. }
             | Instruction::Amass { .. }
-            | Instruction::UntapUpTo { .. }
-            | Instruction::ChooseVowedCreatures
-            | Instruction::ChooseCreaturesToKeep
-            | Instruction::DestroyOtherCreatures
-            | Instruction::SacrificeOtherCreatures
-            | Instruction::ExileFromHandOrBattlefield(_)
-            | Instruction::ExileRelatedHandCardForPlay
-            | Instruction::PayLifeOrSacrificeCreatures
-            | Instruction::ChooseOtherControlledCreature { .. }
             | Instruction::Sacrifice { .. }
             | Instruction::SacrificeRandomUntilLand
-            | Instruction::SacrificeToContinue { .. }
             | Instruction::Discard { .. }
-            | Instruction::SetControlledCreatureSizeToHand
             | Instruction::ExileTopPlay { .. }
             | Instruction::LookTopChoose { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
-            | Instruction::GiveFixedTargetControl { .. }
             | Instruction::BecomeCopy { .. }
             | Instruction::BecomeCopyFixedTargets { .. }
             | Instruction::DistributeCountersAmongTargets { .. }
@@ -2379,133 +1994,56 @@ impl EffectWindow {
             | Instruction::Blight { .. }
             | Instruction::RevealUntilMatch { .. }
             | Instruction::ResolvePowerAbility(_)
-            | Instruction::UnattachEquipmentAndProtectHost
             | Instruction::CreateTokenAndAttach { .. }
-            | Instruction::CreateTokensToFight(_)
-            | Instruction::FightPairedCreatures(_)
             | Instruction::CreateTokens { .. }
             | Instruction::CreateAttackingTokens { .. }
-            | Instruction::ExchangeLifeWithSourceToughness
-            | Instruction::ChooseTypeThenDestroyUnchosen
             | Instruction::ChooseCreatureType { .. }
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::AdditionalCombat { .. }
-            | Instruction::AdditionalCombatAfterUntappingAttackers
-            | Instruction::GrantGraveyardCastAndWatchAbilities
             | Instruction::GainCastCardAbilities { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
-            | Instruction::RemoveCreatureCounters { .. }
-            | Instruction::RevealTopAndRemoveAttackerIfForest
             | Instruction::Proliferate
-            | Instruction::DamagePlayersHalfLife
             | Instruction::DamageTargetControllersCreatures { .. }
-            | Instruction::RepeatOpponentLifeLoss
             | Instruction::CreatePreventionShield { .. }
-            | Instruction::CreateReflectingShield
             | Instruction::CreateDamageMultiplier { .. }
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
-            | Instruction::ReturnGraveyardCohort(_)
             | Instruction::DivideThreeDamageAmongTargets
-            | Instruction::DistributePlusOneCounters { .. }
             | Instruction::DamageOrderedTargets { .. }
-            | Instruction::ExileUntilOtherTargetLeaves
-            | Instruction::CopyOtherTargetAsArtifact
             | Instruction::FixedTargetClause(_)
-            | Instruction::DestroyFixedTargets
-            | Instruction::ReturnFixedTargets
             | Instruction::FightFixedTargets
             | Instruction::BindOrderedPermanents { .. }
-            | Instruction::ExileOrderedPermanent(_)
-            | Instruction::PutTargetOwnedExiledLandsOntoBattlefield
-            | Instruction::LookOpponentExileForCast { .. }
-            | Instruction::ExileFromTargetLibrary
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::MayRevealLibraryTop
             | Instruction::ManifestTop { .. }
-            | Instruction::ExileNonlandsToHandAndDamage { .. }
-            | Instruction::RevealTopHandLoseManaValue { .. }
-            | Instruction::RevealUntilLandKind
-            | Instruction::RevealOpponentChoosesCreature
-            | Instruction::RevealToNameAfterSourceShuffle(_)
-            | Instruction::WatchSmallCreatureCombatDraw(_)
-            | Instruction::WatchTargetCombatDamageDraw
-            | Instruction::ChooseOwnCommanderToCast
-            | Instruction::ChooseMatchingHandSpellToCast
-            | Instruction::SearchEachLibraryForFreeCast
             | Instruction::ChooseFoundSpell
-            | Instruction::LookTopOneRestGraveyard { .. }
-            | Instruction::RevealTopHandRestGraveyard { .. }
-            | Instruction::LookTopCreatureSharingAttachedSubtype { .. }
-            | Instruction::RevealTopCreaturesAndLandsRestBottom { .. }
-            | Instruction::RevealHandAndBottomPiles
-            | Instruction::RevealDividePiles
-            | Instruction::DivideTargetPermanentsAndSacrificePile
-            | Instruction::LookTopPlaneswalkers
-            | Instruction::RevealTopPermanentOrHand
-            | Instruction::LookTopLandBattlefieldTapped
-            | Instruction::LookTopReveal { .. }
-            | Instruction::LookTopTakeOne { .. }
-            | Instruction::BecomeMonarch(_)
             | Instruction::RequireCondition(_)
-            | Instruction::PutEquipmentFromHandOrGraveyard
-            | Instruction::EquipNewToken
             | Instruction::Encore
-            | Instruction::RequireAttackSourceNextTurn
-            | Instruction::ChooseAttackDirection
             | Instruction::ReselectAttackDefender
             | Instruction::SetBlockDeclarations(_)
             | Instruction::AdditionalLoyaltyActivation
-            | Instruction::SacrificeCombatContributor
-            | Instruction::RevealCreatureOfSacrificedType
-            | Instruction::ExileNonlandForFormerControllers
-            | Instruction::ExileMilledCreatures { .. }
-            | Instruction::VoteForGraveyardCards { .. }
-            | Instruction::ShuffleOnePermanentPerPlayer
             | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::RevealCreatureForEachTargetController
-            | Instruction::ReturnOddGraveyardPermanentIfPaid { .. }
-            | Instruction::PutGraveyardCreatureAtMostX
-            | Instruction::PutLandFromExiledCohort
-            | Instruction::ExileTopForEachSpellType(_)
             | Instruction::ExileTopForPlay { .. }
             | Instruction::ScheduleCreatedTokenExile(_)
             | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
-            | Instruction::ReflectAttachedCreatureDamage
-            | Instruction::DestroyAttachedEnchantmentSubtype(_)
             | Instruction::GrantFlashback(_)
-            | Instruction::TapTargetWhileControllingSource
-            | Instruction::RegisterTokenLinkedExile
-            | Instruction::ReturnTokenLinkedExile
             | Instruction::ReturnEarthbentCard
             | Instruction::AddMana(_)
-            | Instruction::CreateNonlegendaryLoyaltyCopy
-            | Instruction::WeakenOpposingAttackersUntilNextTurn
-            | Instruction::PhaseOtherPlaneswalkersNextEndStep
-            | Instruction::ChooseMeldPartner(_)
-            | Instruction::ExileMeldPair
-            | Instruction::MeldExiledPair(_)
             | Instruction::PairWithCreature { .. }
-            | Instruction::ReturnOneNonlandPerOpponent
-            | Instruction::DrawRevealRemoveLoyalty
-            | Instruction::CreateReflexiveDiscardDamage
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
-            | Instruction::RemoveLoyaltyExileTopForPlay
             | Instruction::Ninjutsu
             | Instruction::Unearth
             | Instruction::EndStepCast { .. }
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
-            | Instruction::ScheduleGraveyardReturnAtEndStep(_)
-            | Instruction::ReturnDyingCreatureAsForest
             | Instruction::ReturnDelayedGraveyardCard(_)
             | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedPermanentToHand(_)
@@ -2521,40 +2059,17 @@ impl EffectWindow {
             | Instruction::CounterWardSource
             | Instruction::CounterTriggeringStackObject
             | Instruction::Attach(_)
-            | Instruction::ReturnUpToOneRecentGraveyardCard
-            | Instruction::ExileUpToTwoGraveyardTargetsGainLife
             | Instruction::ChooseRevealedHandCard { .. }
-            | Instruction::ReturnUpToOneOwnGraveyardCreatureToHand
-            | Instruction::DrawEachPlayerForPayments
-            | Instruction::CreateReflexiveGraveyardReturn
             | Instruction::ReturnGraveyardCreatureWithCorpse(_)
-            | Instruction::ReturnRandomLinkedExile
-            | Instruction::ReturnLinkedSearchCards
-            | Instruction::ExileTargetUntilNonlandForFreeCast
-            | Instruction::ExileTopRepeatOnPermanentEntry
-            | Instruction::ShuffleTargetGraveyardCards { .. }
-            | Instruction::ExileCreaturesAndPlaneswalkersBelowRevealedManaValue
-            | Instruction::CastLinkedSpellMatchingX
-            | Instruction::DestroyDamagedPlayersNonlandsAtX
-            | Instruction::DestroyNonlandsAtSourceChargeCount
-            | Instruction::AddCounterAndDischargeOnResolution(_)
-            | Instruction::ExileCreatureAtMostRevealedPower
-            | Instruction::ImprintTargetLand
-            | Instruction::ImprintTargetCreature
-            | Instruction::ExileTargetAsAbilityDonor
-            | Instruction::ExileTargetUntilOpponentMonarch
             | Instruction::CounterSpellToExile
             | Instruction::CounterSpellToLibrary { .. }
             | Instruction::CounterSpell
             | Instruction::GainControlOfSpell
             | Instruction::ChangeOnlyTarget
-            | Instruction::LoseLifeEqualToTargetSpellManaValue
             | Instruction::ChooseNewTargets
-            | Instruction::FightSourceWithTarget
             | Instruction::CopyAbility
             | Instruction::CopySpell
             | Instruction::CopyTargetToSource { .. }
-            | Instruction::AnimateTargetAsCountedCreature { .. }
             | Instruction::Earthbend { .. }
             | Instruction::GrantProtectionChosenColor(_)
             | Instruction::SearchLibrary { .. }
@@ -2570,12 +2085,10 @@ impl EffectWindow {
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
             | Instruction::MoveCounters { .. }
-            | Instruction::EmpowerJace { .. }
             | Instruction::CounterMatchingStackObjects { .. }
             | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::AddManaForPlayer { .. }
-            | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::AttachFixedTargets => return Ok(false),
+            | Instruction::SelectExtremeLifePlayer { .. } => return Ok(false),
         }
         Ok(true)
     }
@@ -2780,119 +2293,13 @@ impl EffectWindow {
                 .and_then(StackPayload::instructions)
                 .and_then(|program| program.get(frame.instruction))
                 .ok_or(EffectError::InconsistentProgram)?;
-            let is_impulse = matches!(
-                instruction,
-                Instruction::RevealSharedTypeCreatureCastOrBottom
-                    | Instruction::RevealOddCastOrDraw
-                    | Instruction::ImpulseCastOrDamage(_)
-            );
             let is_madness = matches!(instruction, Instruction::MadnessCast);
             match instruction {
-                Instruction::ChooseAndReturnOwnGraveyardCardsByType => {
-                    let OptionalEffectChoice::PermanentType(kind) = choice else {
-                        return Err(EffectError::IllegalOptionalEffect);
-                    };
-                    let Some(StackPayload::Instructions(payload)) =
-                        next.payloads.get_mut(&frame.entry)
-                    else {
-                        return Err(EffectError::InconsistentProgram);
-                    };
-                    payload.body.instructions[frame.instruction] =
-                        Instruction::ZoneOp(Box::new(crate::toolbox::ZoneOpSpec::move_all(
-                            crate::toolbox::ObjectQuery::zone(
-                                crate::toolbox::QueryZone::Graveyard(Box::new(
-                                    crate::toolbox::PlayerSelector::Resolving(
-                                        crate::program::ResolvingPlayer::Controller,
-                                    ),
-                                )),
-                                crate::program::ObjectFilter::from_clause(
-                                    crate::program::ObjectClause::any().any_types(
-                                        crate::program::CardTypeMask::from_card_type(kind),
-                                    ),
-                                ),
-                            ),
-                            crate::toolbox::ZoneDest::Hand,
-                        )));
-                    continue_current_instruction = true;
-                    frame.instruction
-                }
-                Instruction::OrderArtifactCreatureLandSacrifices => {
-                    let OptionalEffectChoice::PermanentTypeOrder(order) = choice else {
-                        return Err(EffectError::IllegalOptionalEffect);
-                    };
-                    let operations: Vec<_> = order
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, kind)| Instruction::Sacrifice {
-                            players: crate::program::AffectedPlayers::EachPlayer,
-                            amount: ValueExpr::Literal(RulesInteger::from_usize(index + 1)),
-                            filter: crate::program::PermanentTypeFilter {
-                                any_types: BTreeSet::new(),
-                                required_types: [kind].into(),
-                                forbidden_types: BTreeSet::new(),
-                                object_filter: None,
-                            },
-                        })
-                        .collect();
-                    let Some(StackPayload::Instructions(payload)) =
-                        next.payloads.get_mut(&frame.entry)
-                    else {
-                        return Err(EffectError::InconsistentProgram);
-                    };
-                    payload.expand_instruction(frame.instruction, false, operations);
-                    continue_current_instruction = true;
-                    frame.instruction
-                }
-                Instruction::OfferOpponentsDamage => {
-                    let asked = work
-                        .cursor
-                        .damage_offer_opponents
-                        .as_mut()
-                        .and_then(|players| players.pop_front())
-                        .ok_or(EffectError::WrongResolutionFrame)?;
-                    if asked != actor {
-                        return Err(EffectError::WrongChooser);
-                    }
-                    if choice == OptionalEffectChoice::Take {
-                        work.cursor.chosen_opponent = Some(asked);
-                        frame.instruction + 1
-                    } else {
-                        continue_current_instruction = true;
-                        frame.instruction
-                    }
-                }
-                Instruction::ExileTopRepeatOnPermanentEntry
-                    if choice == OptionalEffectChoice::Take =>
-                {
-                    work.cursor.impulse.decided = true;
-                    continue_current_instruction = true;
-                    frame.instruction
-                }
-                Instruction::ExileTopRepeatOnPermanentEntry => frame.instruction + 1,
-                Instruction::TemptWithTokens {
-                    phase: crate::token::TemptingTokenPhase::Opponents,
-                    ..
-                } => {
-                    let offer = work
-                        .cursor
-                        .tempting_token_offer
-                        .as_mut()
-                        .ok_or(EffectError::WrongResolutionFrame)?;
-                    offer
-                        .replies
-                        .push((actor, choice == OptionalEffectChoice::Take));
-                    continue_current_instruction = true;
-                    frame.instruction
-                }
-                Instruction::RevealSharedTypeCreatureCastOrBottom
-                | Instruction::RevealOddCastOrDraw
-                | Instruction::ImpulseCastOrDamage(_)
-                | Instruction::Cascade
+                Instruction::Cascade
                 | Instruction::MadnessCast
                 | Instruction::MiracleCast(_)
                 | Instruction::CastFoundSpell(_)
                 | Instruction::CastDefeatedSiege
-                | Instruction::CastTargetGraveyardInstant
                 | Instruction::ReboundCast(_)
                 | Instruction::ResolveCounterKeyword(
                     crate::program::CounterKeyword::SuspendLastCounter,
@@ -2946,17 +2353,10 @@ impl EffectWindow {
                     } else if is_madness {
                         next.finish_declined_madness(&work.cursor, &mut append)?;
                     }
-                    if is_impulse {
-                        work.cursor.impulse.decided = true;
-                        work.cursor.impulse.cast = choice == OptionalEffectChoice::Take;
-                        continue_current_instruction = true;
-                        frame.instruction
-                    } else {
-                        frame
-                            .instruction
-                            .checked_add(1)
-                            .ok_or(EffectError::InconsistentProgram)?
-                    }
+                    frame
+                        .instruction
+                        .checked_add(1)
+                        .ok_or(EffectError::InconsistentProgram)?
                 }
                 Instruction::OfferSourceCounters {
                     amount,

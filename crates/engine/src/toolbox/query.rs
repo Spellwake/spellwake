@@ -21,6 +21,8 @@ use spellwake_contracts::creature_types::CreatureTypeVocabulary;
 pub enum PlayerSelector {
     /// Single player resolved by the standard resolution player reference.
     Resolving(ResolvingPlayer),
+    /// Explicit seat identity (used for internal/delayed triggers such as monarch combat steal).
+    Fixed(crate::priority::SeatId),
     /// Player group (each player, each opponent, controller, etc.).
     Group(AffectedPlayers),
     /// Players bound in [`crate::toolbox::ExecEnv`] (or controllers of bound objects).
@@ -43,7 +45,7 @@ impl PlayerSelector {
                     | ResolvingPlayer::TargetController
                     | ResolvingPlayer::TargetOwner
             ),
-            Self::Group(_) | Self::Bound(_) => false,
+            Self::Group(_) | Self::Bound(_) | Self::Fixed(_) => false,
             Self::OwnersOf(q) | Self::ControllersOf(q) => q.uses_target(),
         }
     }
@@ -57,7 +59,7 @@ impl PlayerSelector {
         vocabulary: &CreatureTypeVocabulary,
     ) -> Result<(), DefinitionError> {
         match self {
-            Self::Resolving(_) | Self::Group(_) | Self::Bound(_) => Ok(()),
+            Self::Resolving(_) | Self::Group(_) | Self::Bound(_) | Self::Fixed(_) => Ok(()),
             Self::OwnersOf(q) | Self::ControllersOf(q) => q.validate_vocabulary(vocabulary),
         }
     }

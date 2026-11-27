@@ -1200,22 +1200,6 @@ impl DamageState {
         self.next_shield = next;
         Ok(shield)
     }
-    pub(crate) fn add_reflecting_shield(
-        &mut self,
-        creator: StackEntryId,
-        player: SeatId,
-        amount: RulesInteger,
-        reflection: DamageReflection,
-    ) -> Result<PreventionShield, DamageError> {
-        let shield = self.add_shield(
-            creator,
-            DamageEffectTarget::PlayerAndPermanents(player),
-            amount,
-        )?;
-        self.reflections.insert(shield.id, reflection);
-        Ok(shield)
-    }
-
     pub(crate) fn reflection(&self, id: PreventionShieldId) -> Option<&DamageReflection> {
         self.reflections.get(&id)
     }

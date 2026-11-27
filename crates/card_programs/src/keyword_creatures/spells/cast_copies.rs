@@ -7,10 +7,6 @@ pub(super) fn body(
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<ExecutableBody> {
     let (target, instructions) = match text {
-        "Search target player's library for a card and exile it. Then that player shuffles." => (
-            BodyTarget::SinglePlayer,
-            vec![Instruction::ExileFromTargetLibrary],
-        ),
         "Target player mills three cards." => (
             BodyTarget::SinglePlayer,
             vec![Instruction::Mill {

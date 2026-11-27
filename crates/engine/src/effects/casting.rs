@@ -1514,18 +1514,11 @@ impl EffectWindow {
         {
             return Err(EffectError::InvalidCastResource);
         }
-        let one_per_player = payload.body().is_some_and(|body| {
-            body.instructions.first() == Some(&Instruction::ShuffleOnePermanentPerPlayer)
-        });
         let one_per_opponent = matches!(target_contract, BodyTarget::FilteredPermanent(filter) if filter.is_opposing_even_mana_value());
         let target_bounds = payload
             .body()
             .and_then(ExecutableBody::permanent_target_bounds)
             .map(|bounds| {
-                if one_per_player {
-                    let seats = self.window.participants().len();
-                    return (seats, seats);
-                }
                 if payload.body().is_some_and(|body| {
                     body.instructions == [Instruction::ReturnChosenXGraveyardCreatures]
                         || body.has_x_target_count()
@@ -1653,7 +1646,7 @@ impl EffectWindow {
                         .map(|(choice, &share)| (choice.id, share)),
                 );
             }
-            if one_per_player || one_per_opponent {
+            if one_per_opponent {
                 let StackPayload::Instructions(bound) = &mut payload else {
                     return Err(EffectError::InconsistentProgram);
                 };

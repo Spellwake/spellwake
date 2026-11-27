@@ -30,9 +30,6 @@ fn referenced(
     if body.instructions.iter().any(|instruction| {
         matches!(
             instruction,
-            Instruction::LookTopCreatureSharingAttachedSubtype { .. }
-        ) || matches!(
-            instruction,
             Instruction::MutateObject(spec)
                 if matches!(spec.source, crate::toolbox::ObjectQuery::AttachedHost)
         ) || matches!(
