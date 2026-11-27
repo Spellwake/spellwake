@@ -1797,3 +1797,331 @@ fn v2_wave4_compositional_grammar_deep_ir_assertions() {
             )
     ));
 }
+
+#[test]
+fn v2_wave5_compositional_grammar_deep_ir_assertions() {
+    use spellwake_oracle_compiler::v2::ir::{
+        CastPermissionMode, ConditionExpr, ConditionFlag, DamageReplacement, ObjectStateAction,
+        ReplacementRuleKind, StaticFlagKind, SubjectStaticRule, TriggerModifierKind,
+        VisibilityKind,
+    };
+
+    let vocab = v2_vocab();
+
+    // 20 real Wave 5 cards exercising consolidated orthogonal IR primitives and compositional grammar
+    let wave5_cards: &[(&str, &str, &str)] = &[
+        (
+            "Birthing Pod",
+            "Artifact",
+            "{1}{G/P}, {T}, Sacrifice a creature: Search your library for a creature card with mana value equal to 1 plus the sacrificed creature's mana value, put that card onto the battlefield, then shuffle. Activate only as a sorcery.",
+        ),
+        (
+            "Worship",
+            "Enchantment",
+            "If you control a creature, damage that would reduce your life total to less than 1 reduces it to 1 instead.",
+        ),
+        (
+            "Contamination",
+            "Enchantment",
+            "At the beginning of your upkeep, sacrifice Contamination unless you sacrifice a creature.\nIf a land is tapped for mana, it produces {B} instead of any other type and amount.",
+        ),
+        (
+            "Isshin, Two Heavens as One",
+            "Legendary Creature — Human Samurai",
+            "If a creature attacking causes a triggered ability of a permanent you control to trigger, that ability triggers an additional time.",
+        ),
+        (
+            "Thryx, the Sudden Storm",
+            "Legendary Creature — Elemental Giant",
+            "Flash\nFlying\nSpells you cast with mana value 5 or greater cost {1} less to cast and can't be countered.",
+        ),
+        (
+            "Disallow",
+            "Instant",
+            "Counter target spell, activated ability, or triggered ability.",
+        ),
+        (
+            "Dream Prowler",
+            "Creature — Illusion",
+            "Dream Prowler can't be blocked as long as it's attacking alone.",
+        ),
+        (
+            "Stoic Sphinx",
+            "Creature — Sphinx",
+            "Flash\nFlying\nStoic Sphinx has hexproof as long as you haven't cast a spell this turn.",
+        ),
+        (
+            "Jaheira's Respite",
+            "Instant",
+            "Search your library for up to X basic land cards, where X is the number of creatures attacking you, put those cards onto the battlefield tapped, then shuffle.\nPrevent all combat damage that would be dealt this turn.",
+        ),
+        (
+            "Laccolith Titan",
+            "Creature — Beast",
+            "Whenever Laccolith Titan becomes blocked, you may have it deal damage equal to its power to target creature. If you do, Laccolith Titan assigns no combat damage this turn.",
+        ),
+        (
+            "Sanguine Statuette",
+            "Artifact",
+            "When Sanguine Statuette enters, create a Blood token.\nWhenever you sacrifice a Blood token, you may have Sanguine Statuette become a 3/3 Vampire artifact creature with haste until end of turn.",
+        ),
+        (
+            "Band Together",
+            "Instant",
+            "Up to two target creatures you control each deal damage equal to their power to another target creature.",
+        ),
+        (
+            "Jaws of Defeat",
+            "Enchantment",
+            "Whenever a creature you control enters, target opponent loses life equal to the difference between that creature's power and its toughness.",
+        ),
+        (
+            "Gingerbrute",
+            "Artifact Creature — Food Golem",
+            "Haste\n{1}: Gingerbrute can't be blocked this turn except by creatures with haste.\n{2}, {T}, Sacrifice Gingerbrute: You gain 3 life.",
+        ),
+        (
+            "Exotic Orchard",
+            "Land",
+            "{T}: Add one mana of any color that a land an opponent controls could produce.",
+        ),
+        (
+            "Swift Warkite",
+            "Creature — Dragon",
+            "Flying\nWhen Swift Warkite enters, you may put a creature card with mana value 3 or less from your hand or graveyard onto the battlefield. That creature gains haste. Return it to your hand at the beginning of the next end step.",
+        ),
+        (
+            "Repay in Kind",
+            "Sorcery",
+            "Each player's life total becomes the lowest life total among all players.",
+        ),
+        (
+            "Crown of Vigor",
+            "Enchantment — Aura",
+            "Enchant creature\nEnchanted creature gets +1/+1.\nSacrifice Crown of Vigor: Enchanted creature and other creatures that share a creature type with it get +1/+1 until end of turn.",
+        ),
+        (
+            "Nezumi Graverobber",
+            "Creature — Rat Rogue",
+            "{1}{B}: Exile target card from an opponent's graveyard. If no cards are in that graveyard, flip Nezumi Graverobber.",
+        ),
+        (
+            "Bolas's Citadel",
+            "Legendary Artifact",
+            "You may look at the top card of your library any time.\nYou may play lands and cast spells from the top of your library.",
+        ),
+    ];
+
+    for &(name, type_line, oracle) in wave5_cards {
+        let compiled = compile_v2_strict(name, type_line, oracle, &vocab);
+        assert!(
+            compiled.strictly_compiled,
+            "Wave 5 card `{name}` failed to compile strictly"
+        );
+    }
+
+    // Deep IR spot assertions on consolidated orthogonal primitives:
+
+    // 1. Isshin -> StaticAbility::TriggerModifier(AdditionalTriggers)
+    let isshin = compile_v2_strict(
+        "Isshin, Two Heavens as One",
+        "Legendary Creature — Human Samurai",
+        "If a creature attacking causes a triggered ability of a permanent you control to trigger, that ability triggers an additional time.",
+        &vocab,
+    );
+    assert!(matches!(
+        isshin.faces[0].statics.as_slice(),
+        [StaticAbility::TriggerModifier {
+            kind: TriggerModifierKind::AdditionalTriggers,
+            extra_count: 1,
+            ..
+        }]
+    ));
+
+    // 2. Bolas's Citadel -> VisibilityRule(LookAtTop) + ZoneCastPermission(PlayFromZone)
+    let citadel = compile_v2_strict(
+        "Bolas's Citadel",
+        "Legendary Artifact",
+        "You may look at the top card of your library any time.\nYou may play lands and cast spells from the top of your library.",
+        &vocab,
+    );
+    assert!(matches!(
+        citadel.faces[0].statics.as_slice(),
+        [
+            StaticAbility::VisibilityRule {
+                player: PlayerRef::You,
+                kind: VisibilityKind::LookAtTop(_),
+            },
+            StaticAbility::ZoneCastPermission {
+                player: PlayerRef::You,
+                mode: CastPermissionMode::PlayFromZone {
+                    top_only: true,
+                    lands: true,
+                    spells: true,
+                },
+                ..
+            }
+        ]
+    ));
+
+    // 3. Gingerbrute -> ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeBlockedExceptBy)
+    let ginger = compile_v2_strict(
+        "Gingerbrute",
+        "Artifact Creature — Food Golem",
+        "{1}: Gingerbrute can't be blocked this turn except by creatures with haste.",
+        &vocab,
+    );
+    assert!(matches!(
+        ginger.faces[0].abilities.as_slice(),
+        [Ability::Activated { body, .. }]
+            if matches!(
+                body.as_slice(),
+                [Effect::MutateObject {
+                    mutation: ObjectMutation::ApplyRule(
+                        RuleRestrictionKind::CantBeBlockedExceptBy(_)
+                    ),
+                    ..
+                }]
+            )
+    ));
+
+    // 4. Dream Prowler -> StaticAbility::RuleRestriction with trailing `as long as` condition
+    let prowler = compile_v2_strict(
+        "Dream Prowler",
+        "Creature — Illusion",
+        "Dream Prowler can't be blocked as long as it's attacking alone.",
+        &vocab,
+    );
+    assert!(matches!(
+        prowler.faces[0].statics.as_slice(),
+        [StaticAbility::RuleRestriction {
+            rule: RuleRestrictionKind::CantBeBlocked,
+            condition: Some(_),
+            ..
+        }]
+    ));
+
+    // 5. Contamination -> Replacement::Rule(ReplacementRuleKind::ManaOverride)
+    let contam = compile_v2_strict(
+        "Contamination",
+        "Enchantment",
+        "If a land is tapped for mana, it produces {B} instead of any other type and amount.",
+        &vocab,
+    );
+    assert!(matches!(
+        contam.faces[0].replacements.as_slice(),
+        [Replacement::Rule(ReplacementRuleKind::ManaOverride(_))]
+    ));
+
+    // 6. Nezumi Graverobber -> ObjectMutation::StateAction(ObjectStateAction::Flip)
+    let nezumi = compile_v2_strict(
+        "Nezumi Graverobber",
+        "Creature — Rat Rogue",
+        "{1}{B}: Exile target card from an opponent's graveyard. If no cards are in that graveyard, flip Nezumi Graverobber.",
+        &vocab,
+    );
+    assert!(matches!(
+        nezumi.faces[0].abilities.as_slice(),
+        [Ability::Activated { body, .. }]
+            if matches!(
+                body.get(1),
+                Some(Effect::BranchCondition { then_body, .. })
+                    if matches!(
+                        then_body.as_slice(),
+                        [Effect::MutateObject {
+                            mutation: ObjectMutation::StateAction(ObjectStateAction::Flip),
+                            ..
+                        }]
+                    )
+            )
+    ));
+
+    // 7. Repay in Kind -> Effect::AdjustLife { op: LifeOp::Set }
+    let repay = compile_v2_strict(
+        "Repay in Kind",
+        "Sorcery",
+        "Each player's life total becomes the lowest life total among all players.",
+        &vocab,
+    );
+    assert!(matches!(
+        repay.faces[0].spell_effects.as_slice(),
+        [Effect::AdjustLife {
+            player: PlayerRef::EachPlayer,
+            op: LifeOp::Set,
+            ..
+        }]
+    ));
+
+    // 8. Excruciator -> Replacement::DamageRule(DamageReplacement::UnpreventableBySource)
+    let excruc = compile_v2_strict(
+        "Excruciator",
+        "Creature — Avatar",
+        "Damage that would be dealt by Excruciator can't be prevented.",
+        &vocab,
+    );
+    assert!(matches!(
+        excruc.faces[0].replacements.as_slice(),
+        [Replacement::DamageRule(
+            DamageReplacement::UnpreventableBySource(_)
+        )]
+    ));
+
+    // 9. Dain, Lord of the Iron Hills -> ConditionFlag::HasEnduringStory + StaticAbility::AttackTax
+    let dain = compile_v2_strict(
+        "Dain, Lord of the Iron Hills",
+        "Legendary Creature — Dwarf Noble",
+        "As long as you have an enduring story, creatures can't attack you unless their controller pays {1} for each of those creatures.",
+        &vocab,
+    );
+    assert!(matches!(
+        dain.faces[0].statics.as_slice(),
+        [StaticAbility::AttackTax {
+            per_creature: true,
+            ..
+        }]
+    ));
+
+    // 10. Ori, Keeper of Songs -> ConditionFlag::HasEnduringStory in ContinuousModifyPT
+    let ori = compile_v2_strict(
+        "Ori, Keeper of Songs",
+        "Legendary Creature — Dwarf",
+        "As long as you have an enduring story, Ori gets +1/+0 and has vigilance.",
+        &vocab,
+    );
+    assert!(matches!(
+        ori.faces[0].statics.as_slice(),
+        [StaticAbility::ContinuousModifyPT {
+            condition: Some(ConditionExpr::Flag(ConditionFlag::HasEnduringStory)),
+            ..
+        }]
+    ));
+
+    // 11. Pithing Needle -> StaticAbility::GlobalFlag(StaticFlagKind::NamedSourcesCantActivate)
+    let needle = compile_v2_strict(
+        "Pithing Needle",
+        "Artifact",
+        "As Pithing Needle enters, choose a card name.\nActivated abilities of sources with the chosen name can't be activated unless they're mana abilities.",
+        &vocab,
+    );
+    assert!(matches!(
+        needle.faces[0].statics.as_slice(),
+        [StaticAbility::GlobalFlag(
+            StaticFlagKind::NamedSourcesCantActivate
+        )]
+    ));
+
+    // 12. Assault Formation -> StaticAbility::SubjectRule(SubjectStaticRule::AssignDamageByToughness)
+    let assault = compile_v2_strict(
+        "Assault Formation",
+        "Enchantment",
+        "Each creature you control assigns combat damage equal to its toughness rather than its power.",
+        &vocab,
+    );
+    assert!(matches!(
+        assault.faces[0].statics.as_slice(),
+        [StaticAbility::SubjectRule {
+            rule: SubjectStaticRule::AssignDamageByToughness,
+            ..
+        }]
+    ));
+}

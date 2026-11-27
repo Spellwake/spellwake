@@ -3,7 +3,11 @@
 use crate::v2::clause::parse_effect_sentence;
 use crate::v2::condition::parse_condition;
 use crate::v2::filter::{parse_counter_kind, parse_object_filter, parse_subject_ref};
-use crate::v2::ir::{ObjectFilter, PlayerRef, Replacement, SubjectRef, TriggerEvent, ValueExpr};
+use crate::v2::ir::{
+    DamageReplacement, ObjectFilter, PlayerActionKind, PlayerObjectTriggerKind, PlayerRef,
+    PlayerReplacementKind, PlayerTriggerKind, Replacement, ReplacementRuleKind, SubjectRef,
+    TokenReplacementKind, TriggerEvent, ValueExpr, ZoneKind,
+};
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
 use crate::v2::value::parse_value_expr;
 
@@ -11,12 +15,15 @@ use crate::v2::value::parse_value_expr;
 /// `If <event> would ..., <instead> instead`,
 /// `The next <flt> you cast this turn enters with ...`).
 pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
-    // 0. `As [~ | it] enters, <body (one or more sentences; trailing sentences may also be replacements or statics)>`
+    // 0. `As [~ | it] enters [or is turned face up] / is turned face up / transforms into ~, <body (one or more sentences)>`
     {
         let cp = ts.checkpoint();
         if ts.eat_word("as")
             && (ts.eat_tilde() || ts.eat_word("it"))
-            && ts.eat_word("enters")
+            && (ts.eat_phrase(&["enters", "or", "is", "turned", "face", "up"])
+                || ts.eat_word("enters")
+                || ts.eat_phrase(&["is", "turned", "face", "up"])
+                || (ts.eat_phrase(&["transforms", "into"]) && ts.eat_tilde()))
             && ts.eat_comma()
         {
             let mut body = Vec::new();
@@ -205,25 +212,31 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             ts.restore(item_cp);
                             break;
                         }
-                    } else if let Some(quoted) = ts.next_quoted() {
-                        let compiled = crate::v2::card::compile_face_v2(
-                            crate::FaceInput {
-                                name: "~",
-                                type_line: "Permanent",
-                                oracle_text: quoted,
-                            },
-                            ts.vocab,
-                        );
-                        if compiled.is_ok() {
-                            exceptions
-                                .push(crate::v2::ir::CopyException::AddAbility(Box::new(compiled)));
+                    } else {
+                        let qcp = ts.checkpoint();
+                        let _ = ts.eat_phrase(&["it", "has"]) || ts.eat_phrase(&["they", "have"]);
+                        if let Some(quoted) = ts.next_quoted() {
+                            let compiled = crate::v2::card::compile_face_v2(
+                                crate::FaceInput {
+                                    name: "~",
+                                    type_line: "Permanent",
+                                    oracle_text: quoted,
+                                },
+                                ts.vocab,
+                            );
+                            if compiled.is_ok() {
+                                exceptions.push(crate::v2::ir::CopyException::AddAbility(
+                                    Box::new(compiled),
+                                ));
+                            } else {
+                                ts.restore(item_cp);
+                                break;
+                            }
                         } else {
+                            ts.restore(qcp);
                             ts.restore(item_cp);
                             break;
                         }
-                    } else {
-                        ts.restore(item_cp);
-                        break;
                     }
                     let sep_cp = ts.checkpoint();
                     let had_comma = ts.eat_comma();
@@ -248,18 +261,56 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
         ts.restore(cp);
     }
 
-    // 0c. `All damage that would be dealt to <from> is dealt to <to> instead.` (Pariah)
+    // 0c. `All damage / Damage that would be dealt to <from> [by <flt>] is dealt to <to> instead.` (Pariah, Martyrs of Korlis, Veteran Bodyguard)
+    //     `Damage that would reduce your life total to less than <N> reduces it to <N> instead.` (Worship, Ali from Cairo)
+    //     `Damage that would be dealt by ~ can't be prevented.` (Excruciator)
     {
         let cp = ts.checkpoint();
-        if ts.eat_phrase(&["all", "damage", "that", "would", "be", "dealt", "to"])
-            && let Ok(from) = try_parse(ts, parse_subject_ref)
-            && ts.eat_phrase(&["is", "dealt", "to"])
-            && let Ok(to) = try_parse(ts, parse_subject_ref)
+        let _ = ts.eat_word("all");
+        if ts.eat_phrase(&[
+            "damage", "that", "would", "reduce", "your", "life", "total", "to", "less", "than",
+        ]) && let Some(floor) = ts.next_number(false)
+            && ts.eat_phrase(&["reduces", "it", "to"])
+            && ts.next_number(false).is_some()
             && ts.eat_word("instead")
         {
             let _ = ts.eat_period();
             if ts.is_eof() {
-                return Ok(Replacement::RedirectAllDamage { from, to });
+                return Ok(Replacement::Rule(ReplacementRuleKind::LifeFloor(floor)));
+            }
+        }
+        ts.restore(cp);
+        let _ = ts.eat_word("all");
+        if ts.eat_phrase(&["damage", "that", "would", "be", "dealt", "by"])
+            && let Ok(src) = try_parse(ts, parse_subject_ref)
+            && ts.eat_phrase(&["can't", "be", "prevented"])
+        {
+            let _ = ts.eat_period();
+            if ts.is_eof() {
+                return Ok(Replacement::DamageRule(
+                    DamageReplacement::UnpreventableBySource(src),
+                ));
+            }
+        }
+        ts.restore(cp);
+        let _ = ts.eat_word("all");
+        if ts.eat_phrase(&["damage", "that", "would", "be", "dealt", "to"])
+            && let Ok(from) = try_parse(ts, parse_subject_ref)
+        {
+            if ts.eat_word("by") {
+                let _ = opt(ts, parse_object_filter);
+            }
+            if ts.eat_phrase(&["is", "dealt", "to"])
+                && let Ok(to) = try_parse(ts, parse_subject_ref)
+                && ts.eat_word("instead")
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::DamageRule(DamageReplacement::RedirectAll {
+                        from,
+                        to,
+                    }));
+                }
             }
         }
         ts.restore(cp);
@@ -288,7 +339,9 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             {
                 let _ = ts.eat_period();
                 if ts.is_eof() {
-                    return Ok(Replacement::OpeningHandOnBattlefield);
+                    return Ok(Replacement::Rule(
+                        ReplacementRuleKind::OpeningHandOnBattlefield,
+                    ));
                 }
             }
             ts.restore(cp);
@@ -306,7 +359,9 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             {
                 let _ = ts.eat_period();
                 if ts.is_eof() {
-                    return Ok(Replacement::LeaveBattlefieldExileInstead);
+                    return Ok(Replacement::Rule(
+                        ReplacementRuleKind::LeaveBattlefieldExileInstead,
+                    ));
                 }
             }
             ts.restore(cp);
@@ -328,10 +383,12 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 {
                     let _ = ts.eat_period();
                     if ts.is_eof() {
-                        return Ok(Replacement::LoseLifeMultiply {
+                        return Ok(Replacement::PlayerRule {
                             player,
-                            factor: 2,
-                            during_your_turn,
+                            rule: PlayerReplacementKind::LoseLifeMultiply {
+                                factor: 2,
+                                during_your_turn,
+                            },
                         });
                     }
                 }
@@ -364,8 +421,28 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 {
                     let _ = ts.eat_period();
                     if ts.is_eof() {
-                        return Ok(Replacement::SkipExtraTurn(player));
+                        return Ok(Replacement::PlayerRule {
+                            player,
+                            rule: PlayerReplacementKind::SkipExtraTurn,
+                        });
                     }
+                }
+            }
+            ts.restore(cp);
+        }
+
+        // 1a0f. `If a land is tapped for mana, it produces {M} instead of any other type and amount.` (`Contamination`)
+        {
+            let cp = ts.checkpoint();
+            if ts.eat_phrase(&["a", "land", "is", "tapped", "for", "mana"])
+                && ts.eat_comma()
+                && ts.eat_phrase(&["it", "produces"])
+                && let Some(mc) = ts.eat_mana_cost()
+                && ts.eat_phrase(&["instead", "of", "any", "other", "type", "and", "amount"])
+            {
+                let _ = ts.eat_period();
+                if ts.is_eof() {
+                    return Ok(Replacement::Rule(ReplacementRuleKind::ManaOverride(mc)));
                 }
             }
             ts.restore(cp);
@@ -385,10 +462,12 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 {
                     let _ = ts.eat_period();
                     if ts.is_eof() {
-                        return Ok(Replacement::SkipStepReplacement {
+                        return Ok(Replacement::PlayerRule {
                             player,
-                            step: crate::ast::TurnStepAst::DrawStep,
-                            optional: false,
+                            rule: PlayerReplacementKind::SkipStep {
+                                step: crate::ast::TurnStepAst::DrawStep,
+                                optional: false,
+                            },
                         });
                     }
                 }
@@ -407,7 +486,7 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             {
                 let _ = ts.eat_period();
                 if ts.is_eof() {
-                    return Ok(Replacement::BecomesDayOnEnter);
+                    return Ok(Replacement::Rule(ReplacementRuleKind::BecomesDayOnEnter));
                 }
             }
             ts.restore(cp);
@@ -429,15 +508,18 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             {
                 let _ = ts.eat_period();
                 ts.expect_eof()?;
-                return Ok(Replacement::MultiplyTokens {
+                return Ok(Replacement::TokenRule {
                     controller: PlayerRef::You,
-                    factor: 2,
+                    filter: None,
+                    rule: TokenReplacementKind::Multiply(2),
                 });
             }
             ts.restore(cp);
             if ts.eat_phrase(&["one", "or", "more"])
                 && {
-                    let _ = ts.eat_word("creature");
+                    let _ = ts.eat_word("creature")
+                        || ts.eat_word("artifact")
+                        || ts.eat_word("enchantment");
                     ts.eat_phrase(&[
                         "tokens", "would", "be", "created", "under", "your", "control",
                     ])
@@ -449,9 +531,10 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 ]) {
                     let _ = ts.eat_period();
                     ts.expect_eof()?;
-                    return Ok(Replacement::MultiplyTokens {
+                    return Ok(Replacement::TokenRule {
                         controller: PlayerRef::You,
-                        factor: 2,
+                        filter: None,
+                        rule: TokenReplacementKind::Multiply(2),
                     });
                 }
                 if ts.eat_phrase(&[
@@ -460,9 +543,10 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 ]) {
                     let _ = ts.eat_period();
                     ts.expect_eof()?;
-                    return Ok(Replacement::MultiplyTokens {
+                    return Ok(Replacement::TokenRule {
                         controller: PlayerRef::You,
-                        factor: 3,
+                        filter: None,
+                        rule: TokenReplacementKind::Multiply(3),
                     });
                 }
                 {
@@ -474,10 +558,10 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                     {
                         let _ = ts.eat_period();
                         if ts.is_eof() {
-                            return Ok(Replacement::ReplaceTokens {
+                            return Ok(Replacement::TokenRule {
                                 controller: PlayerRef::You,
                                 filter: None,
-                                spec: Box::new(spec),
+                                rule: TokenReplacementKind::Replace(Box::new(spec)),
                             });
                         }
                     }
@@ -497,11 +581,13 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                         {
                             let _ = ts.eat_period();
                             if ts.is_eof() {
-                                return Ok(Replacement::BonusTokens {
-                                    filter: None,
+                                return Ok(Replacement::TokenRule {
                                     controller: PlayerRef::You,
-                                    bonus: Box::new(crate::v2::ir::TokenSpec::Predefined(pt)),
-                                    bonus_count: ValueExpr::Const(1),
+                                    filter: None,
+                                    rule: TokenReplacementKind::Bonus {
+                                        spec: Box::new(crate::v2::ir::TokenSpec::Predefined(pt)),
+                                        count: ValueExpr::Const(1),
+                                    },
                                 });
                             }
                         }
@@ -513,11 +599,13 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                     {
                         let _ = ts.eat_period();
                         if ts.is_eof() {
-                            return Ok(Replacement::BonusTokens {
-                                filter: None,
+                            return Ok(Replacement::TokenRule {
                                 controller: PlayerRef::You,
-                                bonus: Box::new(spec),
-                                bonus_count,
+                                filter: None,
+                                rule: TokenReplacementKind::Bonus {
+                                    spec: Box::new(spec),
+                                    count: bonus_count,
+                                },
                             });
                         }
                     }
@@ -547,15 +635,17 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                     if ts.eat_word("token") || ts.eat_word("tokens") {
                         let _ = ts.eat_period();
                         if ts.is_eof() {
-                            return Ok(Replacement::BonusTokens {
+                            return Ok(Replacement::TokenRule {
+                                controller: PlayerRef::You,
                                 filter: Some(ObjectFilter {
                                     token: Some(true),
                                     subtypes: vec![format!("{pt:?}")],
                                     ..Default::default()
                                 }),
-                                controller: PlayerRef::You,
-                                bonus: Box::new(crate::v2::ir::TokenSpec::Predefined(pt2)),
-                                bonus_count: ValueExpr::Const(1),
+                                rule: TokenReplacementKind::Bonus {
+                                    spec: Box::new(crate::v2::ir::TokenSpec::Predefined(pt2)),
+                                    count: ValueExpr::Const(1),
+                                },
                             });
                         }
                     }
@@ -586,8 +676,10 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             {
                 let _ = ts.eat_period();
                 ts.expect_eof()?;
-                return Ok(Replacement::MultiplyCounters {
+                return Ok(Replacement::CounterRule {
                     filter: flt,
+                    kind: None,
+                    add: 0,
                     factor: 2,
                 });
             }
@@ -607,10 +699,9 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                     if ts.eat_phrase(&["twice", "that", "much", "life", "instead"]) {
                         let _ = ts.eat_period();
                         ts.expect_eof()?;
-                        let rep = Replacement::ModifyLifeGain {
+                        let rep = Replacement::PlayerRule {
                             player: PlayerRef::You,
-                            add: 0,
-                            factor: 2,
+                            rule: PlayerReplacementKind::ModifyLifeGain { add: 0, factor: 2 },
                         };
                         return Ok(if let Some(condition) = while_cond {
                             Replacement::ConditionalEnters {
@@ -627,10 +718,12 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                     {
                         let _ = ts.eat_period();
                         ts.expect_eof()?;
-                        let rep = Replacement::ModifyLifeGain {
+                        let rep = Replacement::PlayerRule {
                             player: PlayerRef::You,
-                            add: i16::try_from(n).unwrap_or(1),
-                            factor: 1,
+                            rule: PlayerReplacementKind::ModifyLifeGain {
+                                add: i16::try_from(n).unwrap_or(1),
+                                factor: 1,
+                            },
                         };
                         return Ok(if let Some(condition) = while_cond {
                             Replacement::ConditionalEnters {
@@ -684,8 +777,10 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             {
                                 let _ = ts.eat_period();
                                 ts.expect_eof()?;
-                                return Ok(Replacement::MultiplyCounters {
+                                return Ok(Replacement::CounterRule {
                                     filter: flt,
+                                    kind: None,
+                                    add: 0,
                                     factor: 2,
                                 });
                             }
@@ -710,10 +805,11 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             {
                                 let _ = ts.eat_period();
                                 ts.expect_eof()?;
-                                return Ok(Replacement::ModifyCountersPlaced {
+                                return Ok(Replacement::CounterRule {
                                     filter: flt,
                                     kind,
                                     add: i16::try_from(n).unwrap_or(1),
+                                    factor: 1,
                                 });
                             }
                         }
@@ -809,12 +905,14 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                                 if ts.eat_word("instead") {
                                     let _ = ts.eat_period();
                                     if ts.is_eof() {
-                                        return Ok(Replacement::DamageCap {
-                                            source: Some(src_flt),
-                                            target,
-                                            threshold,
-                                            capped_to,
-                                        });
+                                        return Ok(Replacement::DamageRule(
+                                            DamageReplacement::Cap {
+                                                source: Some(src_flt),
+                                                target,
+                                                threshold,
+                                                capped_to,
+                                            },
+                                        ));
                                     }
                                 }
                             }
@@ -826,11 +924,11 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                         {
                             let _ = ts.eat_period();
                             ts.expect_eof()?;
-                            return Ok(Replacement::PreventAllButDamage {
+                            return Ok(Replacement::DamageRule(DamageReplacement::PreventAllBut {
                                 source: Some(src_flt),
                                 target,
                                 remaining: u16::try_from(n).unwrap_or(1),
-                            });
+                            }));
                         }
                         {
                             let pcp = ts.checkpoint();
@@ -848,11 +946,13 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             {
                                 let _ = ts.eat_period();
                                 if ts.is_eof() {
-                                    return Ok(Replacement::PreventFixedDamage {
-                                        source: Some(src_flt),
-                                        target,
-                                        amount,
-                                    });
+                                    return Ok(Replacement::DamageRule(
+                                        DamageReplacement::PreventFixed {
+                                            source: Some(src_flt),
+                                            target,
+                                            amount,
+                                        },
+                                    ));
                                 }
                             }
                             ts.restore(pcp);
@@ -866,11 +966,14 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             };
                             let _ = ts.eat_period();
                             if ts.is_eof() {
-                                return Ok(Replacement::PreventDamageWithRider {
-                                    target: target.unwrap_or(SubjectRef::Player(PlayerRef::You)),
-                                    condition: None,
-                                    rider,
-                                });
+                                return Ok(Replacement::DamageRule(
+                                    DamageReplacement::PreventWithRider {
+                                        target: target
+                                            .unwrap_or(SubjectRef::Player(PlayerRef::You)),
+                                        condition: None,
+                                        rider,
+                                    },
+                                ));
                             }
                         }
                         if ts.eat_phrase(&["it", "deals"]) || ts.eat_phrase(&["they", "deal"]) {
@@ -882,11 +985,13 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                                 {
                                     let _ = ts.eat_period();
                                     if ts.is_eof() {
-                                        return Ok(Replacement::RedirectAllDamage {
-                                            from: target
-                                                .unwrap_or(SubjectRef::Player(PlayerRef::You)),
-                                            to,
-                                        });
+                                        return Ok(Replacement::DamageRule(
+                                            DamageReplacement::RedirectAll {
+                                                from: target
+                                                    .unwrap_or(SubjectRef::Player(PlayerRef::You)),
+                                                to,
+                                            },
+                                        ));
                                     }
                                 }
                                 ts.restore(rcp);
@@ -936,11 +1041,13 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                                         if ts.eat_word("instead") {
                                             let _ = ts.eat_period();
                                             if ts.is_eof() {
-                                                return Ok(Replacement::ModifyDamageDynamic {
-                                                    source: Some(src_flt),
-                                                    target,
-                                                    add,
-                                                });
+                                                return Ok(Replacement::DamageRule(
+                                                    DamageReplacement::ModifyDynamic {
+                                                        source: Some(src_flt),
+                                                        target,
+                                                        add,
+                                                    },
+                                                ));
                                             }
                                         }
                                     }
@@ -984,10 +1091,11 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             ts.restore(cp);
         }
 
-        // 1f. `If [combat] damage would be dealt to <subj> [while <cond>], prevent that damage [and/, <eff>] | <instead>.`
+        // 1f. `If [combat|noncombat] damage would be dealt to <subj> [while <cond>], prevent that damage [and/, <eff>] | <instead>.`
         {
             let cp = ts.checkpoint();
             let combat_only = ts.eat_word("combat");
+            let _ = ts.eat_word("noncombat");
             if ts.eat_phrase(&["damage", "would", "be", "dealt", "to"])
                 && let Ok(target) = try_parse(ts, parse_subject_ref)
             {
@@ -1003,23 +1111,27 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             let rider = parse_effect_sentence(ts)?;
                             let _ = ts.eat_period();
                             if ts.is_eof() {
-                                return Ok(Replacement::PreventDamageWithRider {
-                                    target,
-                                    condition: cond,
-                                    rider,
-                                });
+                                return Ok(Replacement::DamageRule(
+                                    DamageReplacement::PreventWithRider {
+                                        target,
+                                        condition: cond,
+                                        rider,
+                                    },
+                                ));
                             }
                         } else {
                             let _ = ts.eat_period();
                             if ts.is_eof() {
                                 return Ok(if cond.is_some() {
-                                    Replacement::PreventDamageWithRider {
+                                    Replacement::DamageRule(DamageReplacement::PreventWithRider {
                                         target,
                                         condition: cond,
                                         rider: Vec::new(),
-                                    }
+                                    })
                                 } else {
-                                    Replacement::PreventDamageReplacement { target }
+                                    Replacement::DamageRule(DamageReplacement::PreventAll {
+                                        target,
+                                    })
                                 });
                             }
                         }
@@ -1048,10 +1160,12 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 if ts.eat_phrase(&["skip", "that", "step", "instead"]) {
                     let _ = ts.eat_period();
                     if ts.is_eof() {
-                        return Ok(Replacement::SkipStepReplacement {
+                        return Ok(Replacement::PlayerRule {
                             player: PlayerRef::You,
-                            step: crate::ast::TurnStepAst::DrawStep,
-                            optional,
+                            rule: PlayerReplacementKind::SkipStep {
+                                step: crate::ast::TurnStepAst::DrawStep,
+                                optional,
+                            },
                         });
                     }
                 }
@@ -1114,7 +1228,10 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 let _ = ts.eat_period();
                 if ts.is_eof() {
                     return Ok(Replacement::EventInstead {
-                        event: TriggerEvent::CardDrawn { player },
+                        event: TriggerEvent::PlayerAction {
+                            player,
+                            action: PlayerTriggerKind::CardDrawn,
+                        },
                         instead,
                     });
                 }
@@ -1133,8 +1250,9 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 let _ = ts.eat_period();
                 if ts.is_eof() {
                     return Ok(Replacement::EventInstead {
-                        event: TriggerEvent::CardDrawn {
+                        event: TriggerEvent::PlayerAction {
                             player: PlayerRef::AnyOpponent,
+                            action: PlayerTriggerKind::CardDrawn,
                         },
                         instead,
                     });
@@ -1150,7 +1268,14 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 let while_cond = if ts
                     .eat_phrase(&["while", "your", "library", "has", "no", "cards", "in", "it"])
                 {
-                    Some(crate::v2::ir::ConditionExpr::LibraryEmpty(PlayerRef::You))
+                    Some(crate::v2::ir::ConditionExpr::Compare {
+                        lhs: Box::new(ValueExpr::PlayerStat {
+                            player: PlayerRef::You,
+                            stat: crate::ast::PlayerStatKind::CardsInLibrary,
+                        }),
+                        op: crate::ast::CompareOp::Eq,
+                        rhs: Box::new(ValueExpr::Const(0)),
+                    })
                 } else if ts.eat_word("while") {
                     opt(ts, parse_condition)
                 } else {
@@ -1162,8 +1287,9 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                     let _ = ts.eat_period();
                     ts.expect_eof()?;
                     let rep = Replacement::EventInstead {
-                        event: TriggerEvent::CardDrawn {
+                        event: TriggerEvent::PlayerAction {
                             player: PlayerRef::You,
+                            action: PlayerTriggerKind::CardDrawn,
                         },
                         instead,
                     };
@@ -1200,11 +1326,11 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                     {
                         let _ = ts.eat_period();
                         if ts.is_eof() {
-                            return Ok(Replacement::PreventFixedDamage {
+                            return Ok(Replacement::DamageRule(DamageReplacement::PreventFixed {
                                 source: Some(src_flt),
                                 target,
                                 amount,
-                            });
+                            }));
                         }
                     }
                 }
@@ -1222,7 +1348,10 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             {
                 let _ = ts.eat_period();
                 if ts.is_eof() {
-                    return Ok(Replacement::MultiplyMill { player, factor: 2 });
+                    return Ok(Replacement::PlayerRule {
+                        player,
+                        rule: PlayerReplacementKind::MultiplyMill { factor: 2 },
+                    });
                 }
             }
             ts.restore(cp);
@@ -1244,7 +1373,9 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                         },
                         instead: vec![crate::v2::ir::Effect::MutatePlayer {
                             player: PlayerRef::ThatPlayer,
-                            mutation: crate::v2::ir::PlayerMutation::SkipNextTurn,
+                            mutation: crate::v2::ir::PlayerMutation::Action(
+                                PlayerActionKind::SkipNextTurn,
+                            ),
                             duration: crate::v2::ir::Duration::Instant,
                         }],
                     });
@@ -1265,7 +1396,7 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             {
                 let _ = ts.eat_period();
                 if ts.is_eof() {
-                    return Ok(Replacement::ExploreAgain { filter });
+                    return Ok(Replacement::Rule(ReplacementRuleKind::ExploreAgain(filter)));
                 }
             }
             ts.restore(cp);
@@ -1321,7 +1452,9 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                                 let inner = if let Some(kws) = extra_kws {
                                     Replacement::Compound(vec![
                                         base_counters,
-                                        Replacement::EntersWithKeywords(kws),
+                                        Replacement::Rule(ReplacementRuleKind::EntersWithKeywords(
+                                            kws,
+                                        )),
                                     ])
                                 } else {
                                     base_counters
@@ -1401,9 +1534,10 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                     let _ = ts.eat_period();
                     ts.expect_eof()?;
                     return Ok(Replacement::EventInstead {
-                        event: TriggerEvent::PutIntoGraveyard {
-                            subject: subj,
+                        event: TriggerEvent::ZoneChange {
                             from,
+                            to: Some(ZoneKind::Graveyard),
+                            subject: subj,
                         },
                         instead,
                     });
@@ -1433,10 +1567,13 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                         instead
                     };
                     return Ok(Replacement::ConditionalEnters {
-                        condition: crate::v2::ir::ConditionExpr::FirstTimeEachTurn,
+                        condition: crate::v2::ir::ConditionExpr::Flag(
+                            crate::v2::ir::ConditionFlag::FirstTimeEachTurn,
+                        ),
                         inner: Box::new(Replacement::EventInstead {
-                            event: TriggerEvent::CardDrawn {
+                            event: TriggerEvent::PlayerAction {
                                 player: PlayerRef::You,
+                                action: PlayerTriggerKind::CardDrawn,
                             },
                             instead: inner_eff,
                         }),
@@ -1463,14 +1600,17 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                         instead
                     };
                     return Ok(Replacement::ConditionalEnters {
-                        condition: crate::v2::ir::ConditionExpr::FirstTimeEachTurn,
+                        condition: crate::v2::ir::ConditionExpr::Flag(
+                            crate::v2::ir::ConditionFlag::FirstTimeEachTurn,
+                        ),
                         inner: Box::new(Replacement::EventInstead {
-                            event: TriggerEvent::CreatesTokens {
+                            event: TriggerEvent::PlayerObjectEvent {
                                 player: PlayerRef::You,
-                                filter: ObjectFilter {
+                                kind: PlayerObjectTriggerKind::CreatesTokens,
+                                filter: Some(ObjectFilter {
                                     token: Some(true),
                                     ..Default::default()
-                                },
+                                }),
                             },
                             instead: inner_eff,
                         }),
@@ -1496,7 +1636,11 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             {
                 let _ = ts.eat_period();
                 if ts.is_eof() {
-                    return Ok(Replacement::RedirectNextDamage { amount, from, to });
+                    return Ok(Replacement::DamageRule(DamageReplacement::RedirectNext {
+                        amount,
+                        from,
+                        to,
+                    }));
                 }
             }
         }
@@ -1518,8 +1662,9 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                         let _ = ts.eat_period();
                         if ts.is_eof() {
                             return Ok(Replacement::EventInstead {
-                                event: TriggerEvent::CardDrawn {
+                                event: TriggerEvent::PlayerAction {
                                     player: PlayerRef::You,
+                                    action: PlayerTriggerKind::CardDrawn,
                                 },
                                 instead,
                             });
@@ -1635,17 +1780,19 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                                     || ts.eat_phrase(&["rounded", "up"]);
                                 let _ = ts.eat_period();
                                 if ts.is_eof() {
-                                    return Ok(Replacement::PreventFixedDamage {
-                                        source: Some(src_flt),
-                                        target,
-                                        amount: ValueExpr::Div {
-                                            expr: Box::new(ValueExpr::PriorActionCount(
-                                                crate::v2::ir::PriorActionKind::ThatMany,
-                                            )),
-                                            denom: 2,
-                                            rounding: crate::ast::Rounding::Down,
+                                    return Ok(Replacement::DamageRule(
+                                        DamageReplacement::PreventFixed {
+                                            source: Some(src_flt),
+                                            target,
+                                            amount: ValueExpr::Div {
+                                                expr: Box::new(ValueExpr::PriorActionCount(
+                                                    crate::v2::ir::PriorActionKind::ThatMany,
+                                                )),
+                                                denom: 2,
+                                                rounding: crate::ast::Rounding::Down,
+                                            },
                                         },
-                                    });
+                                    ));
                                 }
                             }
                             ts.restore(hcp);
@@ -1659,10 +1806,13 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             {
                                 let _ = ts.eat_period();
                                 if ts.is_eof() {
-                                    return Ok(Replacement::RedirectAllDamage {
-                                        from: target.unwrap_or(SubjectRef::Player(PlayerRef::You)),
-                                        to,
-                                    });
+                                    return Ok(Replacement::DamageRule(
+                                        DamageReplacement::RedirectAll {
+                                            from: target
+                                                .unwrap_or(SubjectRef::Player(PlayerRef::You)),
+                                            to,
+                                        },
+                                    ));
                                 }
                             }
                             ts.restore(rcp);
@@ -1680,10 +1830,13 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             {
                                 let _ = ts.eat_period();
                                 if ts.is_eof() {
-                                    return Ok(Replacement::RedirectAllDamage {
-                                        from: target.unwrap_or(SubjectRef::Player(PlayerRef::You)),
-                                        to,
-                                    });
+                                    return Ok(Replacement::DamageRule(
+                                        DamageReplacement::RedirectAll {
+                                            from: target
+                                                .unwrap_or(SubjectRef::Player(PlayerRef::You)),
+                                            to,
+                                        },
+                                    ));
                                 }
                             }
                             ts.restore(rcp);
@@ -1696,11 +1849,13 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                             {
                                 let _ = ts.eat_period();
                                 if ts.is_eof() {
-                                    return Ok(Replacement::PreventFixedDamage {
-                                        source: Some(src_flt),
-                                        target,
-                                        amount,
-                                    });
+                                    return Ok(Replacement::DamageRule(
+                                        DamageReplacement::PreventFixed {
+                                            source: Some(src_flt),
+                                            target,
+                                            amount,
+                                        },
+                                    ));
                                 }
                             }
                             ts.restore(pcp);
@@ -1708,20 +1863,22 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                         if ts.eat_phrase(&["prevent", "that", "damage"]) {
                             let _ = ts.eat_period();
                             if ts.is_eof() {
-                                return Ok(Replacement::NextDamageReplacement {
-                                    source: Some(src_flt),
-                                    target,
-                                    instead: Vec::new(),
-                                });
+                                return Ok(Replacement::DamageRule(
+                                    DamageReplacement::ReplaceNext {
+                                        source: Some(src_flt),
+                                        target,
+                                        instead: Vec::new(),
+                                    },
+                                ));
                             }
                         } else if let Ok(instead) = parse_instead_clause(ts) {
                             let _ = ts.eat_period();
                             ts.expect_eof()?;
-                            return Ok(Replacement::NextDamageReplacement {
+                            return Ok(Replacement::DamageRule(DamageReplacement::ReplaceNext {
                                 source: Some(src_flt),
                                 target,
                                 instead,
-                            });
+                            }));
                         }
                     }
                 }
@@ -1768,7 +1925,9 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
             if (ts.eat_word("counters") || ts.eat_word("counter")) && ts.eat_phrase(&["on", "it"]) {
                 let _ = ts.eat_period();
                 ts.expect_eof()?;
-                return Ok(Replacement::EscapesWithCounters { kind, count });
+                return Ok(Replacement::Rule(
+                    ReplacementRuleKind::EscapesWithCounters { kind, count },
+                ));
             }
         }
         if ts.eat_phrase(&["enters", "tapped"]) {
@@ -1818,7 +1977,9 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                 {
                     let _ = ts.eat_period();
                     ts.expect_eof()?;
-                    return Ok(Replacement::EntersWithChoiceCounter { kind1, kind2 });
+                    return Ok(Replacement::Rule(
+                        ReplacementRuleKind::EntersWithChoiceCounter { kind1, kind2 },
+                    ));
                 }
                 ts.restore(ccp);
             }
@@ -1867,7 +2028,10 @@ pub fn parse_replacement(ts: &mut TokenStream<'_>) -> PResult<Replacement> {
                     additional: false,
                 };
                 let base = if let Some(kws) = extra_kws {
-                    Replacement::Compound(vec![base_counters, Replacement::EntersWithKeywords(kws)])
+                    Replacement::Compound(vec![
+                        base_counters,
+                        Replacement::Rule(ReplacementRuleKind::EntersWithKeywords(kws)),
+                    ])
                 } else {
                     base_counters
                 };

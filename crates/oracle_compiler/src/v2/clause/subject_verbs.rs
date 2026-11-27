@@ -8,8 +8,9 @@ use crate::v2::filter::{
     parse_counter_kind, parse_keyword_list, parse_player_ref, parse_subject_ref,
 };
 use crate::v2::ir::{
-    ChoiceKind, Duration, Effect, ObjectMutation, PlayerMutation, PlayerRef, Replacement,
-    RuleRestrictionKind, StaticAbility, SubjectRef, ValueExpr,
+    CharacteristicKind, ChoiceKind, Duration, Effect, ObjectKeywordAction, ObjectMutation,
+    ObjectStateAction, PlayerMutation, PlayerRef, Replacement, RuleRestrictionKind,
+    ScaledPlayerAction, StaticAbility, SubjectRef, SubjectStaticRule, ValueExpr,
 };
 use crate::v2::lexer::TokenKind;
 use crate::v2::parser::{PResult, TokenStream, opt, try_parse};
@@ -242,25 +243,55 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             lost_kws = Some(kws);
         }
         let mut cant_mut = None;
-        if ts.eat_phrase(&["and", "can't", "be", "blocked"]) {
-            cant_mut = Some(ObjectMutation::CantBeBlocked);
+        if ts.eat_phrase(&["and", "can't", "be", "blocked", "except", "by"])
+            && let Ok(flt) = try_parse(ts, crate::v2::filter::parse_object_filter)
+        {
+            cant_mut = Some(ObjectMutation::ApplyRule(
+                RuleRestrictionKind::CantBeBlockedExceptBy(Box::new(flt)),
+            ));
+        } else if ts.eat_phrase(&["and", "can't", "be", "blocked", "by"])
+            && let Ok(flt) = try_parse(ts, crate::v2::filter::parse_object_filter)
+        {
+            cant_mut = Some(ObjectMutation::ApplyRule(
+                RuleRestrictionKind::CantBeBlockedBy(Box::new(flt)),
+            ));
+        } else if ts.eat_phrase(&["and", "can't", "be", "blocked"]) {
+            cant_mut = Some(ObjectMutation::ApplyRule(
+                RuleRestrictionKind::CantBeBlocked,
+            ));
         } else if ts.eat_phrase(&["and", "can't", "block"]) {
-            cant_mut = Some(ObjectMutation::CantBlock);
+            cant_mut = Some(ObjectMutation::ApplyRule(RuleRestrictionKind::CantBlock));
         } else if ts.eat_phrase(&["and", "can't", "attack"]) {
-            cant_mut = Some(ObjectMutation::CantAttack);
+            cant_mut = Some(ObjectMutation::ApplyRule(RuleRestrictionKind::CantAttack));
         }
         let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
-        // Support trailing `and can't be blocked [this turn]` / `and gains <kws> [dur]` AFTER duration!
+        // Support trailing `and can't be blocked [except by <flt>] [this turn]` / `and gains <kws> [dur]` AFTER duration!
         if cant_mut.is_none() {
-            if ts.eat_phrase(&["and", "can't", "be", "blocked"]) {
+            if ts.eat_phrase(&["and", "can't", "be", "blocked", "except", "by"])
+                && let Ok(flt) = try_parse(ts, crate::v2::filter::parse_object_filter)
+            {
                 let _ = parse_trailing_duration(ts);
-                cant_mut = Some(ObjectMutation::CantBeBlocked);
+                cant_mut = Some(ObjectMutation::ApplyRule(
+                    RuleRestrictionKind::CantBeBlockedExceptBy(Box::new(flt)),
+                ));
+            } else if ts.eat_phrase(&["and", "can't", "be", "blocked", "by"])
+                && let Ok(flt) = try_parse(ts, crate::v2::filter::parse_object_filter)
+            {
+                let _ = parse_trailing_duration(ts);
+                cant_mut = Some(ObjectMutation::ApplyRule(
+                    RuleRestrictionKind::CantBeBlockedBy(Box::new(flt)),
+                ));
+            } else if ts.eat_phrase(&["and", "can't", "be", "blocked"]) {
+                let _ = parse_trailing_duration(ts);
+                cant_mut = Some(ObjectMutation::ApplyRule(
+                    RuleRestrictionKind::CantBeBlocked,
+                ));
             } else if ts.eat_phrase(&["and", "can't", "block"]) {
                 let _ = parse_trailing_duration(ts);
-                cant_mut = Some(ObjectMutation::CantBlock);
+                cant_mut = Some(ObjectMutation::ApplyRule(RuleRestrictionKind::CantBlock));
             } else if ts.eat_phrase(&["and", "can't", "attack"]) {
                 let _ = parse_trailing_duration(ts);
-                cant_mut = Some(ObjectMutation::CantAttack);
+                cant_mut = Some(ObjectMutation::ApplyRule(RuleRestrictionKind::CantAttack));
             }
         }
         if gained_kws.is_none()
@@ -317,8 +348,9 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             "defender",
         ]) {
             out.push(Effect::ApplyContinuous {
-                effect: Box::new(StaticAbility::CanAttackWithDefender {
+                effect: Box::new(StaticAbility::SubjectRule {
                     subject: subject.clone(),
+                    rule: SubjectStaticRule::CanAttackWithDefender,
                     condition: None,
                 }),
                 duration: Duration::UntilEndOfTurn,
@@ -493,24 +525,54 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             extra_ability = Some(compiled);
         }
         let mut cant_mut = None;
-        if ts.eat_phrase(&["and", "can't", "be", "blocked"]) {
-            cant_mut = Some(ObjectMutation::CantBeBlocked);
+        if ts.eat_phrase(&["and", "can't", "be", "blocked", "except", "by"])
+            && let Ok(flt) = try_parse(ts, crate::v2::filter::parse_object_filter)
+        {
+            cant_mut = Some(ObjectMutation::ApplyRule(
+                RuleRestrictionKind::CantBeBlockedExceptBy(Box::new(flt)),
+            ));
+        } else if ts.eat_phrase(&["and", "can't", "be", "blocked", "by"])
+            && let Ok(flt) = try_parse(ts, crate::v2::filter::parse_object_filter)
+        {
+            cant_mut = Some(ObjectMutation::ApplyRule(
+                RuleRestrictionKind::CantBeBlockedBy(Box::new(flt)),
+            ));
+        } else if ts.eat_phrase(&["and", "can't", "be", "blocked"]) {
+            cant_mut = Some(ObjectMutation::ApplyRule(
+                RuleRestrictionKind::CantBeBlocked,
+            ));
         } else if ts.eat_phrase(&["and", "can't", "block"]) {
-            cant_mut = Some(ObjectMutation::CantBlock);
+            cant_mut = Some(ObjectMutation::ApplyRule(RuleRestrictionKind::CantBlock));
         } else if ts.eat_phrase(&["and", "can't", "attack"]) {
-            cant_mut = Some(ObjectMutation::CantAttack);
+            cant_mut = Some(ObjectMutation::ApplyRule(RuleRestrictionKind::CantAttack));
         }
         let duration = parse_trailing_duration(ts).unwrap_or(Duration::Permanent);
         if cant_mut.is_none() {
-            if ts.eat_phrase(&["and", "can't", "be", "blocked"]) {
+            if ts.eat_phrase(&["and", "can't", "be", "blocked", "except", "by"])
+                && let Ok(flt) = try_parse(ts, crate::v2::filter::parse_object_filter)
+            {
                 let _ = parse_trailing_duration(ts);
-                cant_mut = Some(ObjectMutation::CantBeBlocked);
+                cant_mut = Some(ObjectMutation::ApplyRule(
+                    RuleRestrictionKind::CantBeBlockedExceptBy(Box::new(flt)),
+                ));
+            } else if ts.eat_phrase(&["and", "can't", "be", "blocked", "by"])
+                && let Ok(flt) = try_parse(ts, crate::v2::filter::parse_object_filter)
+            {
+                let _ = parse_trailing_duration(ts);
+                cant_mut = Some(ObjectMutation::ApplyRule(
+                    RuleRestrictionKind::CantBeBlockedBy(Box::new(flt)),
+                ));
+            } else if ts.eat_phrase(&["and", "can't", "be", "blocked"]) {
+                let _ = parse_trailing_duration(ts);
+                cant_mut = Some(ObjectMutation::ApplyRule(
+                    RuleRestrictionKind::CantBeBlocked,
+                ));
             } else if ts.eat_phrase(&["and", "can't", "block"]) {
                 let _ = parse_trailing_duration(ts);
-                cant_mut = Some(ObjectMutation::CantBlock);
+                cant_mut = Some(ObjectMutation::ApplyRule(RuleRestrictionKind::CantBlock));
             } else if ts.eat_phrase(&["and", "can't", "attack"]) {
                 let _ = parse_trailing_duration(ts);
-                cant_mut = Some(ObjectMutation::CantAttack);
+                cant_mut = Some(ObjectMutation::ApplyRule(RuleRestrictionKind::CantAttack));
             }
         }
         if is_choice {
@@ -562,8 +624,9 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             "defender",
         ]) {
             out.push(Effect::ApplyContinuous {
-                effect: Box::new(StaticAbility::CanAttackWithDefender {
+                effect: Box::new(StaticAbility::SubjectRule {
                     subject: subject.clone(),
+                    rule: SubjectStaticRule::CanAttackWithDefender,
                     condition: None,
                 }),
                 duration: Duration::UntilEndOfTurn,
@@ -734,8 +797,10 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                         || ts.eat_phrase(&["gain", "all", "creature", "types"])
                     {
                         out.push(Effect::ApplyContinuous {
-                            effect: Box::new(StaticAbility::AllCreatureTypes {
+                            effect: Box::new(StaticAbility::SubjectRule {
                                 subject: subject.clone(),
+                                rule: SubjectStaticRule::AllCreatureTypes,
+                                condition: None,
                             }),
                             duration: duration.clone(),
                         });
@@ -768,7 +833,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
                         let bdur = parse_trailing_duration(ts).unwrap_or_else(|| duration.clone());
                         out.push(Effect::MutateObject {
                             subject: subject.clone(),
-                            mutation: ObjectMutation::CantBeBlocked,
+                            mutation: ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeBlocked),
                             duration: bdur,
                         });
                         continue;
@@ -892,14 +957,14 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
             return Ok(vec![Effect::MutateObject {
                 subject,
-                mutation: ObjectMutation::BecomeChosenColor,
+                mutation: ObjectMutation::BecomeChosen(CharacteristicKind::Color),
                 duration,
             }]);
         }
         if ts.eat_word("prepared") {
             return Ok(vec![Effect::MutateObject {
                 subject,
-                mutation: ObjectMutation::Prepare,
+                mutation: ObjectMutation::StateAction(ObjectStateAction::Prepare),
                 duration: Duration::Permanent,
             }]);
         }
@@ -907,7 +972,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
             return Ok(vec![Effect::MutateObject {
                 subject,
-                mutation: ObjectMutation::BecomeChosenType(
+                mutation: ObjectMutation::BecomeChosen(
                     crate::v2::ir::CharacteristicKind::BasicLandType,
                 ),
                 duration,
@@ -917,7 +982,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
             return Ok(vec![Effect::MutateObject {
                 subject,
-                mutation: ObjectMutation::BecomeChosenType(
+                mutation: ObjectMutation::BecomeChosen(
                     crate::v2::ir::CharacteristicKind::CreatureType,
                 ),
                 duration,
@@ -994,7 +1059,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             if ts.eat_phrase(&["and", "attacks", "this", "turn", "if", "able"]) {
                 out.push(Effect::MutateObject {
                     subject,
-                    mutation: ObjectMutation::MustAttackEachCombat,
+                    mutation: ObjectMutation::StateAction(ObjectStateAction::MustAttackEachCombat),
                     duration: Duration::UntilEndOfTurn,
                 });
             }
@@ -1171,7 +1236,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
     if ts.eat_phrase(&["becomes", "prepared"]) || ts.eat_phrase(&["become", "prepared"]) {
         return Ok(vec![Effect::MutateObject {
             subject,
-            mutation: ObjectMutation::Prepare,
+            mutation: ObjectMutation::StateAction(ObjectStateAction::Prepare),
             duration: Duration::Permanent,
         }]);
     }
@@ -1183,7 +1248,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilEndOfTurn);
         return Ok(vec![Effect::MutateObject {
             subject,
-            mutation: ObjectMutation::AssignsNoCombatDamage,
+            mutation: ObjectMutation::StateAction(ObjectStateAction::AssignsNoCombatDamage),
             duration,
         }]);
     }
@@ -1195,8 +1260,9 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         "can", "attack", "this", "turn", "as", "though", "it", "didn't", "have", "defender",
     ]) {
         return Ok(vec![Effect::ApplyContinuous {
-            effect: Box::new(crate::v2::ir::StaticAbility::CanAttackWithDefender {
+            effect: Box::new(StaticAbility::SubjectRule {
                 subject,
+                rule: SubjectStaticRule::CanAttackWithDefender,
                 condition: None,
             }),
             duration: Duration::UntilEndOfTurn,
@@ -1209,7 +1275,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
     {
         return Ok(vec![Effect::MutateObject {
             subject,
-            mutation: ObjectMutation::MustAttackEachCombat,
+            mutation: ObjectMutation::StateAction(ObjectStateAction::MustAttackEachCombat),
             duration: Duration::UntilEndOfTurn,
         }]);
     }
@@ -1255,7 +1321,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilYourNextTurn);
         return Ok(vec![Effect::MutateObject {
             subject,
-            mutation: ObjectMutation::Goad,
+            mutation: ObjectMutation::StateAction(ObjectStateAction::Goad),
             duration,
         }]);
     }
@@ -1263,31 +1329,34 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
     // 7. `<subj> can't attack [or block] / can't be blocked / can't be countered / can't be regenerated [duration]`
     if ts.eat_word("can't") {
         let mutation = if ts.eat_phrase(&["attack", "or", "block"]) {
-            ObjectMutation::CantAttackOrBlock
+            ObjectMutation::ApplyRule(RuleRestrictionKind::CantAttackOrBlock)
         } else if ts.eat_word("attack") {
-            ObjectMutation::CantAttack
+            ObjectMutation::ApplyRule(RuleRestrictionKind::CantAttack)
         } else if ts.eat_word("block") {
             if let Ok(blk_subj) = try_parse(ts, parse_subject_ref) {
-                ObjectMutation::CantBlockSubject(Box::new(blk_subj))
+                ObjectMutation::ApplyRule(RuleRestrictionKind::CantBlockSubject(Box::new(blk_subj)))
             } else {
-                ObjectMutation::CantBlock
+                ObjectMutation::ApplyRule(RuleRestrictionKind::CantBlock)
             }
         } else if ts.eat_phrase(&["be", "blocked"]) {
+            let _ = ts.eat_phrase(&["this", "turn"]);
             if ts.eat_phrase(&["except", "by"])
                 && let Ok(flt) = try_parse(ts, crate::v2::filter::parse_object_filter)
             {
-                ObjectMutation::CantBeBlockedExceptBy(Box::new(flt))
+                ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeBlockedExceptBy(Box::new(flt)))
             } else if ts.eat_word("by")
                 && let Ok(flt) = try_parse(ts, crate::v2::filter::parse_object_filter)
             {
-                ObjectMutation::CantBeBlockedBy(Box::new(flt))
+                ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeBlockedBy(Box::new(flt)))
             } else {
-                ObjectMutation::CantBeBlocked
+                ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeBlocked)
             }
         } else if ts.eat_phrase(&["be", "regenerated"]) {
             ObjectMutation::CantBeRegenerated
         } else if ts.eat_phrase(&["be", "countered"]) {
-            ObjectMutation::CantBeCountered
+            ObjectMutation::ApplyRule(RuleRestrictionKind::CantBeCountered)
+        } else if ts.eat_phrase(&["phase", "out"]) {
+            ObjectMutation::ApplyRule(RuleRestrictionKind::CantPhaseOut)
         } else {
             return Err(ts.err("expected combat restriction after `can't`"));
         };
@@ -1339,7 +1408,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         let duration = parse_trailing_duration(ts).unwrap_or(Duration::UntilYourNextTurn);
         return Ok(vec![Effect::MutateObject {
             subject,
-            mutation: ObjectMutation::DoesntUntapNextUntap,
+            mutation: ObjectMutation::StateAction(ObjectStateAction::DoesntUntapNextUntap),
             duration,
         }]);
     }
@@ -1454,7 +1523,7 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
     if ts.eat_phrase(&["phases", "out"]) || ts.eat_phrase(&["phase", "out"]) {
         return Ok(vec![Effect::MutateObject {
             subject,
-            mutation: ObjectMutation::PhaseOut,
+            mutation: ObjectMutation::StateAction(ObjectStateAction::PhaseOut),
             duration: Duration::Instant,
         }]);
     }
@@ -1474,7 +1543,10 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         let amount = parse_value_expr(ts)?;
         return Ok(vec![Effect::MutateObject {
             subject,
-            mutation: ObjectMutation::Endure(amount),
+            mutation: ObjectMutation::KeywordAction {
+                kind: ObjectKeywordAction::Endure,
+                amount,
+            },
             duration: Duration::Instant,
         }]);
     }
@@ -1485,14 +1557,20 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
         {
             return Ok(vec![Effect::MutateObject {
                 subject,
-                mutation: ObjectMutation::ExploreCount(times),
+                mutation: ObjectMutation::KeywordAction {
+                    kind: ObjectKeywordAction::Explore,
+                    amount: times,
+                },
                 duration: Duration::Instant,
             }]);
         }
         ts.restore(ecp);
         return Ok(vec![Effect::MutateObject {
             subject,
-            mutation: ObjectMutation::Explore,
+            mutation: ObjectMutation::KeywordAction {
+                kind: ObjectKeywordAction::Explore,
+                amount: ValueExpr::Const(1),
+            },
             duration: Duration::Instant,
         }]);
     }
@@ -1503,7 +1581,10 @@ pub(super) fn parse_subject_verb_frame(ts: &mut TokenStream<'_>) -> PResult<Vec<
             .unwrap_or(ValueExpr::Const(1));
         return Ok(vec![Effect::MutatePlayer {
             player: PlayerRef::You,
-            mutation: PlayerMutation::Connive(amt),
+            mutation: PlayerMutation::ScaledAction {
+                kind: ScaledPlayerAction::Connive,
+                amount: amt,
+            },
             duration: Duration::Instant,
         }]);
     }
@@ -1533,6 +1614,11 @@ pub(super) fn parse_trailing_duration(ts: &mut TokenStream<'_>) -> Option<Durati
             return Some(Duration::UntilSourceLeaves);
         }
         ts.restore(cp);
+        if ts.eat_word("until") && ts.eat_tilde() && ts.eat_phrase(&["is", "cast", "from", "exile"])
+        {
+            return Some(Duration::ForAsLongAsExiled);
+        }
+        ts.restore(cp);
     }
     if ts.eat_phrase(&["until", "end", "of", "combat"])
         || ts.eat_phrase(&["at", "end", "of", "combat"])
@@ -1540,6 +1626,12 @@ pub(super) fn parse_trailing_duration(ts: &mut TokenStream<'_>) -> Option<Durati
         || ts.eat_phrase(&["that", "combat"])
     {
         return Some(Duration::UntilEndOfCombat);
+    }
+    if ts.eat_phrase(&["until", "your", "next", "end", "step"]) {
+        return Some(Duration::UntilYourNextEndStep);
+    }
+    if ts.eat_phrase(&["until", "your", "next", "upkeep"]) {
+        return Some(Duration::UntilYourNextUpkeep);
     }
     if ts.eat_phrase(&["until", "your", "next", "turn"]) {
         return Some(Duration::UntilYourNextTurn);
