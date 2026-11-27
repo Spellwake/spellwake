@@ -224,11 +224,12 @@ pub(super) fn deranged_assistant(
         },
         body: ExecutableBody::new(
             BodyTarget::None,
-            vec![Instruction::AddMana(
-                spellwake_engine::program::EffectManaYield::Fixed(
+            vec![Instruction::AddManaForPlayer {
+                player: spellwake_engine::program::ResolvingPlayer::Controller,
+                yield_kind: spellwake_engine::program::EffectManaYield::Fixed(
                     [(spellwake_engine::mana::ManaType::Colourless, 1.into())].into(),
                 ),
-            )],
+            }],
         ),
     });
     Some(program)

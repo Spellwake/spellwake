@@ -353,9 +353,14 @@ fn normal_entries_and_resolved_gain_regain_or_copy_use_actual_world_history() {
                 source_cost: SourceCost::None,
                 body: ExecutableBody::new(
                     BodyTarget::SinglePermanent,
-                    vec![Instruction::CopyTargetToSource {
+                    vec![Instruction::BecomeCopy {
+                        receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
+                        donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
                         duration: ResolvedDuration::NoStatedDuration,
-                        power_toughness: None,
+                        exceptions: Box::new(spellwake_engine::program::CopyExceptions {
+                            override_pt: None,
+                            ..Default::default()
+                        }),
                     }],
                 ),
             });
@@ -621,9 +626,14 @@ fn copy_and_source_controller_changes_track_continuity_instead_of_restarting_eve
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::CopyTargetToSource {
+            vec![Instruction::BecomeCopy {
+                receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
+                donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
                 duration: ResolvedDuration::NoStatedDuration,
-                power_toughness: None,
+                exceptions: Box::new(spellwake_engine::program::CopyExceptions {
+                    override_pt: None,
+                    ..Default::default()
+                }),
             }],
         ),
     }];

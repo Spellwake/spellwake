@@ -452,9 +452,14 @@ fn copied_sources_keep_recipient_instance_identity_after_donor_departure() {
             source_cost: SourceCost::None,
             body: ExecutableBody::new(
                 BodyTarget::SinglePermanent,
-                vec![Instruction::CopyTargetToSource {
+                vec![Instruction::BecomeCopy {
+                    receiver: Box::new(crate::program::EffectSubject::AbilitySource),
+                    donor: crate::program::MoveSubjectRef::TargetObject,
                     duration: ResolvedDuration::NoStatedDuration,
-                    power_toughness: None,
+                    exceptions: Box::new(crate::program::CopyExceptions {
+                        override_pt: None,
+                        ..Default::default()
+                    }),
                 }],
             ),
         }],

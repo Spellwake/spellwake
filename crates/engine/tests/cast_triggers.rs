@@ -628,14 +628,20 @@ fn copies_and_copies_of_copies_keep_self_cast_definitions_without_becoming_casts
         ManaCost::one(ManaType::Blue),
         ExecutableBody::new(
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-            vec![Instruction::CopySpell],
+            vec![Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            ))],
         ),
     );
     let counter = Program::instant(
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-            vec![Instruction::CounterSpell],
+            vec![Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            ))],
         ),
     );
     let game = two(vec![
@@ -819,7 +825,11 @@ fn countering_the_original_before_its_trigger_resolves_keeps_the_owned_cast_caus
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-            vec![Instruction::CounterSpell],
+            vec![Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            ))],
         ),
     );
     let game = two(vec![

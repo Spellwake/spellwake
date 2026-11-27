@@ -284,7 +284,10 @@ fn triggered_fixed_target_clause_fight_resolves_and_handles_removed_target() {
                     BodyTarget::FilteredPermanent(ObjectFilter::creature().not_controlled()),
                     vec![Instruction::RememberPermanentTarget],
                 ))),
-                Instruction::FightFixedTargets,
+                Instruction::Fight {
+                    first: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedFirst),
+                    second: Box::new(spellwake_engine::program::MoveSubjectRef::RememberedSecond),
+                },
             ],
         ),
     });
@@ -335,7 +338,7 @@ fn triggered_fixed_target_clause_fight_resolves_and_handles_removed_target() {
         Err(GameError::Effect(EffectError::IllegalTarget))
     );
 
-    // Duplicate targets are rejected for FightFixedTargets.
+    // Duplicate targets are rejected for fixed-target Fight.
     assert_eq!(
         attempt(
             entered.state(),

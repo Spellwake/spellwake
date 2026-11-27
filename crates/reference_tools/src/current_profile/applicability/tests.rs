@@ -272,6 +272,7 @@ fn applicability_visits_unreachable_instructions_and_zero_count_nested_token_tem
                     base_size: None,
                     enters_tapped: false,
                     recipients: spellwake_engine::token::TokenRecipients::Controller,
+                    attacking_defender: None,
                 }],
             }],
         ),

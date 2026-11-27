@@ -342,9 +342,10 @@ fn compile_face(
                 (
                     upkeep.clone(),
                     vec![
-                        OfferManaPayment {
+                        OfferDynamicManaPayment {
                             payer: ResolvingPlayer::Controller,
-                            cost: fixed_cost("{2}{B}{B}")?,
+                            fixed: fixed_cost("{2}{B}{B}")?,
+                            extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                             paid_destination: 1,
                             declined_destination: 2,
                         },

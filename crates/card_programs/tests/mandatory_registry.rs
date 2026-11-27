@@ -385,7 +385,11 @@ fn contract_body(raw: &Value, vocabulary: &CreatureTypeVocabulary) -> Executable
                         spellwake_engine::toolbox::ZoneDest::Hand,
                     ),
                 )),
-                "CounterSpell" => Instruction::CounterSpell,
+                "CounterSpell" => Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                )),
                 "DrawController" => spellwake_engine::program::Instruction::DrawCards(Box::new(
                     spellwake_engine::toolbox::DrawCardsSpec::simple(
                         spellwake_engine::toolbox::PlayerSelector::Resolving(

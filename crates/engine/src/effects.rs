@@ -480,12 +480,7 @@ enum LinkedReturnOrigin {
         entry: StackEntryId,
         instruction: usize,
     },
-    GraveyardTransformed {
-        player: SeatId,
-        controller: SeatId,
-        entry: StackEntryId,
-        instruction: usize,
-    },
+
     Graveyard {
         player: Option<SeatId>,
         controller: Option<SeatId>,
@@ -514,8 +509,7 @@ impl LinkedReturnOrigin {
             | Self::Graveyard {
                 controller: Some(controller),
                 ..
-            }
-            | Self::GraveyardTransformed { controller, .. } => controller,
+            } => controller,
             _ => card.owner(),
         }
     }
@@ -532,9 +526,7 @@ impl LinkedReturnOrigin {
                 Self::Graveyard { player, .. } => {
                     matches!(card.zone(), ObjectZone::Graveyard(owner) if player.is_none_or(|player| player == owner))
                 }
-                Self::GraveyardTransformed { player, .. } => {
-                    card.zone() == ObjectZone::Graveyard(player)
-                }
+
                 Self::Manifest { player, .. } | Self::LibraryTop { player, .. } => {
                     card.zone() == ObjectZone::Library(player)
                 }
@@ -561,7 +553,7 @@ impl LinkedReturnOrigin {
                 }
                 _ => crate::occurrence::ZoneReason::HandToBattlefield,
             },
-            Self::Graveyard { .. } | Self::GraveyardTransformed { .. } => {
+            Self::Graveyard { .. } => {
                 crate::occurrence::ZoneReason::ReturnFromGraveyardToBattlefield
             }
             Self::LibraryTop { .. } => crate::occurrence::ZoneReason::LookTopToBattlefield,
@@ -584,9 +576,6 @@ impl LinkedReturnOrigin {
                 entry, instruction, ..
             }
             | Self::Graveyard {
-                entry, instruction, ..
-            }
-            | Self::GraveyardTransformed {
                 entry, instruction, ..
             }
             | Self::LibraryTop {
@@ -2083,7 +2072,7 @@ struct ResolutionResults {
     clash_state: Option<ClashState>,
     discover_state: Option<DiscoverState>,
     manifest_dread_candidates: Vec<ObjectId>,
-    /// Current loop participant bound by `Instruction::ForEachPlayer` / `OfferAnyPlayer`.
+    /// Current loop participant bound by `Instruction::ForEachPlayerQuery` / `OfferAnyPlayer`.
     loop_player: Option<SeatId>,
     /// Total damage prevented during this resolution (CR 615.6, e.g. "for each 1 damage prevented this way").
     damage_prevented_this_resolution: RulesInteger,
@@ -3711,60 +3700,6 @@ impl EffectWindow {
         Ok(())
     }
 
-    /// Capture one delayed exile trigger for newly created tokens from any resolving stack entry.
-    pub(crate) fn delay_entry_exile(
-        &mut self,
-        entry: StackEntryId,
-        controller: SeatId,
-        step: crate::turn::Step,
-        objects: Vec<ObjectId>,
-    ) -> Result<(), EffectError> {
-        let actual = self
-            .window
-            .resolving()
-            .filter(|actual| actual.id() == entry && actual.controller() == controller)
-            .ok_or(EffectError::WrongResolutionFrame)?;
-        if objects.iter().copied().collect::<BTreeSet<_>>().len() != objects.len()
-            || objects.iter().any(|id| {
-                self.window
-                    .cards()
-                    .get(*id)
-                    .is_none_or(|card| card.zone() != ObjectZone::Battlefield)
-            })
-        {
-            return Err(EffectError::InconsistentProgram);
-        }
-        match actual.kind() {
-            StackKind::CardSpell(id) => {
-                let source = self
-                    .rules_snapshot(None)?
-                    .view()
-                    .appearance(*id)
-                    .ok_or(EffectError::InconsistentProgram)?;
-                self.triggers.delay_exile(source, controller, step, objects);
-            }
-            StackKind::ActivatedAbility { source } | StackKind::TriggeredAbility { source } => {
-                let appearance = self
-                    .execution_bindings(entry)
-                    .and_then(|b| b.trigger.as_ref())
-                    .map(|t| t.source.clone())
-                    .or_else(|| {
-                        self.rules_snapshot(None)
-                            .ok()
-                            .and_then(|s| s.view().appearance(source.id()))
-                    })
-                    .ok_or(EffectError::InconsistentProgram)?;
-                self.triggers
-                    .delay_exile(appearance, controller, step, objects);
-            }
-            StackKind::SpellCopy { .. } => {
-                self.triggers
-                    .delay_copy_exile(entry, controller, step, objects);
-            }
-            _ => return Err(EffectError::InconsistentProgram),
-        }
-        Ok(())
-    }
     /// The player entitled to inspect this exact face-down exile incarnation, if any.
     pub fn face_down_exile_viewer(&self, object: ObjectId) -> Option<SeatId> {
         if !self
@@ -8145,10 +8080,7 @@ impl EffectWindow {
                 .ok_or(EffectError::WrongResolutionFrame)?
         } else if matches!(
             self.current_instruction()?,
-            Instruction::CopyAbility
-                | Instruction::CopySpell
-                | Instruction::ChooseNewTargets
-                | Instruction::ChangeOnlyTarget
+            Instruction::StackOp(spec) if spec.is_interactive_copy_or_retarget()
         ) {
             let bound = self.instruction_target(entry)?;
             let TargetRef::Stack(original) = bound.choice().target else {
@@ -10522,32 +10454,49 @@ impl EffectWindow {
                     .is_some_and(|o| o.zone() == ObjectZone::Battlefield),
                 TargetRef::Stack(_) => false,
             },
-            Instruction::CounterSpell
-            | Instruction::CounterSpellToExile
-            | Instruction::CounterSpellToLibrary { .. } => {
-                matches!(target,TargetRef::Stack(id) if self.window.entries().iter().any(|entry|entry.id()==id))
-            }
-            Instruction::ChooseNewTargets
-            | Instruction::GainControlOfSpell
-            | Instruction::ChangeOnlyTarget => {
-                matches!(target, TargetRef::Stack(id) if self.window.entries().iter().any(|entry| entry.id() == id))
-            }
-            Instruction::CopyAbility => {
-                matches!(target,TargetRef::Stack(id) if self.window.entries().iter().any(|s|s.id()==id && !matches!(s.kind(),StackKind::CardSpell(_) | StackKind::SpellCopy {..})))
-            }
-            Instruction::CopySpell => match target {
-                TargetRef::Stack(id) => {
-                    self.copyable_payload(id)
-                        && self.window.entries().iter().any(|entry| {
-                            entry.id() == id
-                                && matches!(
-                                    entry.kind(),
-                                    StackKind::CardSpell(_) | StackKind::SpellCopy { .. }
-                                )
-                        })
+            Instruction::StackOp(spec) => {
+                if !spec.requires_stack_target() {
+                    true
+                } else {
+                    match &spec.op {
+                        crate::toolbox::StackOpKind::Copy {
+                            ability_mode: true, ..
+                        } => matches!(
+                            target,
+                            TargetRef::Stack(id) if self.window.entries().iter().any(|s| {
+                                s.id() == id
+                                    && !matches!(
+                                        s.kind(),
+                                        StackKind::CardSpell(_) | StackKind::SpellCopy { .. }
+                                    )
+                            })
+                        ),
+                        crate::toolbox::StackOpKind::Copy {
+                            ability_mode: false,
+                            ..
+                        } => match target {
+                            TargetRef::Stack(id) => {
+                                self.copyable_payload(id)
+                                    && self.window.entries().iter().any(|entry| {
+                                        entry.id() == id
+                                            && matches!(
+                                                entry.kind(),
+                                                StackKind::CardSpell(_)
+                                                    | StackKind::SpellCopy { .. }
+                                            )
+                                    })
+                            }
+                            TargetRef::Object(_) | TargetRef::Player(_) => false,
+                        },
+                        crate::toolbox::StackOpKind::Counter { .. }
+                        | crate::toolbox::StackOpKind::Retarget { .. }
+                        | crate::toolbox::StackOpKind::GainControl => matches!(
+                            target,
+                            TargetRef::Stack(id) if self.window.entries().iter().any(|entry| entry.id() == id)
+                        ),
+                    }
                 }
-                TargetRef::Object(_) | TargetRef::Player(_) => false,
-            },
+            }
             Instruction::DamageFromPower(_) => match target {
                 TargetRef::Player(player) => self.window.participants().contains(&player),
                 TargetRef::Object(card) => evaluated
@@ -10557,42 +10506,30 @@ impl EffectWindow {
                 TargetRef::Stack(_) => false,
             },
             Instruction::Attach(_) => true,
-            Instruction::CreatePreventionShield { .. }
-            | Instruction::CreateDamageMultiplier { .. }
+            Instruction::CreateDamageMultiplier { .. }
             | Instruction::Earthbend { .. }
-            | Instruction::CopyTargetToSource { .. }
-            | Instruction::GrantProtectionChosenColor(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. } => match target {
                 TargetRef::Object(card) => self
                     .window
                     .cards()
                     .get(card)
                     .is_some_and(|value| value.zone() == ObjectZone::Battlefield),
-                TargetRef::Player(seat) => {
-                    matches!(instruction, Instruction::CreatePreventionShield { .. })
-                        && self.window.participants().contains(&seat)
-                }
-                TargetRef::Stack(_) => false,
+                TargetRef::Player(_) | TargetRef::Stack(_) => false,
             },
             // The iterative driver owns these paths before target availability.
             Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
-            | Instruction::OfferManaPayment { .. }
             | Instruction::BranchIfFalse { .. }
             | Instruction::Jump { .. }
             | Instruction::ExileTopPlay { .. }
-            | Instruction::LookTopChoose { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::BecomeCopyFixedTargets { .. }
             | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::ChooseOptionForPlayers { .. }
             | Instruction::Vote { .. }
             | Instruction::Incubate { .. }
             | Instruction::Connive { .. }
@@ -10608,8 +10545,6 @@ impl EffectWindow {
             | Instruction::Monstrosity { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
-            | Instruction::CopyStackObject { .. }
-            | Instruction::CastLinkedFaceDownFree
             | Instruction::Ripple(_)
             | Instruction::Demonstrate
             | Instruction::Enlist
@@ -10627,17 +10562,14 @@ impl EffectWindow {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::CreateTokenCopy { .. }
             | Instruction::BindResolutionX(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
-            | Instruction::RevealUntilMatch { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::CreateAttackingTokens { .. }
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
@@ -10649,14 +10581,9 @@ impl EffectWindow {
             | Instruction::AdditionalLoyaltyActivation
             | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::ExileTopForPlay { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
-            | Instruction::ScheduleCreatedTokenExile(_)
-            | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
-            | Instruction::GrantFlashback(_)
             | Instruction::ReturnEarthbentCard
-            | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::PairWithCreature { .. }
@@ -10664,7 +10591,6 @@ impl EffectWindow {
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
-            | Instruction::FlipCoin { .. }
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::Myriad
@@ -10680,7 +10606,6 @@ impl EffectWindow {
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
             | Instruction::ReturnDelayedGraveyardCard(_)
-            | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedPermanentToHand(_)
             | Instruction::ReturnDelayedExileWithCounters(_)
             | Instruction::ReturnDelayedExile(_)
@@ -10691,15 +10616,11 @@ impl EffectWindow {
             | Instruction::ResolveCounterKeyword(_)
             | Instruction::SacrificeEvoked
             | Instruction::SacrificeStateTriggerSource
-            | Instruction::CounterWardSource
-            | Instruction::CounterTriggeringStackObject
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::DivideThreeDamageAmongTargets
             | Instruction::DamageOrderedTargets { .. }
             | Instruction::FixedTargetClause(_)
-            | Instruction::FightFixedTargets
-            | Instruction::BindOrderedPermanents { .. }
             | Instruction::ReturnGraveyardCreatureWithCorpse(_)
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::MayRevealLibraryTop
@@ -10710,7 +10631,6 @@ impl EffectWindow {
             | Instruction::ChooseCreatureType { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::AdditionalCombat { .. }
-            | Instruction::GainCastCardAbilities { .. }
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::AdvanceClassLevel(_)
@@ -10720,7 +10640,6 @@ impl EffectWindow {
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
             | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::ForEachPlayer { .. }
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
             | Instruction::GrantChosenProtection { .. }
@@ -10728,9 +10647,6 @@ impl EffectWindow {
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
-            | Instruction::MoveCounters { .. }
-            | Instruction::CounterMatchingStackObjects { .. }
-            | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::DrawCards(_)
             | Instruction::MutateObject(_) => false,
         })
@@ -11728,7 +11644,14 @@ mod revision_tests {
                     instant(
                         2,
                         b,
-                        vec![Instruction::CopySpell, Instruction::CopySpell],
+                        vec![
+                            Instruction::StackOp(Box::new(
+                                crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                            )),
+                            Instruction::StackOp(Box::new(
+                                crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                            )),
+                        ],
                         BodyTarget::SingleSpell(SpellFilter::copyable_instruction()),
                     ),
                     SeedCard {

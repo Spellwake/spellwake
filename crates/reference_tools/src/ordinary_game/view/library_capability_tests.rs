@@ -91,7 +91,9 @@ fn initialize_control(
                     BodyTarget::SingleSpell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
-                    vec![Instruction::CopySpell],
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                    ))],
                 ),
             ),
         });

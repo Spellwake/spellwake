@@ -4,6 +4,7 @@ mod eval;
 mod life_damage;
 mod mutate;
 mod prompt;
+mod stack_op;
 mod zone_op;
 
 use super::progress_rules::{RuleStepContext, StepOutcome};
@@ -11,6 +12,7 @@ use super::*;
 use crate::{
     characteristics::StaticContinuousAbility,
     emblem::EmblemDefinition,
+    occurrence::{EventCause, RulesOccurrence},
     program::{Instruction, TemporaryRuleKind},
     stack_window::StackEntry,
     toolbox::{
@@ -405,6 +407,33 @@ impl EffectWindow {
                     }
                 }
             }
+            ContinuousPayload::TargetPreventionShield { amount } => {
+                let target = self.instruction_target(entry)?.choice().target;
+                let protected = match target {
+                    TargetRef::Object(id) => DamageEffectTarget::Permanent(id),
+                    TargetRef::Player(seat) => DamageEffectTarget::Player(seat),
+                    TargetRef::Stack(_) => return Err(EffectError::InconsistentProgram),
+                };
+                let before = self.rules_snapshot(None)?;
+                let shield = self
+                    .damage_state
+                    .add_shield(entry.id(), protected, amount.clone())?;
+                let created = DamageEffectCreation::Prevention {
+                    shield,
+                    instruction: index,
+                };
+                ctx.journal.created.push(created.clone());
+                self.emit_from(
+                    EventCause::Instruction {
+                        entry: entry.id(),
+                        instruction: index,
+                    },
+                    &before,
+                    None,
+                    ctx.append,
+                    |_, _, _| Ok(vec![RulesOccurrence::DamageEffectCreated(created)]),
+                )?;
+            }
         }
 
         self.advance_instruction()?;
@@ -424,6 +453,12 @@ impl EffectWindow {
         match instruction {
             Instruction::BindEnv { binding, value } => {
                 if let Some(cur) = self.resolution_cursor_mut() {
+                    if binding == crate::toolbox::BindingId::LOOP_PLAYER {
+                        cur.results.loop_player = match value.as_ref() {
+                            ExecValue::Players(seats) => seats.first().copied(),
+                            _ => None,
+                        };
+                    }
                     cur.env.bind(binding, *value);
                 }
                 self.advance_instruction()?;
@@ -613,13 +648,20 @@ impl EffectWindow {
                     self.advance_instruction()?;
                     return Ok(StepOutcome::Continue);
                 }
-                let mut expanded = Vec::with_capacity(seats.len() * (1 + body.instructions.len()));
+                let mut expanded =
+                    Vec::with_capacity(seats.len() * (1 + body.instructions.len()) + 1);
                 for seat in seats {
                     expanded.push(Instruction::BindEnv {
                         binding: bind_player,
                         value: Box::new(ExecValue::Players(vec![seat])),
                     });
                     expanded.extend(body.instructions.iter().cloned());
+                }
+                if bind_player == crate::toolbox::BindingId::LOOP_PLAYER {
+                    expanded.push(Instruction::BindEnv {
+                        binding: bind_player,
+                        value: Box::new(ExecValue::Players(Vec::new())),
+                    });
                 }
                 self.splice_replacing_current(entry.id(), index, &expanded)?;
                 Ok(StepOutcome::Continue)
@@ -689,6 +731,9 @@ impl EffectWindow {
             Instruction::AdjustLife(spec) => self.execute_adjust_life(ctx, entry, index, &spec),
             Instruction::DealDamage(spec) => self.execute_deal_damage(ctx, entry, index, &spec),
             Instruction::MutatePlayer(spec) => self.execute_mutate_player(ctx, entry, index, &spec),
+            Instruction::StackOp(spec) if !spec.requires_stack_target() => {
+                self.execute_non_targeted_stack_op(ctx, entry, index, &spec)
+            }
             other => Ok(StepOutcome::Next(other)),
         }
     }

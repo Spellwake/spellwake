@@ -1394,12 +1394,15 @@ pub(super) fn lower_search_library_group(
                         CostAtomAst::PayMana(raw) => {
                             let idx = builder.instructions.len();
                             if let Some(cost) = parse_fixed_mana_cost(raw) {
-                                builder.instructions.push(Instruction::OfferManaPayment {
-                                    payer: ResolvingPlayer::TriggerSubjectController,
-                                    cost,
-                                    paid_destination: idx + 2,
-                                    declined_destination: idx + 1,
-                                });
+                                builder
+                                    .instructions
+                                    .push(Instruction::OfferDynamicManaPayment {
+                                        payer: ResolvingPlayer::TriggerSubjectController,
+                                        fixed: cost,
+                                        extra_generic: ValueExpr::Literal(0.into()),
+                                        paid_destination: idx + 2,
+                                        declined_destination: idx + 1,
+                                    });
                             } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
                                 && x_cnt > 0
                             {
@@ -1422,9 +1425,9 @@ pub(super) fn lower_search_library_group(
                             } else {
                                 return Err("oracle:counter-unless-x");
                             }
-                            builder
-                                .instructions
-                                .push(Instruction::CounterTriggeringStackObject);
+                            builder.instructions.push(Instruction::StackOp(Box::new(
+                                spellwake_engine::toolbox::StackOpSpec::counter_triggering(),
+                            )));
                             return Ok(());
                         }
                         CostAtomAst::PayGenericManaExpr(_) | CostAtomAst::PayScaledMana { .. } => {
@@ -1441,17 +1444,17 @@ pub(super) fn lower_search_library_group(
                                     paid_destination: idx + 2,
                                     declined_destination: idx + 1,
                                 });
-                            builder
-                                .instructions
-                                .push(Instruction::CounterTriggeringStackObject);
+                            builder.instructions.push(Instruction::StackOp(Box::new(
+                                spellwake_engine::toolbox::StackOpSpec::counter_triggering(),
+                            )));
                             return Ok(());
                         }
                         _ => return Err("oracle:counter-unless-non-mana"),
                     }
                 }
-                builder
-                    .instructions
-                    .push(Instruction::CounterTriggeringStackObject);
+                builder.instructions.push(Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_triggering(),
+                )));
                 return Ok(());
             }
             let reuse_bound_spell = matches!(
@@ -1481,12 +1484,15 @@ pub(super) fn lower_search_library_group(
                     CostAtomAst::PayMana(raw) => {
                         let idx = builder.instructions.len();
                         if let Some(cost) = parse_fixed_mana_cost(raw) {
-                            builder.instructions.push(Instruction::OfferManaPayment {
-                                payer: ResolvingPlayer::TargetSpellController,
-                                cost,
-                                paid_destination: idx + 2,
-                                declined_destination: idx + 1,
-                            });
+                            builder
+                                .instructions
+                                .push(Instruction::OfferDynamicManaPayment {
+                                    payer: ResolvingPlayer::TargetSpellController,
+                                    fixed: cost,
+                                    extra_generic: ValueExpr::Literal(0.into()),
+                                    paid_destination: idx + 2,
+                                    declined_destination: idx + 1,
+                                });
                         } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
                             && x_cnt > 0
                         {
@@ -1509,7 +1515,11 @@ pub(super) fn lower_search_library_group(
                         } else {
                             return Err("oracle:counter-unless-x");
                         }
-                        builder.instructions.push(Instruction::CounterSpell);
+                        builder.instructions.push(Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                spellwake_engine::toolbox::CounterDestination::Graveyard,
+                            ),
+                        )));
                         Ok(())
                     }
                     CostAtomAst::PayGenericManaExpr(_) | CostAtomAst::PayScaledMana { .. } => {
@@ -1526,7 +1536,11 @@ pub(super) fn lower_search_library_group(
                                 paid_destination: idx + 2,
                                 declined_destination: idx + 1,
                             });
-                        builder.instructions.push(Instruction::CounterSpell);
+                        builder.instructions.push(Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                spellwake_engine::toolbox::CounterDestination::Graveyard,
+                            ),
+                        )));
                         Ok(())
                     }
                     other => {
@@ -1557,12 +1571,20 @@ pub(super) fn lower_search_library_group(
                             },
                             destination: branch_idx + 2,
                         });
-                        builder.instructions.push(Instruction::CounterSpell);
+                        builder.instructions.push(Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                spellwake_engine::toolbox::CounterDestination::Graveyard,
+                            ),
+                        )));
                         Ok(())
                     }
                 }
             } else {
-                builder.instructions.push(Instruction::CounterSpell);
+                builder.instructions.push(Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                )));
                 Ok(())
             }
         }
@@ -1633,9 +1655,15 @@ pub(super) fn lower_search_library_group(
                 destination: branch_idx + 2,
             });
             builder.instructions.push(if is_trigger_target {
-                Instruction::CounterTriggeringStackObject
+                Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_triggering(),
+                ))
             } else {
-                Instruction::CounterSpell
+                Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))
             });
             Ok(())
         }
@@ -1653,12 +1681,9 @@ pub(super) fn lower_search_library_group(
                 )?)
             };
             let make_add = |yield_kind: EffectManaYield| -> Instruction {
-                match target_player {
-                    None => Instruction::AddMana(yield_kind),
-                    Some(rp) => Instruction::AddManaForPlayer {
-                        player: rp,
-                        yield_kind,
-                    },
+                Instruction::AddManaForPlayer {
+                    player: target_player.unwrap_or(ResolvingPlayer::Controller),
+                    yield_kind,
                 }
             };
             let wubrg = || -> BTreeSet<ManaType> {
@@ -1951,7 +1976,9 @@ pub(super) fn lower_search_library_group(
             {
                 let bt = lower_target_subject(&eff_subject, vocabulary)?;
                 builder.bind_target(bt)?;
-                builder.instructions.push(Instruction::GainControlOfSpell);
+                builder.instructions.push(Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::gain_control(),
+                )));
                 return Ok(());
             }
             let dur = lower_duration(duration)?;
@@ -2519,7 +2546,9 @@ pub(super) fn lower_search_library_group(
                 if matches!(target.as_ref(), SubjectRefAst::Anaphora(_))
                     && is_stack_body_target(builder.target)
                 {
-                    builder.instructions.push(Instruction::ChangeOnlyTarget);
+                    builder.instructions.push(Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::retarget(true),
+                    )));
                     return Ok(());
                 }
                 let bt = if let SubjectRefAst::TargetObject {
@@ -2544,47 +2573,57 @@ pub(super) fn lower_search_library_group(
                     return Err("oracle:unsupported-change-targets");
                 }
                 builder.bind_target(bt)?;
-                builder.instructions.push(Instruction::ChangeOnlyTarget);
+                builder.instructions.push(Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::retarget(true),
+                )));
                 return Ok(());
             }
             if matches!(target.as_ref(), SubjectRefAst::Anaphora(_)) {
-                if let Some(copy_op) = builder.instructions.iter_mut().rev().find(|op| {
-                    matches!(
-                        op,
-                        Instruction::CopyStackObject { .. }
-                            | Instruction::CopySpell
-                            | Instruction::CopyAbility
-                    )
-                }) {
-                    match copy_op {
-                        Instruction::CopyStackObject {
-                            may_choose_new_targets,
-                            ..
-                        } => {
-                            *may_choose_new_targets = true;
-                            return Ok(());
-                        }
-                        Instruction::CopySpell => {
-                            *copy_op = Instruction::CopyStackObject {
-                                target: StackCopyTarget::TargetSpell,
-                                count: ValueExpr::literal(1),
-                                may_choose_new_targets: true,
-                            };
-                            return Ok(());
-                        }
-                        Instruction::CopyAbility => {
-                            *copy_op = Instruction::CopyStackObject {
-                                target: StackCopyTarget::TargetAbility,
-                                count: ValueExpr::literal(1),
-                                may_choose_new_targets: true,
-                            };
-                            return Ok(());
-                        }
-                        _ => {}
+                if let Some(Instruction::StackOp(spec)) =
+                    builder.instructions.iter_mut().rev().find(|op| {
+                        matches!(
+                            op,
+                            Instruction::StackOp(spec)
+                                if matches!(spec.op, spellwake_engine::toolbox::StackOpKind::Copy { .. })
+                        )
+                    })
+                {
+                    let interactive_target = match (&spec.target, &spec.op) {
+                        (
+                            spellwake_engine::toolbox::StackTargetSelector::Targeted,
+                            spellwake_engine::toolbox::StackOpKind::Copy {
+                                interactive_retarget: true,
+                                ability_mode,
+                                ..
+                            },
+                        ) => Some(if *ability_mode {
+                            StackCopyTarget::TargetAbility
+                        } else {
+                            StackCopyTarget::TargetSpell
+                        }),
+                        _ => None,
+                    };
+                    if let Some(copy_target) = interactive_target {
+                        **spec = spellwake_engine::toolbox::StackOpSpec::copy_stack(
+                            copy_target,
+                            ValueExpr::literal(1),
+                            true,
+                        );
+                        return Ok(());
+                    }
+                    if let spellwake_engine::toolbox::StackOpKind::Copy {
+                        may_choose_new_targets,
+                        ..
+                    } = &mut spec.op
+                    {
+                        *may_choose_new_targets = true;
+                        return Ok(());
                     }
                 }
                 if is_stack_body_target(builder.target) {
-                    builder.instructions.push(Instruction::ChooseNewTargets);
+                    builder.instructions.push(Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::retarget(false),
+                    )));
                     return Ok(());
                 }
             }
@@ -2605,7 +2644,9 @@ pub(super) fn lower_search_library_group(
                     return Err("oracle:unsupported-change-targets");
                 }
                 builder.bind_target(bt)?;
-                builder.instructions.push(Instruction::ChangeOnlyTarget);
+                builder.instructions.push(Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::retarget(true),
+                )));
                 return Ok(());
             }
             let bt = lower_target_subject(target, vocabulary)?;
@@ -2613,7 +2654,9 @@ pub(super) fn lower_search_library_group(
                 return Err("oracle:unsupported-change-targets");
             }
             builder.bind_target(bt)?;
-            builder.instructions.push(Instruction::ChooseNewTargets);
+            builder.instructions.push(Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::retarget(false),
+            )));
             Ok(())
         }
         InstructionAst::Exchange { kind, left, right } => match kind {
@@ -3384,20 +3427,18 @@ pub(super) fn lower_search_library_group(
                 )?;
                 push_for_each_player(
                     players,
-                    vec![Instruction::LookTopChoose {
-                        count: cnt,
+                    vec![Instruction::LookTopChooseExt {
                         library_owner: ResolvingPlayer::LoopPlayer,
+                        chooser: ResolvingPlayer::Controller,
+                        count: cnt,
                         filter: None,
-                        reveal: *reveal,
-                        reveal_only: true,
-                        to_battlefield: false,
-                        enters_tapped: false,
-                        take_all_matching: false,
                         max_picks: 0,
-                        rest_to_graveyard: false,
-                        rest_to_exile: false,
-                        rest_to_top: false,
-                        random_rest_order: false,
+                        take_all_matching: false,
+                        keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
+                        rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
+                        reveal_kept: false,
+                        reveal_all: *reveal,
+                        reveal_only: true,
                         secondary: None,
                     }],
                     builder,
@@ -3490,20 +3531,18 @@ pub(super) fn lower_search_library_group(
                 in_trigger,
                 vocabulary,
             )?;
-            builder.instructions.push(Instruction::LookTopChoose {
-                count: cnt,
+            builder.instructions.push(Instruction::LookTopChooseExt {
                 library_owner,
+                chooser: ResolvingPlayer::Controller,
+                count: cnt,
                 filter: None,
-                reveal: *reveal,
-                reveal_only: true,
-                to_battlefield: false,
-                enters_tapped: false,
-                take_all_matching: false,
                 max_picks: 0,
-                rest_to_graveyard: false,
-                rest_to_exile: false,
-                rest_to_top: false,
-                random_rest_order: false,
+                take_all_matching: false,
+                keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
+                rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
+                reveal_kept: false,
+                reveal_all: *reveal,
+                reveal_only: true,
                 secondary: None,
             });
             Ok(())
@@ -4017,7 +4056,7 @@ pub(super) fn lower_search_library_group(
                     {
                         spec.duration
                     }
-                    Some(Instruction::ForEachPlayer { body, .. }) => {
+                    Some(Instruction::ForEachPlayerQuery { body, .. }) => {
                         match body.instructions.first() {
                             Some(Instruction::ApplyContinuous(spec))
                                 if matches!(
@@ -4103,12 +4142,13 @@ pub(super) fn lower_search_library_group(
                     if let Some(colors) = all_colored_single
                         && !colors.is_empty()
                     {
-                        builder
-                            .instructions
-                            .push(Instruction::AddMana(EffectManaYield::Choice {
+                        builder.instructions.push(Instruction::AddManaForPlayer {
+                            player: ResolvingPlayer::Controller,
+                            yield_kind: EffectManaYield::Choice {
                                 colors,
                                 amount: ValueExpr::literal(1),
-                            }));
+                            },
+                        });
                         return Ok(());
                     }
                     let mut options: Vec<BTreeMap<ManaType, RulesInteger>> = Vec::new();
@@ -4120,15 +4160,17 @@ pub(super) fn lower_search_library_group(
                         }
                     }
                     if options.len() >= 2 {
-                        builder.instructions.push(Instruction::AddMana(
-                            EffectManaYield::ChoiceBundle { options },
-                        ));
+                        builder.instructions.push(Instruction::AddManaForPlayer {
+                            player: ResolvingPlayer::Controller,
+                            yield_kind: EffectManaYield::ChoiceBundle { options },
+                        });
                         return Ok(());
                     }
                     if let [only] = options.as_slice() {
-                        builder
-                            .instructions
-                            .push(Instruction::AddMana(EffectManaYield::Fixed(only.clone())));
+                        builder.instructions.push(Instruction::AddManaForPlayer {
+                            player: ResolvingPlayer::Controller,
+                            yield_kind: EffectManaYield::Fixed(only.clone()),
+                        });
                         return Ok(());
                     }
                     return Err("oracle:unsupported-qualified-mana");
@@ -4149,7 +4191,10 @@ pub(super) fn lower_search_library_group(
                                     label: format!("Add {raw}"),
                                     body: ExecutableBody::new(
                                         BodyTarget::None,
-                                        vec![Instruction::AddMana(EffectManaYield::Fixed(bundle))],
+                                        vec![Instruction::AddManaForPlayer {
+                                            player: ResolvingPlayer::Controller,
+                                            yield_kind: EffectManaYield::Fixed(bundle),
+                                        }],
                                     ),
                                 });
                             }
@@ -4158,11 +4203,12 @@ pub(super) fn lower_search_library_group(
                                     label: "Add one mana of the chosen color".to_owned(),
                                     body: ExecutableBody::new(
                                         BodyTarget::None,
-                                        vec![Instruction::AddMana(
-                                            EffectManaYield::SourceChosenColor {
+                                        vec![Instruction::AddManaForPlayer {
+                                            player: ResolvingPlayer::Controller,
+                                            yield_kind: EffectManaYield::SourceChosenColor {
                                                 amount: ValueExpr::literal(1),
                                             },
-                                        )],
+                                        }],
                                     ),
                                 });
                             }
@@ -4208,9 +4254,10 @@ pub(super) fn lower_search_library_group(
                         )?,
                         None => ValueExpr::literal(1),
                     };
-                    builder.instructions.push(Instruction::AddMana(
-                        EffectManaYield::LandProducible { controller, amount },
-                    ));
+                    builder.instructions.push(Instruction::AddManaForPlayer {
+                        player: ResolvingPlayer::Controller,
+                        yield_kind: EffectManaYield::LandProducible { controller, amount },
+                    });
                     return Ok(());
                 }
             }
@@ -4380,20 +4427,18 @@ pub(super) fn lower_search_library_group(
                 if *reveal {
                     push_for_each_player(
                         group_players,
-                        vec![Instruction::LookTopChoose {
-                            count: cnt,
+                        vec![Instruction::LookTopChooseExt {
                             library_owner,
+                            chooser: ResolvingPlayer::Controller,
+                            count: cnt,
                             filter: None,
-                            reveal: true,
-                            reveal_only: true,
-                            to_battlefield: false,
-                            enters_tapped: false,
-                            take_all_matching: false,
                             max_picks: 0,
-                            rest_to_graveyard: false,
-                            rest_to_exile: false,
-                            rest_to_top: false,
-                            random_rest_order: false,
+                            take_all_matching: false,
+                            keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
+                            rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
+                            reveal_kept: false,
+                            reveal_all: true,
+                            reveal_only: true,
                             secondary: None,
                         }],
                         &mut trial,
@@ -4534,20 +4579,18 @@ pub(super) fn lower_search_library_group(
                     ),
                 ));
             } else {
-                trial.instructions.push(Instruction::LookTopChoose {
-                    count: cnt,
+                trial.instructions.push(Instruction::LookTopChooseExt {
                     library_owner,
+                    chooser: ResolvingPlayer::Controller,
+                    count: cnt,
                     filter: None,
-                    reveal: *reveal,
-                    reveal_only: true,
-                    to_battlefield: false,
-                    enters_tapped: false,
-                    take_all_matching: false,
                     max_picks: 0,
-                    rest_to_graveyard: false,
-                    rest_to_exile: false,
-                    rest_to_top: false,
-                    random_rest_order: false,
+                    take_all_matching: false,
+                    keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
+                    rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
+                    reveal_kept: false,
+                    reveal_all: *reveal,
+                    reveal_only: true,
                     secondary: None,
                 });
             }
@@ -4619,12 +4662,14 @@ fn try_lower_counter_matching_stack_objects(
             if let Some((filter, include_spells, include_abilities, opponents_only)) =
                 lower_single_counter_matching_filter(f, vocabulary)?
             {
-                Ok(Some(vec![Instruction::CounterMatchingStackObjects {
-                    filter,
-                    include_spells,
-                    include_abilities,
-                    opponents_only,
-                }]))
+                Ok(Some(vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_matching(
+                        filter,
+                        include_spells,
+                        include_abilities,
+                        opponents_only,
+                    ),
+                ))]))
             } else {
                 Ok(None)
             }
@@ -4649,24 +4694,28 @@ fn try_lower_counter_matching_stack_objects(
                     || (!specs[0].1 && specs[0].2 && specs[1].1 && !specs[1].2))
             {
                 let (filter, _, _, opponents_only) = specs.remove(0);
-                return Ok(Some(vec![Instruction::CounterMatchingStackObjects {
-                    filter,
-                    include_spells: true,
-                    include_abilities: true,
-                    opponents_only,
-                }]));
+                return Ok(Some(vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_matching(
+                        filter,
+                        true,
+                        true,
+                        opponents_only,
+                    ),
+                ))]));
             }
             Ok(Some(
                 specs
                     .into_iter()
                     .map(
                         |(filter, include_spells, include_abilities, opponents_only)| {
-                            Instruction::CounterMatchingStackObjects {
-                                filter,
-                                include_spells,
-                                include_abilities,
-                                opponents_only,
-                            }
+                            Instruction::StackOp(Box::new(
+                                spellwake_engine::toolbox::StackOpSpec::counter_matching(
+                                    filter,
+                                    include_spells,
+                                    include_abilities,
+                                    opponents_only,
+                                ),
+                            ))
                         },
                     )
                     .collect(),
@@ -4678,7 +4727,7 @@ fn try_lower_counter_matching_stack_objects(
 
 fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool) -> bool {
     match op {
-        Instruction::ExileTopForPlay { .. } => true,
+        Instruction::ExileTopPlay { .. } => true,
         Instruction::ZoneOp(_) | Instruction::ForEachPlayerQuery { .. }
             if crate::keyword_creatures::oracle_lowering::toolbox_emit::unwrap_zone_op(op)
                 .is_some() =>
@@ -4704,7 +4753,7 @@ fn is_grant_play_last_moved_producer(op: &Instruction, expected_exile_only: bool
                 )
         }
         Instruction::ChooseObjects { .. } => !expected_exile_only,
-        Instruction::ForEachPlayer { body, .. } => body
+        Instruction::ForEachPlayerQuery { body, .. } => body
             .instructions
             .iter()
             .rev()
@@ -4807,7 +4856,6 @@ fn strip_last_moved_for_grant_play(filter: &mut ObjectFilterAst, ops: &[Instruct
             | Instruction::Jump { .. }
             | Instruction::BindResolutionX(_)
             | Instruction::AdjustLife(_)
-            | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(

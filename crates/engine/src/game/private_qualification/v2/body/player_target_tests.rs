@@ -29,7 +29,9 @@ fn copier() -> Program {
         ManaCost::free(),
         ExecutableBody::new(
             BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-            vec![Instruction::CopySpell],
+            vec![Instruction::StackOp(Box::new(
+                crate::toolbox::StackOpSpec::copy_targeted_spell(),
+            ))],
         ),
     )
 }

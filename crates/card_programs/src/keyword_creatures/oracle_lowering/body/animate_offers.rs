@@ -717,12 +717,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     &rewrite_offer_chosen_to_loop_ve,
                 );
             }
-            Instruction::ChooseOptionForPlayers { players, options } => {
-                rewrite_offer_chosen_to_loop_ap(players);
-                for br in options {
-                    rewrite_offer_chosen_to_loop_ops(&mut br.body.instructions);
-                }
-            }
             Instruction::Scry { player, amount }
             | Instruction::Surveil { player, amount }
             | Instruction::Mill { player, amount }
@@ -734,15 +728,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             Instruction::CollectEvidence { player, minimum } => {
                 rewrite_offer_chosen_to_loop_rp(player);
                 rewrite_offer_chosen_to_loop_ve(minimum);
-            }
-
-            Instruction::LookTopChoose {
-                count,
-                library_owner,
-                ..
-            } => {
-                rewrite_offer_chosen_to_loop_ve(count);
-                rewrite_offer_chosen_to_loop_rp(library_owner);
             }
             Instruction::LookTopChooseExt {
                 library_owner,
@@ -759,9 +744,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                 rewrite_offer_chosen_to_loop_rp(library_owner);
                 rewrite_offer_chosen_to_loop_rp(chooser);
                 rewrite_offer_chosen_to_loop_ve(count);
-            }
-            Instruction::OfferManaPayment { payer, .. } => {
-                rewrite_offer_chosen_to_loop_rp(payer);
             }
             Instruction::OfferDynamicManaPayment {
                 payer,
@@ -783,11 +765,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     rewrite_offer_chosen_to_loop_ops(&mut br.body.instructions);
                 }
             }
-            Instruction::AddMana(yield_kind) => {
-                if let Some(amount) = mana_yield_amount_mut(yield_kind) {
-                    rewrite_offer_chosen_to_loop_ve(amount);
-                }
-            }
             Instruction::AddManaForPlayer { player, yield_kind } => {
                 rewrite_offer_chosen_to_loop_rp(player);
                 if let Some(amount) = mana_yield_amount_mut(yield_kind) {
@@ -799,8 +776,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             | Instruction::TakeInitiative { player: rp } => {
                 rewrite_offer_chosen_to_loop_rp(rp);
             }
-            Instruction::CreateTokens { creations }
-            | Instruction::CreateAttackingTokens { creations, .. } => {
+            Instruction::CreateTokens { creations } => {
                 for c in creations {
                     rewrite_offer_chosen_to_loop_ve(&mut c.amount);
                     if let TokenRecipients::Player(rp) = &mut c.recipients {
@@ -808,10 +784,7 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
                     }
                 }
             }
-            Instruction::CreateTokenCopy {
-                count, recipients, ..
-            }
-            | Instruction::CreateTokenCopyExt {
+            Instruction::CreateTokenCopyExt {
                 count, recipients, ..
             } => {
                 rewrite_offer_chosen_to_loop_ve(count);
@@ -996,10 +969,6 @@ pub(super) fn rewrite_offer_chosen_to_loop_ops(ops: &mut [Instruction]) {
             }
             Instruction::RepeatLoop { count, body } => {
                 rewrite_offer_chosen_to_loop_ve(count);
-                rewrite_offer_chosen_to_loop_ops(&mut body.instructions);
-            }
-            Instruction::ForEachPlayer { players, body } => {
-                rewrite_offer_chosen_to_loop_ap(players);
                 rewrite_offer_chosen_to_loop_ops(&mut body.instructions);
             }
             Instruction::OfferAnyPlayer {
@@ -2050,8 +2019,7 @@ pub(in super::super) fn lower_animate_or_set_pt(
         matches!(
             op,
             Instruction::CreateTokens { .. }
-                | Instruction::CreateAttackingTokens { .. }
-                | Instruction::CreateTokenCopy { .. }
+                | Instruction::CreateTokenCopyExt { .. }
                 | Instruction::CreateTokenAndAttach { .. }
         )
     });

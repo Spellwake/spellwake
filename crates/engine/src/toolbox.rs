@@ -18,6 +18,7 @@ pub mod expr;
 pub mod life_damage;
 pub mod mutate;
 pub mod query;
+pub mod stack_op;
 pub mod tags;
 pub mod zone_op;
 
@@ -34,6 +35,7 @@ pub use life_damage::{
 };
 pub use mutate::{DrawCardsSpec, MutateObjectSpec, ObjectMutation};
 pub use query::{ObjectQuery, PlayerSelector, QuerySlice, QueryZone};
+pub use stack_op::{CounterDestination, StackOpKind, StackOpSpec, StackTargetSelector};
 pub use tags::{
     ObjectTagStore, SideDeck, SideDeckKind, SideDeckOpKind, SideDeckOpSpec, SideDeckStore,
     StateTrackKey, StateTrackKeySpec, StateTrackOp, StateTrackScope, StateTrackStore,

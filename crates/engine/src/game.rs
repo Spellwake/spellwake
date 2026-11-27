@@ -3997,8 +3997,24 @@ mod tests {
                                             exile_if_dies: false,
                                         },
                                     )),
-                                    Instruction::CreatePreventionShield { amount: 3.into() },
-                                    Instruction::CreatePreventionShield { amount: 4.into() },
+                                    Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec {
+    selector: None,
+    payload: crate::toolbox::ContinuousPayload::TargetPreventionShield { amount: 3.into() },
+    duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+    condition: None,
+    one_shot: true,
+    as_emblem: None,
+    emblem_label: None,
+})),
+                                    Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec {
+    selector: None,
+    payload: crate::toolbox::ContinuousPayload::TargetPreventionShield { amount: 4.into() },
+    duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+    condition: None,
+    one_shot: true,
+    as_emblem: None,
+    emblem_label: None,
+})),
                                     Instruction::DealDamage(Box::new(
                                         crate::toolbox::DealDamageSpec {
                                             source: crate::toolbox::DamageSourceQuery::EntrySource,
@@ -4094,7 +4110,17 @@ mod tests {
         let a = SeatId(0);
         let b = SeatId(1);
         let instructions = [
-            Instruction::CreatePreventionShield { amount: 1.into() },
+            Instruction::ApplyContinuous(Box::new(crate::toolbox::ApplyContinuousSpec {
+                selector: None,
+                payload: crate::toolbox::ContinuousPayload::TargetPreventionShield {
+                    amount: 1.into(),
+                },
+                duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+                condition: None,
+                one_shot: true,
+                as_emblem: None,
+                emblem_label: None,
+            })),
             Instruction::CreateDamageMultiplier { factor: 2.into() },
             Instruction::CreateDamageMultiplier { factor: 3.into() },
             Instruction::DealDamage(Box::new(crate::toolbox::DealDamageSpec {
@@ -4362,7 +4388,14 @@ mod tests {
                         2,
                         b,
                         ManaType::Blue,
-                        vec![Instruction::CopySpell, Instruction::CopySpell],
+                        vec![
+                            Instruction::StackOp(Box::new(
+                                crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                            )),
+                            Instruction::StackOp(Box::new(
+                                crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                            )),
+                        ],
                         BodyTarget::SingleSpell(SpellFilter::copyable_instruction()),
                     ),
                     SeedCard {

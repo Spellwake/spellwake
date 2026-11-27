@@ -18,6 +18,11 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BindingId(pub u16);
 
+impl BindingId {
+    /// Reserved slot synced with `ResolutionResults.loop_player` for `ForEachPlayerQuery`.
+    pub const LOOP_PLAYER: Self = Self(u16::MAX);
+}
+
 /// Last-known-information snapshot captured before an object changes zones (CR 400.7, 608.2h).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectSnapshot {

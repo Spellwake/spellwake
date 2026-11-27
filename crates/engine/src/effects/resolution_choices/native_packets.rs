@@ -264,15 +264,17 @@ fn skipped_local_definition() {
         Instruction::OptionalEffect {
             chooser: ResolvingPlayer::Controller,
         },
-        Instruction::OfferManaPayment {
+        Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::Controller,
-            cost: ManaCost::generic(1.into()),
+            fixed: ManaCost::generic(1.into()),
+            extra_generic: crate::program::ValueExpr::Literal(0.into()),
             paid_destination: 1,
             declined_destination: 2,
         },
-        Instruction::OfferManaPayment {
+        Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::Controller,
-            cost: ManaCost::generic(1.into()),
+            fixed: ManaCost::generic(1.into()),
+            extra_generic: crate::program::ValueExpr::Literal(0.into()),
             paid_destination: 2,
             declined_destination: 1,
         },
@@ -313,9 +315,10 @@ fn skipped_local_definition() {
                 ExecutableBody::new(
                     BodyTarget::None,
                     vec![
-                        Instruction::OfferManaPayment {
+                        Instruction::OfferDynamicManaPayment {
                             payer: ResolvingPlayer::Controller,
-                            cost: ManaCost::generic(1.into()),
+                            fixed: ManaCost::generic(1.into()),
+                            extra_generic: crate::program::ValueExpr::Literal(0.into()),
                             paid_destination,
                             declined_destination,
                         },
@@ -378,9 +381,10 @@ fn singular_related_player_definitions() {
                 },
                 gain(1),
             ],
-            vec![Instruction::OfferManaPayment {
+            vec![Instruction::OfferDynamicManaPayment {
                 payer: ResolvingPlayer::UniqueRelatedPlayer,
-                cost: ManaCost::generic(1.into()),
+                fixed: ManaCost::generic(1.into()),
+                extra_generic: crate::program::ValueExpr::Literal(0.into()),
                 paid_destination: 1,
                 declined_destination: 1,
             }],
@@ -428,9 +432,14 @@ fn moved_donor_definition() {
                             crate::toolbox::ZoneDest::Hand,
                         ),
                     )),
-                    Instruction::CopyTargetToSource {
+                    Instruction::BecomeCopy {
+                        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
+                        donor: crate::program::MoveSubjectRef::TargetObject,
                         duration: ResolvedDuration::UntilEndOfTurn,
-                        power_toughness: None,
+                        exceptions: Box::new(crate::program::CopyExceptions {
+                            override_pt: None,
+                            ..Default::default()
+                        }),
                     },
                 ],
             ),
@@ -554,9 +563,10 @@ fn saved_replay() -> Value {
     .enumerate()
     {
         let initial = initialize(vec![
-            Instruction::OfferManaPayment {
+            Instruction::OfferDynamicManaPayment {
                 payer: ResolvingPlayer::Controller,
-                cost: ManaCost::generic(2.into()),
+                fixed: ManaCost::generic(2.into()),
+                extra_generic: crate::program::ValueExpr::Literal(0.into()),
                 paid_destination: 1,
                 declined_destination: 4,
             },

@@ -427,9 +427,10 @@ fn native_payment_time_mana_color_restores_parent_and_rejects_old_handles() {
             instant(
                 BodyTarget::None,
                 vec![
-                    Instruction::OfferManaPayment {
+                    Instruction::OfferDynamicManaPayment {
                         payer: ResolvingPlayer::Controller,
-                        cost: ManaCost::one(ManaType::Blue),
+                        fixed: ManaCost::one(ManaType::Blue),
+                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                         paid_destination: 1,
                         declined_destination: 2,
                     },

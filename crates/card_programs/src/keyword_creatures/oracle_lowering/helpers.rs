@@ -1299,11 +1299,9 @@ fn last_instruction_created_tokens_local(ops: &[Instruction]) -> bool {
         ops.last(),
         Some(
             Instruction::CreateTokens { .. }
-                | Instruction::CreateTokenCopy { .. }
                 | Instruction::CreateTokenCopyExt { .. }
                 | Instruction::CreateTokenAndAttach { .. }
                 | Instruction::CreateAuraTokenAttached { .. }
-                | Instruction::CreateAttackingTokens { .. }
         )
     ) || matches!(
         ops.last(),
@@ -2415,9 +2413,10 @@ pub(super) fn try_build_offer_mana(
     vocabulary: &CreatureTypeVocabulary,
 ) -> Option<Instruction> {
     if let Some(cost) = parse_fixed_mana_cost(raw) {
-        return Some(Instruction::OfferManaPayment {
+        return Some(Instruction::OfferDynamicManaPayment {
             payer,
-            cost,
+            fixed: cost,
+            extra_generic: ValueExpr::Literal(0.into()),
             paid_destination,
             declined_destination,
         });
@@ -2442,50 +2441,32 @@ pub(super) fn try_build_offer_mana(
 }
 
 pub(super) fn with_offer_dests(mut op: Instruction, paid: usize, declined: usize) -> Instruction {
-    match &mut op {
-        Instruction::OfferManaPayment {
-            paid_destination,
-            declined_destination,
-            ..
-        }
-        | Instruction::OfferDynamicManaPayment {
-            paid_destination,
-            declined_destination,
-            ..
-        } => {
-            *paid_destination = paid;
-            *declined_destination = declined;
-        }
-        _ => {}
+    if let Instruction::OfferDynamicManaPayment {
+        paid_destination,
+        declined_destination,
+        ..
+    } = &mut op
+    {
+        *paid_destination = paid;
+        *declined_destination = declined;
     }
     op
 }
 
 pub(super) fn set_offer_paid(op: Option<&mut Instruction>, paid: usize) {
-    if let Some(
-        Instruction::OfferManaPayment {
-            paid_destination, ..
-        }
-        | Instruction::OfferDynamicManaPayment {
-            paid_destination, ..
-        },
-    ) = op
+    if let Some(Instruction::OfferDynamicManaPayment {
+        paid_destination, ..
+    }) = op
     {
         *paid_destination = paid;
     }
 }
 
 pub(super) fn set_offer_declined(op: Option<&mut Instruction>, declined: usize) {
-    if let Some(
-        Instruction::OfferManaPayment {
-            declined_destination,
-            ..
-        }
-        | Instruction::OfferDynamicManaPayment {
-            declined_destination,
-            ..
-        },
-    ) = op
+    if let Some(Instruction::OfferDynamicManaPayment {
+        declined_destination,
+        ..
+    }) = op
     {
         *declined_destination = declined;
     }
@@ -2870,19 +2851,21 @@ pub(super) fn lower_ward_cost_body(
     let mut instructions = Vec::new();
     if let Some(mc) = mana_cost {
         if non_mana_ops.is_empty() {
-            instructions.push(Instruction::OfferManaPayment {
+            instructions.push(Instruction::OfferDynamicManaPayment {
                 payer,
-                cost: mc,
+                fixed: mc,
+                extra_generic: ValueExpr::Literal(0.into()),
                 paid_destination: 2,
                 declined_destination: 1,
             });
             return Ok(ExecutableBody::new(BodyTarget::None, instructions));
         }
-        // Offer mana first; if declined jump directly to CounterWardSource (the instruction after this body).
+        // Offer mana first; if declined jump directly to the ward counter op (the instruction after this body).
         let counter_idx = 1 + 1 + non_mana_ops.len() + 1;
-        instructions.push(Instruction::OfferManaPayment {
+        instructions.push(Instruction::OfferDynamicManaPayment {
             payer,
-            cost: mc,
+            fixed: mc,
+            extra_generic: ValueExpr::Literal(0.into()),
             paid_destination: 1,
             declined_destination: counter_idx,
         });
@@ -4437,6 +4420,7 @@ pub(super) fn lower_token_spec_with_abilities(
                     amount: amt,
                     base_size: None,
                     recipients,
+                    attacking_defender: None,
                 },
                 false,
             ))
@@ -4739,6 +4723,7 @@ pub(super) fn lower_token_spec_with_abilities(
                     amount: amt,
                     base_size,
                     recipients,
+                    attacking_defender: None,
                 },
                 *attacking,
             ))

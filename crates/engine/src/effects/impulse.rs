@@ -233,22 +233,6 @@ impl EffectWindow {
                 .window
                 .resolving()
                 .ok_or(EffectError::WrongResolutionFrame)?;
-            let linked_source = if matches!(
-                self.payloads
-                    .get(&entry.id())
-                    .and_then(StackPayload::instructions)
-                    .and_then(|ops| ops.get(work.cursor.instruction)),
-                Some(Instruction::ExileTopForPlay {
-                    until_next_from_source: true
-                })
-            ) {
-                let StackKind::TriggeredAbility { source } = entry.kind() else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                Some(source.id())
-            } else {
-                None
-            };
             let exile_top_play = match self
                 .payloads
                 .get(&entry.id())
@@ -303,8 +287,6 @@ impl EffectWindow {
                         if free {
                             self.free_exiled_cards.insert(permission);
                         }
-                    } else if let Some(source) = linked_source {
-                        self.exile_play_until_next.insert(source, permission);
                     } else {
                         self.card_play_permissions.insert(CardPlayPermission {
                             zone: CardPlayZone::Exile,

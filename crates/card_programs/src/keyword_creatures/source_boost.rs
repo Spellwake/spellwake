@@ -820,8 +820,12 @@ pub(super) fn parse(
         }
         body.instructions.insert(
             0,
-            Instruction::FlipCoin {
-                lose_destination: 2,
+            Instruction::FlipCoins {
+                player: spellwake_engine::program::ResolvingPlayer::Controller,
+                mode: spellwake_engine::program::CoinFlipMode::Single,
+                win_body: None,
+                lose_body: None,
+                lose_destination: Some(2),
             },
         );
         return Some((mana_cost, source_cost, body, restriction));
@@ -895,7 +899,11 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                vec![Instruction::CounterSpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))],
             ),
             restriction,
         ));
@@ -1076,7 +1084,9 @@ pub(super) fn parse(
             source_cost,
             ExecutableBody::new(
                 BodyTarget::ControlledAbility { colorless_source },
-                vec![Instruction::CopyAbility],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_ability(),
+                ))],
             ),
             restriction,
         ));
@@ -1091,7 +1101,9 @@ pub(super) fn parse(
                 BodyTarget::SingleSpell(
                     spellwake_engine::program::SpellFilter::instant_or_sorcery().controlled(),
                 ),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
             restriction,
         ));

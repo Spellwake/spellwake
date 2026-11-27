@@ -22,7 +22,9 @@ fn cmm_duplicant_and_phyrexian_ingester_keep_distinct_imprint_values_when_the_en
                 BodyTarget::ControlledAbility {
                     colorless_source: false,
                 },
-                vec![Instruction::CopyAbility],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_ability(),
+                ))],
             ),
         });
         let mut maker = named("Dragon Fodder", 7, A, ObjectDestination::Hand);

@@ -36,9 +36,10 @@ impl Lane {
             ],
             Self::Payer => vec![
                 gate_instruction(3),
-                Instruction::OfferManaPayment {
+                Instruction::OfferDynamicManaPayment {
                     payer: ResolvingPlayer::UniqueRelatedPlayer,
-                    cost: ManaCost::free(),
+                    fixed: ManaCost::free(),
+                    extra_generic: crate::program::ValueExpr::Literal(0.into()),
                     paid_destination: 2,
                     declined_destination: 2,
                 },
@@ -48,9 +49,10 @@ impl Lane {
     }
 }
 fn gate_instruction(end: usize) -> Instruction {
-    Instruction::OfferManaPayment {
+    Instruction::OfferDynamicManaPayment {
         payer: ResolvingPlayer::Controller,
-        cost: ManaCost::free(),
+        fixed: ManaCost::free(),
+        extra_generic: crate::program::ValueExpr::Literal(0.into()),
         paid_destination: 1,
         declined_destination: end,
     }

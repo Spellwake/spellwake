@@ -218,13 +218,19 @@ fn retain_copy_reply_rejects_wrong_actor_and_both_reuse_forms_before_real_retain
                 2,
                 A,
                 BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-                vec![Instruction::CounterSpell],
+                vec![Instruction::StackOp(Box::new(
+                    crate::toolbox::StackOpSpec::counter_targeted(
+                        crate::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))],
             ),
             hand(
                 3,
                 A,
                 BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
-                wrapped(Instruction::CopySpell),
+                wrapped(Instruction::StackOp(Box::new(
+                    crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))),
             ),
         ],
     );

@@ -53,9 +53,17 @@ fn damage(amount: i64) -> Instruction {
 }
 
 fn shield(amount: i64) -> Instruction {
-    Instruction::CreatePreventionShield {
-        amount: amount.into(),
-    }
+    Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec {
+        selector: None,
+        payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+            amount: amount.into(),
+        },
+        duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+        condition: None,
+        one_shot: true,
+        as_emblem: None,
+        emblem_label: None,
+    }))
 }
 
 fn multiplier(factor: i64) -> Instruction {
@@ -700,7 +708,14 @@ fn two_copy_choices_keep_source_cursor_and_independent_full_programs_above_it() 
                     BodyTarget::SingleSpell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
-                    vec![Instruction::CopySpell, Instruction::CopySpell],
+                    vec![
+                        Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                        )),
+                        Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                        )),
+                    ],
                 ),
             ),
         ],
@@ -816,7 +831,16 @@ fn copy_then_counter_preserves_the_independent_copied_sequence() {
                     BodyTarget::SingleSpell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
-                    vec![Instruction::CopySpell, Instruction::CounterSpell],
+                    vec![
+                        Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                        )),
+                        Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                spellwake_engine::toolbox::CounterDestination::Graveyard,
+                            ),
+                        )),
+                    ],
                 ),
             ),
         ],
@@ -848,7 +872,16 @@ fn copy_then_counter_preserves_the_independent_copied_sequence() {
 
 #[test]
 fn counter_then_copy_and_repeated_counter_skip_departed_stack_operands() {
-    for later in [Instruction::CopySpell, Instruction::CounterSpell] {
+    for later in [
+        Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+        )),
+        Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                spellwake_engine::toolbox::CounterDestination::Graveyard,
+            ),
+        )),
+    ] {
         let game = world(
             100,
             vec![
@@ -862,7 +895,14 @@ fn counter_then_copy_and_repeated_counter_skip_departed_stack_operands() {
                     B,
                     ExecutableBody::new(
                         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                        vec![Instruction::CounterSpell, later],
+                        vec![
+                            Instruction::StackOp(Box::new(
+                                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                                ),
+                            )),
+                            later,
+                        ],
                     ),
                 ),
             ],
@@ -898,9 +938,15 @@ fn one_choice_convenience_wrappers_reject_a_second_prompt_atomically() {
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
                     vec![
-                        Instruction::CopySpell,
-                        Instruction::CopySpell,
-                        Instruction::CopySpell,
+                        Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                        )),
+                        Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                        )),
+                        Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                        )),
                     ],
                 ),
             ),

@@ -3485,6 +3485,8 @@ pub enum EffectSubject {
     CreatedTokens,
     /// Objects moved earlier during this same resolution.
     LastMoved,
+    /// First permanent in a two-target linked pair (`legal_linked_targets`).
+    LinkedFirst,
     /// Every battlefield permanent matching this composable filter at resolution.
     Matching(ObjectFilter),
     /// The targeted permanent plus every other battlefield permanent matching this filter with the same name as the target.

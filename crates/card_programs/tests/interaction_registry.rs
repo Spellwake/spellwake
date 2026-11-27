@@ -280,7 +280,11 @@ fn assert_complete_programs(registry: &Registry, vocabulary: &CreatureTypeVocabu
                         ),
                         "Cancel" | "Counterspell" => ExecutableBody::new(
                             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                            vec![Instruction::CounterSpell],
+                            vec![Instruction::StackOp(Box::new(
+                                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                                ),
+                            ))],
                         ),
                         "Divination" => ExecutableBody::new(
                             BodyTarget::None,

@@ -827,14 +827,14 @@ fn split_disjunctive_items(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// Apply `restriction` onto the most recent `AddMana` / `AddManaForPlayer` instruction in `op`
+/// Apply `restriction` onto the most recent `AddManaForPlayer` instruction in `op`
 /// (mirroring `retain_mana_in_instruction`).
 pub(super) fn restrict_mana_in_instruction(
     op: &mut Instruction,
     restriction: &ManaRestriction,
 ) -> bool {
     match op {
-        Instruction::AddMana(yield_kind) | Instruction::AddManaForPlayer { yield_kind, .. } => {
+        Instruction::AddManaForPlayer { yield_kind, .. } => {
             wrap_restricted_mana_yield(yield_kind, restriction)
         }
         _ => false,
@@ -2086,7 +2086,7 @@ fn has_live_interactive_last_moved(
                     InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Mill
                 );
             }
-            Instruction::ExileTopPlay { .. } | Instruction::ExileTopForPlay { .. } => {
+            Instruction::ExileTopPlay { .. } => {
                 return matches!(
                     expected,
                     InteractiveLastMovedKind::Any | InteractiveLastMovedKind::Exile
@@ -2167,7 +2167,6 @@ fn has_live_interactive_last_moved(
             | Instruction::BindResolutionX(_)
             | Instruction::ApplyContinuous(_)
             | Instruction::AdjustLife(_)
-            | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. } => continue,
             _ => return false,
         }

@@ -662,9 +662,8 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
             if matches!(
                 builder.instructions.last(),
                 Some(
-                    Instruction::LookTopChoose { .. }
+                    Instruction::LookTopChooseExt { .. }
                         | Instruction::CreateTokens { .. }
-                        | Instruction::CreateAttackingTokens { .. }
                 )
             ) =>
         {
@@ -674,7 +673,7 @@ pub(super) fn last_moved_subject_safe(builder: &BodyBuilder, subject_ref: MatchO
             if builder.instructions.iter().rev().take(2).any(|op| {
                 matches!(
                     op,
-                    Instruction::ExileTopForPlay { .. }
+                    Instruction::ExileTopPlay { .. }
                 ) || super::super::toolbox_emit::unwrap_zone_op(op).is_some_and(|spec| {
                     matches!(
                         &spec.source,

@@ -1554,7 +1554,6 @@ impl EffectWindow {
             matches!(
             op,
             Instruction::CreateTokens { creations }
-                    | Instruction::CreateAttackingTokens { creations, .. }
                     if creations.iter().any(|creation| {
                         creation.amount.references_trigger_source_stat()
                             || match &creation.base_size {
@@ -4163,8 +4162,7 @@ impl EffectWindow {
                             ObjectDestination::Exile
                         )
                         | (
-                            LinkedReturnOrigin::Graveyard { .. }
-                                | LinkedReturnOrigin::GraveyardTransformed { .. },
+                            LinkedReturnOrigin::Graveyard { .. },
                             ObjectDestination::Graveyard
                         )
                         | (
@@ -4257,9 +4255,7 @@ impl EffectWindow {
                     .entered_from_graveyard
                     .insert(movement.after.id());
             }
-            if matches!(origin, LinkedReturnOrigin::GraveyardTransformed { .. })
-                && !movement.after.transformed()
-            {
+            if false && !movement.after.transformed() {
                 self.window.transform(movement.after.id())?;
             }
             if let LinkedReturnOrigin::Graveyard {

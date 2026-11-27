@@ -301,7 +301,14 @@ impl EffectWindow {
         report_first: bool,
         legal: impl Fn(&ExecutableBody, TargetRef) -> bool,
     ) -> Result<ResolvedModeSelection, EffectError> {
-        let fights = body.instructions.contains(&Instruction::FightFixedTargets);
+        let fights = body.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::Fight { first, second }
+                    if **first == crate::program::MoveSubjectRef::RememberedFirst
+                        && **second == crate::program::MoveSubjectRef::RememberedSecond
+            )
+        });
         if fights && matches!(choices, [first, second] if first == second) {
             return Err(EffectError::IllegalTarget);
         }
@@ -400,17 +407,13 @@ impl EffectWindow {
         };
         for idx in outer_indices {
             match &mut instructions[idx] {
-                Instruction::FlipCoin {
-                    lose_destination: destination,
+                Instruction::FlipCoins {
+                    lose_destination: Some(destination),
+                    ..
                 }
                 | Instruction::BranchIfFalse { destination, .. }
                 | Instruction::Jump { destination } => remap(destination),
-                Instruction::OfferManaPayment {
-                    paid_destination,
-                    declined_destination,
-                    ..
-                }
-                | Instruction::OfferDynamicManaPayment {
+                Instruction::OfferDynamicManaPayment {
                     paid_destination,
                     declined_destination,
                     ..

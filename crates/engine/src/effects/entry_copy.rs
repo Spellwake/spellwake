@@ -621,10 +621,11 @@ fn condition_uses_entrant_source(cond: &crate::program::ResolutionCondition) -> 
 impl EffectWindow {
     pub(super) fn prospective_entry_face(&self, object: ObjectId) -> Option<&Program> {
         let program = self.copiable_program(object)?;
-        if self.linked_return_work.as_ref().is_some_and(|work| {
-            matches!(work.origin, LinkedReturnOrigin::GraveyardTransformed { .. })
-                && work.objects.contains(&object)
-        }) {
+        if self
+            .linked_return_work
+            .as_ref()
+            .is_some_and(|work| false && work.objects.contains(&object))
+        {
             return program.transform_back.as_deref();
         }
         Some(program)

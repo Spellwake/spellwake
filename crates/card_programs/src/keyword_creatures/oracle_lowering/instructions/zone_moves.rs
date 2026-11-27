@@ -5257,9 +5257,12 @@ pub(super) fn lower_zone_moves_instruction(
                             BodyTarget::None,
                             vec![crate::keyword_creatures::oracle_lowering::toolbox_emit::select_zone_cards_to_zone(ResolvingPlayer::LoopPlayer, src_zone, obj, min, max, destination, false)],
                         );
-                        trial.instructions.push(Instruction::ForEachPlayer {
-                            players,
-                            body: loop_body,
+                        trial.instructions.push(Instruction::ForEachPlayerQuery {
+                            selector: Box::new(spellwake_engine::toolbox::PlayerSelector::Group(
+                                players,
+                            )),
+                            bind_player: spellwake_engine::toolbox::BindingId::LOOP_PLAYER,
+                            body: Box::new(loop_body),
                         });
                     } else {
                         let rp = lower_resolving_player_in_context(
@@ -8333,12 +8336,15 @@ pub(super) fn lower_zone_moves_instruction(
         } if is_self_pronoun(subject, builder, self_pronoun_valid) => {
             let idx = builder.instructions.len();
             if let Some(cost) = parse_fixed_mana_cost(raw) {
-                builder.instructions.push(Instruction::OfferManaPayment {
-                    payer: ResolvingPlayer::Controller,
-                    cost,
-                    paid_destination: idx + 2,
-                    declined_destination: idx + 1,
-                });
+                builder
+                    .instructions
+                    .push(Instruction::OfferDynamicManaPayment {
+                        payer: ResolvingPlayer::Controller,
+                        fixed: cost,
+                        extra_generic: ValueExpr::Literal(0.into()),
+                        paid_destination: idx + 2,
+                        declined_destination: idx + 1,
+                    });
             } else if let Some((fixed, x_cnt)) = parse_mana_cost_with_x(raw)
                 && x_cnt > 0
             {
@@ -8929,20 +8935,17 @@ pub(super) fn lower_zone_moves_instruction(
                     prior_p
                 } else if let Some(loop_players) =
                     builder.instructions.iter().rev().find_map(|op| match op {
-                        Instruction::ForEachPlayer { players, body }
-                            if !body.instructions.is_empty() =>
-                        {
-                            Some(*players)
-                        }
-                        Instruction::ForEachPlayerQuery { selector, .. } => match selector.as_ref()
-                        {
-                            spellwake_engine::toolbox::PlayerSelector::Group(players)
-                                if !matches!(players, AffectedPlayers::One(_)) =>
-                            {
-                                Some(*players)
+                        Instruction::ForEachPlayerQuery { selector, body, .. } => {
+                            match selector.as_ref() {
+                                spellwake_engine::toolbox::PlayerSelector::Group(players)
+                                    if !body.instructions.is_empty()
+                                        || !matches!(players, AffectedPlayers::One(_)) =>
+                                {
+                                    Some(*players)
+                                }
+                                _ => None,
                             }
-                            _ => None,
-                        },
+                        }
                         Instruction::DrawCards(spec) => match &spec.players {
                             spellwake_engine::toolbox::PlayerSelector::Group(players)
                                 if !matches!(players, AffectedPlayers::One(_)) =>
@@ -9747,12 +9750,15 @@ pub(super) fn lower_zone_moves_instruction(
                 && let Some(mana) = parse_fixed_mana_cost(raw)
             {
                 let offer_idx = builder.instructions.len();
-                builder.instructions.push(Instruction::OfferManaPayment {
-                    payer: ResolvingPlayer::Controller,
-                    cost: mana,
-                    paid_destination: 0,
-                    declined_destination: offer_idx + 1,
-                });
+                builder
+                    .instructions
+                    .push(Instruction::OfferDynamicManaPayment {
+                        payer: ResolvingPlayer::Controller,
+                        fixed: mana,
+                        extra_generic: ValueExpr::Literal(0.into()),
+                        paid_destination: 0,
+                        declined_destination: offer_idx + 1,
+                    });
                 lower_instruction(
                     &sac_ins,
                     builder,
@@ -9763,7 +9769,7 @@ pub(super) fn lower_zone_moves_instruction(
                     bound_x,
                 )?;
                 let end_dest = builder.instructions.len();
-                if let Some(Instruction::OfferManaPayment {
+                if let Some(Instruction::OfferDynamicManaPayment {
                     paid_destination, ..
                 }) = builder.instructions.get_mut(offer_idx)
                 {
@@ -9953,6 +9959,8 @@ pub(super) fn lower_zone_moves_instruction(
                     },
                     rest_dest: spellwake_engine::program::LookTopRestDest::Exile,
                     keep_all_revealed: false,
+                    optional_keep: false,
+                    exile_instead_of_reveal: false,
                 });
             } else {
                 builder
@@ -9982,22 +9990,21 @@ pub(super) fn lower_zone_moves_instruction(
             SubjectRefAst::Anaphora(raw) => {
                 let low = raw.trim().to_ascii_lowercase();
                 if low == "the top card" {
-                    let make_reveal = |library_owner: ResolvingPlayer| Instruction::LookTopChoose {
-                        count: ValueExpr::literal(1),
-                        library_owner,
-                        filter: None,
-                        reveal: true,
-                        reveal_only: true,
-                        to_battlefield: false,
-                        enters_tapped: false,
-                        take_all_matching: false,
-                        max_picks: 0,
-                        rest_to_graveyard: false,
-                        rest_to_exile: false,
-                        rest_to_top: false,
-                        random_rest_order: false,
-                        secondary: None,
-                    };
+                    let make_reveal =
+                        |library_owner: ResolvingPlayer| Instruction::LookTopChooseExt {
+                            library_owner,
+                            chooser: ResolvingPlayer::Controller,
+                            count: ValueExpr::literal(1),
+                            filter: None,
+                            max_picks: 0,
+                            take_all_matching: false,
+                            keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
+                            rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
+                            reveal_kept: false,
+                            reveal_all: true,
+                            reveal_only: true,
+                            secondary: None,
+                        };
                     if let Some(players) = try_group_affected_players(*player) {
                         push_for_each_player(
                             players,
@@ -10016,7 +10023,7 @@ pub(super) fn lower_zone_moves_instruction(
                         return Err("oracle:unsupported-reveal-by-player");
                     }
                     let prior_owner = builder.instructions.iter().rev().find_map(|op| match op {
-                        Instruction::LookTopChoose {
+                        Instruction::LookTopChooseExt {
                             count,
                             library_owner,
                             reveal_only: true,
@@ -10047,20 +10054,18 @@ pub(super) fn lower_zone_moves_instruction(
                     if actor != library_owner && actor != ResolvingPlayer::Controller {
                         return Err("oracle:unsupported-reveal-by-player");
                     }
-                    trial.instructions.push(Instruction::LookTopChoose {
-                        count: ValueExpr::literal(1),
+                    trial.instructions.push(Instruction::LookTopChooseExt {
                         library_owner,
+                        chooser: ResolvingPlayer::Controller,
+                        count: ValueExpr::literal(1),
                         filter: None,
-                        reveal: true,
-                        reveal_only: true,
-                        to_battlefield: false,
-                        enters_tapped: false,
-                        take_all_matching: false,
                         max_picks: 0,
-                        rest_to_graveyard: false,
-                        rest_to_exile: false,
-                        rest_to_top: false,
-                        random_rest_order: false,
+                        take_all_matching: false,
+                        keep_dest: spellwake_engine::program::LookTopKeepDest::Hand,
+                        rest_dest: spellwake_engine::program::LookTopRestDest::BottomOrder,
+                        reveal_kept: false,
+                        reveal_all: true,
+                        reveal_only: true,
                         secondary: None,
                     });
                     *builder = trial;
@@ -10102,10 +10107,12 @@ pub(super) fn lower_zone_moves_instruction(
 fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
     for op in ops.iter().rev() {
         match op {
+            Instruction::LookTopChooseExt {
+                reveal_only: true, ..
+            } => continue,
             Instruction::RevealUntilMatchExt { .. }
             | Instruction::LookTopChooseExt { .. }
-            | Instruction::ExileTopPlay { .. }
-            | Instruction::ExileTopForPlay { .. } => return true,
+            | Instruction::ExileTopPlay { .. } => return true,
             Instruction::ZoneOp(spec)
                 if matches!(
                     spec.destination,
@@ -10123,7 +10130,6 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             Instruction::ChooseOneLastMoved { .. }
             | Instruction::OptionalEffect { .. }
             | Instruction::OptionalSequence { .. }
-            | Instruction::OfferManaPayment { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::AdjustLife(_)
             | Instruction::MutatePlayer(_)
@@ -10132,11 +10138,7 @@ fn has_live_revealed_last_moved_producer(ops: &[Instruction]) -> bool {
             | Instruction::BindResolutionX(_)
             | Instruction::ChooseValue { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::AddMana(_)
-            | Instruction::AddManaForPlayer { .. }
-            | Instruction::LookTopChoose {
-                reveal_only: true, ..
-            } => continue,
+            | Instruction::AddManaForPlayer { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(
                     spec.payload,
@@ -10227,7 +10229,7 @@ pub(super) fn has_live_last_moved_producer(
                         | LastMovedProducerKind::Graveyard
                 );
             }
-            Instruction::ExileTopPlay { .. } | Instruction::ExileTopForPlay { .. } => {
+            Instruction::ExileTopPlay { .. } => {
                 return matches!(
                     expected,
                     LastMovedProducerKind::Any | LastMovedProducerKind::Exile
@@ -10303,6 +10305,9 @@ pub(super) fn has_live_last_moved_producer(
                 };
             }
 
+            Instruction::LookTopChooseExt {
+                reveal_only: true, ..
+            } => continue,
             Instruction::LookTopChooseExt { keep_dest, .. }
             | Instruction::RevealUntilMatchExt {
                 match_dest: keep_dest,
@@ -10333,7 +10338,6 @@ pub(super) fn has_live_last_moved_producer(
             Instruction::ChooseOneLastMoved { .. }
             | Instruction::OptionalEffect { .. }
             | Instruction::OptionalSequence { .. }
-            | Instruction::OfferManaPayment { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::AdjustLife(_)
             | Instruction::MutatePlayer(_)
@@ -10342,11 +10346,7 @@ pub(super) fn has_live_last_moved_producer(
             | Instruction::BindResolutionX(_)
             | Instruction::ChooseValue { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
-            | Instruction::AddMana(_)
-            | Instruction::AddManaForPlayer { .. }
-            | Instruction::LookTopChoose {
-                reveal_only: true, ..
-            } => continue,
+            | Instruction::AddManaForPlayer { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(
                     spec.payload,
@@ -10605,11 +10605,10 @@ pub(super) fn has_checked_revealed_top(ops: &[Instruction]) -> bool {
     ops.iter().rev().any(|op| {
         matches!(
             op,
-            Instruction::LookTopChoose {
+            Instruction::LookTopChooseExt {
                 reveal_only: true,
                 ..
             } | Instruction::MayRevealLibraryTop
-                | Instruction::RevealUntilMatch { .. }
                 | Instruction::RevealUntilMatchExt { .. }
         ) || matches!(
             op,
@@ -10634,7 +10633,7 @@ pub(super) fn has_checked_revealed_top_strict(ops: &[Instruction]) -> bool {
     ops.iter().rev().any(|op| {
         matches!(
             op,
-            Instruction::LookTopChoose {
+            Instruction::LookTopChooseExt {
                 reveal_only: true,
                 ..
             } | Instruction::MayRevealLibraryTop
@@ -10787,11 +10786,6 @@ fn can_upgrade_destroy_no_regen(op: &Instruction) -> bool {
             .iter()
             .rev()
             .any(can_upgrade_destroy_no_regen),
-        Instruction::ForEachPlayer { body, .. } => body
-            .instructions
-            .iter()
-            .rev()
-            .any(can_upgrade_destroy_no_regen),
         Instruction::ForEachPlayerQuery { body, .. } | Instruction::RepeatLoop { body, .. } => body
             .instructions
             .iter()
@@ -10832,11 +10826,6 @@ fn try_upgrade_destroy_no_regen(op: &mut Instruction) -> bool {
             true
         }
         Instruction::FixedTargetClause(body) => body
-            .instructions
-            .iter_mut()
-            .rev()
-            .any(try_upgrade_destroy_no_regen),
-        Instruction::ForEachPlayer { body, .. } => body
             .instructions
             .iter_mut()
             .rev()
@@ -10885,7 +10874,6 @@ fn is_damage_instruction_for_no_regen(op: &Instruction) -> bool {
                 action: PermanentTargetAction::Damage(_),
                 ..
             }
-            | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::CreatureDealsPowerDamageToOther { .. }
     )
@@ -10897,11 +10885,6 @@ fn find_damage_instruction_for_no_regen(op: &Instruction) -> Option<&Instruction
     }
     match op {
         Instruction::FixedTargetClause(body) => body
-            .instructions
-            .iter()
-            .rev()
-            .find_map(find_damage_instruction_for_no_regen),
-        Instruction::ForEachPlayer { body, .. } => body
             .instructions
             .iter()
             .rev()
@@ -11019,7 +11002,6 @@ fn damage_no_regen_object_query(
             action: PermanentTargetAction::Damage(_),
             ..
         }
-        | Instruction::DivideDamageAmongTargets { .. }
         | Instruction::DivideDamageExprAmongTargets { .. }
         | Instruction::CreatureDealsPowerDamageToOther { .. } => {
             if is_permanent_body_target(target) {
@@ -11103,7 +11085,6 @@ fn extract_prior_resolving_player_for_shuffle(
         Instruction::AdjustLife(spec) => from_sel(&spec.players),
         Instruction::OptionalEffect { chooser: p }
         | Instruction::OptionalSequence { chooser: p, .. }
-        | Instruction::OfferManaPayment { payer: p, .. }
         | Instruction::OfferDynamicManaPayment { payer: p, .. }
         | Instruction::RevealUntilMatchExt {
             library_owner: p, ..
@@ -11111,9 +11092,6 @@ fn extract_prior_resolving_player_for_shuffle(
         | Instruction::Mill { player: p, .. }
         | Instruction::Scry { player: p, .. }
         | Instruction::Surveil { player: p, .. }
-        | Instruction::LookTopChoose {
-            library_owner: p, ..
-        }
         | Instruction::LookTopChooseExt {
             library_owner: p, ..
         }
@@ -11230,13 +11208,10 @@ fn is_moved_object_instruction(op: &Instruction) -> bool {
             | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::RevealUntilMatch { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::LookTopChoose { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::ExileTopPlay { .. }
-            | Instruction::ExileTopForPlay { .. }
             | Instruction::Mill { .. }
             | Instruction::Discard { .. }
             | Instruction::ManifestDread
@@ -11394,7 +11369,6 @@ pub(super) fn has_prior_moved_object(ops: &[Instruction]) -> bool {
         match op {
             Instruction::OptionalEffect { .. }
             | Instruction::OptionalSequence { .. }
-            | Instruction::OfferManaPayment { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::AdjustLife(_)
             | Instruction::MutatePlayer(_)
@@ -11402,7 +11376,6 @@ pub(super) fn has_prior_moved_object(ops: &[Instruction]) -> bool {
             | Instruction::Jump { .. }
             | Instruction::BindResolutionX(_)
             | Instruction::ChooseValue { .. }
-            | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. } => continue,
             Instruction::ApplyContinuous(spec)
                 if matches!(

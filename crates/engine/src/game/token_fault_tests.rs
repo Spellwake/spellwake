@@ -35,6 +35,7 @@ fn prepare_grouped_count(count: i64, grouping: crate::program::TriggerGrouping) 
                     base_size: None,
                     enters_tapped: false,
                     recipients: crate::token::TokenRecipients::Controller,
+                    attacking_defender: None,
                 }],
             }],
         ),

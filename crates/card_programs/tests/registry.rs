@@ -117,7 +117,11 @@ fn known_identities_bind_versioned_partial_programs_without_claiming_behavior_or
                 ManaCost::specific(ManaType::Blue, 2.into()),
                 ExecutableBody::new(
                     BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                    vec![Instruction::CounterSpell]
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard
+                        )
+                    ))]
                 )
             ),
             "Counterspell"
@@ -347,7 +351,7 @@ fn twincast_guard_binds_only_its_exact_source_to_partial_supported_instant_seman
     assert!(matches!(
         seed.program,
         Program { kind: spellwake_engine::program::ProgramKind::Spell(spell), .. }
-            if spell.body.instructions == vec![Instruction::CopySpell]
+            if spell.body.instructions == vec![Instruction::StackOp(Box::new(spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell()))]
     ));
     source
         .cards

@@ -118,9 +118,19 @@ fn protected_player_receives_only_unprevented_infect_and_one_toxic_amount_on_a_h
         let mut protection = instant(
             3,
             A,
-            Instruction::CreatePreventionShield {
-                amount: shield.into(),
-            },
+            Instruction::ApplyContinuous(Box::new(
+                spellwake_engine::toolbox::ApplyContinuousSpec {
+                    selector: None,
+                    payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                        amount: shield.into(),
+                    },
+                    duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                    condition: None,
+                    one_shot: true,
+                    as_emblem: None,
+                    emblem_label: None,
+                },
+            )),
         );
         let spellwake_engine::program::ProgramKind::Spell(spell) = &mut protection.program.kind
         else {

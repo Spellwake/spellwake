@@ -1115,14 +1115,13 @@ impl EffectWindow {
         instruction: &Instruction,
         is_sequence: bool,
     ) -> Result<bool, EffectError> {
-        let allowed_sequence_head = matches!(
-            instruction,
-            Instruction::OfferManaPayment { .. } | Instruction::OfferDynamicManaPayment { .. }
-        ) || (is_sequence
-            && matches!(
-                instruction,
-                Instruction::BranchIfFalse { .. } | Instruction::Jump { .. }
-            ));
+        let allowed_sequence_head =
+            matches!(instruction, Instruction::OfferDynamicManaPayment { .. })
+                || (is_sequence
+                    && matches!(
+                        instruction,
+                        Instruction::BranchIfFalse { .. } | Instruction::Jump { .. }
+                    ));
         if !instruction.is_optional_primitive() && !allowed_sequence_head {
             return Err(EffectError::InconsistentProgram);
         }
@@ -1139,16 +1138,10 @@ impl EffectWindow {
             | Instruction::DamageFromGrantingPermanent { .. } => {
                 Err(EffectError::InconsistentProgram)
             }
-            Instruction::ReturnDelayedGraveyardCardTransformed(object) => {
-                Ok(self.delayed_transformed_return_player(*object).is_some())
-            }
             Instruction::ReturnDelayedGraveyardCard(object) => {
                 Ok(self.delayed_graveyard_return_player(*object).is_some())
             }
-            Instruction::ScheduleCreatedTokenExile(_)
-            | Instruction::ScheduleCreatedTokenSacrifice
-            | Instruction::ExileDelayedObjects(_)
-            | Instruction::GrantFlashback(_) => Err(EffectError::InconsistentProgram),
+            Instruction::ExileDelayedObjects(_) => Err(EffectError::InconsistentProgram),
             Instruction::AdjustLife(spec) => {
                 if let crate::toolbox::LifeOp::Pay(amount) = &spec.op {
                     let entry = self
@@ -1283,10 +1276,9 @@ impl EffectWindow {
                     .count();
                 Ok(!requested.is_positive() || RulesInteger::from_usize(hand_count) >= requested)
             }
-            Instruction::ChooseNewTargets
-            | Instruction::OfferManaPayment { .. }
-            | Instruction::OfferDynamicManaPayment { .. }
-            | Instruction::FixedTargetClause(_) => Ok(true),
+            Instruction::OfferDynamicManaPayment { .. } | Instruction::FixedTargetClause(_) => {
+                Ok(true)
+            }
             Instruction::Sacrifice {
                 players: crate::program::AffectedPlayers::One(role),
                 amount,
@@ -1319,24 +1311,17 @@ impl EffectWindow {
             Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Proliferate
-            | Instruction::AddMana(_)
-            | Instruction::ExileTopForPlay { .. }
             | Instruction::Bolster(_)
             | Instruction::Amass { .. }
             | Instruction::ManifestTop { .. }
             | Instruction::ExileTopPlay { .. }
-            | Instruction::LookTopChoose { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
-            | Instruction::BecomeCopy { .. }
-            | Instruction::BecomeCopyFixedTargets { .. }
             | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::ChooseOptionForPlayers { .. }
             | Instruction::Vote { .. }
             | Instruction::Incubate { .. }
             | Instruction::Connive { .. }
@@ -1352,8 +1337,6 @@ impl EffectWindow {
             | Instruction::Monstrosity { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
-            | Instruction::CopyStackObject { .. }
-            | Instruction::CastLinkedFaceDownFree
             | Instruction::Ripple(_)
             | Instruction::Demonstrate
             | Instruction::Enlist
@@ -1368,13 +1351,64 @@ impl EffectWindow {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::CreateTokenCopy { .. }
             | Instruction::BindResolutionX(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
-            | Instruction::RepeatLoop { .. }
-            | Instruction::RevealUntilMatch { .. } => Ok(true),
+            | Instruction::RepeatLoop { .. } => Ok(true),
+            Instruction::BecomeCopy {
+                receiver, donor, ..
+            } => {
+                if **receiver == crate::program::EffectSubject::AbilitySource
+                    && *donor == crate::program::MoveSubjectRef::TargetObject
+                {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let source_live = match entry.kind() {
+                        StackKind::ActivatedAbility { source }
+                        | StackKind::TriggeredAbility { source } => self
+                            .window
+                            .cards()
+                            .get(source.id())
+                            .is_some_and(|card| card.zone() == ObjectZone::Battlefield),
+                        _ => false,
+                    };
+                    if !source_live {
+                        return Ok(false);
+                    }
+                    let bound = self.instruction_target(entry)?;
+                    let TargetRef::Object(donor_id) = bound.choice().target else {
+                        return Ok(false);
+                    };
+                    return Ok(self
+                        .window
+                        .cards()
+                        .get(donor_id)
+                        .is_some_and(|card| card.zone() == ObjectZone::Battlefield));
+                }
+                Ok(true)
+            }
+            Instruction::StackOp(spec) => {
+                if !spec.requires_stack_target()
+                    || matches!(
+                        spec.op,
+                        crate::toolbox::StackOpKind::Retarget {
+                            single_target_only: false
+                        }
+                    )
+                {
+                    Ok(true)
+                } else {
+                    let entry = self
+                        .window
+                        .resolving()
+                        .ok_or(EffectError::InconsistentProgram)?;
+                    let bound = self.instruction_target(entry)?;
+                    self.operation_available(instruction, bound.choice().target)
+                }
+            }
             Instruction::ZoneOp(spec) => {
                 if matches!(
                     spec.destination,
@@ -1548,9 +1582,7 @@ impl EffectWindow {
             | Instruction::ReturnDelayedExileWithCounters(_)
             | Instruction::ReturnDelayedExile(_)
             | Instruction::ExileUnearthed(_)
-            | Instruction::SacrificeStateTriggerSource
-            | Instruction::CounterWardSource
-            | Instruction::CounterTriggeringStackObject => Ok(true),
+            | Instruction::SacrificeStateTriggerSource => Ok(true),
             Instruction::AdditionalCombat { .. } => Ok(true),
             Instruction::ExileOnePerPlayerUntilSourceLeaves
             | Instruction::Populate
@@ -1571,66 +1603,29 @@ impl EffectWindow {
             Instruction::ResolvePowerAbility(_)
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::CreateAttackingTokens { .. }
-            | Instruction::ForEachPlayer { .. }
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
             | Instruction::GrantChosenProtection { .. }
             | Instruction::LookTopChooseExt { .. }
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
-            | Instruction::CreateTokenCopyExt { .. }
-            | Instruction::MoveCounters { .. }
-            | Instruction::CounterMatchingStackObjects { .. }
-            | Instruction::TransferAllCountersFromTriggeringLki { .. } => Ok(true),
+            | Instruction::CreateTokenCopyExt { .. } => Ok(true),
             Instruction::ChooseCreatureType { excluding, .. } => {
                 Ok(excluding.len() < self.creature_vocabulary.len())
-            }
-            Instruction::CopyTargetToSource { .. } => {
-                let entry = self
-                    .window
-                    .resolving()
-                    .ok_or(EffectError::InconsistentProgram)?;
-                let StackKind::ActivatedAbility { source } = entry.kind() else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                if !self
-                    .window
-                    .cards()
-                    .get(source.id())
-                    .is_some_and(|object| object.zone() == ObjectZone::Battlefield)
-                {
-                    return Ok(false);
-                }
-                let bound = self.instruction_target(entry)?;
-                let TargetRef::Object(donor) = bound.choice().target else {
-                    return Err(EffectError::InconsistentProgram);
-                };
-                Ok(
-                    self.operation_available(instruction, bound.choice().target)?
-                        && self.copiable_program(donor).is_some_and(|program| {
-                            matches!(program.kind, ProgramKind::Permanent(_))
-                        }),
-                )
             }
             Instruction::DamageTargetControllersCreatures { .. }
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::RememberPermanentTarget
-            | Instruction::GainCastCardAbilities { .. }
             | Instruction::ExileDefeatedSiege
-            | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateDamageMultiplier { .. }
             | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::DivideThreeDamageAmongTargets
             | Instruction::DamageOrderedTargets { .. }
-            | Instruction::FightFixedTargets
-            | Instruction::BindOrderedPermanents { .. }
             | Instruction::MayRevealLibraryTop
             | Instruction::ChooseFoundSpell
             | Instruction::Encore
             | Instruction::PairWithCreature { .. }
-            | Instruction::FlipCoin { .. }
             | Instruction::CastFoundSpell(_)
             | Instruction::ExtortDrain
             | Instruction::ResolveGrowth(_)
@@ -1638,15 +1633,7 @@ impl EffectWindow {
             | Instruction::SacrificeEvoked
             | Instruction::Attach(_)
             | Instruction::ChooseRevealedHandCard { .. }
-            | Instruction::CounterSpellToExile
-            | Instruction::CounterSpellToLibrary { .. }
-            | Instruction::CounterSpell
-            | Instruction::GainControlOfSpell
-            | Instruction::ChangeOnlyTarget
-            | Instruction::CopyAbility
-            | Instruction::CopySpell
-            | Instruction::Earthbend { .. }
-            | Instruction::GrantProtectionChosenColor(_) => {
+            | Instruction::Earthbend { .. } => {
                 let entry = self
                     .window
                     .resolving()
@@ -1717,7 +1704,6 @@ impl EffectWindow {
             Instruction::ResolveCounterKeyword(
                 crate::program::CounterKeyword::SuspendLastCounter,
             )
-            | Instruction::FlipCoin { .. }
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::MadnessCast
@@ -1776,18 +1762,6 @@ impl EffectWindow {
                         )
                     }
                     _ => {
-                        if matches!(instruction, Instruction::FlipCoin { .. }) {
-                            let chooser = self.resolving_player(ResolvingPlayer::Controller)?;
-                            self.pending_work =
-                                Some(PendingWork::OptionalEffect(Box::new(OptionalEffectWork {
-                                    rebound_or_buyback: false,
-                                    cast: None,
-                                    cursor,
-                                    chooser,
-                                    options: BTreeSet::new(),
-                                })));
-                            return Ok(true);
-                        }
                         if matches!(instruction, Instruction::CascadeBottom) {
                             let ids = self.cascade_remaining(cursor.entry)?;
                             if ids.len() <= 1 {
@@ -1867,33 +1841,6 @@ impl EffectWindow {
                     cost.generic = cost.generic.plus(&extra);
                 }
                 let payer = self.resolving_player_identity_at(*payer, Some(&cursor))?;
-                self.start_resolution_payment(
-                    ResolutionPaymentWork {
-                        variable: defines_x,
-                        defines_x,
-                        x_factor,
-                        record_last_action: true,
-                        restricted_colors: None,
-                        cursor,
-                        payer,
-                        cost,
-                        paid_destination: *paid_destination,
-                        declined_destination: *declined_destination,
-                    },
-                    append,
-                )?;
-            }
-            Instruction::OfferManaPayment {
-                payer,
-                cost,
-                paid_destination,
-                declined_destination,
-            } => {
-                let cursor = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let payer = self.resolving_player_identity_at(*payer, Some(&cursor))?;
                 let restricted_colors = self
                     .payloads
                     .get(&cursor.entry)
@@ -1903,14 +1850,14 @@ impl EffectWindow {
                     .then_some([ManaType::White, ManaType::Black]);
                 self.start_resolution_payment(
                     ResolutionPaymentWork {
-                        variable: false,
-                        defines_x: false,
-                        x_factor: 1.into(),
-                        record_last_action: false,
+                        variable: defines_x,
+                        defines_x,
+                        x_factor,
+                        record_last_action: true,
                         restricted_colors,
                         cursor,
                         payer,
-                        cost: cost.clone(),
+                        cost,
                         paid_destination: *paid_destination,
                         declined_destination: *declined_destination,
                     },
@@ -1936,18 +1883,14 @@ impl EffectWindow {
             | Instruction::SacrificeRandomUntilLand
             | Instruction::Discard { .. }
             | Instruction::ExileTopPlay { .. }
-            | Instruction::LookTopChoose { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::BecomeCopyFixedTargets { .. }
             | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::ChooseOptionForPlayers { .. }
             | Instruction::Vote { .. }
             | Instruction::Incubate { .. }
             | Instruction::Connive { .. }
@@ -1963,8 +1906,6 @@ impl EffectWindow {
             | Instruction::Monstrosity { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
-            | Instruction::CopyStackObject { .. }
-            | Instruction::CastLinkedFaceDownFree
             | Instruction::Ripple(_)
             | Instruction::Demonstrate
             | Instruction::Enlist
@@ -1984,7 +1925,7 @@ impl EffectWindow {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::CreateTokenCopy { .. }
+            | Instruction::StackOp(_)
             | Instruction::BindResolutionX(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
@@ -1992,32 +1933,26 @@ impl EffectWindow {
             | Instruction::RepeatLoop { .. }
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
-            | Instruction::RevealUntilMatch { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::CreateAttackingTokens { .. }
             | Instruction::ChooseCreatureType { .. }
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::AdditionalCombat { .. }
-            | Instruction::GainCastCardAbilities { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
             | Instruction::Proliferate
             | Instruction::DamageTargetControllersCreatures { .. }
-            | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateDamageMultiplier { .. }
             | Instruction::ResolveKeywordTrigger(_)
             | Instruction::ReturnChosenXGraveyardCreatures
             | Instruction::DivideThreeDamageAmongTargets
             | Instruction::DamageOrderedTargets { .. }
             | Instruction::FixedTargetClause(_)
-            | Instruction::FightFixedTargets
-            | Instruction::BindOrderedPermanents { .. }
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::MayRevealLibraryTop
             | Instruction::ManifestTop { .. }
@@ -2029,13 +1964,8 @@ impl EffectWindow {
             | Instruction::AdditionalLoyaltyActivation
             | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::ExileTopForPlay { .. }
-            | Instruction::ScheduleCreatedTokenExile(_)
-            | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
-            | Instruction::GrantFlashback(_)
             | Instruction::ReturnEarthbentCard
-            | Instruction::AddMana(_)
             | Instruction::PairWithCreature { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
@@ -2045,7 +1975,6 @@ impl EffectWindow {
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
             | Instruction::ReturnDelayedGraveyardCard(_)
-            | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedPermanentToHand(_)
             | Instruction::ReturnDelayedExileWithCounters(_)
             | Instruction::ReturnDelayedExile(_)
@@ -2056,27 +1985,14 @@ impl EffectWindow {
             | Instruction::ResolveCounterKeyword(_)
             | Instruction::SacrificeEvoked
             | Instruction::SacrificeStateTriggerSource
-            | Instruction::CounterWardSource
-            | Instruction::CounterTriggeringStackObject
             | Instruction::Attach(_)
             | Instruction::ChooseRevealedHandCard { .. }
             | Instruction::ReturnGraveyardCreatureWithCorpse(_)
-            | Instruction::CounterSpellToExile
-            | Instruction::CounterSpellToLibrary { .. }
-            | Instruction::CounterSpell
-            | Instruction::GainControlOfSpell
-            | Instruction::ChangeOnlyTarget
-            | Instruction::ChooseNewTargets
-            | Instruction::CopyAbility
-            | Instruction::CopySpell
-            | Instruction::CopyTargetToSource { .. }
             | Instruction::Earthbend { .. }
-            | Instruction::GrantProtectionChosenColor(_)
             | Instruction::SearchLibrary { .. }
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
-            | Instruction::ForEachPlayer { .. }
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
             | Instruction::GrantChosenProtection { .. }
@@ -2084,9 +2000,6 @@ impl EffectWindow {
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
-            | Instruction::MoveCounters { .. }
-            | Instruction::CounterMatchingStackObjects { .. }
-            | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SelectExtremeLifePlayer { .. } => return Ok(false),
         }

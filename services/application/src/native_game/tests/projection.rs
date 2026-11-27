@@ -1022,7 +1022,11 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                vec![Instruction::CounterSpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))],
             ),
         ),
         card(
@@ -1031,7 +1035,11 @@ fn stack_targets_leave_anonymous_occurrence_counts_without_incarnation_rebinding
             ObjectDestination::Hand,
             instant(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                vec![Instruction::CounterSpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))],
             ),
         ),
     ]);
@@ -1357,9 +1365,11 @@ fn projected_current_control_counters_damage_tap_and_copy_use_actual_native_owne
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::CopyTargetToSource {
+            vec![Instruction::BecomeCopy {
+                receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
+                donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
                 duration: ResolvedDuration::NoStatedDuration,
-                power_toughness: None,
+                exceptions: Box::default(),
             }],
         ),
     };
@@ -1713,7 +1723,9 @@ fn captured_damage_sources_keep_public_provenance_after_departure() {
                 BodyTarget::SingleSpell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
         ),
     ]);

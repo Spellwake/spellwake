@@ -232,7 +232,9 @@ fn splice_spell_copies_keep_added_effects_and_choose_each_target_without_repayin
                     BodyTarget::SingleSpell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
-                    Instruction::CopySpell,
+                    Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                    )),
                 ),
             ),
         ],

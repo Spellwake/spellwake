@@ -175,19 +175,15 @@ impl EffectWindow {
             }
             Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
-            | Instruction::OfferManaPayment { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ChooseObjects { .. }
             | Instruction::ChooseOption { .. }
-            | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::BecomeCopyFixedTargets { .. }
             | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::ChooseOptionForPlayers { .. }
             | Instruction::Vote { .. }
             | Instruction::Incubate { .. }
             | Instruction::Connive { .. }
@@ -203,8 +199,6 @@ impl EffectWindow {
             | Instruction::Monstrosity { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
-            | Instruction::CopyStackObject { .. }
-            | Instruction::CastLinkedFaceDownFree
             | Instruction::Ripple(_)
             | Instruction::Demonstrate
             | Instruction::Enlist
@@ -219,14 +213,13 @@ impl EffectWindow {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::CreateTokenCopy { .. }
+            | Instruction::StackOp(_)
             | Instruction::BindResolutionX(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::CollectEvidence { .. }
             | Instruction::Blight { .. }
-            | Instruction::ForEachPlayer { .. }
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
             | Instruction::GrantChosenProtection { .. }
@@ -234,9 +227,6 @@ impl EffectWindow {
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
-            | Instruction::MoveCounters { .. }
-            | Instruction::CounterMatchingStackObjects { .. }
-            | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
             | Instruction::AffectPermanentTargets { .. }
             | Instruction::ExileOnePerPlayerUntilSourceLeaves
@@ -249,25 +239,20 @@ impl EffectWindow {
             | Instruction::SacrificeRandomUntilLand
             | Instruction::Discard { .. }
             | Instruction::ExileTopPlay { .. }
-            | Instruction::LookTopChoose { .. }
-            | Instruction::RevealUntilMatch { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::CreateAttackingTokens { .. }
             | Instruction::ChooseCreatureType { .. }
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::AdditionalCombat { .. }
-            | Instruction::GainCastCardAbilities { .. }
             | Instruction::ExileDefeatedSiege
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
             | Instruction::Proliferate
             | Instruction::DamageTargetControllersCreatures { .. }
-            | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateDamageMultiplier { .. }
             | Instruction::OfferSourceCounters { .. }
             | Instruction::ResolveKeywordTrigger(_)
@@ -275,8 +260,6 @@ impl EffectWindow {
             | Instruction::DivideThreeDamageAmongTargets
             | Instruction::DamageOrderedTargets { .. }
             | Instruction::FixedTargetClause(_)
-            | Instruction::FightFixedTargets
-            | Instruction::BindOrderedPermanents { .. }
             | Instruction::ReturnGraveyardCreatureWithCorpse(_)
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::MayRevealLibraryTop
@@ -291,14 +274,9 @@ impl EffectWindow {
             | Instruction::AdditionalLoyaltyActivation
             | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::ExileTopForPlay { .. }
-            | Instruction::ScheduleCreatedTokenExile(_)
-            | Instruction::ScheduleCreatedTokenSacrifice
             | Instruction::ExileDelayedObjects(_)
-            | Instruction::GrantFlashback(_)
             | Instruction::Earthbend { .. }
             | Instruction::ReturnEarthbentCard
-            | Instruction::AddMana(_)
             | Instruction::AddManaForPlayer { .. }
             | Instruction::SelectExtremeLifePlayer { .. }
             | Instruction::PairWithCreature { .. }
@@ -306,7 +284,6 @@ impl EffectWindow {
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
-            | Instruction::FlipCoin { .. }
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::Myriad
@@ -322,7 +299,6 @@ impl EffectWindow {
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
             | Instruction::ReturnDelayedGraveyardCard(_)
-            | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedPermanentToHand(_)
             | Instruction::ReturnDelayedExileWithCounters(_)
             | Instruction::ReturnDelayedExile(_)
@@ -333,20 +309,8 @@ impl EffectWindow {
             | Instruction::ResolveCounterKeyword(_)
             | Instruction::SacrificeEvoked
             | Instruction::SacrificeStateTriggerSource
-            | Instruction::CounterWardSource
-            | Instruction::CounterTriggeringStackObject
             | Instruction::Attach(_)
             | Instruction::ChooseRevealedHandCard { .. }
-            | Instruction::CounterSpellToExile
-            | Instruction::CounterSpellToLibrary { .. }
-            | Instruction::CounterSpell
-            | Instruction::GainControlOfSpell
-            | Instruction::ChangeOnlyTarget
-            | Instruction::ChooseNewTargets
-            | Instruction::CopyAbility
-            | Instruction::CopySpell
-            | Instruction::CopyTargetToSource { .. }
-            | Instruction::GrantProtectionChosenColor(_)
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
@@ -583,6 +547,7 @@ mod tests {
                 base_size: None,
                 enters_tapped: false,
                 recipients: TokenRecipients::Controller,
+                attacking_defender: None,
             }],
         }));
         let human = v.resolve_label("Human").unwrap();

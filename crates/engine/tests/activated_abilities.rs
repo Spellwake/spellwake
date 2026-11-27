@@ -68,9 +68,17 @@ fn damage(amount: i64) -> Instruction {
     ))
 }
 fn shield(amount: i64) -> Instruction {
-    Instruction::CreatePreventionShield {
-        amount: amount.into(),
-    }
+    Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec {
+        selector: None,
+        payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+            amount: amount.into(),
+        },
+        duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+        condition: None,
+        one_shot: true,
+        as_emblem: None,
+        emblem_label: None,
+    }))
 }
 fn multiplier(factor: i64) -> Instruction {
     Instruction::CreateDamageMultiplier {
@@ -748,7 +756,9 @@ fn ability_can_counter_a_real_spell_copy_while_original_remains() {
                     7,
                     SourceCost::Tap,
                     ManaCost::free(),
-                    vec![Instruction::CopySpell],
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                    ))],
                     BodyTarget::SingleSpell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
@@ -762,7 +772,11 @@ fn ability_can_counter_a_real_spell_copy_while_original_remains() {
                     7,
                     SourceCost::Sacrifice,
                     ManaCost::free(),
-                    vec![Instruction::CounterSpell],
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    ))],
                     BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 )],
             ),
@@ -838,7 +852,9 @@ fn ability_can_copy_a_spell_copy_with_another_independent_payload() {
                     7,
                     SourceCost::Tap,
                     ManaCost::free(),
-                    vec![Instruction::CopySpell],
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                    ))],
                     BodyTarget::SingleSpell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),
@@ -852,7 +868,9 @@ fn ability_can_copy_a_spell_copy_with_another_independent_payload() {
                     7,
                     SourceCost::Sacrifice,
                     ManaCost::free(),
-                    vec![Instruction::CopySpell],
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                    ))],
                     BodyTarget::SingleSpell(
                         spellwake_engine::program::SpellFilter::copyable_instruction(),
                     ),

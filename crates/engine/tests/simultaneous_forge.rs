@@ -169,6 +169,7 @@ fn run(scenario: &str) {
             } else {
                 TokenRecipients::Controller
             },
+            attacking_defender: None,
         }],
     }];
     if scenario == "separate" {

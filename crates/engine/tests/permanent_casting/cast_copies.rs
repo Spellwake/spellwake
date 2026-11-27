@@ -61,7 +61,11 @@ fn fixture(kind: CastCopyKeyword) -> GameState {
     cards.push(spell(
         5,
         B,
-        Instruction::CounterSpell,
+        Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                spellwake_engine::toolbox::CounterDestination::Graveyard,
+            ),
+        )),
         free.clone(),
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
     ));

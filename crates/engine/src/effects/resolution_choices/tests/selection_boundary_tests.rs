@@ -11,9 +11,10 @@ fn target_player_role_uses_the_bound_player_for_optional_and_payment_choices() {
                 chooser: ResolvingPlayer::TargetPlayer,
             },
             gain(1),
-            Instruction::OfferManaPayment {
+            Instruction::OfferDynamicManaPayment {
                 payer: ResolvingPlayer::TargetPlayer,
-                cost: ManaCost::free(),
+                fixed: ManaCost::free(),
+                extra_generic: crate::program::ValueExpr::Literal(0.into()),
                 paid_destination: 3,
                 declined_destination: 4,
             },

@@ -947,9 +947,19 @@ fn shield(card: u64, alias: &'static str, checkpoint: &'static str, amount: i64)
         card: CardId(card),
         alias,
         checkpoint,
-        instructions: vec![Instruction::CreatePreventionShield {
-            amount: amount.into(),
-        }],
+        instructions: vec![Instruction::ApplyContinuous(Box::new(
+            spellwake_engine::toolbox::ApplyContinuousSpec {
+                selector: None,
+                payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                    amount: amount.into(),
+                },
+                duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                condition: None,
+                one_shot: true,
+                as_emblem: None,
+                emblem_label: None,
+            },
+        ))],
         creation_aliases: vec![(0, alias)],
         prepared: false,
         choices: &[],
@@ -1072,7 +1082,17 @@ fn sequence_scenarios() -> Vec<(&'static str, Vec<Source>)> {
             vec![sequence(
                 2,
                 vec![
-                    Instruction::CreatePreventionShield { amount: 4.into() },
+                    Instruction::ApplyContinuous(Box::new(spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload: spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                            amount: 4.into(),
+                        },
+                        duration: spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    })),
                     Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
                         source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
                         recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,
@@ -1372,8 +1392,36 @@ mod tests {
             alias: "probe",
             checkpoint: "settled",
             instructions: vec![
-                Instruction::CreatePreventionShield { amount: 1.into() },
-                Instruction::CreatePreventionShield { amount: 2.into() },
+                Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload:
+                            spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: 1.into(),
+                            },
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                )),
+                Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload:
+                            spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: 2.into(),
+                            },
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                )),
                 Instruction::DealDamage(Box::new(spellwake_engine::toolbox::DealDamageSpec {
                     source: spellwake_engine::toolbox::DamageSourceQuery::EntrySource,
                     recipients: spellwake_engine::toolbox::DamageTargetQuery::Targets,

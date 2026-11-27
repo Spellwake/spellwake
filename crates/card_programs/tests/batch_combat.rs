@@ -550,7 +550,21 @@ fn defiant_elf_tramples_after_lethal_even_with_prevention_and_when_all_blockers_
                 4,
                 ALICE,
                 BodyTarget::SingleCreature,
-                Instruction::CreatePreventionShield { amount: 1.into() },
+                Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload:
+                            spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: 1.into(),
+                            },
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                )),
             ),
             instant(
                 5,

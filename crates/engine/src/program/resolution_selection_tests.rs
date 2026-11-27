@@ -34,9 +34,14 @@ fn gain() -> Instruction {
 }
 
 fn copy() -> Instruction {
-    Instruction::CopyTargetToSource {
+    Instruction::BecomeCopy {
+        receiver: Box::new(crate::program::EffectSubject::AbilitySource),
+        donor: crate::program::MoveSubjectRef::TargetObject,
         duration: ResolvedDuration::UntilEndOfTurn,
-        power_toughness: None,
+        exceptions: Box::new(crate::program::CopyExceptions {
+            override_pt: None,
+            ..Default::default()
+        }),
     }
 }
 
@@ -145,9 +150,10 @@ fn target_player_uses_the_shared_optional_and_payment_role_owner() {
         Instruction::OptionalEffect {
             chooser: ResolvingPlayer::TargetPlayer,
         },
-        Instruction::OfferManaPayment {
+        Instruction::OfferDynamicManaPayment {
             payer: ResolvingPlayer::TargetPlayer,
-            cost: ManaCost::free(),
+            fixed: ManaCost::free(),
+            extra_generic: crate::program::ValueExpr::Literal(0.into()),
             paid_destination: 1,
             declined_destination: 2,
         },

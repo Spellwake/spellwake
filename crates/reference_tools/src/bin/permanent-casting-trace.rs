@@ -315,7 +315,11 @@ fn fixture(
                 ManaCost::specific(ManaType::Blue, 2.into()),
                 ExecutableBody::new(
                     BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                    vec![Instruction::CounterSpell],
+                    vec![Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    ))],
                 ),
             ),
         ));

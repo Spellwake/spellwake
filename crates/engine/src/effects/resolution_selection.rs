@@ -1369,10 +1369,6 @@ impl EffectWindow {
                     ResolutionSelectionOperation::ExileAnnouncedTargets { objects },
                 )
             }
-            Instruction::BindOrderedPermanents { .. } => {
-                self.advance_instruction()?;
-                return Ok(true);
-            }
             Instruction::AffectPermanentTargets {
                 action:
                     action @ (crate::program::PermanentTargetAction::ReturnToHand
@@ -1589,20 +1585,15 @@ impl EffectWindow {
             | Instruction::Jump { .. }
             | Instruction::OptionalSequence { .. }
             | Instruction::OptionalEffect { .. }
-            | Instruction::OfferManaPayment { .. }
             | Instruction::OfferDynamicManaPayment { .. }
             | Instruction::ChooseOption { .. }
             | Instruction::ExileTopPlay { .. }
-            | Instruction::LookTopChoose { .. }
-            | Instruction::DivideDamageAmongTargets { .. }
             | Instruction::DivideDamageExprAmongTargets { .. }
             | Instruction::BecomeCopy { .. }
-            | Instruction::BecomeCopyFixedTargets { .. }
             | Instruction::DistributeCountersAmongTargets { .. }
             | Instruction::RollDie { .. }
             | Instruction::FlipCoins { .. }
             | Instruction::ChooseValue { .. }
-            | Instruction::ChooseOptionForPlayers { .. }
             | Instruction::Vote { .. }
             | Instruction::Incubate { .. }
             | Instruction::Connive { .. }
@@ -1618,8 +1609,6 @@ impl EffectWindow {
             | Instruction::Monstrosity { .. }
             | Instruction::Fight { .. }
             | Instruction::Exchange(_)
-            | Instruction::CopyStackObject { .. }
-            | Instruction::CastLinkedFaceDownFree
             | Instruction::Ripple(_)
             | Instruction::Demonstrate
             | Instruction::Enlist
@@ -1634,26 +1623,22 @@ impl EffectWindow {
             | Instruction::SetObjectTag { .. }
             | Instruction::UpdateStateTrack { .. }
             | Instruction::SideDeckOp(_)
-            | Instruction::CreateTokenCopy { .. }
+            | Instruction::StackOp(_)
             | Instruction::BindResolutionX(_)
             | Instruction::CreateAuraTokenAttached { .. }
             | Instruction::ExploreSubject(_)
             | Instruction::ScheduleDelayedEventTrigger { .. }
             | Instruction::RepeatLoop { .. }
-            | Instruction::RevealUntilMatch { .. }
             | Instruction::ResolvePowerAbility(_)
             | Instruction::CreateTokenAndAttach { .. }
             | Instruction::CreateTokens { .. }
-            | Instruction::CreateAttackingTokens { .. }
             | Instruction::ChooseCreatureType { .. }
             | Instruction::DamageFromPower(_)
             | Instruction::CreatureDealsPowerDamageToOther { .. }
             | Instruction::RememberPermanentTarget
             | Instruction::AdditionalCombat { .. }
-            | Instruction::GrantFlashback(_)
             | Instruction::Proliferate
             | Instruction::DamageTargetControllersCreatures { .. }
-            | Instruction::CreatePreventionShield { .. }
             | Instruction::CreateDamageMultiplier { .. }
             | Instruction::OfferSourceCounters { .. }
             | Instruction::ResolveKeywordTrigger(_)
@@ -1661,7 +1646,6 @@ impl EffectWindow {
             | Instruction::DivideThreeDamageAmongTargets
             | Instruction::DamageOrderedTargets { .. }
             | Instruction::FixedTargetClause(_)
-            | Instruction::FightFixedTargets
             | Instruction::ReturnGraveyardCreatureWithCorpse(_)
             | Instruction::PutHandPermanentsOntoBattlefield { .. }
             | Instruction::MayRevealLibraryTop
@@ -1676,17 +1660,12 @@ impl EffectWindow {
             | Instruction::AdditionalLoyaltyActivation
             | Instruction::ReturnExiledTargetCohort { .. }
             | Instruction::ReturnCardsDestroyedThisWay
-            | Instruction::ExileTopForPlay { .. }
             | Instruction::ModifyAnyNumberOfPermanents { .. }
-            | Instruction::ScheduleCreatedTokenExile(_)
-            | Instruction::ScheduleCreatedTokenSacrifice
-            | Instruction::AddMana(_)
             | Instruction::PairWithCreature { .. }
             | Instruction::ScheduleDelayedStepTrigger { .. }
             | Instruction::EmitReflexiveTrigger { .. }
             | Instruction::Ninjutsu
             | Instruction::Unearth
-            | Instruction::FlipCoin { .. }
             | Instruction::Cascade
             | Instruction::CascadeBottom
             | Instruction::Myriad
@@ -1702,7 +1681,6 @@ impl EffectWindow {
             | Instruction::SacrificeDelayedObjects(_)
             | Instruction::ScheduleArtifactReturn(_)
             | Instruction::ReturnDelayedGraveyardCard(_)
-            | Instruction::ReturnDelayedGraveyardCardTransformed(_)
             | Instruction::ReturnDelayedExileWithCounters(_)
             | Instruction::ReturnDelayedExile(_)
             | Instruction::ExileUnearthed(_)
@@ -1712,29 +1690,15 @@ impl EffectWindow {
             | Instruction::ResolveCounterKeyword(_)
             | Instruction::SacrificeEvoked
             | Instruction::SacrificeStateTriggerSource
-            | Instruction::CounterWardSource
-            | Instruction::CounterTriggeringStackObject
             | Instruction::Attach(_)
             | Instruction::AdvanceClassLevel(_)
             | Instruction::SolveSourceCase
             | Instruction::BecomePreparedSource
             | Instruction::ReturnDelayedGraveyardToHand(_)
             | Instruction::DamageFromGrantingPermanent { .. }
-            | Instruction::CounterSpellToExile
-            | Instruction::CounterSpellToLibrary { .. }
-            | Instruction::CounterSpell
-            | Instruction::GainControlOfSpell
-            | Instruction::ChangeOnlyTarget
-            | Instruction::ChooseNewTargets
-            | Instruction::CopyAbility
-            | Instruction::CopySpell
-            | Instruction::CopyTargetToSource { .. }
-            | Instruction::GrantProtectionChosenColor(_)
             | Instruction::Scry { .. }
             | Instruction::Surveil { .. }
             | Instruction::Mill { .. }
-            | Instruction::GainCastCardAbilities { .. }
-            | Instruction::ForEachPlayer { .. }
             | Instruction::OfferAnyPlayer { .. }
             | Instruction::DealDamageToAnnouncedTargets { .. }
             | Instruction::GrantChosenProtection { .. }
@@ -1742,9 +1706,6 @@ impl EffectWindow {
             | Instruction::RevealTopTwoPiles { .. }
             | Instruction::RevealUntilMatchExt { .. }
             | Instruction::CreateTokenCopyExt { .. }
-            | Instruction::MoveCounters { .. }
-            | Instruction::CounterMatchingStackObjects { .. }
-            | Instruction::TransferAllCountersFromTriggeringLki { .. }
             | Instruction::Earthbend { .. }
             | Instruction::ReturnEarthbentCard
             | Instruction::AddManaForPlayer { .. }

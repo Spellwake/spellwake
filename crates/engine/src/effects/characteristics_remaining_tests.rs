@@ -190,7 +190,11 @@ fn historical_roles() -> Vec<(&'static str, Program, bool)> {
                 ManaCost::one(ManaType::Blue),
                 body(
                     BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-                    vec![Instruction::CounterSpell],
+                    vec![Instruction::StackOp(Box::new(
+                        crate::toolbox::StackOpSpec::counter_targeted(
+                            crate::toolbox::CounterDestination::Graveyard,
+                        ),
+                    ))],
                 ),
             ),
             true,

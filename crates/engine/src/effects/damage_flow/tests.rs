@@ -38,7 +38,19 @@ fn prepared() -> (
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::CreatePreventionShield { amount: 3.into() }],
+                vec![Instruction::ApplyContinuous(Box::new(
+                    crate::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload: crate::toolbox::ContinuousPayload::TargetPreventionShield {
+                            amount: 3.into(),
+                        },
+                        duration: crate::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                ))],
             ),
         ),
     });

@@ -522,7 +522,7 @@ impl EffectWindow {
         next_instruction: Option<&Instruction>,
         mut instruction: Instruction,
     ) -> Result<StepOutcome, EffectError> {
-        if let Instruction::OfferManaPayment { cost, .. } = &mut instruction
+        if let Instruction::OfferDynamicManaPayment { fixed: cost, .. } = &mut instruction
             && let Some(keyword) = self
                 .execution_bindings(entry.id())
                 .and_then(|b| b.trigger.as_ref())
@@ -533,37 +533,6 @@ impl EffectWindow {
                 return Ok(StepOutcome::Continue);
             };
             *cost = price;
-        }
-        if let Instruction::GrantFlashback(subject) = instruction {
-            use crate::program::FlashbackSubject;
-            let player = entry.controller();
-            let candidates = match subject {
-                FlashbackSubject::Target => {
-                    let TargetRef::Object(card) = self.instruction_target(entry)?.choice().target
-                    else {
-                        return Err(EffectError::InconsistentProgram);
-                    };
-                    vec![card]
-                }
-                FlashbackSubject::ControllerGraveyard => self
-                    .window
-                    .cards()
-                    .iter()
-                    .filter(|card| card.zone() == ObjectZone::Graveyard(player))
-                    .map(GameObject::id)
-                    .collect(),
-            };
-            let evaluated = self.evaluated_characteristics()?;
-            self.granted_flashback
-                .extend(candidates.into_iter().filter(|id| {
-                    evaluated.get(*id).is_some_and(|card| {
-                        card.zone == ObjectZone::Graveyard(player)
-                            && (card.has_type(CardType::Instant)
-                                || card.has_type(CardType::Sorcery))
-                    })
-                }));
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
         }
         if let Instruction::DamageFromPower(source) = instruction {
             let Some((dealer, power)) = self.damage_dealer_power(entry, source)? else {
@@ -803,22 +772,6 @@ impl EffectWindow {
                 cards,
                 ctx.append,
             )?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ReturnDelayedGraveyardCardTransformed(object) = instruction {
-            if let Some(player) = self.delayed_transformed_return_player(object) {
-                self.begin_linked_cohort_return(
-                    LinkedReturnOrigin::GraveyardTransformed {
-                        player,
-                        controller: entry.controller(),
-                        entry: entry.id(),
-                        instruction: index,
-                    },
-                    vec![object],
-                    ctx.append,
-                )?;
-            }
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
@@ -1179,347 +1132,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::CounterMatchingStackObjects {
-            ref filter,
-            include_spells,
-            include_abilities,
-            opponents_only,
-        } = instruction
-        {
-            let evaluated = self.evaluated_characteristics()?;
-            let resolver = entry.controller();
-            let candidates: Vec<StackEntryId> = self
-                .window
-                .entries()
-                .iter()
-                .rev()
-                .filter(|s| s.id() != entry.id())
-                .filter(|s| !opponents_only || s.controller() != resolver)
-                .filter(|s| match s.kind() {
-                    StackKind::CardSpell(obj_id) => {
-                        if !include_spells {
-                            return false;
-                        }
-                        match filter.as_deref() {
-                            None => true,
-                            Some(sf) => evaluated.get(*obj_id).is_some_and(|view| {
-                                self.matches_object_filter(
-                                    sf.object,
-                                    view,
-                                    resolver,
-                                    None,
-                                    &BTreeSet::new(),
-                                    &evaluated,
-                                )
-                            }),
-                        }
-                    }
-                    StackKind::SpellCopy { .. } => include_spells && filter.is_none(),
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => {
-                        if !include_abilities {
-                            return false;
-                        }
-                        match filter.as_deref() {
-                            None => true,
-                            Some(sf) => evaluated.get(source.id()).is_some_and(|view| {
-                                self.matches_object_filter(
-                                    sf.object,
-                                    view,
-                                    resolver,
-                                    None,
-                                    &BTreeSet::new(),
-                                    &evaluated,
-                                )
-                            }),
-                        }
-                    }
-                    StackKind::Speed
-                    | StackKind::Monarch
-                    | StackKind::DelayedCopy { .. }
-                    | StackKind::Emblem { .. } => include_abilities && filter.is_none(),
-                })
-                .map(|s| s.id())
-                .collect();
-            let mut countered_count = 0usize;
-            for target_id in candidates {
-                if self.counter_captured_stack_entry(entry.id(), index, target_id, ctx.append)? {
-                    countered_count += 1;
-                }
-            }
-            if let Some(cursor) = self.resolution_cursor_mut() {
-                cursor.results.last_action_succeeded = countered_count > 0;
-                cursor.results.last_action_count = Some(RulesInteger::from_usize(countered_count));
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::TransferAllCountersFromTriggeringLki { to } = instruction {
-            let lki_counters: BTreeMap<CounterKind, RulesInteger> = self
-                .execution_bindings(entry.id())
-                .and_then(|b| b.trigger.as_ref())
-                .and_then(|binding| {
-                    binding
-                        .causes
-                        .members()
-                        .first()
-                        .and_then(|m| match &m.related {
-                            crate::occurrence::TriggerRelated::ZoneChange { before, .. } => {
-                                before.battlefield_all_counters.clone()
-                            }
-                            _ => None,
-                        })
-                        .or_else(|| binding.source.battlefield_all_counters.clone())
-                })
-                .unwrap_or_default();
-            let targets: Vec<ObjectId> = self
-                .effect_group(entry, *to)?
-                .into_iter()
-                .filter(|&id| {
-                    self.window
-                        .cards()
-                        .get(id)
-                        .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-                })
-                .collect();
-            let mut placed_any = false;
-            if !lki_counters.is_empty() && !targets.is_empty() {
-                let before = self.rules_snapshot(None)?;
-                let mut occurrences = Vec::new();
-                for object in targets {
-                    for (&kind, raw_count) in &lki_counters {
-                        if !raw_count.is_positive() {
-                            continue;
-                        }
-                        let mult = super::permanent_counters::effect_counter_multiplier(
-                            &before.view().evaluated,
-                            object,
-                        );
-                        let added = self.apply_static_counter_modifiers(
-                            &before.view().evaluated,
-                            object,
-                            kind,
-                            raw_count.times(&mult),
-                        );
-                        if !added.is_positive() {
-                            continue;
-                        }
-                        placed_any = true;
-                        if matches!(kind, CounterKind::PlusOne | CounterKind::MinusOne) {
-                            let pt = if kind == CounterKind::PlusOne {
-                                PowerToughnessCounters {
-                                    plus_one: added,
-                                    minus_one: 0.into(),
-                                }
-                            } else {
-                                PowerToughnessCounters {
-                                    plus_one: 0.into(),
-                                    minus_one: added,
-                                }
-                            };
-                            let previous = self.characteristics.counters(object);
-                            self.characteristics.place_counters(object, &pt)?;
-                            let after_pt = self.characteristics.counters(object);
-                            occurrences.push(
-                                crate::occurrence::RulesOccurrence::PermanentCounterChanged {
-                                    object,
-                                    kind,
-                                    before: if kind == CounterKind::PlusOne {
-                                        previous.plus_one
-                                    } else {
-                                        previous.minus_one
-                                    },
-                                    after: if kind == CounterKind::PlusOne {
-                                        after_pt.plus_one
-                                    } else {
-                                        after_pt.minus_one
-                                    },
-                                },
-                            );
-                        } else {
-                            let old = self.counters_of_kind(object, kind);
-                            let after = old.plus(&added);
-                            self.characteristics
-                                .named_permanent_counters_mut(kind)
-                                .ok_or(EffectError::InconsistentProgram)?
-                                .insert(object, after.clone());
-                            if kind.keyword_counter_ability().is_some() {
-                                self.characteristics.refresh_keyword_counter_grant(
-                                    entry.id(),
-                                    object,
-                                    kind,
-                                )?;
-                            }
-                            occurrences.push(
-                                crate::occurrence::RulesOccurrence::PermanentCounterChanged {
-                                    object,
-                                    kind,
-                                    before: old,
-                                    after,
-                                },
-                            );
-                        }
-                    }
-                }
-                if !occurrences.is_empty() {
-                    self.emit_from(
-                        crate::occurrence::EventCause::Instruction {
-                            entry: entry.id(),
-                            instruction: index,
-                        },
-                        &before,
-                        None,
-                        ctx.append,
-                        |_, _, _| Ok(occurrences),
-                    )?;
-                }
-            }
-            if let Some(cursor) = self.resolution_cursor_mut() {
-                cursor.results.last_action_succeeded = placed_any;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::MoveCounters {
-            from,
-            to,
-            kind,
-            all,
-            any_number,
-            amount,
-        } = instruction
-        {
-            let from_opt = self.resolve_pass_c_move_subject(entry, from)?;
-            let to_opt = self.resolve_pass_c_move_subject(entry, to)?;
-            let both_valid = from_opt.zip(to_opt).filter(|(f, t)| {
-                f != t
-                    && self
-                        .window
-                        .cards()
-                        .get(*f)
-                        .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
-                    && self
-                        .window
-                        .cards()
-                        .get(*t)
-                        .is_some_and(|c| c.zone() == ObjectZone::Battlefield)
-            });
-            if let Some((from_id, to_id)) = both_valid {
-                let evaluated = self.evaluated_characteristics()?;
-                let mut present_kinds: Vec<CounterKind> = match kind {
-                    Some(ck) => {
-                        if self.counters_of_kind(from_id, ck).is_positive() {
-                            vec![ck]
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    None => self
-                        .characteristics
-                        .present_permanent_counter_kinds(from_id)
-                        .into_iter()
-                        .collect(),
-                };
-                present_kinds
-                    .retain(|&ck| !self.permanent_counter_prevented(&evaluated, to_id, ck));
-                if !present_kinds.is_empty() {
-                    if all {
-                        let mut moved = BTreeMap::new();
-                        for &ck in &present_kinds {
-                            let removed = self.remove_counters_from_objects(
-                                entry,
-                                index,
-                                &[from_id],
-                                Some(ck),
-                                None,
-                                ctx.append,
-                            )?;
-                            if removed.is_positive() {
-                                moved.insert(ck, removed);
-                            }
-                        }
-                        if !moved.is_empty() {
-                            self.place_moved_counters(
-                                entry.id(),
-                                index,
-                                to_id,
-                                &moved,
-                                ctx.append,
-                            )?;
-                        }
-                    } else if any_number {
-                        return Ok(StepOutcome::Pending(EffectDecision::CounterRemoval(
-                            self.counter_removal_choice()?,
-                        )));
-                    } else if let Some(ck) = kind {
-                        let cap = match amount.as_ref() {
-                            Some(expr) => self.resolve_value_expr(entry.controller(), expr)?,
-                            None => 1.into(),
-                        };
-                        if cap.is_positive() {
-                            let removed = self.remove_counters_from_objects(
-                                entry,
-                                index,
-                                &[from_id],
-                                Some(ck),
-                                Some(&ValueExpr::Literal(cap)),
-                                ctx.append,
-                            )?;
-                            if removed.is_positive() {
-                                let mut moved = BTreeMap::new();
-                                moved.insert(ck, removed);
-                                self.place_moved_counters(
-                                    entry.id(),
-                                    index,
-                                    to_id,
-                                    &moved,
-                                    ctx.append,
-                                )?;
-                            }
-                        }
-                    } else if present_kinds.len() == 1 {
-                        let ck = present_kinds[0];
-                        let cap = match amount.as_ref() {
-                            Some(expr) => self.resolve_value_expr(entry.controller(), expr)?,
-                            None => 1.into(),
-                        };
-                        if cap.is_positive() {
-                            let removed = self.remove_counters_from_objects(
-                                entry,
-                                index,
-                                &[from_id],
-                                Some(ck),
-                                Some(&ValueExpr::Literal(cap)),
-                                ctx.append,
-                            )?;
-                            if removed.is_positive() {
-                                let mut moved = BTreeMap::new();
-                                moved.insert(ck, removed);
-                                self.place_moved_counters(
-                                    entry.id(),
-                                    index,
-                                    to_id,
-                                    &moved,
-                                    ctx.append,
-                                )?;
-                            }
-                        }
-                    } else {
-                        let cap = match amount.as_ref() {
-                            Some(expr) => self.resolve_value_expr(entry.controller(), expr)?,
-                            None => 1.into(),
-                        };
-                        if cap.is_positive() {
-                            return Ok(StepOutcome::Pending(EffectDecision::CounterRemoval(
-                                self.counter_removal_choice()?,
-                            )));
-                        }
-                    }
-                }
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if false {
             let objects = self
                 .legal_permanent_targets()?
@@ -1688,52 +1300,6 @@ impl EffectWindow {
             for mode in &mut payload.modes {
                 mode.shift_for_splice(index, inserted);
             }
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ForEachPlayer { players, body } = instruction {
-            let initialized = self
-                .resolution_cursor()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .results
-                .option_players_initialized;
-            if !initialized {
-                if body.instructions.is_empty() {
-                    self.advance_instruction()?;
-                    return Ok(StepOutcome::Continue);
-                }
-                let cursor_snap = self
-                    .resolution_cursor()
-                    .ok_or(EffectError::WrongResolutionFrame)?
-                    .clone();
-                let seats =
-                    self.selection_players(players, entry.controller(), Some(&cursor_snap))?;
-                if seats.is_empty() {
-                    self.advance_instruction()?;
-                    return Ok(StepOutcome::Continue);
-                }
-                if let Some(cur) = self.resolution_cursor_mut() {
-                    cur.results.pending_option_players = seats.into();
-                    cur.results.option_players_initialized = true;
-                }
-            }
-            let next_seat = self
-                .resolution_cursor_mut()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .results
-                .pending_option_players
-                .pop_front();
-            if let Some(seat) = next_seat {
-                if let Some(cur) = self.resolution_cursor_mut() {
-                    cur.results.loop_player = Some(seat);
-                }
-                self.splice_before_current_op(entry.id(), index, &body.instructions)?;
-                return Ok(StepOutcome::Continue);
-            }
-            if let Some(cur) = self.resolution_cursor_mut() {
-                cur.results.option_players_initialized = false;
-                cur.results.loop_player = None;
-            }
-            self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
         if let Instruction::OfferAnyPlayer {
@@ -1916,193 +1482,20 @@ impl EffectWindow {
             )?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::CreateTokenCopy {
-            source,
-            count,
-            tapped,
-            grant_keywords,
-            nonlegendary,
-            override_pt,
-            override_colors,
-            add_subtypes,
-            add_card_types,
-            strip_mana_cost,
-            recipients,
-            ..
-        } = instruction
-        {
-            let resolved_count = self
-                .resolve_value_expr(entry.controller(), &count)?
-                .max(0.into())
-                .to_usize()
-                .unwrap_or(0);
-            let donor_id = match source {
-                crate::program::MoveSubjectRef::TargetObject => self
-                    .instruction_target(entry)
-                    .ok()
-                    .and_then(|t| match t.choice().target {
-                        TargetRef::Object(id) => Some(id),
-                        _ => None,
-                    }),
-                crate::program::MoveSubjectRef::AbilitySource => match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => Some(source.id()),
-                    _ => None,
-                },
-                crate::program::MoveSubjectRef::TriggeringObject => self
-                    .execution_bindings(entry.id())
-                    .and_then(|b| b.trigger.as_ref())
-                    .and_then(|t| t.causes.members().first())
-                    .and_then(|m| m.subject_object_id()),
-                crate::program::MoveSubjectRef::AttachedHost => match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => match self.attached_to(source.id())
-                    {
-                        Some(TargetRef::Object(host)) => Some(host),
-                        _ => None,
-                    },
-                    _ => None,
-                },
-                crate::program::MoveSubjectRef::RevealedCard => None,
-                crate::program::MoveSubjectRef::CreatedTokens => self
-                    .resolution_cursor()
-                    .and_then(|c| c.last_created_tokens.first().copied()),
-                crate::program::MoveSubjectRef::LastMoved => {
-                    self.resolution_cursor().and_then(|c| {
-                        c.results
-                            .last_moved_objects
-                            .first()
-                            .copied()
-                            .or(c.results.returned_target_permanent)
-                    })
-                }
-                crate::program::MoveSubjectRef::RememberedFirst => {
-                    self.legal_linked_targets()?.map(|(a, _)| a)
-                }
-                crate::program::MoveSubjectRef::RememberedSecond => {
-                    self.legal_linked_targets()?.map(|(_, b)| b)
-                }
-            };
-            if resolved_count > 0
-                && let Some(donor) = donor_id
-                && let Some(mut program) = self
-                    .copiable_program(donor)
-                    .or_else(|| self.departed_copy_sources.get(&donor))
-                    .cloned()
-                && program.permanent().is_some()
-            {
-                if nonlegendary {
-                    program
-                        .supertypes
-                        .remove(&crate::program::Supertype::Legendary);
-                }
-                program
-                    .printed_keywords
-                    .extend(grant_keywords.iter().copied());
-                if let Some((p, t)) = override_pt
-                    && let crate::program::ProgramKind::Permanent(perm) = &mut program.kind
-                {
-                    perm.printed_pt = Some(crate::characteristics::PrintedPowerToughness {
-                        power: crate::characteristics::PrintedStat::Number(i64::from(p).into()),
-                        toughness: crate::characteristics::PrintedStat::Number(i64::from(t).into()),
-                    });
-                }
-                if let Some(colors) = override_colors {
-                    program.color_indicator = Some(colors.clone());
-                    program.effect_defined_colors = Some(colors);
-                }
-                program
-                    .creature_subtypes
-                    .extend(add_subtypes.iter().copied());
-                program.card_types.extend(add_card_types.iter().copied());
-                if strip_mana_cost {
-                    if let crate::program::ProgramKind::Permanent(perm) = &mut program.kind {
-                        perm.casting_cost = None;
-                    }
-                    program.x_mana_symbols = 0;
-                    program.hybrid_symbols.clear();
-                }
-                let controller = entry.controller();
-                let mut groups = Vec::new();
-                use crate::token::TokenRecipients;
-                if recipients == TokenRecipients::DestroyedPermanentControllers {
-                    let mut counts: BTreeMap<SeatId, usize> = BTreeMap::new();
-                    if let Some(cursor) = self.resolution_cursor() {
-                        for &seat in &cursor.results.last_moved_controllers {
-                            *counts.entry(seat).or_insert(0) += 1;
-                        }
-                    }
-                    for (creator, mult) in counts {
-                        let total = resolved_count.saturating_mul(mult);
-                        if total > 0 {
-                            groups.push((creator, total, program.clone(), tapped));
-                        }
-                    }
-                } else {
-                    let prior_controller = match recipients {
-                        TokenRecipients::CombatDamageSourceController => {
-                            self.combat_damage_source_controller()?
-                        }
-                        TokenRecipients::RememberedTargetController => Some(
-                            self.resolution_cursor()
-                                .and_then(|cursor| cursor.remembered_permanent.as_ref())
-                                .ok_or(EffectError::InconsistentProgram)?
-                                .0,
-                        ),
-                        TokenRecipients::ExiledTargetController => Some(
-                            self.resolution_cursor()
-                                .and_then(|cursor| cursor.exiled_target.as_ref())
-                                .ok_or(EffectError::InconsistentProgram)?
-                                .controller,
-                        ),
-                        TokenRecipients::Player(role) => Some(self.resolving_player(role)?),
-                        TokenRecipients::Controller
-                        | TokenRecipients::EachPlayer
-                        | TokenRecipients::EachOpponent
-                        | TokenRecipients::DestroyedPermanentControllers => None,
-                    };
-                    for creator in
-                        self.window
-                            .participants()
-                            .iter()
-                            .copied()
-                            .filter(|seat| match recipients {
-                                TokenRecipients::CombatDamageSourceController
-                                | TokenRecipients::RememberedTargetController
-                                | TokenRecipients::ExiledTargetController
-                                | TokenRecipients::Player(_) => Some(*seat) == prior_controller,
-                                TokenRecipients::Controller => *seat == controller,
-                                TokenRecipients::EachPlayer => true,
-                                TokenRecipients::EachOpponent => *seat != controller,
-                                TokenRecipients::DestroyedPermanentControllers => false,
-                            })
-                    {
-                        groups.push((creator, resolved_count, program.clone(), tapped));
-                    }
-                }
-                if !groups.is_empty() {
-                    self.begin_materialized_token_entries(groups, None, false)?;
-                    return Ok(StepOutcome::Continue);
-                }
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         if let Instruction::CreateTokenCopyExt {
             source,
             count,
             recipients,
             enters_tapped,
-            enters_attacking,
             haste,
-            sacrifice_at_end_step,
-            exile_at_end_step,
             nonlegendary,
             extra_types,
             extra_subtypes,
             extra_keywords,
             override_pt,
             extra_colors,
+            override_colors,
+            strip_mana_cost,
             ..
         } = instruction
         {
@@ -2155,11 +1548,21 @@ impl EffectWindow {
                         program.continuous = None;
                     }
                 }
-                if !extra_colors.is_empty() {
+                if let Some(colors) = override_colors {
+                    program.color_indicator = Some(colors.clone());
+                    program.effect_defined_colors = Some(colors);
+                } else if !extra_colors.is_empty() {
                     let mut merged = program.defined_colors();
                     merged.extend(extra_colors.iter().copied());
                     program.color_indicator = Some(merged.clone());
                     program.effect_defined_colors = Some(merged);
+                }
+                if strip_mana_cost {
+                    if let crate::program::ProgramKind::Permanent(perm) = &mut program.kind {
+                        perm.casting_cost = None;
+                    }
+                    program.x_mana_symbols = 0;
+                    program.hybrid_symbols.clear();
                 }
                 let controller = entry.controller();
                 let mut groups = Vec::new();
@@ -2220,28 +1623,6 @@ impl EffectWindow {
                     }
                 }
                 if !groups.is_empty() {
-                    if (enters_attacking || sacrifice_at_end_step || exile_at_end_step)
-                        && let Some(StackPayload::Instructions(payload)) =
-                            self.payloads.get_mut(&entry.id())
-                        && let Some(slot) = payload.body.instructions.get_mut(index)
-                    {
-                        *slot = Instruction::CreateTokenCopy {
-                            source,
-                            count: ValueExpr::Literal(0.into()),
-                            tapped: enters_tapped,
-                            attacking: enters_attacking,
-                            sacrifice_at_end_step,
-                            exile_at_end_step,
-                            grant_keywords: BTreeSet::new(),
-                            nonlegendary: false,
-                            override_pt: None,
-                            override_colors: None,
-                            add_subtypes: BTreeSet::new(),
-                            add_card_types: BTreeSet::new(),
-                            strip_mana_cost: false,
-                            recipients,
-                        };
-                    }
                     self.begin_materialized_token_entries(groups, None, false)?;
                     return Ok(StepOutcome::Continue);
                 }
@@ -2317,41 +1698,13 @@ impl EffectWindow {
         if self.begin_resolution_selection(&instruction, ctx.append)? {
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::ScheduleCreatedTokenSacrifice {
-            let cursor = self
-                .resolution_cursor_mut()
-                .ok_or(EffectError::WrongResolutionFrame)?;
-            let tokens = std::mem::take(&mut cursor.last_created_tokens);
-            if !tokens.is_empty() {
-                self.delay_spell_sacrifice(entry.id(), entry.controller(), tokens)?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::ScheduleCreatedTokenExile(step) = instruction {
-            let cursor = self
-                .resolution_cursor_mut()
-                .ok_or(EffectError::WrongResolutionFrame)?;
-            let tokens = std::mem::take(&mut cursor.last_created_tokens);
-            if !tokens.is_empty() {
-                self.delay_entry_exile(entry.id(), entry.controller(), step, tokens)?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if matches!(
-            instruction,
-            Instruction::ExileTopForPlay { .. } | Instruction::ExileTopPlay { .. }
-        ) {
-            let count = match &instruction {
-                Instruction::ExileTopPlay { count, .. } => self
-                    .resolve_value_expr(entry.controller(), count)?
-                    .max(0.into())
-                    .min(RulesInteger::from_usize(1024))
-                    .to_usize()
-                    .ok_or(EffectError::InconsistentProgram)?,
-                _ => 1,
-            };
+        if let Instruction::ExileTopPlay { ref count, .. } = instruction {
+            let count = self
+                .resolve_value_expr(entry.controller(), count)?
+                .max(0.into())
+                .min(RulesInteger::from_usize(1024))
+                .to_usize()
+                .ok_or(EffectError::InconsistentProgram)?;
             if count == 0 || !self.begin_exile_top_for_play(entry, index, count)? {
                 self.advance_instruction()?;
             }
@@ -2535,12 +1888,20 @@ impl EffectWindow {
                         .map(|t| t.source.clone())
                 })
                 .ok_or(EffectError::InconsistentProgram)?;
+            let mut materialized_body = body;
+            if let Some(created) = self
+                .resolution_cursor()
+                .map(|c| c.last_created_tokens.clone())
+                && !created.is_empty()
+            {
+                materialize_created_tokens_in_body(&mut materialized_body, &created);
+            }
             self.triggers.delay_step_body(
                 appearance,
                 entry.controller(),
                 step,
                 own_step_only,
-                body,
+                materialized_body,
             );
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
@@ -2612,14 +1973,12 @@ impl EffectWindow {
         }
         if matches!(
             instruction,
-            Instruction::LookTopChoose { .. }
-                | Instruction::LookTopChooseExt { .. }
+            Instruction::LookTopChooseExt { .. }
                 | Instruction::RevealTopTwoPiles { .. }
-                | Instruction::RevealUntilMatch { .. }
                 | Instruction::RevealUntilMatchExt { .. }
         ) {
             let look_top_reveal_only_count = match &instruction {
-                Instruction::LookTopChoose {
+                Instruction::LookTopChooseExt {
                     count,
                     reveal_only: true,
                     ..
@@ -2632,8 +1991,7 @@ impl EffectWindow {
                 cursor.results.revealed_top_card = None;
                 cursor.results.revealed_top_types.clear();
             }
-            let player = if let Instruction::LookTopChoose { library_owner, .. }
-            | Instruction::LookTopChooseExt { library_owner, .. }
+            let player = if let Instruction::LookTopChooseExt { library_owner, .. }
             | Instruction::RevealUntilMatchExt { library_owner, .. } = instruction
             {
                 let cursor_snap = self
@@ -2717,115 +2075,6 @@ impl EffectWindow {
         index: usize,
         instruction: Instruction,
     ) -> Result<StepOutcome, EffectError> {
-        if let Instruction::GrantProtectionChosenColor(recipients) = instruction {
-            let Some(color) = self
-                .resolution_cursor_mut()
-                .and_then(|cursor| cursor.chosen_effect_color.take())
-            else {
-                let frame = EffectDecision::ResolutionManaColor(ResolutionManaColorChoice {
-                    revision: self.revision,
-                    entry: entry.id(),
-                    instruction: index,
-                    chooser: entry.controller(),
-                    colors: mana_domains::colored_mana(),
-                    split: None,
-                });
-                return Ok(StepOutcome::Pending(frame));
-            };
-            use crate::characteristics::Color;
-            let color = Color::from_mana(color).ok_or(EffectError::InconsistentProgram)?;
-            let keyword = match color {
-                Color::White => KeywordAbility::ProtectionFromWhite,
-                Color::Blue => KeywordAbility::ProtectionFromBlue,
-                Color::Black => KeywordAbility::ProtectionFromBlack,
-                Color::Red => KeywordAbility::ProtectionFromRed,
-                Color::Green => KeywordAbility::ProtectionFromGreen,
-            };
-            if recipients == crate::program::ProtectionRecipients::ControllerAndPermanents {
-                self.grant_controller_protection(entry, index, color, keyword, ctx.append)?;
-                self.advance_instruction()?;
-                return Ok(StepOutcome::Continue);
-            }
-            if recipients == crate::program::ProtectionRecipients::AbilitySource {
-                if let StackKind::ActivatedAbility { source }
-                | StackKind::TriggeredAbility { source } = entry.kind()
-                    && self
-                        .window
-                        .cards()
-                        .get(source.id())
-                        .is_some_and(|card| card.zone() == ObjectZone::Battlefield)
-                {
-                    let parts = crate::characteristics::ResolvedParts(vec![
-                        crate::characteristics::ResolvedPart::Abilities(
-                            crate::characteristics::AbilityChange::grant_keywords([keyword]),
-                        ),
-                    ]);
-                    self.characteristics.add_effect(
-                        entry.id(),
-                        source.id(),
-                        parts,
-                        crate::characteristics::ResolvedDuration::UntilEndOfTurn,
-                    )?;
-                }
-                self.advance_instruction()?;
-                return Ok(StepOutcome::Continue);
-            }
-            if let crate::program::ProtectionRecipients::Matching(filter) = recipients {
-                let evaluated = self.evaluated_characteristics()?;
-                let ability_source = match entry.kind() {
-                    StackKind::ActivatedAbility { source }
-                    | StackKind::TriggeredAbility { source } => Some(source.id()),
-                    _ => None,
-                };
-                let affected: BTreeSet<ObjectId> = evaluated
-                    .objects
-                    .values()
-                    .filter(|p| {
-                        p.zone == ObjectZone::Battlefield
-                            && self.matches_object_filter(
-                                *filter,
-                                p,
-                                entry.controller(),
-                                ability_source,
-                                &BTreeSet::new(),
-                                &evaluated,
-                            )
-                    })
-                    .map(|p| p.object)
-                    .collect();
-                if !affected.is_empty() {
-                    let parts = crate::characteristics::ResolvedParts(vec![
-                        crate::characteristics::ResolvedPart::Abilities(
-                            crate::characteristics::AbilityChange::grant_keywords([keyword]),
-                        ),
-                    ]);
-                    self.characteristics.add_effect_for_objects(
-                        entry.id(),
-                        affected,
-                        parts,
-                        crate::characteristics::ResolvedDuration::UntilEndOfTurn,
-                    )?;
-                }
-                self.advance_instruction()?;
-                return Ok(StepOutcome::Continue);
-            }
-            return self.progress_toolbox_instruction(
-                ctx,
-                entry,
-                index,
-                Instruction::ApplyContinuous(Box::new(
-                    crate::toolbox::ApplyContinuousSpec::resolved_parts(
-                        crate::toolbox::ObjectQuery::Targets,
-                        crate::characteristics::ResolvedPartsSpec(vec![
-                            crate::characteristics::ResolvedPartSpec::Abilities(
-                                crate::characteristics::AbilityChange::grant_keywords([keyword]),
-                            ),
-                        ]),
-                        crate::characteristics::ResolvedDuration::UntilEndOfTurn,
-                    ),
-                )),
-            );
-        }
         if let Instruction::GrantChosenProtection {
             recipients,
             duration,
@@ -3044,9 +2293,6 @@ impl EffectWindow {
                 }
             }
         }
-        if let Instruction::AddMana(ref mana_yield) = instruction {
-            return self.execute_add_mana(ctx, entry, index, entry.controller(), mana_yield);
-        }
         if let Instruction::AddManaForPlayer {
             player,
             ref yield_kind,
@@ -3238,118 +2484,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::BecomeCopyFixedTargets {
-            duration,
-            exceptions,
-        } = instruction
-        {
-            if let Some(resolved_dur) = self.resolve_duration(entry, duration)?
-                && let Some((recv_id, donor_id)) = self.legal_linked_targets()?
-                && self
-                    .window
-                    .cards()
-                    .get(recv_id)
-                    .is_some_and(|obj| obj.zone() == ObjectZone::Battlefield)
-                && let Some(mut copied) = self.copiable_program(donor_id).cloned()
-            {
-                let before = self.rules_snapshot(None)?;
-                apply_copy_exceptions(&mut copied, &exceptions, self.copiable_program(recv_id));
-                let effect = self.characteristics.add_effect(
-                    entry.id(),
-                    recv_id,
-                    crate::characteristics::ResolvedParts(vec![
-                        crate::characteristics::ResolvedPart::Copy(Box::new(copied)),
-                    ]),
-                    resolved_dur,
-                )?;
-                self.emit_from(
-                    crate::occurrence::EventCause::Instruction {
-                        entry: entry.id(),
-                        instruction: index,
-                    },
-                    &before,
-                    None,
-                    ctx.append,
-                    |old, new, _| {
-                        let appearances = occurrence_flow::characteristic_appearance_changes(
-                            old,
-                            new,
-                            effect.affected.iter().copied(),
-                        )?;
-                        Ok(vec![
-                            crate::occurrence::RulesOccurrence::ContinuousEffectCreated {
-                                effect,
-                                appearances,
-                            },
-                        ])
-                    },
-                )?;
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if let Instruction::GainCastCardAbilities {
-            recipient,
-            ref donor,
-        } = instruction
-        {
-            use crate::characteristics::{ResolvedDuration, ResolvedPart, ResolvedParts};
-            if self
-                .window
-                .cards()
-                .get(recipient)
-                .is_some_and(|object| object.zone() == ObjectZone::Battlefield)
-                && self.window.cards().phased_out_under(recipient).is_none()
-            {
-                let before = self.rules_snapshot(None)?;
-                let observed = before
-                    .view()
-                    .evaluated
-                    .get(donor.object)
-                    .filter(|card| card.zone == ObjectZone::Stack)
-                    .cloned();
-                let ability = crate::characteristics::StaticAbilityId(
-                    self.characteristics.next_effect_sequence(),
-                );
-                let inherited = crate::characteristics::inherit_activated_abilities(
-                    recipient,
-                    ability,
-                    [observed.as_ref().unwrap_or(donor)],
-                );
-                if !inherited.activated.is_empty() || !inherited.mana.is_empty() {
-                    let effect = self.characteristics.add_effect(
-                        entry.id(),
-                        recipient,
-                        ResolvedParts(vec![ResolvedPart::InheritedAbilities(Box::new(inherited))]),
-                        ResolvedDuration::UntilEndOfTurn,
-                    )?;
-                    self.emit_from(
-                        crate::occurrence::EventCause::Instruction {
-                            entry: entry.id(),
-                            instruction: index,
-                        },
-                        &before,
-                        None,
-                        ctx.append,
-                        |old, new, _| {
-                            let appearances = occurrence_flow::characteristic_appearance_changes(
-                                old,
-                                new,
-                                effect.affected.iter().copied(),
-                            )?;
-                            Ok(vec![
-                                crate::occurrence::RulesOccurrence::ContinuousEffectCreated {
-                                    effect,
-                                    appearances,
-                                },
-                            ])
-                        },
-                    )?;
-                }
-            }
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
         Ok(StepOutcome::Next(instruction))
     }
 
@@ -3420,37 +2554,6 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if instruction == Instruction::CounterWardSource {
-            self.counter_ward_source(entry.id(), index, ctx.append)?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::CounterTriggeringStackObject {
-            self.counter_triggering_stack_object(entry.id(), index, ctx.append)?;
-            self.advance_instruction()?;
-            return Ok(StepOutcome::Continue);
-        }
-        if instruction == Instruction::FightFixedTargets {
-            let pairs = self
-                .legal_linked_targets()?
-                .filter(|(first, second)| first != second);
-            self.emit_fight_occurrences(entry.id(), index, pairs.as_slice(), ctx.append)?;
-            let inputs = self.fight_damage_inputs(pairs.as_slice())?;
-            if inputs.is_empty() {
-                self.advance_instruction()?;
-            } else {
-                self.install_damage_batch(
-                    DamageOrigin::Resolution {
-                        entry: entry.id(),
-                        instruction: index,
-                    },
-                    DamageKind::Noncombat,
-                    inputs,
-                    ctx.journal,
-                )?;
-            }
-            return Ok(StepOutcome::Continue);
-        }
         if let Instruction::DistributeCountersAmongTargets { kind, total } = instruction {
             let assessment = self
                 .window
@@ -3498,16 +2601,11 @@ impl EffectWindow {
             self.advance_instruction()?;
             return Ok(StepOutcome::Continue);
         }
-        if let Some(total) = match &instruction {
-            Instruction::DivideDamageAmongTargets { total } => Some(*total),
-            Instruction::DivideDamageExprAmongTargets { total, .. } => {
-                let resolved = self
-                    .resolve_value_expr(entry.controller(), total)?
-                    .max(0.into());
-                Some(u16::try_from(resolved.to_usize().unwrap_or(0)).unwrap_or(u16::MAX))
-            }
-            _ => None,
-        } {
+        if let Instruction::DivideDamageExprAmongTargets { ref total, .. } = instruction {
+            let resolved = self
+                .resolve_value_expr(entry.controller(), total)?
+                .max(0.into());
+            let total = u16::try_from(resolved.to_usize().unwrap_or(0)).unwrap_or(u16::MAX);
             let assessment = self
                 .window
                 .target_assessment()
@@ -4454,9 +3552,7 @@ impl EffectWindow {
             self.begin_materialized_token_entries(groups, None, false)?;
             return Ok(StepOutcome::Continue);
         }
-        if let Instruction::CreateTokens { creations }
-        | Instruction::CreateAttackingTokens { creations, .. } = instruction
-        {
+        if let Instruction::CreateTokens { creations } = instruction {
             self.begin_token_entries(&creations, None, false)?;
             return Ok(StepOutcome::Continue);
         }
@@ -4503,10 +3599,13 @@ impl EffectWindow {
             return Ok(StepOutcome::Pending(EffectDecision::EntryChoice(frame)));
         }
         match instruction {
-            Instruction::CopyAbility
-            | Instruction::CopySpell
-            | Instruction::ChooseNewTargets
-            | Instruction::ChangeOnlyTarget => {
+            Instruction::StackOp(ref spec) if spec.is_interactive_copy_or_retarget() => {
+                let is_change_only = matches!(
+                    spec.op,
+                    crate::toolbox::StackOpKind::Retarget {
+                        single_target_only: true
+                    }
+                );
                 let TargetRef::Stack(original) = target else {
                     return Err(EffectError::InconsistentProgram);
                 };
@@ -4516,9 +3615,7 @@ impl EffectWindow {
                     .iter()
                     .find(|spell| spell.id() == original)
                     .ok_or(EffectError::InconsistentProgram)?;
-                if instruction == Instruction::ChangeOnlyTarget
-                    && !self.can_change_only_target(source)?
-                {
+                if is_change_only && !self.can_change_only_target(source)? {
                     self.advance_instruction()?;
                     return Ok(StepOutcome::Continue);
                 }
@@ -4544,8 +3641,9 @@ impl EffectWindow {
                     );
                     return Ok(StepOutcome::Continue);
                 }
-                let frame = EffectDecision::CopyTargets(self.copy_resolution_frame()?);
-                return Ok(StepOutcome::Pending(frame));
+                return Ok(StepOutcome::Pending(EffectDecision::CopyTargets(
+                    self.copy_resolution_frame()?,
+                )));
             }
             other => {
                 #[cfg(test)]
@@ -6211,5 +5309,60 @@ fn substitute_chosen_x_in_static(
             substitute_chosen_x_in_condition(condition, resolved_x);
         }
         _ => {}
+    }
+}
+
+fn materialize_created_tokens_in_query(
+    query: &mut crate::toolbox::ObjectQuery,
+    created: &[ObjectId],
+) {
+    use crate::toolbox::ObjectQuery;
+    match query {
+        ObjectQuery::CreatedTokens => *query = ObjectQuery::Fixed(created.to_vec()),
+        ObjectQuery::Filtered { source, .. } | ObjectQuery::Take { source, .. } => {
+            materialize_created_tokens_in_query(source, created);
+        }
+        ObjectQuery::Union(qs) => {
+            for q in qs {
+                materialize_created_tokens_in_query(q, created);
+            }
+        }
+        ObjectQuery::Difference(a, b) | ObjectQuery::Intersect(a, b) => {
+            materialize_created_tokens_in_query(a, created);
+            materialize_created_tokens_in_query(b, created);
+        }
+        _ => {}
+    }
+}
+
+fn materialize_created_tokens_in_body(
+    body: &mut crate::program::ExecutableBody,
+    created: &[ObjectId],
+) {
+    for op in &mut body.instructions {
+        match op {
+            Instruction::ZoneOp(spec) => {
+                materialize_created_tokens_in_query(&mut spec.source, created);
+            }
+            Instruction::MutateObject(spec) => {
+                materialize_created_tokens_in_query(&mut spec.source, created);
+            }
+            Instruction::ApplyContinuous(spec) => {
+                if let Some(sel) = &mut spec.selector {
+                    materialize_created_tokens_in_query(sel, created);
+                }
+            }
+            Instruction::SetObjectTag { query, .. } => {
+                materialize_created_tokens_in_query(query, created);
+            }
+            Instruction::ForEach { query, body, .. } => {
+                materialize_created_tokens_in_query(query, created);
+                materialize_created_tokens_in_body(body, created);
+            }
+            Instruction::ForEachPlayerQuery { body, .. } => {
+                materialize_created_tokens_in_body(body, created);
+            }
+            _ => {}
+        }
     }
 }

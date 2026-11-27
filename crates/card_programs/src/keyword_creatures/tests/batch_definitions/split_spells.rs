@@ -60,7 +60,11 @@ fn shared_split_claim_fame_uses_combined_characteristics_elsewhere_and_exiles_th
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                    Instruction::CounterSpell,
+                    Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    )),
                 ),
             ),
             named(

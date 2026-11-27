@@ -155,7 +155,7 @@ fn rewrite_body_after_revealed_top(body: &mut ExecutableBody) {
         }
         if matches!(
             op,
-            Instruction::LookTopChoose {
+            Instruction::LookTopChooseExt {
                 reveal_only: true,
                 ..
             } | Instruction::MayRevealLibraryTop

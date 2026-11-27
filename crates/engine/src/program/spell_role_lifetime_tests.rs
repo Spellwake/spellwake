@@ -38,9 +38,10 @@ fn optional(player: ResolvingPlayer) -> Instruction {
 }
 
 fn payment(player: ResolvingPlayer, destination: usize) -> Instruction {
-    Instruction::OfferManaPayment {
+    Instruction::OfferDynamicManaPayment {
         payer: player,
-        cost: ManaCost::free(),
+        fixed: ManaCost::free(),
+        extra_generic: crate::program::ValueExpr::Literal(0.into()),
         paid_destination: destination,
         declined_destination: destination,
     }
@@ -71,7 +72,9 @@ fn countered_target_spell_controller_uses_retained_controller() {
         check(
             spell_target(),
             vec![
-                Instruction::CounterSpell,
+                Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                    crate::toolbox::CounterDestination::Graveyard
+                ))),
                 discard(ResolvingPlayer::TargetSpellController, 1),
             ],
         ),
@@ -83,20 +86,28 @@ fn countered_target_spell_controller_uses_retained_controller() {
 fn shared_player_roles_accept_retained_controllers() {
     for instructions in [
         vec![
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
             optional(ResolvingPlayer::TargetSpellController),
             gain(),
         ],
         vec![
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
             payment(ResolvingPlayer::TargetSpellController, 2),
         ],
         vec![
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
             sacrifice(ResolvingPlayer::TargetSpellController, 1),
         ],
         vec![
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
             discard(ResolvingPlayer::TargetSpellController, 1),
         ],
     ] {
@@ -111,7 +122,15 @@ fn zero_selection_after_countering_is_admitted() {
         discard(ResolvingPlayer::TargetSpellController, 0),
     ] {
         assert_eq!(
-            check(spell_target(), vec![Instruction::CounterSpell, operation]),
+            check(
+                spell_target(),
+                vec![
+                    Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                        crate::toolbox::CounterDestination::Graveyard
+                    ))),
+                    operation
+                ]
+            ),
             Ok(())
         );
     }
@@ -123,22 +142,30 @@ fn role_before_countering_and_copy_without_departure_remain_admitted() {
         vec![
             optional(ResolvingPlayer::TargetSpellController),
             gain(),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
         ],
         vec![
             payment(ResolvingPlayer::TargetSpellController, 1),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
         ],
         vec![
             sacrifice(ResolvingPlayer::TargetSpellController, 1),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
         ],
         vec![
             discard(ResolvingPlayer::TargetSpellController, 1),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
         ],
         vec![
-            Instruction::CopySpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::copy_targeted_spell())),
             discard(ResolvingPlayer::TargetSpellController, 1),
         ],
     ] {
@@ -152,8 +179,10 @@ fn copy_after_attempted_countering_is_valid_for_a_remaining_spell() {
         check(
             spell_target(),
             vec![
-                Instruction::CounterSpell,
-                Instruction::CopySpell,
+                Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                    crate::toolbox::CounterDestination::Graveyard
+                ))),
+                Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::copy_targeted_spell())),
                 discard(ResolvingPlayer::TargetSpellController, 1),
             ],
         ),
@@ -166,22 +195,29 @@ fn live_and_retained_controller_paths_join() {
     for instructions in [
         vec![
             branch(2),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
             discard(ResolvingPlayer::TargetSpellController, 1),
         ],
         vec![
             optional(ResolvingPlayer::Controller),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
             discard(ResolvingPlayer::TargetSpellController, 1),
         ],
         vec![
-            Instruction::OfferManaPayment {
+            Instruction::OfferDynamicManaPayment {
                 payer: ResolvingPlayer::Controller,
-                cost: ManaCost::free(),
+                fixed: ManaCost::free(),
+                extra_generic: crate::program::ValueExpr::Literal(0.into()),
                 paid_destination: 1,
                 declined_destination: 2,
             },
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
             discard(ResolvingPlayer::TargetSpellController, 1),
         ],
     ] {
@@ -196,7 +232,9 @@ fn disjoint_or_unreachable_countering_does_not_poison_a_live_role_path() {
             spell_target(),
             vec![
                 branch(3),
-                Instruction::CounterSpell,
+                Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                    crate::toolbox::CounterDestination::Graveyard
+                ))),
                 Instruction::Jump { destination: 4 },
                 discard(ResolvingPlayer::TargetSpellController, 1),
                 gain(),
@@ -209,7 +247,9 @@ fn disjoint_or_unreachable_countering_does_not_poison_a_live_role_path() {
             spell_target(),
             vec![
                 Instruction::Jump { destination: 2 },
-                Instruction::CounterSpell,
+                Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                    crate::toolbox::CounterDestination::Graveyard
+                ))),
                 discard(ResolvingPlayer::TargetSpellController, 1),
             ],
         ),
@@ -237,7 +277,9 @@ fn trigger_bound_related_player_keeps_its_context_contract_after_countering() {
     let body = ExecutableBody::new(
         spell_target(),
         vec![
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                crate::toolbox::CounterDestination::Graveyard,
+            ))),
             discard(ResolvingPlayer::UniqueRelatedPlayer, 1),
         ],
     );
@@ -274,7 +316,9 @@ fn exact_target_capability_and_unreachable_context_errors_remain_precise() {
         check(
             spell_target(),
             vec![
-                Instruction::CounterSpell,
+                Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                    crate::toolbox::CounterDestination::Graveyard
+                ))),
                 discard(ResolvingPlayer::TargetPlayer, 1),
             ],
         ),
@@ -295,7 +339,9 @@ fn exact_target_capability_and_unreachable_context_errors_remain_precise() {
         check(
             spell_target(),
             vec![
-                Instruction::CounterSpell,
+                Instruction::StackOp(Box::new(crate::toolbox::StackOpSpec::counter_targeted(
+                    crate::toolbox::CounterDestination::Graveyard
+                ))),
                 discard(ResolvingPlayer::UniqueRelatedPlayer, 1),
             ],
         ),
@@ -315,9 +361,14 @@ fn independent_departed_permanent_donor_guard_still_rejects_copy_lki() {
                         crate::toolbox::ZoneDest::Hand
                     )
                 )),
-                Instruction::CopyTargetToSource {
+                Instruction::BecomeCopy {
+                    receiver: Box::new(crate::program::EffectSubject::AbilitySource),
+                    donor: crate::program::MoveSubjectRef::TargetObject,
                     duration: ResolvedDuration::UntilEndOfTurn,
-                    power_toughness: None,
+                    exceptions: Box::new(crate::program::CopyExceptions {
+                        override_pt: None,
+                        ..Default::default()
+                    }),
                 },
             ],
         ),

@@ -481,18 +481,20 @@ pub(super) fn compile(
                             ),
                             spellwake_engine::program::ValueExpr::literal(2),
                         ),
-                        Instruction::AddMana(
-                            spellwake_engine::program::EffectManaYield::RestrictedChoice {
-                                colors: BTreeSet::from([
-                                    ManaType::Blue,
-                                    ManaType::Red,
-                                    ManaType::White,
-                                ]),
-                                amount: spellwake_engine::program::ValueExpr::literal(1),
-                                restriction:
-                                    spellwake_engine::mana::ManaRestriction::NoncreatureSpell,
-                            },
-                        ),
+                        Instruction::AddManaForPlayer {
+                            player: spellwake_engine::program::ResolvingPlayer::Controller,
+                            yield_kind:
+                                spellwake_engine::program::EffectManaYield::RestrictedChoice {
+                                    colors: BTreeSet::from([
+                                        ManaType::Blue,
+                                        ManaType::Red,
+                                        ManaType::White,
+                                    ]),
+                                    amount: spellwake_engine::program::ValueExpr::literal(1),
+                                    restriction:
+                                        spellwake_engine::mana::ManaRestriction::NoncreatureSpell,
+                                },
+                        },
                     ],
                 ),
             });
@@ -704,8 +706,8 @@ pub(super) fn compile(
                     true,
                 ),
             ),
-            "Add {R} for each planeswalker you control." => (BodyTarget::None, Instruction::AddMana(spellwake_engine::program::EffectManaYield::Counted { kind: ManaType::Red, amount: spellwake_engine::program::ValueExpr::controlled_type(CardType::Planeswalker) })),
-            "Add {R}{R}." => (BodyTarget::None, Instruction::AddMana(spellwake_engine::program::EffectManaYield::Fixed([(ManaType::Red, 2.into())].into()))),
+            "Add {R} for each planeswalker you control." => (BodyTarget::None, Instruction::AddManaForPlayer { player: spellwake_engine::program::ResolvingPlayer::Controller, yield_kind: spellwake_engine::program::EffectManaYield::Counted { kind: ManaType::Red, amount: spellwake_engine::program::ValueExpr::controlled_type(CardType::Planeswalker) } }),
+            "Add {R}{R}." => (BodyTarget::None, Instruction::AddManaForPlayer { player: spellwake_engine::program::ResolvingPlayer::Controller, yield_kind: spellwake_engine::program::EffectManaYield::Fixed([(ManaType::Red, 2.into())].into()) }),
             "Create a 1/1 red Wizard creature token with \"{T}: Add {R}. Spend this mana only to cast a planeswalker spell.\"" => {
                 use spellwake_engine::{characteristics::Color, mana::{ManaAbility, ManaAbilityId, ManaOutput, ManaRestriction}, token::{TokenCreation, TokenDefinition, TokenName, TokenSubtype}};
                 let wizard = vocabulary.resolve_label("Wizard")?;

@@ -477,13 +477,10 @@ fn body_safe_for_synthesized_mode(body: &ExecutableBody) -> bool {
         && body.target_division_expr().is_none()
         && !body.has_x_target_count()
         && !body.has_up_to_x_target_count()
-        && !body.instructions.iter().any(|op| {
-            matches!(
-                op,
-                Instruction::BindOrderedPermanents { .. }
-                    | Instruction::ExileOnePerPlayerUntilSourceLeaves
-            )
-        })
+        && !body
+            .instructions
+            .iter()
+            .any(|op| matches!(op, Instruction::ExileOnePerPlayerUntilSourceLeaves))
 }
 
 fn rewrite_condition_expr_ve(
@@ -1432,7 +1429,7 @@ pub(in super::super) fn rewrite_instruction_anaphora(
     replacement: ValueObjectRef,
 ) {
     match op {
-        Instruction::AddMana(yield_kind) | Instruction::AddManaForPlayer { yield_kind, .. } => {
+        Instruction::AddManaForPlayer { yield_kind, .. } => {
             if let Some(amount) = mana_yield_amount_mut(yield_kind) {
                 rewrite_value_expr_anaphora(amount, replacement);
             }
@@ -1444,7 +1441,6 @@ pub(in super::super) fn rewrite_instruction_anaphora(
         | Instruction::Earthbend { amount }
         | Instruction::Sacrifice { amount, .. }
         | Instruction::ExileTopPlay { count: amount, .. }
-        | Instruction::LookTopChoose { count: amount, .. }
         | Instruction::LookTopChooseExt { count: amount, .. }
         | Instruction::RevealUntilMatchExt { count: amount, .. }
         | Instruction::Incubate { count: amount }
@@ -1454,7 +1450,7 @@ pub(in super::super) fn rewrite_instruction_anaphora(
         | Instruction::CollectEvidence {
             minimum: amount, ..
         }
-        | Instruction::CreateTokenCopy { count: amount, .. }
+        | Instruction::CreateTokenCopyExt { count: amount, .. }
         | Instruction::Monstrosity { amount }
         | Instruction::OfferDynamicManaPayment {
             extra_generic: amount,
@@ -1568,8 +1564,7 @@ pub(in super::super) fn rewrite_instruction_anaphora(
             }
             _ => {}
         },
-        Instruction::CreateTokens { creations }
-        | Instruction::CreateAttackingTokens { creations, .. } => {
+        Instruction::CreateTokens { creations } => {
             for spec in creations {
                 rewrite_value_expr_anaphora(&mut spec.amount, replacement);
                 if let Some(TokenSize::AtCreation(expr)) = &mut spec.base_size {
@@ -1654,8 +1649,7 @@ pub(in super::super) fn rewrite_body_prior_result(
     for op in &mut body.instructions {
         if !saw_count_action {
             match op {
-                Instruction::AddMana(yield_kind)
-                | Instruction::AddManaForPlayer { yield_kind, .. } => {
+                Instruction::AddManaForPlayer { yield_kind, .. } => {
                     if let Some(amount) = mana_yield_amount_mut(yield_kind) {
                         rewrite_value_expr_prior_result(amount, replacement);
                     }
@@ -1667,7 +1661,6 @@ pub(in super::super) fn rewrite_body_prior_result(
                 | Instruction::Earthbend { amount }
                 | Instruction::Sacrifice { amount, .. }
                 | Instruction::ExileTopPlay { count: amount, .. }
-                | Instruction::LookTopChoose { count: amount, .. }
                 | Instruction::LookTopChooseExt { count: amount, .. }
                 | Instruction::RevealUntilMatchExt { count: amount, .. }
                 | Instruction::BindResolutionX(amount) => {
@@ -1706,8 +1699,7 @@ pub(in super::super) fn rewrite_body_prior_result(
                         rewrite_value_expr_prior_result(expr, replacement);
                     }
                 }
-                Instruction::CreateTokens { creations }
-                | Instruction::CreateAttackingTokens { creations, .. } => {
+                Instruction::CreateTokens { creations } => {
                     for spec in creations {
                         rewrite_value_expr_prior_result(&mut spec.amount, replacement);
                         if let Some(TokenSize::AtCreation(expr)) = &mut spec.base_size {
@@ -2740,7 +2732,7 @@ pub(super) fn rewrite_body_trigger_subject_stats(
 ) {
     for op in &mut body.instructions {
         match op {
-            Instruction::AddMana(yield_kind) | Instruction::AddManaForPlayer { yield_kind, .. } => {
+            Instruction::AddManaForPlayer { yield_kind, .. } => {
                 if let Some(amount) = mana_yield_amount_mut(yield_kind) {
                     rewrite_value_expr_trigger_subject(amount, replacement);
                 }
@@ -2752,7 +2744,7 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             | Instruction::Earthbend { amount }
             | Instruction::Sacrifice { amount, .. }
             | Instruction::ExileTopPlay { count: amount, .. }
-            | Instruction::LookTopChoose { count: amount, .. }
+            | Instruction::LookTopChooseExt { count: amount, .. }
             | Instruction::Incubate { count: amount }
             | Instruction::Discover { value: amount }
             | Instruction::Connive { count: amount, .. }
@@ -2760,7 +2752,7 @@ pub(super) fn rewrite_body_trigger_subject_stats(
             | Instruction::CollectEvidence {
                 minimum: amount, ..
             }
-            | Instruction::CreateTokenCopy { count: amount, .. }
+            | Instruction::CreateTokenCopyExt { count: amount, .. }
             | Instruction::Monstrosity { amount }
             | Instruction::OfferDynamicManaPayment {
                 extra_generic: amount,
@@ -2877,8 +2869,7 @@ pub(super) fn rewrite_body_trigger_subject_stats(
                 }
                 _ => {}
             },
-            Instruction::CreateTokens { creations }
-            | Instruction::CreateAttackingTokens { creations, .. } => {
+            Instruction::CreateTokens { creations } => {
                 for spec in creations {
                     rewrite_value_expr_trigger_subject(&mut spec.amount, replacement);
                     if let Some(TokenSize::AtCreation(expr)) = &mut spec.base_size {

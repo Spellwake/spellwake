@@ -46,7 +46,21 @@ fn protection_competes_with_shields_and_multipliers_and_prevents_every_damage_re
             instant(
                 4,
                 A,
-                Instruction::CreatePreventionShield { amount: 2.into() },
+                Instruction::ApplyContinuous(Box::new(
+                    spellwake_engine::toolbox::ApplyContinuousSpec {
+                        selector: None,
+                        payload:
+                            spellwake_engine::toolbox::ContinuousPayload::TargetPreventionShield {
+                                amount: 2.into(),
+                            },
+                        duration:
+                            spellwake_engine::characteristics::ResolvedDuration::UntilEndOfTurn,
+                        condition: None,
+                        one_shot: true,
+                        as_emblem: None,
+                        emblem_label: None,
+                    },
+                )),
             ),
             instant(
                 5,
@@ -200,7 +214,9 @@ fn an_instruction_spell_copy_uses_the_copied_spells_color_for_damage() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
         ),
     };

@@ -5285,7 +5285,11 @@ fn innistrad_each_other_player_can_copy_and_retarget_the_same_departed_spell() {
     );
     let counter = free_instant(
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-        Instruction::CounterSpell,
+        Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                spellwake_engine::toolbox::CounterDestination::Graveyard,
+            ),
+        )),
     );
     let mana = [(ManaType::Blue, 1), (ManaType::Colourless, 4)];
     let start = game(

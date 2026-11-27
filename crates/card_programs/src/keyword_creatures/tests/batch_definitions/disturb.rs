@@ -82,7 +82,11 @@ fn shared_disturb_baithook_angler_casts_its_flying_reverse_from_the_graveyard_an
                 ObjectDestination::Hand,
                 free_instant(
                     BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                    Instruction::CounterSpell,
+                    Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    )),
                 ),
             ),
         ],

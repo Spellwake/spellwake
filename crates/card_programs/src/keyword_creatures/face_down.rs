@@ -110,7 +110,11 @@ fn turn_up_effect(text: &str) -> Option<ExecutableBody> {
         }
         "counter target spell." => (
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-            Instruction::CounterSpell,
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            )),
         ),
         "target creature gets +3/+3 until end of turn."
         | "target creature gets -3/-3 until end of turn." => {

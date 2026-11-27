@@ -783,6 +783,7 @@ fn real_chosen_type_and_captured_trigger_counts_reauthorize_the_owned_library_cu
                         base_size: None,
                         enters_tapped: false,
                         recipients: TokenRecipients::Controller,
+                        attacking_defender: None,
                     }],
                 }],
                 vec![redirect, watcher],

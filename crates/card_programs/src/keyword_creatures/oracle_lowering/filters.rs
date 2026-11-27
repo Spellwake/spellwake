@@ -6701,8 +6701,7 @@ fn find_prior_cost_object_ref(instructions: &[Instruction]) -> Option<ValueObjec
         Instruction::Mill { amount, .. }
         | Instruction::Scry { amount, .. }
         | Instruction::Surveil { amount, .. } => find_value_expr_cost_object_ref(amount),
-        Instruction::CreateTokens { creations }
-        | Instruction::CreateAttackingTokens { creations, .. } => creations
+        Instruction::CreateTokens { creations } => creations
             .iter()
             .find_map(|c| find_value_expr_cost_object_ref(&c.amount)),
         _ => None,
@@ -6714,7 +6713,7 @@ fn has_prior_reveal_top(context: Option<(&BodyBuilder, bool)>) -> bool {
         b.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::LookTopChoose {
+                Instruction::LookTopChooseExt {
                     reveal_only: true,
                     ..
                 } | Instruction::MayRevealLibraryTop
@@ -6728,7 +6727,7 @@ fn has_prior_reveal_other(context: Option<(&BodyBuilder, bool)>) -> bool {
         b.instructions.iter().any(|op| {
             matches!(
                 op,
-                Instruction::LookTopChoose {
+                Instruction::LookTopChooseExt {
                     reveal_only: false,
                     ..
                 }

@@ -577,9 +577,16 @@ fn actual_supertype_control_copy_and_name_add_operations_create_current_legend_c
                     source_cost: SourceCost::None,
                     body: ExecutableBody::new(
                         BodyTarget::SinglePermanent,
-                        vec![Instruction::CopyTargetToSource {
+                        vec![Instruction::BecomeCopy {
+                            receiver: Box::new(
+                                spellwake_engine::program::EffectSubject::AbilitySource,
+                            ),
+                            donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
                             duration: ResolvedDuration::NoStatedDuration,
-                            power_toughness: None,
+                            exceptions: Box::new(spellwake_engine::program::CopyExceptions {
+                                override_pt: None,
+                                ..Default::default()
+                            }),
                         }],
                     ),
                 });

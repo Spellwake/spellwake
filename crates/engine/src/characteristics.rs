@@ -7,7 +7,6 @@
 mod colors;
 mod evaluation;
 mod inheritance;
-pub(crate) use inheritance::inherit_activated_abilities;
 pub use inheritance::{ActivationOriginPath, ActivationTerms, InheritedAbilities};
 #[cfg(test)]
 #[path = "characteristics/tests.rs"]

@@ -116,7 +116,11 @@ fn self_cast_trigger_can_counter_causing_spell_and_keep_its_owned_body() {
     let source = targeted(
         instruction(),
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-        vec![Instruction::CounterSpell],
+        vec![Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                spellwake_engine::toolbox::CounterDestination::Graveyard,
+            ),
+        ))],
     );
     let game = two(vec![hand(1, P0, source)]);
     let cast = paid(&game, P0, 1, 0, None);
@@ -147,7 +151,9 @@ fn spell_copy_target_gate_uses_existing_copy_owner_without_an_extra_cast() {
     let source = targeted(
         instruction(),
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
-        vec![Instruction::CopySpell],
+        vec![Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+        ))],
     );
     let game = two(vec![hand(1, P0, source)]);
     let cast = paid(&game, P0, 1, 0, None);
@@ -467,12 +473,18 @@ fn both_spell_domains_include_real_noncard_instruction_copies_as_targets() {
         let source = targeted(
             instruction(),
             BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
-            vec![Instruction::CopySpell],
+            vec![Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            ))],
         );
         let counter = targeted(
             instruction(),
             BodyTarget::SingleSpell(filter),
-            vec![Instruction::CounterSpell],
+            vec![Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            ))],
         );
         let game = two(vec![hand(1, P0, source), hand(3, P0, counter)]);
         let cast = paid(&game, P0, 1, 0, None);
@@ -533,7 +545,11 @@ fn any_spell_includes_permanent_spells_while_copyable_filter_preserves_interpret
         let counter = targeted(
             instruction(),
             BodyTarget::SingleSpell(filter),
-            vec![Instruction::CounterSpell],
+            vec![Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            ))],
         );
         let game = two(vec![
             hand(1, P0, cast_permanent(false)),
@@ -756,7 +772,9 @@ fn nested_copy_choice_changes_only_the_copy_plan_and_keeps_the_trigger_binding()
             ExecutableBody::new(BodyTarget::SinglePlayer, vec![gain_target(2)]),
         ),
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::copyable_instruction()),
-        vec![Instruction::CopySpell],
+        vec![Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+        ))],
     );
     let game = two(vec![hand(1, P0, source)]);
     let cast = paid(&game, P0, 1, 0, Some(TargetRef::Player(P1)));

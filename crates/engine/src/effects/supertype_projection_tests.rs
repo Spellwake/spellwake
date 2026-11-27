@@ -88,7 +88,9 @@ fn populated_supertype_views_preserve_root_receipts_stack_traits_and_ability_non
             tr::spell(
                 4,
                 BodyTarget::SingleSpell(crate::program::SpellFilter::copyable_instruction()),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
         ],
         vec![CardId(1)],

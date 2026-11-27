@@ -2312,3 +2312,495 @@ fn phase5_prevent_damage_forbidden_subtypes_and_sticker_tag() {
     let s3 = pass_pair(c_gob.state()).into_state();
     assert_eq!(s3.execution().life_total(P1), Some(&RulesInteger::from(18)));
 }
+
+fn advance_until_end_step_resolved(mut game: GameState) -> GameState {
+    for _ in 0..40 {
+        let pos = game.turn().unwrap().position();
+        if pos.step == Step::End
+            && game.execution().window().entries().is_empty()
+            && game.pending_decision().is_none()
+        {
+            return game;
+        }
+        if let Some(pending) = game.pending_decision() {
+            let chooser = pending.chooser();
+            let choice = match pending.frame() {
+                RuleFrame::Combat(CombatDecision::Attackers(_)) => {
+                    DecisionReply::DeclareAttackers(vec![])
+                }
+                RuleFrame::Combat(CombatDecision::Blockers(_)) => {
+                    DecisionReply::DeclareBlockers(vec![])
+                }
+                other => panic!("unexpected decision while advancing to End step: {other:?}"),
+            };
+            game = reply(&game, chooser, choice).into_state();
+        } else {
+            let active = game.execution().window().active_player();
+            let order = if active == P0 { [P0, P1] } else { [P1, P0] };
+            game = pass_in_order(&game, order).into_state();
+        }
+    }
+    panic!("did not reach resolved Step::End");
+}
+
+#[test]
+fn stack_op_counter_targeted_graveyard_and_exile() {
+    let vocab = vocabulary();
+    let gain_life = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                    PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                    ValueExpr::literal(4),
+                )))],
+            ),
+        ),
+        &vocab,
+    );
+    let counter_gy = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))],
+            ),
+        ),
+        &vocab,
+    );
+    let counter_exile = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Exile,
+                    ),
+                ))],
+            ),
+        ),
+        &vocab,
+    );
+
+    let game = init_world(
+        vocab,
+        vec![
+            in_hand(1, P0, gain_life.clone()),
+            in_hand(2, P1, counter_gy),
+            in_hand(3, P0, gain_life),
+            in_hand(4, P1, counter_exile),
+        ],
+    );
+
+    // 1. Counter targeted spell to graveyard.
+    let cast1 = submit(
+        &game,
+        P0,
+        GameCommand::CastUntargeted {
+            spell: object(&game, 1),
+            payment: Some(ManaPayment::default()),
+        },
+    );
+    let entry1 = cast1.state().execution().window().entries()[0].id();
+    let p0_pass1 = submit(cast1.state(), P0, GameCommand::Pass);
+    let cast_c1 = submit(
+        p0_pass1.state(),
+        P1,
+        GameCommand::Cast {
+            spell: object(p0_pass1.state(), 2),
+            target: TargetRef::Stack(entry1),
+        },
+    );
+    let after1 = pass_in_order(cast_c1.state(), [P1, P0]).into_state();
+    assert!(after1.execution().window().entries().is_empty());
+    assert_eq!(
+        after1
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after1, 1))
+            .unwrap()
+            .zone(),
+        ObjectZone::Graveyard(P0)
+    );
+    assert_eq!(
+        after1.execution().life_total(P0),
+        Some(&RulesInteger::from(20))
+    );
+
+    // 2. Counter targeted spell to exile.
+    let cast2 = submit(
+        &after1,
+        P0,
+        GameCommand::CastUntargeted {
+            spell: object(&after1, 3),
+            payment: Some(ManaPayment::default()),
+        },
+    );
+    let entry2 = cast2.state().execution().window().entries()[0].id();
+    let p0_pass2 = submit(cast2.state(), P0, GameCommand::Pass);
+    let cast_c2 = submit(
+        p0_pass2.state(),
+        P1,
+        GameCommand::Cast {
+            spell: object(p0_pass2.state(), 4),
+            target: TargetRef::Stack(entry2),
+        },
+    );
+    let after2 = pass_in_order(cast_c2.state(), [P1, P0]).into_state();
+    assert!(after2.execution().window().entries().is_empty());
+    assert_eq!(
+        after2
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after2, 3))
+            .unwrap()
+            .zone(),
+        ObjectZone::Exile
+    );
+    assert_eq!(
+        after2.execution().life_total(P0),
+        Some(&RulesInteger::from(20))
+    );
+}
+
+#[test]
+fn stack_op_counter_matching_opponents_spells() {
+    let vocab = vocabulary();
+    let p0_spell = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                    PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                    ValueExpr::literal(4),
+                )))],
+            ),
+        ),
+        &vocab,
+    );
+    let p1_spell = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::AdjustLife(Box::new(AdjustLifeSpec::gain(
+                    PlayerSelector::Resolving(ResolvingPlayer::Controller),
+                    ValueExpr::literal(3),
+                )))],
+            ),
+        ),
+        &vocab,
+    );
+    let sweep_opponents = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::None,
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_matching(
+                        None, true, false, true,
+                    ),
+                ))],
+            ),
+        ),
+        &vocab,
+    );
+
+    let game = init_world(
+        vocab,
+        vec![
+            in_hand(1, P0, p0_spell),
+            in_hand(2, P1, p1_spell),
+            in_hand(3, P0, sweep_opponents),
+        ],
+    );
+
+    let c1 = submit(
+        &game,
+        P0,
+        GameCommand::CastUntargeted {
+            spell: object(&game, 1),
+            payment: Some(ManaPayment::default()),
+        },
+    );
+    let p0_pass = submit(c1.state(), P0, GameCommand::Pass);
+    let c2 = submit(
+        p0_pass.state(),
+        P1,
+        GameCommand::CastUntargeted {
+            spell: object(p0_pass.state(), 2),
+            payment: Some(ManaPayment::default()),
+        },
+    );
+    let p1_pass = submit(c2.state(), P1, GameCommand::Pass);
+    let c3 = submit(
+        p1_pass.state(),
+        P0,
+        GameCommand::CastUntargeted {
+            spell: object(p1_pass.state(), 3),
+            payment: Some(ManaPayment::default()),
+        },
+    );
+    // Resolve sweep (counters P1's spell, leaves P0's spell on the stack).
+    let after_sweep = pass_pair(c3.state()).into_state();
+    assert_eq!(
+        after_sweep
+            .execution()
+            .window()
+            .cards()
+            .get(object(&after_sweep, 2))
+            .unwrap()
+            .zone(),
+        ObjectZone::Graveyard(P1)
+    );
+    assert_eq!(after_sweep.execution().window().entries().len(), 1);
+    // Resolve P0's surviving spell.
+    let done = pass_pair(&after_sweep).into_state();
+    assert!(done.execution().window().entries().is_empty());
+    assert_eq!(
+        done.execution().life_total(P0),
+        Some(&RulesInteger::from(24))
+    );
+    assert_eq!(
+        done.execution().life_total(P1),
+        Some(&RulesInteger::from(20))
+    );
+}
+
+#[test]
+fn stack_op_retarget_and_copy_spell() {
+    let vocab = vocabulary();
+    let burn = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SinglePlayer,
+                vec![Instruction::DealDamage(Box::new(DealDamageSpec {
+                    source: DamageSourceQuery::EntrySource,
+                    recipients: DamageTargetQuery::Targets,
+                    amount: spellwake_engine::program::DamageAmountSpec::Expr(ValueExpr::literal(
+                        3,
+                    )),
+                    exile_if_dies: false,
+                }))],
+            ),
+        ),
+        &vocab,
+    );
+    let retarget = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::retarget(false),
+                ))],
+            ),
+        ),
+        &vocab,
+    );
+    let copy_spell = validated(
+        Program::instant(
+            ManaCost::free(),
+            ExecutableBody::new(
+                BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
+            ),
+        ),
+        &vocab,
+    );
+
+    let game = init_world(
+        vocab,
+        vec![
+            in_hand(1, P0, burn.clone()),
+            in_hand(2, P1, retarget),
+            in_hand(3, P0, burn),
+            in_hand(4, P0, copy_spell),
+        ],
+    );
+
+    // 1. Retarget P0's burn spell from P1 onto P0.
+    let c_burn1 = submit(
+        &game,
+        P0,
+        GameCommand::Cast {
+            spell: object(&game, 1),
+            target: TargetRef::Player(P1),
+        },
+    );
+    let burn1_entry = c_burn1.state().execution().window().entries()[0].id();
+    let p0_pass = submit(c_burn1.state(), P0, GameCommand::Pass);
+    let c_retarget = submit(
+        p0_pass.state(),
+        P1,
+        GameCommand::Cast {
+            spell: object(p0_pass.state(), 2),
+            target: TargetRef::Stack(burn1_entry),
+        },
+    );
+    let retarget_prompt = pass_in_order(c_retarget.state(), [P1, P0]).into_state();
+    assert!(matches!(
+        retarget_prompt.pending_decision().map(|d| d.frame()),
+        Some(RuleFrame::CopyTargets(_))
+    ));
+    let retargeted = reply(
+        &retarget_prompt,
+        P1,
+        DecisionReply::CopyTargets(spellwake_engine::effects::CopyTargetChoice::Change(
+            TargetRef::Player(P0),
+        )),
+    )
+    .into_state();
+    let after_retarget = pass_pair(&retargeted).into_state();
+    assert_eq!(
+        after_retarget.execution().life_total(P0),
+        Some(&RulesInteger::from(17))
+    );
+    assert_eq!(
+        after_retarget.execution().life_total(P1),
+        Some(&RulesInteger::from(20))
+    );
+
+    // 2. Copy P0's burn spell targeting P1, keeping target P1 for both copy and original.
+    let c_burn2 = submit(
+        &after_retarget,
+        P0,
+        GameCommand::Cast {
+            spell: object(&after_retarget, 3),
+            target: TargetRef::Player(P1),
+        },
+    );
+    let burn2_entry = c_burn2.state().execution().window().entries()[0].id();
+    let c_copy = submit(
+        c_burn2.state(),
+        P0,
+        GameCommand::Cast {
+            spell: object(c_burn2.state(), 4),
+            target: TargetRef::Stack(burn2_entry),
+        },
+    );
+    let copy_prompt = pass_pair(c_copy.state()).into_state();
+    assert!(matches!(
+        copy_prompt.pending_decision().map(|d| d.frame()),
+        Some(RuleFrame::CopyTargets(_))
+    ));
+    let copied = reply(
+        &copy_prompt,
+        P0,
+        DecisionReply::CopyTargets(spellwake_engine::effects::CopyTargetChoice::Retain),
+    )
+    .into_state();
+    // Resolve the copy, then the original burn spell.
+    let after_copy = pass_pair(&copied).into_state();
+    let after_orig = pass_pair(&after_copy).into_state();
+    assert!(after_orig.execution().window().entries().is_empty());
+    assert_eq!(
+        after_orig.execution().life_total(P1),
+        Some(&RulesInteger::from(14))
+    );
+}
+
+#[test]
+fn schedule_delayed_step_trigger_with_created_tokens() {
+    let vocab = vocabulary();
+    let saproling = vocab
+        .resolve_label("Saproling")
+        .expect("Saproling in vocab");
+    let token_def = spellwake_engine::token::TokenDefinition::new(
+        Program::creature(None, 1.into(), 1.into(), BTreeSet::from([saproling])),
+        spellwake_engine::token::TokenName::Default {
+            ordered_subtypes: vec![spellwake_engine::token::TokenSubtype::Creature(saproling)],
+        },
+        &vocab,
+    )
+    .expect("saproling token definition");
+
+    for (use_exile, label) in [(true, "exile"), (false, "sacrifice")] {
+        let delayed_dest = if use_exile {
+            ZoneDest::exile()
+        } else {
+            ZoneDest::Graveyard {
+                semantics: GraveyardSemantics::Sacrifice,
+            }
+        };
+        let make_and_schedule = sorcery(
+            vec![
+                Instruction::CreateTokens {
+                    creations: vec![spellwake_engine::token::TokenCreation {
+                        definition: token_def.clone(),
+                        amount: ValueExpr::literal(1),
+                        base_size: None,
+                        enters_tapped: false,
+                        recipients: spellwake_engine::token::TokenRecipients::Controller,
+                        attacking_defender: None,
+                    }],
+                },
+                Instruction::ScheduleDelayedStepTrigger {
+                    step: Step::End,
+                    own_step_only: false,
+                    body: Box::new(ExecutableBody::new(
+                        BodyTarget::None,
+                        vec![Instruction::ZoneOp(Box::new(ZoneOpSpec::move_all(
+                            ObjectQuery::CreatedTokens,
+                            delayed_dest,
+                        )))],
+                    )),
+                },
+            ],
+            &vocab,
+        );
+        let bystander = bear(2, 2, BTreeSet::new(), &vocab);
+        let game = init_world(
+            vocab.clone(),
+            vec![in_hand(1, P0, make_and_schedule), bf(2, P0, bystander)],
+        );
+        let after_cast = cast_untargeted(&game, 1).into_state();
+        let bf_before: usize = after_cast
+            .execution()
+            .window()
+            .cards()
+            .iter()
+            .filter(|c| c.zone() == ObjectZone::Battlefield)
+            .count();
+        assert_eq!(
+            bf_before, 2,
+            "{label}: bear and created token must both be on battlefield"
+        );
+
+        let at_end = advance_until_end_step_resolved(after_cast);
+        let bf_after: usize = at_end
+            .execution()
+            .window()
+            .cards()
+            .iter()
+            .filter(|c| c.zone() == ObjectZone::Battlefield)
+            .count();
+        assert_eq!(
+            bf_after, 1,
+            "{label}: delayed End-step trigger must remove only the created token"
+        );
+        assert_eq!(
+            at_end
+                .execution()
+                .window()
+                .cards()
+                .get(object(&at_end, 2))
+                .unwrap()
+                .zone(),
+            ObjectZone::Battlefield,
+            "{label}: non-token bear must stay on battlefield"
+        );
+    }
+}

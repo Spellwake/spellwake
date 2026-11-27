@@ -149,63 +149,6 @@ impl EffectWindow {
         player: SeatId,
         journal: &mut RulesJournal,
     ) -> Result<Option<EffectDecision>, EffectError> {
-        let look_top_choose = match self.current_instruction()? {
-            Instruction::LookTopChoose {
-                filter,
-                reveal_only,
-                to_battlefield,
-                enters_tapped,
-                take_all_matching,
-                max_picks,
-                rest_to_graveyard,
-                rest_to_exile,
-                rest_to_top,
-                random_rest_order,
-                secondary,
-                ..
-            } => Some((
-                filter.clone(),
-                *reveal_only,
-                *to_battlefield,
-                *enters_tapped,
-                *take_all_matching,
-                *max_picks,
-                *rest_to_graveyard,
-                *rest_to_exile,
-                *rest_to_top,
-                *random_rest_order,
-                secondary.clone(),
-            )),
-            _ => None,
-        };
-        let reveal_until = match self.current_instruction()? {
-            Instruction::RevealUntilMatch {
-                filter,
-                count,
-                to_battlefield,
-                enters_tapped,
-                keep_all_revealed,
-                optional_keep,
-                exile_instead_of_reveal,
-                rest_to_graveyard,
-                rest_to_exile,
-                rest_to_bottom,
-                random_rest_order,
-            } => Some((
-                filter.clone(),
-                *count,
-                *to_battlefield,
-                *enters_tapped,
-                *keep_all_revealed,
-                *optional_keep,
-                *exile_instead_of_reveal,
-                *rest_to_graveyard,
-                *rest_to_exile,
-                *rest_to_bottom,
-                *random_rest_order,
-            )),
-            _ => None,
-        };
         let look_top_choose_ext = match self.current_instruction()? {
             Instruction::LookTopChooseExt {
                 chooser,
@@ -215,6 +158,9 @@ impl EffectWindow {
                 keep_dest,
                 rest_dest,
                 reveal_kept,
+                reveal_all,
+                reveal_only,
+                secondary,
                 ..
             } => Some((
                 *chooser,
@@ -224,6 +170,9 @@ impl EffectWindow {
                 *keep_dest,
                 *rest_dest,
                 *reveal_kept,
+                *reveal_all,
+                *reveal_only,
+                secondary.clone(),
             )),
             _ => None,
         };
@@ -235,6 +184,8 @@ impl EffectWindow {
                 match_dest,
                 rest_dest,
                 keep_all_revealed,
+                optional_keep,
+                exile_instead_of_reveal,
                 ..
             } => Some((
                 *chooser,
@@ -243,6 +194,8 @@ impl EffectWindow {
                 *match_dest,
                 *rest_dest,
                 *keep_all_revealed,
+                *optional_keep,
+                *exile_instead_of_reveal,
             )),
             _ => None,
         };
@@ -267,16 +220,16 @@ impl EffectWindow {
             .or_else(|| {
                 reveal_until_ext
                     .as_ref()
-                    .map(|(_, _, _, match_dest, _, _)| *match_dest)
+                    .map(|(_, _, _, match_dest, ..)| *match_dest)
             })
             .or_else(|| reveal_two_piles.map(|(_, _, chosen_dest, _)| chosen_dest));
         let ext_rest_dest = look_top_choose_ext
             .as_ref()
-            .map(|(_, _, _, _, _, rest_dest, _)| *rest_dest)
+            .map(|(_, _, _, _, _, rest_dest, ..)| *rest_dest)
             .or_else(|| {
                 reveal_until_ext
                     .as_ref()
-                    .map(|(_, _, _, _, rest_dest, _)| *rest_dest)
+                    .map(|(_, _, _, _, rest_dest, ..)| *rest_dest)
             })
             .or_else(|| reveal_two_piles.map(|(_, _, _, other_dest)| other_dest));
         let (count, private, take_all, other_pile_to_bottom) = match self.current_instruction()? {
@@ -302,12 +255,11 @@ impl EffectWindow {
                         | crate::program::LookTopRestDest::TopOrder
                 ),
             ),
-            Instruction::LookTopChoose {
+            Instruction::LookTopChooseExt {
                 count,
-                reveal,
+                rest_dest,
+                reveal_all,
                 reveal_only,
-                rest_to_graveyard,
-                rest_to_exile,
                 ..
             } => (
                 self.resolve_value_expr(
@@ -320,35 +272,16 @@ impl EffectWindow {
                 ))
                 .to_usize()
                 .ok_or(EffectError::InconsistentProgram)?,
-                !*reveal && !*reveal_only,
+                !*reveal_all && !*reveal_only,
                 false,
-                !*reveal_only && !*rest_to_graveyard && !*rest_to_exile,
+                !*reveal_only
+                    && matches!(
+                        rest_dest,
+                        crate::program::LookTopRestDest::BottomRandom
+                            | crate::program::LookTopRestDest::BottomOrder
+                            | crate::program::LookTopRestDest::TopOrder
+                    ),
             ),
-            Instruction::LookTopChooseExt {
-                count, rest_dest, ..
-            } => (
-                self.resolve_value_expr(
-                    self.window.resolving().map_or(player, |e| e.controller()),
-                    count,
-                )?
-                .max(0.into())
-                .min(RulesInteger::from_usize(
-                    self.window.cards().library(player).len(),
-                ))
-                .to_usize()
-                .ok_or(EffectError::InconsistentProgram)?,
-                true,
-                false,
-                matches!(
-                    rest_dest,
-                    crate::program::LookTopRestDest::BottomRandom
-                        | crate::program::LookTopRestDest::BottomOrder
-                        | crate::program::LookTopRestDest::TopOrder
-                ),
-            ),
-            Instruction::RevealUntilMatch { rest_to_bottom, .. } => {
-                (usize::MAX, false, false, *rest_to_bottom)
-            }
             Instruction::RevealUntilMatchExt {
                 count, rest_dest, ..
             } => {
@@ -387,26 +320,7 @@ impl EffectWindow {
         } else {
             let library = self.window.cards().library(player);
             let mut reveal_until_matches: Vec<ObjectId> = Vec::new();
-            let named = if let Some((filter, target_count, ..)) = &reveal_until {
-                let evaluated = self.evaluated_characteristics()?;
-                let excluded = BTreeSet::new();
-                let need = usize::from((*target_count).max(1));
-                let mut stop_idx = None;
-                for (idx, id) in library.iter().enumerate() {
-                    if evaluated.get(*id).is_some_and(|card| {
-                        filter.matches_static_characteristics(card, &excluded, || {
-                            self.copiable_program(*id).map(Program::mana_value)
-                        })
-                    }) {
-                        reveal_until_matches.push(*id);
-                        if reveal_until_matches.len() >= need {
-                            stop_idx = Some(idx);
-                            break;
-                        }
-                    }
-                }
-                stop_idx
-            } else if let Some((_, filter, target_count_expr, ..)) = &reveal_until_ext {
+            let named = if let Some((_, filter, target_count_expr, ..)) = &reveal_until_ext {
                 let evaluated = self.evaluated_characteristics()?;
                 let excluded = BTreeSet::new();
                 let resolving_ctrl = self.window.resolving().map_or(player, |e| e.controller());
@@ -490,9 +404,9 @@ impl EffectWindow {
                     },
                 )?;
             }
-            if look_top_choose
+            if look_top_choose_ext
                 .as_ref()
-                .is_some_and(|(_, reveal_only, ..)| *reveal_only)
+                .is_some_and(|(_, _, _, _, _, _, _, _, reveal_only, _)| *reveal_only)
             {
                 let evaluated = self.evaluated_characteristics()?;
                 let revealed_types: BTreeSet<CardType> = cards
@@ -507,16 +421,10 @@ impl EffectWindow {
                 return Ok(None);
             }
             let mut work = RevealedPiles::new(cards);
-            if let Some((_, _, _, _, keep_all_revealed, optional_keep, ..)) = &reveal_until {
-                if *keep_all_revealed {
-                    work.hand = Some(work.cards.clone());
-                } else if !*optional_keep || reveal_until_matches.is_empty() {
-                    work.hand = Some(reveal_until_matches);
-                }
-            } else if let Some((_, _, _, _, _, keep_all)) = &reveal_until_ext {
+            if let Some((_, _, _, _, _, keep_all, optional_keep, _)) = &reveal_until_ext {
                 if *keep_all {
                     work.hand = Some(work.cards.clone());
-                } else {
+                } else if !*optional_keep || reveal_until_matches.is_empty() {
                     work.hand = Some(reveal_until_matches);
                 }
             }
@@ -533,12 +441,7 @@ impl EffectWindow {
                 return Err(EffectError::InconsistentProgram);
             };
             opp
-        } else if private
-            || take_all
-            || look_top_choose.is_some()
-            || look_top_choose_ext.is_some()
-            || reveal_until.is_some()
-            || reveal_until_ext.is_some()
+        } else if private || take_all || look_top_choose_ext.is_some() || reveal_until_ext.is_some()
         {
             player
         } else {
@@ -578,28 +481,17 @@ impl EffectWindow {
         } else {
             self.window.resolving().map_or(player, |e| e.controller())
         };
-        let choice = if reveal_until_ext.is_some() {
-            None
-        } else if let Some((_, filter, max_picks, take_all_matching, _, rest_dest, _)) =
-            &look_top_choose_ext
-        {
-            if work.hand.is_some() {
+        let choice = if let Some((_, filter, _, _, _, _, optional_keep, _)) = &reveal_until_ext {
+            if work.hand.is_some() || !*optional_keep {
                 None
-            } else if !*take_all_matching && *max_picks == 0 {
-                work.hand = Some(Vec::new());
-                None
-            } else if let Some(filter) = filter {
+            } else {
                 let current = self.evaluated_characteristics()?;
                 let excluded = BTreeSet::new();
                 let resolving_src = self.window.resolving().and_then(|e| match e.kind() {
                     StackKind::ActivatedAbility { source }
                     | StackKind::TriggeredAbility { source } => Some(source.id()),
                     StackKind::CardSpell(id) => Some(*id),
-                    StackKind::SpellCopy { .. }
-                    | StackKind::Speed
-                    | StackKind::Monarch
-                    | StackKind::DelayedCopy { .. }
-                    | StackKind::Emblem { .. } => None,
+                    _ => None,
                 });
                 let eligible: Vec<_> = work
                     .cards
@@ -615,69 +507,6 @@ impl EffectWindow {
                                 &excluded,
                                 &current,
                             )
-                        })
-                    })
-                    .collect();
-                if eligible.is_empty() || *take_all_matching {
-                    work.hand = Some(eligible);
-                    None
-                } else if *max_picks > 1 {
-                    Some((
-                        chooser,
-                        PileChoice::OptionalUpTo {
-                            looked: work.cards.clone(),
-                            eligible,
-                            max: usize::from(*max_picks),
-                        },
-                    ))
-                } else {
-                    Some((
-                        chooser,
-                        PileChoice::OptionalCreatureToBattlefield {
-                            looked: work.cards.clone(),
-                            eligible,
-                        },
-                    ))
-                }
-            } else if *take_all_matching || work.cards.len() <= usize::from((*max_picks).max(1)) {
-                work.hand = Some(work.cards.clone());
-                None
-            } else if *max_picks > 1 {
-                Some((
-                    chooser,
-                    PileChoice::OptionalUpTo {
-                        looked: work.cards.clone(),
-                        eligible: work.cards.clone(),
-                        max: usize::from(*max_picks),
-                    },
-                ))
-            } else {
-                let choice = if matches!(
-                    rest_dest,
-                    crate::program::LookTopRestDest::BottomOrder
-                        | crate::program::LookTopRestDest::BottomRandom
-                ) {
-                    PileChoice::OneToHandRestBottom(work.cards.clone())
-                } else {
-                    PileChoice::OneToHand(work.cards.clone())
-                };
-                Some((chooser, choice))
-            }
-        } else if let Some((filter, _, _, _, _, optional_keep, ..)) = &reveal_until {
-            if work.hand.is_some() || !*optional_keep {
-                None
-            } else {
-                let current = self.evaluated_characteristics()?;
-                let excluded = BTreeSet::new();
-                let eligible: Vec<_> = work
-                    .cards
-                    .iter()
-                    .copied()
-                    .filter(|id| {
-                        current.get(*id).is_some_and(|card| {
-                            filter.matches_static_characteristics(card, &excluded, || {
-                                self.copiable_program(*id).map(Program::mana_value)
-                            })
                         })
                     })
                     .collect();
@@ -704,18 +533,17 @@ impl EffectWindow {
                 }
             }
         } else if let Some((
+            _,
             filter,
-            _reveal_only,
-            _to_battlefield,
-            _enters_tapped,
-            take_all_matching,
             max_picks,
-            _rest_to_graveyard,
-            _rest_to_exile,
-            _rest_to_top,
-            _random_rest_order,
+            take_all_matching,
+            _,
+            rest_dest,
+            _,
+            _,
+            _,
             secondary,
-        )) = &look_top_choose
+        )) = &look_top_choose_ext
         {
             if let Some(primary_chosen) = &work.hand {
                 if let Some(sec) = secondary
@@ -829,7 +657,11 @@ impl EffectWindow {
                     },
                 ))
             } else {
-                let choice = if other_pile_to_bottom {
+                let choice = if matches!(
+                    rest_dest,
+                    crate::program::LookTopRestDest::BottomOrder
+                        | crate::program::LookTopRestDest::BottomRandom
+                ) {
                     PileChoice::OneToHandRestBottom(work.cards.clone())
                 } else {
                     PileChoice::OneToHand(work.cards.clone())
@@ -929,22 +761,12 @@ impl EffectWindow {
                 )
             } else {
                 (
-                    if look_top_choose
-                        .as_ref()
-                        .is_some_and(|(_, _, to_battlefield, ..)| *to_battlefield)
-                        || reveal_until
-                            .as_ref()
-                            .is_some_and(|(_, _, to_battlefield, ..)| *to_battlefield)
-                    {
-                        Zone::Battlefield
-                    } else {
-                        Zone::Hand
-                    },
+                    Zone::Hand,
                     work.hand.clone().ok_or(EffectError::InconsistentProgram)?,
                 )
             };
             let secondary_chosen = work.secondary_hand.clone().unwrap_or_default();
-            let secondary_zone = look_top_choose
+            let secondary_zone = look_top_choose_ext
                 .as_ref()
                 .and_then(|(.., sec)| sec.as_ref())
                 .map_or(Zone::Hand, |sec| {
@@ -960,16 +782,10 @@ impl EffectWindow {
                 .copied()
                 .filter(|id| !chosen.contains(id) && !secondary_chosen.contains(id))
                 .collect();
-            let random_rest_order = look_top_choose
-                .as_ref()
-                .is_some_and(|(_, _, _, _, _, _, _, _, _, random_rest, _)| *random_rest)
-                || reveal_until
-                    .as_ref()
-                    .is_some_and(|(.., random_rest)| *random_rest)
-                || matches!(
-                    ext_rest_dest,
-                    Some(crate::program::LookTopRestDest::BottomRandom)
-                );
+            let random_rest_order = matches!(
+                ext_rest_dest,
+                Some(crate::program::LookTopRestDest::BottomRandom)
+            );
             if other_pile_to_bottom && work.bottom_order.is_none() {
                 if remainder.len() > 1 {
                     if random_rest_order {
@@ -1013,23 +829,10 @@ impl EffectWindow {
                     | crate::program::LookTopRestDest::BottomOrder
                     | crate::program::LookTopRestDest::TopOrder => Zone::Graveyard,
                 }
-            } else if look_top_choose
-                .as_ref()
-                .is_some_and(|(_, _, _, _, _, _, _, rest_to_exile, ..)| *rest_to_exile)
-                || reveal_until
-                    .as_ref()
-                    .is_some_and(|(_, _, _, _, _, _, _, _, rest_to_exile, ..)| *rest_to_exile)
-            {
-                Zone::Exile
             } else {
                 Zone::Graveyard
             };
-            let leave_rest_in_library = reveal_until.as_ref().is_some_and(
-                |(_, _, _, _, _, _, _, rest_to_gy, rest_to_exile, rest_to_bottom, _)| {
-                    !*rest_to_gy && !*rest_to_exile && !*rest_to_bottom
-                },
-            );
-            let rest_cards = if other_pile_to_bottom || leave_rest_in_library {
+            let rest_cards = if other_pile_to_bottom {
                 Vec::new()
             } else {
                 remainder
@@ -1170,7 +973,7 @@ impl EffectWindow {
         );
         if look_top_choose_ext
             .as_ref()
-            .is_some_and(|(.., reveal_kept)| *reveal_kept)
+            .is_some_and(|(_, _, _, _, _, _, reveal_kept, _, _, _)| *reveal_kept)
             && let Some(kept) = work.hand.as_ref()
             && !kept.is_empty()
         {
@@ -1215,13 +1018,10 @@ impl EffectWindow {
             self.window = window;
             movements
         };
-        let rest_is_top = look_top_choose
-            .as_ref()
-            .is_some_and(|(_, _, _, _, _, _, _, _, rest_to_top, ..)| *rest_to_top)
-            || matches!(
-                ext_rest_dest,
-                Some(crate::program::LookTopRestDest::TopOrder)
-            );
+        let rest_is_top = matches!(
+            ext_rest_dest,
+            Some(crate::program::LookTopRestDest::TopOrder)
+        );
         if keep_stays_on_top {
             let kept_top = work.hand.clone().unwrap_or_default();
             if let Some(rest_order) = work.bottom_order {
@@ -1271,7 +1071,7 @@ impl EffectWindow {
             .iter()
             .copied()
             .collect();
-        let secondary_tapped = look_top_choose
+        let secondary_tapped = look_top_choose_ext
             .as_ref()
             .and_then(|(.., sec)| sec.as_ref())
             .is_some_and(|sec| sec.enters_tapped);
@@ -1289,16 +1089,10 @@ impl EffectWindow {
             let should_tap = if secondary_ids.contains(&movement.before.id()) {
                 secondary_tapped
             } else {
-                look_top_choose
-                    .as_ref()
-                    .is_some_and(|(_, _, _, enters_tapped, ..)| *enters_tapped)
-                    || reveal_until
-                        .as_ref()
-                        .is_some_and(|(_, _, _, enters_tapped, ..)| *enters_tapped)
-                    || matches!(
-                        ext_keep_dest,
-                        Some(crate::program::LookTopKeepDest::Battlefield { tapped: true, .. })
-                    )
+                matches!(
+                    ext_keep_dest,
+                    Some(crate::program::LookTopKeepDest::Battlefield { tapped: true, .. })
+                )
             };
             if should_tap {
                 self.window.enter_tapped(id)?;
@@ -1456,18 +1250,6 @@ impl EffectWindow {
                     });
                 }
             }
-        }
-        if look_top_choose.is_some() {
-            let took_card = movements.iter().any(|movement| {
-                matches!(
-                    movement.after.zone(),
-                    ObjectZone::Hand(_) | ObjectZone::Battlefield
-                )
-            });
-            self.resolution_cursor_mut()
-                .ok_or(EffectError::WrongResolutionFrame)?
-                .results
-                .last_action_succeeded = took_card;
         }
         if look_top_choose_ext.is_some() || reveal_until_ext.is_some() {
             let kept_before: BTreeSet<ObjectId> = work

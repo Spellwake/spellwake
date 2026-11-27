@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 #![allow(dead_code, unused_imports)]
 //! Behavioral integration tests for Mega-Batch 3 engine primitives:
-//! - `Instruction::CounterMatchingStackObjects` (opponents-only spell sweep & ability sweep)
+//! - `Instruction::StackOp` (`StackOpSpec::counter_matching` opponents-only spell sweep & ability sweep)
 //! - `Instruction::ReturnLinkedExile` (returns exiled card linked to source permanent)
-//! - `Instruction::TransferAllCountersFromTriggeringLki` (transfers +1/+1 and keyword counters on death LKI)
+//! - `Instruction::MutateObject` (`ObjectMutation::TransferAllCountersFromTriggeringLki` on death LKI)
 //! - `SpellCostModifier::AlternativeForMatching { pay_life_mv: true, each_player }`
 //! - `CastPermissionRule::Flash` with `cast_zone` enforcement
 //! - `Instruction::TransformSubject`

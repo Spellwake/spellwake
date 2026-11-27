@@ -87,7 +87,9 @@ fn setup(filter: SpellFilter, source: Vec<Instruction>, copier: Vec<Instruction>
             P0,
             ExecutableBody::new(
                 BodyTarget::SingleSpell(filter),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
             false,
         ),
@@ -96,7 +98,11 @@ fn setup(filter: SpellFilter, source: Vec<Instruction>, copier: Vec<Instruction>
             P0,
             ExecutableBody::new(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                vec![Instruction::CounterSpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))],
             ),
             false,
         ),
@@ -277,7 +283,13 @@ fn both_filters_copy_paid_targetless_spells_without_choices_or_recasting_for_ano
         spellwake_engine::program::SpellFilter::any(),
         spellwake_engine::program::SpellFilter::copyable_instruction(),
     ] {
-        let game = setup(filter, vec![draw(), gain()], vec![Instruction::CopySpell]);
+        let game = setup(
+            filter,
+            vec![draw(), gain()],
+            vec![Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            ))],
+        );
         let (game, original, copier) = source_and_copier(&game);
         let physical_count = game.execution().window().cards().iter().count();
         let next_decision = game.next_decision_sequence();
@@ -404,7 +416,14 @@ fn repeated_instructions_create_ordered_copies_and_complete_the_exact_copier() {
     let game = setup(
         spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![gain()],
-        vec![Instruction::CopySpell, Instruction::CopySpell],
+        vec![
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            )),
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            )),
+        ],
     );
     let (game, original, copier) = source_and_copier(&game);
     let copier_object = object(&game, 2);
@@ -490,7 +509,9 @@ fn copy_of_copy_owns_body_and_traits_after_the_physical_original_is_countered() 
     let game = setup(
         spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![draw(), gain()],
-        vec![Instruction::CopySpell],
+        vec![Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+        ))],
     );
     let (game, original, _) = source_and_copier(&game);
     let first = resolve(&game);
@@ -573,7 +594,14 @@ fn each_targetless_copy_and_original_makes_fresh_resolution_choices_and_controll
     let game = setup(
         spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![choose, chosen_draw()],
-        vec![Instruction::CopySpell, Instruction::CopySpell],
+        vec![
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            )),
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            )),
+        ],
     );
     let (game, original, _) = source_and_copier(&game);
     let copies_result = resolve(&game);
@@ -686,7 +714,13 @@ fn automatic_copy_keeps_its_journal_when_a_later_real_choice_suspends() {
     let game = setup(
         spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![gain()],
-        vec![Instruction::CopySpell, type_choice_body(), chosen_draw()],
+        vec![
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            )),
+            type_choice_body(),
+            chosen_draw(),
+        ],
     );
     let (game, _, copier) = source_and_copier(&game);
     let lower = resolving_lower(&game);
@@ -733,7 +767,9 @@ fn unused_explicit_copy_choice_on_automatic_completion_is_rejected_atomically() 
     let game = setup(
         spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![gain()],
-        vec![Instruction::CopySpell],
+        vec![Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+        ))],
     );
     let (game, _, _) = source_and_copier(&game);
     let lower = resolving_lower(&game);
@@ -757,7 +793,9 @@ fn targetless_copy_exit_cessation_and_payload_pruning_are_separate_actual_cuts()
     let game = setup(
         spellwake_engine::program::SpellFilter::copyable_instruction(),
         vec![gain()],
-        vec![Instruction::CopySpell],
+        vec![Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+        ))],
     );
     let (game, _, _) = source_and_copier(&game);
     let created = resolve(&game);
@@ -796,9 +834,17 @@ fn copy_then_counter_then_copy_skips_the_departed_source_without_a_false_decisio
         spellwake_engine::program::SpellFilter::any(),
         vec![gain()],
         vec![
-            Instruction::CopySpell,
-            Instruction::CounterSpell,
-            Instruction::CopySpell,
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            )),
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                    spellwake_engine::toolbox::CounterDestination::Graveyard,
+                ),
+            )),
+            Instruction::StackOp(Box::new(
+                spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+            )),
         ],
     );
     let (game, _, _) = source_and_copier(&game);

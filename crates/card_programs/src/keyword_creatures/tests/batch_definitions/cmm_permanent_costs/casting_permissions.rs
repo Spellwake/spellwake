@@ -108,7 +108,11 @@ fn cmm_shimmer_myr_raff_capashen_and_skittering_cicada_flash_in_and_allow_exactl
 fn cmm_thryx_flashes_in_and_reduces_and_protects_its_controllers_spells_at_mana_value_five() {
     let counter = free_instant(
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-        Instruction::CounterSpell,
+        Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                spellwake_engine::toolbox::CounterDestination::Graveyard,
+            ),
+        )),
     );
     let mut cards = draw_pile();
     cards.extend([
@@ -501,7 +505,11 @@ fn cmm_destiny_spinner_protects_its_own_creature_and_enchantment_spells_and_turn
  {
     let counter = free_instant(
         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-        Instruction::CounterSpell,
+        Instruction::StackOp(Box::new(
+            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                spellwake_engine::toolbox::CounterDestination::Graveyard,
+            ),
+        )),
     );
     let mut cards = draw_pile();
     cards.extend([

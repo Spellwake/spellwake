@@ -243,24 +243,35 @@ impl AuthoredEffect {
             Self::CounterUnlessPaidThree => ExecutableBody::new(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
                 vec![
-                    Instruction::OfferManaPayment {
+                    Instruction::OfferDynamicManaPayment {
                         payer: ResolvingPlayer::TargetSpellController,
-                        cost: ManaCost::generic(3.into()),
+                        fixed: ManaCost::generic(3.into()),
+                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                         paid_destination: 2,
                         declined_destination: 1,
                     },
-                    Instruction::CounterSpell,
+                    Instruction::StackOp(Box::new(
+                        spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                            spellwake_engine::toolbox::CounterDestination::Graveyard,
+                        ),
+                    )),
                 ],
             ),
             Self::CopySpell => ExecutableBody::new(
                 BodyTarget::SingleSpell(
                     spellwake_engine::program::SpellFilter::copyable_instruction(),
                 ),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
             Self::CounterSpell => ExecutableBody::new(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                vec![Instruction::CounterSpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                        spellwake_engine::toolbox::CounterDestination::Graveyard,
+                    ),
+                ))],
             ),
             Self::DrawTwo => ExecutableBody::new(
                 BodyTarget::None,
@@ -282,6 +293,7 @@ impl AuthoredEffect {
                         base_size: None,
                         enters_tapped: false,
                         recipients: TokenRecipients::Controller,
+                        attacking_defender: None,
                     }],
                 }],
             ),
@@ -340,9 +352,10 @@ impl AuthoredTrigger {
             AuthoredTriggerEffect::DrawUnlessRelatedPaysOne => (
                 BodyTarget::None,
                 vec![
-                    Instruction::OfferManaPayment {
+                    Instruction::OfferDynamicManaPayment {
                         payer: ResolvingPlayer::UniqueRelatedPlayer,
-                        cost: ManaCost::generic(1.into()),
+                        fixed: ManaCost::generic(1.into()),
+                        extra_generic: spellwake_engine::program::ValueExpr::Literal(0.into()),
                         paid_destination: 3,
                         declined_destination: 1,
                     },

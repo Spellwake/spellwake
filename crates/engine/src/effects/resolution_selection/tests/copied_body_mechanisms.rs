@@ -97,7 +97,9 @@ fn setup() -> GameState {
                             into: slot(),
                             excluding: BTreeSet::new(),
                         },
-                        Instruction::CopySpell,
+                        Instruction::StackOp(Box::new(
+                            crate::toolbox::StackOpSpec::copy_targeted_spell(),
+                        )),
                     ],
                 ),
             ),
@@ -110,7 +112,11 @@ fn setup() -> GameState {
                 ManaCost::free(),
                 ExecutableBody::new(
                     BodyTarget::SingleSpell(crate::program::SpellFilter::any()),
-                    vec![Instruction::CounterSpell],
+                    vec![Instruction::StackOp(Box::new(
+                        crate::toolbox::StackOpSpec::counter_targeted(
+                            crate::toolbox::CounterDestination::Graveyard,
+                        ),
+                    ))],
                 ),
             ),
         ),

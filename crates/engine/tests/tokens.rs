@@ -609,7 +609,9 @@ fn an_owned_spell_copy_creates_a_distinct_token_for_its_own_controller() {
             ManaCost::specific(ManaType::Blue, 2.into()),
             ExecutableBody::new(
                 BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                vec![Instruction::CopySpell],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_targeted_spell(),
+                ))],
             ),
         ),
         false,
@@ -996,9 +998,14 @@ fn copy_ability() -> ActivatedAbility {
         source_cost: SourceCost::None,
         body: ExecutableBody::new(
             BodyTarget::SinglePermanent,
-            vec![Instruction::CopyTargetToSource {
+            vec![Instruction::BecomeCopy {
+                receiver: Box::new(spellwake_engine::program::EffectSubject::AbilitySource),
+                donor: spellwake_engine::program::MoveSubjectRef::TargetObject,
                 duration: ResolvedDuration::UntilEndOfTurn,
-                power_toughness: None,
+                exceptions: Box::new(spellwake_engine::program::CopyExceptions {
+                    override_pt: None,
+                    ..Default::default()
+                }),
             }],
         ),
     }
@@ -1280,6 +1287,7 @@ fn actual_plural_birth_selectors_require_event_uniqueness_and_explicit_ordinal()
                             base_size: None,
                             enters_tapped: false,
                             recipients: spellwake_engine::token::TokenRecipients::Controller,
+                            attacking_defender: None,
                         }],
                     }],
                 ),

@@ -6,13 +6,13 @@
 //! - Targeted damage prevention and redirection: `PreventNextTimeDamage { source_is_target: true }`,
 //!   `StaticDamageRecipient::{TargetObject, TargetAny}`, and
 //!   `DamageRedirectTarget::{TargetAny, SecondTargetObject}`
-//! - Generalized `CreateTokenCopy`: `grant_keywords`, `add_subtypes`, `add_card_types`,
+//! - Generalized `CreateTokenCopyExt`: `extra_keywords`, `extra_subtypes`, `extra_types`,
 //!   and `TokenRecipients::EachOpponent`
 //! - `SpellModes.conditional_maximum`
 //! - `Instruction::BindResolutionX` feeding downstream `ValueExpr::chosen_x()` and
 //!   `Instruction::EmitReflexiveTrigger`
 //! - `Program.conditional_flash` (`SelfFlashPermission::Condition` and `PayExtraMana`)
-//! - `Program.cannot_be_copied` blocking `Instruction::CopyStackObject`
+//! - `Program.cannot_be_copied` blocking `Instruction::StackOp` (`StackOpSpec::copy_stack`)
 //! - `TemporaryRuleKind::TemporaryZoneReplacement` with cleanup expiration
 //! - `AbilityChange.suppressed_activations` (`NonMana` vs `All`) and `AbilityChange.doesnt_untap`
 //! - `TemporaryRuleKind::{CantActivateAbilities, CantPlayLands, PlayerGrantKeyword}`
@@ -234,21 +234,24 @@ fn create_token_copy_grants_keywords_subtypes_card_types_and_each_opponent() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleCreature,
-                vec![Instruction::CreateTokenCopy {
+                vec![Instruction::CreateTokenCopyExt {
                     source: MoveSubjectRef::TargetObject,
                     count: ValueExpr::literal(1),
-                    tapped: false,
-                    attacking: false,
+                    recipients: TokenRecipients::EachOpponent,
+                    enters_tapped: false,
+                    enters_attacking: false,
+                    haste: false,
                     sacrifice_at_end_step: false,
                     exile_at_end_step: false,
-                    grant_keywords: BTreeSet::from([KeywordAbility::Flying, KeywordAbility::Haste]),
                     nonlegendary: true,
+                    extra_types: BTreeSet::from([CardType::Artifact]),
+                    extra_subtypes: BTreeSet::from([zombie, wizard]),
+                    extra_keywords: BTreeSet::from([KeywordAbility::Flying, KeywordAbility::Haste]),
                     override_pt: None,
+                    extra_colors: BTreeSet::new(),
                     override_colors: None,
-                    add_subtypes: BTreeSet::from([zombie, wizard]),
-                    add_card_types: BTreeSet::from([CardType::Artifact]),
                     strip_mana_cost: false,
-                    recipients: TokenRecipients::EachOpponent,
+                    defender_scope: spellwake_engine::token::AttackingDefenderScope::AnyLegal,
                 }],
             ),
         ),
@@ -311,11 +314,13 @@ fn cannot_be_copied_prevents_copy_stack_object() {
             ManaCost::free(),
             ExecutableBody::new(
                 BodyTarget::SingleSpell(SpellFilter::any()),
-                vec![Instruction::CopyStackObject {
-                    target: StackCopyTarget::TargetSpell,
-                    count: ValueExpr::literal(1),
-                    may_choose_new_targets: false,
-                }],
+                vec![Instruction::StackOp(Box::new(
+                    spellwake_engine::toolbox::StackOpSpec::copy_stack(
+                        StackCopyTarget::TargetSpell,
+                        ValueExpr::literal(1),
+                        false,
+                    ),
+                ))],
             ),
         ),
         &vocab,
@@ -332,7 +337,7 @@ fn cannot_be_copied_prevents_copy_stack_object() {
         vec![],
     );
 
-    // Casting CopyStackObject targeting a cannot_be_copied spell creates NO copy on the stack.
+    // Casting StackOp::copy_stack targeting a cannot_be_copied spell creates NO copy on the stack.
     let cast_a = submit(
         &game,
         P0,
@@ -360,7 +365,7 @@ fn cannot_be_copied_prevents_copy_stack_object() {
     let after_a = pass_pair(after_copy_a.state());
     assert_eq!(after_a.state().execution().life_total(P0), Some(&24.into()));
 
-    // Control: CopyStackObject on a normal spell creates a copy and resolves twice (+8 life).
+    // Control: StackOp::copy_stack on a normal spell creates a copy and resolves twice (+8 life).
     let cast_b = submit(
         after_a.state(),
         P0,

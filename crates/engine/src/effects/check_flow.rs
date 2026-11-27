@@ -1020,7 +1020,14 @@ impl EffectWindow {
         if per_clause.is_empty() {
             return Ok(None);
         }
-        let distinct_pair = body.instructions.contains(&Instruction::FightFixedTargets);
+        let distinct_pair = body.instructions.iter().any(|op| {
+            matches!(
+                op,
+                Instruction::Fight { first, second }
+                    if **first == crate::program::MoveSubjectRef::RememberedFirst
+                        && **second == crate::program::MoveSubjectRef::RememberedSecond
+            )
+        });
         if distinct_pair
             && per_clause.len() == 2
             && per_clause[0].len() == 1
@@ -1629,9 +1636,7 @@ impl EffectWindow {
                     DelayedCopyAction::Sacrifice(objects) => {
                         vec![Instruction::SacrificeDelayedObjects(objects.clone())]
                     }
-                    DelayedCopyAction::Exile(objects) => {
-                        vec![Instruction::ExileDelayedObjects(objects.clone())]
-                    }
+
                     DelayedCopyAction::SpellTwice(..) => vec![Instruction::CopyOnCast(
                         crate::program::CastCopyKeyword::CopyObservedSpell,
                     )],

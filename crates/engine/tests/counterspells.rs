@@ -47,7 +47,11 @@ fn setup(blue: RulesInteger, cost: RulesInteger) -> EffectWindow {
                     ManaCost::specific(ManaType::Blue, cost.clone()),
                     ExecutableBody::new(
                         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                        vec![Instruction::CounterSpell],
+                        vec![Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                spellwake_engine::toolbox::CounterDestination::Graveyard,
+                            ),
+                        ))],
                     ),
                 ),
             },
@@ -70,7 +74,11 @@ fn setup(blue: RulesInteger, cost: RulesInteger) -> EffectWindow {
                     ManaCost::specific(ManaType::Blue, cost),
                     ExecutableBody::new(
                         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                        vec![Instruction::CounterSpell],
+                        vec![Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                spellwake_engine::toolbox::CounterDestination::Graveyard,
+                            ),
+                        ))],
                     ),
                 ),
             },
@@ -295,7 +303,11 @@ fn negative_specific_cost_programs_are_rejected_at_setup() {
                     ManaCost::specific(ManaType::Blue, amount),
                     ExecutableBody::new(
                         BodyTarget::SingleSpell(spellwake_engine::program::SpellFilter::any()),
-                        vec![Instruction::CounterSpell],
+                        vec![Instruction::StackOp(Box::new(
+                            spellwake_engine::toolbox::StackOpSpec::counter_targeted(
+                                spellwake_engine::toolbox::CounterDestination::Graveyard,
+                            ),
+                        ))],
                     ),
                 ),
             }],
