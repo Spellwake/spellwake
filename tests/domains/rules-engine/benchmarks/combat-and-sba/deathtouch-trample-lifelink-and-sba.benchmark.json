@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "id": "combat-and-sba/deathtouch-trample-lifelink-and-sba",
+  "title": "Deathtouch + Trample Assignment (vs Indestructible) and Simultaneous Lifelink SBA Survival",
+  "category": "combat-and-sba",
+  "execution_status": "pending-engine",
+  "execution_receipt": null,
+  "review_status": "pending-independent-review",
+  "rules_edition": {
+    "edition": "MTG Comprehensive Rules (2026-09-25)",
+    "source_url": "https://media.wizards.com/2026/downloads/MagicCompRules%2020260925.txt",
+    "cited_rules": [
+      {
+        "rule": "510.1c",
+        "summary": "A blocked creature assigns combat damage to its blockers before excess damage can trample over."
+      },
+      {
+        "rule": "510.2",
+        "summary": "All assigned combat damage is dealt simultaneously without using the stack."
+      },
+      {
+        "rule": "702.2b",
+        "summary": "Any nonzero amount of damage assigned by a source with deathtouch is considered lethal damage."
+      },
+      {
+        "rule": "702.12b",
+        "summary": "Indestructible permanents are not destroyed by lethal damage or deathtouch."
+      },
+      {
+        "rule": "702.15a",
+        "summary": "Lifelink causes damage dealt by the source to also cause its controller to gain that much life simultaneously."
+      },
+      {
+        "rule": "702.19b",
+        "summary": "Trample allows excess combat damage beyond lethal damage to blockers to be assigned to the defending player."
+      },
+      {
+        "rule": "704.3",
+        "summary": "State-based actions are checked after combat damage and lifelink are applied simultaneously."
+      },
+      {
+        "rule": "704.5a",
+        "summary": "A player with 0 or less life loses the game when state-based actions are checked."
+      }
+    ]
+  },
+  "provenance": {
+    "source_summary": "High-value combat rules benchmark testing Deathtouch + Trample lethal assignment against Indestructible blockers and simultaneous Lifelink survival before SBAs.",
+    "scope_notes": "Preemptive benchmark authored before full combat damage assignment and simultaneous lifelink SBA pipelines are qualified."
+  },
+  "required_capabilities": [
+    "combat.deathtouch-lethal-assignment",
+    "combat.simultaneous-lifelink-damage",
+    "combat.trample-excess-assignment",
+    "sba.player-zero-life-check"
+  ],
+  "cards": {
+    "questing_beast": {
+      "name": "Questing Beast",
+      "oracle_id": "b685757b-521e-4353-a233-97052359723d",
+      "mana_cost": "{2}{G}{G}",
+      "type_line": "Legendary Creature — Beast",
+      "oracle_text": "Vigilance, deathtouch, haste\nQuesting Beast can't be blocked by creatures with power 2 or less.\nCombat damage that would be dealt by creatures you control can't be prevented.\nWhenever Questing Beast deals combat damage to an opponent, it deals that much damage to target planeswalker that player controls.",
+      "power": "4",
+      "toughness": "4"
+    },
+    "darksteel_colossus": {
+      "name": "Darksteel Colossus",
+      "oracle_id": "1b09d0cf-403c-4a15-aeee-602a1bdaf0c1",
+      "mana_cost": "{11}",
+      "type_line": "Artifact Creature — Golem",
+      "oracle_text": "Trample, indestructible\nIf Darksteel Colossus would be put into a graveyard from anywhere, reveal Darksteel Colossus and shuffle it into its owner's library instead.",
+      "power": "11",
+      "toughness": "11"
+    },
+    "glissa_sunslayer": {
+      "name": "Glissa Sunslayer",
+      "oracle_id": "8859a692-d107-4de2-9110-4681fc2761c7",
+      "mana_cost": "{1}{B}{G}",
+      "type_line": "Legendary Creature — Phyrexian Zombie Elf",
+      "oracle_text": "First strike, deathtouch\nWhenever Glissa Sunslayer deals combat damage to a player, choose one —\n• You draw a card and you lose 1 life.\n• Destroy target enchantment.\n• Remove up to three counters from target permanent.",
+      "power": "3",
+      "toughness": "3"
+    },
+    "baneslayer_angel": {
+      "name": "Baneslayer Angel",
+      "oracle_id": "0e11792b-7fe5-4208-aa0b-e5d09b2b65fe",
+      "mana_cost": "{3}{W}{W}",
+      "type_line": "Creature — Angel",
+      "oracle_text": "Flying, first strike, lifelink, protection from Demons and from Dragons",
+      "power": "5",
+      "toughness": "5"
+    },
+    "grizzly_bears": {
+      "name": "Grizzly Bears",
+      "oracle_id": "14c8f55d-d177-4c25-a931-ebeb9e6062a0",
+      "mana_cost": "{1}{G}",
+      "type_line": "Creature — Bear",
+      "oracle_text": "",
+      "power": "2",
+      "toughness": "2"
+    }
+  },
+  "cases": [
+    {
+      "id": "deathtouch-trample-assigns-1-to-indestructible-blocker",
+      "name": "Deathtouch + Trample assigns 1 lethal damage to Indestructible 11/11 and tramples remaining damage",
+      "summary": "An attacking 4/4 with deathtouch and trample blocked by an 11/11 indestructible Darksteel Colossus need only assign 1 damage to the blocker and tramples 3 to the defending player while the Colossus survives.",
+      "rules": ["510.1c", "702.2b", "702.12b", "702.19b"],
+      "initial_state": {
+        "players": [
+          { "id": "p1", "life": 20 },
+          { "id": "p2", "life": 20 }
+        ],
+        "active_player": "p1",
+        "turn_number": 5,
+        "phase": "DECLARE_ATTACKERS",
+        "objects": [
+          { "alias": "attacker", "card": "questing_beast", "owner": "p1", "controller": "p1", "zone": "BATTLEFIELD" },
+          { "alias": "colossus", "card": "darksteel_colossus", "owner": "p2", "controller": "p2", "zone": "BATTLEFIELD" }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "declare-attackers",
+            "actor": "p1",
+            "source": "attacker",
+            "target": "p2",
+            "description": "P1 attacks P2 with Questing Beast (granted trample for this combat benchmark)."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "declare-blockers",
+            "actor": "p2",
+            "source": "colossus",
+            "target": "attacker",
+            "description": "P2 blocks with indestructible 11/11 Darksteel Colossus."
+          }
+        },
+        {
+          "step": 3,
+          "action": {
+            "kind": "assign-combat-damage",
+            "actor": "p1",
+            "source": "attacker",
+            "description": "P1 assigns 1 deathtouch damage to Darksteel Colossus and tramples 3 damage to P2."
+          },
+          "checkpoint": {
+            "id": "trample-deals-3-colossus-survives",
+            "assertions": [
+              { "kind": "damage-assigned", "source": "attacker", "target": "colossus", "amount": 1 },
+              { "kind": "damage-assigned", "source": "attacker", "target": "p2", "amount": 3 },
+              { "kind": "object-zone", "target": "colossus", "expected": "BATTLEFIELD" },
+              { "kind": "player-life", "player": "p2", "expected": 17 }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "deathtouch-1-is-lethal-even-vs-indestructible",
+          "rules": ["702.2b", "702.12b", "702.19b"],
+          "description": "Indestructible does not change lethal damage assignment rules; 1 damage from a deathtouch creature satisfies lethal damage for trample."
+        }
+      ]
+    },
+    {
+      "id": "lifelink-blocker-saves-defending-player-from-lethal-combat-damage",
+      "name": "Simultaneous lifelink gain prevents player death at 0 or less life",
+      "summary": "P2 at 3 life faces an unblocked 4/4 Questing Beast and a Grizzly Bears blocked by P2's 5/5 lifelink Baneslayer Angel (normal damage step); lifelink +5 and -4 unblocked happen simultaneously so P2 ends at 4 life and survives.",
+      "rules": ["510.2", "702.15a", "704.3", "704.5a"],
+      "initial_state": {
+        "players": [
+          { "id": "p1", "life": 20 },
+          { "id": "p2", "life": 3 }
+        ],
+        "active_player": "p1",
+        "turn_number": 6,
+        "phase": "DECLARE_ATTACKERS",
+        "objects": [
+          { "alias": "beast", "card": "questing_beast", "owner": "p1", "controller": "p1", "zone": "BATTLEFIELD" },
+          { "alias": "bears", "card": "grizzly_bears", "owner": "p1", "controller": "p1", "zone": "BATTLEFIELD" },
+          { "alias": "angel", "card": "baneslayer_angel", "owner": "p2", "controller": "p2", "zone": "BATTLEFIELD" }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "declare-attackers",
+            "actor": "p1",
+            "source": "beast",
+            "target": "p2",
+            "description": "P1 attacks P2 with Questing Beast and Grizzly Bears."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "declare-blockers",
+            "actor": "p2",
+            "source": "angel",
+            "target": "bears",
+            "description": "P2 blocks Grizzly Bears with lifelink Baneslayer Angel while leaving Questing Beast unblocked."
+          }
+        },
+        {
+          "step": 3,
+          "action": {
+            "kind": "advance-phase",
+            "actor": "p1",
+            "phase": "END_OF_COMBAT",
+            "description": "Combat damage resolves and state-based actions are checked."
+          },
+          "checkpoint": {
+            "id": "p2-survives-with-4-life",
+            "assertions": [
+              { "kind": "player-life", "player": "p2", "expected": 4 },
+              { "kind": "player-alive", "player": "p2", "expected": true },
+              { "kind": "object-zone", "target": "bears", "expected": "GRAVEYARD" }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "lifelink-is-not-a-trigger",
+          "rules": ["510.2", "702.15a", "704.3"],
+          "description": "Lifelink life gain happens simultaneously with combat damage, before state-based actions check whether a player has 0 or less life."
+        }
+      ]
+    }
+  ]
+}

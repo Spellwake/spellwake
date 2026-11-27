@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "id": "layers-and-sagas/humility-opalescence-timestamps",
+  "title": "Humility + Opalescence Layer 4/6/7b and Timestamp Order",
+  "category": "layers-and-sagas",
+  "execution_status": "pending-engine",
+  "execution_receipt": null,
+  "review_status": "pending-independent-review",
+  "rules_edition": {
+    "edition": "MTG Comprehensive Rules (2026-09-25)",
+    "source_url": "https://media.wizards.com/2026/downloads/MagicCompRules%2020260925.txt",
+    "cited_rules": [
+      {
+        "rule": "613.1d",
+        "summary": "Layer 4 applies type-changing effects (Opalescence makes each other non-Aura enchantment a creature)."
+      },
+      {
+        "rule": "613.1f",
+        "summary": "Layer 6 applies ability-removing effects (Humility removes all abilities from all creatures, including Opalescence and itself once Humility is a creature)."
+      },
+      {
+        "rule": "613.1g",
+        "summary": "Layer 7 applies power- and toughness-changing effects; sublayer 7b applies P/T-setting effects in timestamp order."
+      },
+      {
+        "rule": "613.7",
+        "summary": "Within a layer or sublayer without dependency, continuous effects are applied in timestamp order so the later timestamp wins."
+      }
+    ]
+  },
+  "provenance": {
+    "source_summary": "Classic MTG continuous-effect layer and timestamp stress benchmark verifying Layer 4 animation, Layer 6 ability removal, and Layer 7b timestamp precedence.",
+    "scope_notes": "Preemptive benchmark authored before full Layer 4/6/7b continuous-effect engine integration; execution_status remains pending-engine until executed against spellwake-engine."
+  },
+  "required_capabilities": [
+    "layers.layer4-type-changing",
+    "layers.layer6-ability-removal",
+    "layers.layer7b-pt-setting",
+    "layers.timestamp-ordering"
+  ],
+  "cards": {
+    "humility": {
+      "name": "Humility",
+      "oracle_id": "ed7bdb3e-5c51-4547-9266-76a791e0b2b0",
+      "mana_cost": "{2}{W}{W}",
+      "type_line": "Enchantment",
+      "oracle_text": "All creatures lose all abilities and have base power and toughness 1/1."
+    },
+    "opalescence": {
+      "name": "Opalescence",
+      "oracle_id": "59489b46-9d02-4f3c-bcd0-884e7605e9a5",
+      "mana_cost": "{2}{W}{W}",
+      "type_line": "Enchantment",
+      "oracle_text": "Each other non-Aura enchantment is a creature in addition to its other types and has base power and base toughness each equal to its mana value."
+    }
+  },
+  "cases": [
+    {
+      "id": "opalescence-then-humility",
+      "name": "Opalescence enters first, then Humility enters second",
+      "summary": "In Layer 4 Opalescence animates Humility; in Layer 6 Humility removes all creature abilities (including its own, though its continuous effect already began applying); in Layer 7b Humility has the later timestamp so Humility becomes 1/1.",
+      "rules": ["613.1d", "613.1f", "613.1g", "613.7"],
+      "initial_state": {
+        "players": [
+          { "id": "p1", "life": 20, "mana_pool": { "W": 4 } },
+          { "id": "p2", "life": 20 }
+        ],
+        "active_player": "p1",
+        "turn_number": 4,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          {
+            "alias": "opalescence",
+            "card": "opalescence",
+            "owner": "p1",
+            "controller": "p1",
+            "zone": "BATTLEFIELD",
+            "timestamp_order": 1
+          },
+          {
+            "alias": "humility",
+            "card": "humility",
+            "owner": "p1",
+            "controller": "p1",
+            "zone": "HAND"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "p1",
+            "source": "humility",
+            "description": "P1 casts Humility while Opalescence is already on the battlefield."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "p1",
+            "description": "Humility resolves and enters with a later timestamp than Opalescence."
+          },
+          "checkpoint": {
+            "id": "humility-is-1-1-creature-opalescence-not-creature",
+            "assertions": [
+              { "kind": "object-types", "target": "humility", "expected": ["Enchantment", "Creature"] },
+              { "kind": "object-types", "target": "opalescence", "expected": ["Enchantment"] },
+              { "kind": "object-abilities-absent", "target": "humility", "abilities": ["humility-static"] },
+              { "kind": "object-stats", "target": "humility", "power": 1, "toughness": 1 }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "opalescence-only-animates-other-enchantments",
+          "rules": ["613.1d"],
+          "description": "Opalescence animates each other non-Aura enchantment, so a single Opalescence does not animate itself."
+        },
+        {
+          "id": "later-timestamp-wins-layer-7b",
+          "rules": ["613.1g", "613.7"],
+          "description": "With Opalescence entering before Humility, Humility's Layer 7b 1/1 effect applies after Opalescence's mana-value P/T effect."
+        }
+      ]
+    },
+    {
+      "id": "humility-then-opalescence",
+      "name": "Humility enters first, then Opalescence enters second",
+      "summary": "In Layer 4 Opalescence animates Humility; in Layer 6 Humility removes abilities from creatures; in Layer 7b Opalescence has the later timestamp so Humility becomes a 4/4 creature with no abilities.",
+      "rules": ["613.1d", "613.1f", "613.1g", "613.7"],
+      "initial_state": {
+        "players": [
+          { "id": "p1", "life": 20, "mana_pool": { "W": 4 } },
+          { "id": "p2", "life": 20 }
+        ],
+        "active_player": "p1",
+        "turn_number": 4,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          {
+            "alias": "humility",
+            "card": "humility",
+            "owner": "p1",
+            "controller": "p1",
+            "zone": "BATTLEFIELD",
+            "timestamp_order": 1
+          },
+          {
+            "alias": "opalescence",
+            "card": "opalescence",
+            "owner": "p1",
+            "controller": "p1",
+            "zone": "HAND"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "p1",
+            "source": "opalescence",
+            "description": "P1 casts Opalescence while Humility is already on the battlefield."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "resolve-all",
+            "actor": "p1",
+            "description": "Opalescence resolves with a later timestamp than Humility."
+          },
+          "checkpoint": {
+            "id": "humility-is-4-4-with-no-abilities",
+            "assertions": [
+              { "kind": "object-types", "target": "humility", "expected": ["Enchantment", "Creature"] },
+              { "kind": "object-abilities-absent", "target": "humility", "abilities": ["humility-static"] },
+              { "kind": "object-stats", "target": "humility", "power": 4, "toughness": 4 }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "layer-6-removal-does-not-cancel-layer-7b-effect",
+          "rules": ["613.1f", "613.1g"],
+          "description": "Even though Humility loses its own ability in Layer 6, both Humility and Opalescence continue applying in Layer 7b."
+        },
+        {
+          "id": "opalescence-later-timestamp-sets-4-4",
+          "rules": ["613.7"],
+          "description": "Because Opalescence has the later timestamp, Humility's base P/T is set to its mana value (4/4) instead of 1/1."
+        }
+      ]
+    }
+  ]
+}

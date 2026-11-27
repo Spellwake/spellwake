@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "description": "Authoritative Spellwake test suite and benchmark registry. Consumed by scripts/health_checks.py and scripts/rules_benchmarks.py.",
+  "domains": [
+    {
+      "slug": "patreon",
+      "suitePath": "tests/domains/patreon/suite.json"
+    },
+    {
+      "slug": "stripe",
+      "suitePath": "tests/domains/stripe/suite.json"
+    },
+    {
+      "slug": "matchmaking",
+      "suitePath": "tests/domains/matchmaking/suite.json"
+    },
+    {
+      "slug": "predictions",
+      "suitePath": "tests/domains/predictions/suite.json"
+    },
+    {
+      "slug": "market",
+      "suitePath": "tests/domains/market/suite.json"
+    },
+    {
+      "slug": "cosmetics",
+      "suitePath": "tests/domains/cosmetics/suite.json"
+    },
+    {
+      "slug": "account-auth",
+      "suitePath": "tests/domains/account-auth/suite.json"
+    },
+    {
+      "slug": "decks-collection",
+      "suitePath": "tests/domains/decks-collection/suite.json"
+    },
+    {
+      "slug": "custom-cards",
+      "suitePath": "tests/domains/custom-cards/suite.json"
+    },
+    {
+      "slug": "social",
+      "suitePath": "tests/domains/social/suite.json"
+    },
+    {
+      "slug": "league-progression",
+      "suitePath": "tests/domains/league-progression/suite.json"
+    },
+    {
+      "slug": "rendering",
+      "suitePath": "tests/domains/rendering/suite.json"
+    },
+    {
+      "slug": "oracle-parser",
+      "suitePath": "tests/domains/oracle-parser/suite.json"
+    },
+    {
+      "slug": "rules-engine",
+      "suitePath": "tests/domains/rules-engine/suite.json"
+    },
+    {
+      "slug": "ai",
+      "suitePath": "tests/domains/ai/suite.json"
+    }
+  ],
+  "rulesBenchmarks": {
+    "root": "tests/domains/rules-engine/benchmarks",
+    "schemaPath": "tests/domains/rules-engine/benchmarks/schema.json",
+    "glob": "**/*.benchmark.json"
+  },
+  "sharedDirectories": {
+    "catalogue": "tests/catalogue",
+    "reference": "tests/reference",
+    "scenarios": "tests/scenarios",
+    "support": "tests/support"
+  }
+}

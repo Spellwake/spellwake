@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "slug": "stripe",
+  "label": "Stripe",
+  "category": "service-domain",
+  "readinessStage": "active",
+  "description": "Stripe webhook verification, client/service policies, Postgres settlement integrity, Customer Billing Portal, and frontend checkout contracts.",
+  "localOnly": false,
+  "unqualifiedReason": null,
+  "hostedCredentials": [
+    "SPELLWAKE_STRIPE_SECRET_KEY",
+    "SPELLWAKE_STRIPE_WEBHOOK_SECRET",
+    "SPELLWAKE_STRIPE_API_VERSION",
+    "SPELLWAKE_STRIPE_EVIDENCE_BUCKET"
+  ],
+  "notes": "Retained official Stripe SDK webhook vectors, client/service policy tests, Postgres settlement/reversal/dispute tests, frontend checkout/billing contracts, and standalone Playwright browser E2E checks; live merchant checkout/portal require hosted credentials.",
+  "subdomains": [
+    {
+      "slug": "webhooks",
+      "label": "Webhooks & Signature Verification",
+      "description": "Official Stripe SDK signature verification vectors, tolerance windows, and notification ingestion.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/stripe_webhooks.rs",
+        "services/application/tests/fixtures/stripe-webhooks.json",
+        "services/application/src/stripe/notification.rs"
+      ]
+    },
+    {
+      "slug": "checkout-intents",
+      "label": "Checkout Intents & Shop Flow",
+      "description": "Durable idempotent checkout reservations, hosted Stripe checkout URL enforcement, and cosmetic ownership transition.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "apps/play/src/data/checkout-intent.ts",
+        "apps/play/src/data/checkout-intent.test.ts",
+        "apps/play/src/data/stripe-billing-api.test.ts",
+        "apps/play/scripts/qualify-stripe.ts"
+      ]
+    },
+    {
+      "slug": "settlement-ledger",
+      "label": "Settlement, Refunds & Disputes",
+      "description": "Postgres once-only purchase reservation, paid/refunded/reversed/restored ledger transitions, and purchase history formatting.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/tests/database/stripe.rs",
+        "apps/play/src/data/purchase-rows.test.ts",
+        "apps/play/scripts/qualify-stripe.ts"
+      ]
+    },
+    {
+      "slug": "billing-portal",
+      "label": "Customer Billing Portal",
+      "description": "Stripe Customer Portal session creation, no_customer refusal handling, and responsive Billing & purchases UI.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/supabase/migrations/20261122028500_stripe_customer_portal.sql",
+        "apps/play/src/data/stripe-billing-api.test.ts",
+        "apps/play/scripts/qualify-stripe.ts"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application stripe_webhooks official SDK vectors",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--test",
+          "stripe_webhooks"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      },
+      {
+        "kind": "cargo",
+        "label": "application stripe client/service unit tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "{APP_MANIFEST}",
+          "--lib",
+          "stripe"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [
+      "stripe"
+    ],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "frontend stripe checkout, billing portal, and ledger contracts",
+        "args": [
+          "bun",
+          "test",
+          "src/data/checkout-intent.test.ts",
+          "src/data/purchase-rows.test.ts",
+          "src/data/stripe-billing-api.test.ts"
+        ],
+        "cwd": "apps/play",
+        "envExtra": {}
+      }
+    ],
+    "browserE2e": [
+      {
+        "kind": "playwright",
+        "label": "playwright stripe checkout, billing portal, ledger, and responsive suite",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-stripe.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/src/stripe",
+    "services/application/tests/stripe_webhooks.rs",
+    "services/application/tests/database/stripe.rs",
+    "services/application/tests/fixtures/stripe-webhooks.json",
+    "apps/play/src/data/checkout-intent.test.ts",
+    "apps/play/src/data/purchase-rows.test.ts",
+    "apps/play/src/data/stripe-billing-api.test.ts",
+    "apps/play/scripts/qualify-stripe.ts",
+    "apps/play/scripts/qualify-stripe-browser.ts"
+  ]
+}

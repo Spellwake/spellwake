@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "id": "stack-and-priority/split-second-and-apnap-triggers",
+  "title": "Split Second vs Morph Special Actions and APNAP Simultaneous Trigger Order",
+  "category": "stack-and-priority",
+  "execution_status": "pending-engine",
+  "execution_receipt": null,
+  "review_status": "pending-independent-review",
+  "rules_edition": {
+    "edition": "MTG Comprehensive Rules (2026-09-25)",
+    "source_url": "https://media.wizards.com/2026/downloads/MagicCompRules%2020260925.txt",
+    "cited_rules": [
+      {
+        "rule": "101.4",
+        "summary": "Active player makes choices/actions first, followed by non-active players in turn order (APNAP)."
+      },
+      {
+        "rule": "116.2b",
+        "summary": "Turning a face-down creature face up is a special action that does not use the stack and can be taken whenever a player has priority."
+      },
+      {
+        "rule": "603.3b",
+        "summary": "Simultaneous triggered abilities are placed on the stack in APNAP order, so the non-active player's trigger resolves first."
+      },
+      {
+        "rule": "702.37e",
+        "summary": "Turning a face-down morph creature face up is a special action that bypasses Split Second; its triggered ability still goes on the stack."
+      },
+      {
+        "rule": "702.61a",
+        "summary": "While a spell with split second is on the stack, players cannot cast spells or activate non-mana abilities."
+      },
+      {
+        "rule": "702.61b",
+        "summary": "Players may still activate mana abilities, take special actions, and put triggered abilities onto the stack while split second is on the stack."
+      }
+    ]
+  },
+  "provenance": {
+    "source_summary": "Core stack and priority stress benchmark covering Split Second spell/ability locks vs Morph special actions and APNAP simultaneous trigger resolution order.",
+    "scope_notes": "Preemptive benchmark authored before full Split Second, Morph special action, and APNAP trigger stacking are qualified."
+  },
+  "required_capabilities": [
+    "stack.special-action-morph-unmorph",
+    "stack.split-second-lock",
+    "triggers.apnap-simultaneous-ordering"
+  ],
+  "cards": {
+    "krosan_grip": {
+      "name": "Krosan Grip",
+      "oracle_id": "3e39224c-72ce-4ecc-aa17-12c071ea1f3e",
+      "mana_cost": "{2}{G}",
+      "type_line": "Instant",
+      "oracle_text": "Split second (As long as this spell is on the stack, players can't cast spells or activate abilities that aren't mana abilities.)\nDestroy target artifact or enchantment."
+    },
+    "counterspell": {
+      "name": "Counterspell",
+      "oracle_id": "cc187110-1148-4090-bbb8-e205694a39f5",
+      "mana_cost": "{U}{U}",
+      "type_line": "Instant",
+      "oracle_text": "Counter target spell."
+    },
+    "willbender": {
+      "name": "Willbender",
+      "oracle_id": "0aae277e-e58e-4115-b5fd-0459451e17ec",
+      "mana_cost": "{1}{U}",
+      "type_line": "Creature — Human Wizard",
+      "oracle_text": "Morph {1}{U} (You may cast this card face down as a 2/2 creature for {3}. Turn it face up any time for its morph cost.)\nWhen Willbender is turned face up, change the target of target spell or ability with a single target.",
+      "power": "1",
+      "toughness": "2"
+    },
+    "rest_in_peace": {
+      "name": "Rest in Peace",
+      "oracle_id": "087f9ad7-e74f-40e2-8102-1ed2925d0418",
+      "mana_cost": "{1}{W}",
+      "type_line": "Enchantment",
+      "oracle_text": "When Rest in Peace enters, exile all graveyards.\nIf a card or token would be put into a graveyard from anywhere, exile it instead."
+    },
+    "wrath_of_god": {
+      "name": "Wrath of God",
+      "oracle_id": "34515b16-c9a4-4f98-8c77-416a7a523407",
+      "mana_cost": "{2}{W}{W}",
+      "type_line": "Sorcery",
+      "oracle_text": "Destroy all creatures. They can't be regenerated."
+    },
+    "blood_artist": {
+      "name": "Blood Artist",
+      "oracle_id": "310f141c-7f37-4729-aed6-dd9c09db448d",
+      "mana_cost": "{1}{B}",
+      "type_line": "Creature — Vampire",
+      "oracle_text": "Whenever Blood Artist or another creature dies, target player loses 1 life and you gain 1 life.",
+      "power": "0",
+      "toughness": "1"
+    }
+  },
+  "cases": [
+    {
+      "id": "split-second-blocks-counterspell-allows-willbender-morph",
+      "name": "Krosan Grip blocks Counterspell but allows turning Willbender face up",
+      "summary": "While Krosan Grip is on the stack, P2 is refused from casting Counterspell, but may take the Morph special action to turn Willbender face up and place its triggered redirect ability above Krosan Grip.",
+      "rules": ["116.2b", "702.37e", "702.61a", "702.61b"],
+      "initial_state": {
+        "players": [
+          { "id": "p1", "life": 20, "mana_pool": { "G": 3 } },
+          { "id": "p2", "life": 20, "mana_pool": { "U": 4 } }
+        ],
+        "active_player": "p1",
+        "turn_number": 4,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          { "alias": "grip", "card": "krosan_grip", "owner": "p1", "controller": "p1", "zone": "HAND" },
+          { "alias": "rip_p1", "card": "rest_in_peace", "owner": "p1", "controller": "p1", "zone": "BATTLEFIELD" },
+          { "alias": "rip_p2", "card": "rest_in_peace", "owner": "p2", "controller": "p2", "zone": "BATTLEFIELD" },
+          { "alias": "counterspell", "card": "counterspell", "owner": "p2", "controller": "p2", "zone": "HAND" },
+          { "alias": "willbender", "card": "willbender", "owner": "p2", "controller": "p2", "zone": "BATTLEFIELD", "face_down": true }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "p1",
+            "source": "grip",
+            "target": "rip_p2",
+            "description": "P1 casts Krosan Grip targeting P2's Rest in Peace."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "attempt-illegal-cast",
+            "actor": "p2",
+            "source": "counterspell",
+            "target": "grip",
+            "description": "P2 attempts to cast Counterspell while Krosan Grip is on the stack."
+          },
+          "checkpoint": {
+            "id": "counterspell-rejected-by-split-second",
+            "assertions": [
+              { "kind": "action-rejected", "reason": "split-second" },
+              { "kind": "object-zone", "target": "counterspell", "expected": "HAND" }
+            ]
+          }
+        },
+        {
+          "step": 3,
+          "action": {
+            "kind": "special-action",
+            "actor": "p2",
+            "source": "willbender",
+            "target": "grip",
+            "description": "P2 turns face-down Willbender face up via Morph special action, triggering redirect targeting Krosan Grip."
+          },
+          "checkpoint": {
+            "id": "willbender-trigger-above-split-second",
+            "assertions": [
+              { "kind": "stack-order", "bottom_to_top": ["grip", "willbender-trigger"] }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "special-actions-bypass-split-second",
+          "rules": ["116.2b", "702.37e", "702.61b"],
+          "description": "Split second forbids casting spells and activating non-mana abilities, but never prevents special actions or triggered abilities from going onto the stack."
+        }
+      ]
+    },
+    {
+      "id": "apnap-blood-artist-nap-wins-at-1-life",
+      "name": "APNAP simultaneous dies triggers let Non-Active Player win first",
+      "summary": "Both players are at 1 life and control a Blood Artist; Active Player casts Wrath of God. AP's triggers go on the stack first, NAP's triggers go on top, so NAP's Blood Artist trigger resolves first and reduces AP to 0 life.",
+      "rules": ["101.4", "603.3b"],
+      "initial_state": {
+        "players": [
+          { "id": "p1", "life": 1, "mana_pool": { "W": 4 } },
+          { "id": "p2", "life": 1 }
+        ],
+        "active_player": "p1",
+        "turn_number": 5,
+        "phase": "PRECOMBAT_MAIN",
+        "objects": [
+          { "alias": "artist_p1", "card": "blood_artist", "owner": "p1", "controller": "p1", "zone": "BATTLEFIELD" },
+          { "alias": "artist_p2", "card": "blood_artist", "owner": "p2", "controller": "p2", "zone": "BATTLEFIELD" },
+          { "alias": "wrath", "card": "wrath_of_god", "owner": "p1", "controller": "p1", "zone": "HAND" }
+        ]
+      },
+      "steps": [
+        {
+          "step": 1,
+          "action": {
+            "kind": "cast-spell",
+            "actor": "p1",
+            "source": "wrath",
+            "description": "Active player P1 casts Wrath of God."
+          }
+        },
+        {
+          "step": 2,
+          "action": {
+            "kind": "resolve-top",
+            "actor": "p1",
+            "description": "Wrath of God destroys both Blood Artists; APNAP stacks P1 triggers below P2 triggers."
+          },
+          "checkpoint": {
+            "id": "nap-triggers-on-top",
+            "assertions": [
+              { "kind": "stack-order", "bottom_to_top": ["artist_p1-trigger", "artist_p2-trigger"] }
+            ]
+          }
+        },
+        {
+          "step": 3,
+          "action": {
+            "kind": "resolve-top",
+            "actor": "p2",
+            "description": "P2's top Blood Artist trigger resolves first, draining P1 to 0 life."
+          },
+          "checkpoint": {
+            "id": "ap-loses-before-own-triggers-resolve",
+            "assertions": [
+              { "kind": "player-life", "player": "p1", "expected": 0 },
+              { "kind": "player-alive", "player": "p1", "expected": false },
+              { "kind": "player-alive", "player": "p2", "expected": true }
+            ]
+          }
+        }
+      ],
+      "invariants": [
+        {
+          "id": "apnap-lifo-resolves-nap-first",
+          "rules": ["101.4", "603.3b"],
+          "description": "Because triggers are stacked in APNAP order and the stack resolves LIFO, the non-active player's simultaneous triggers always resolve first."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 1,
+  "slug": "social",
+  "label": "Social & Messaging",
+  "category": "service-domain",
+  "readinessStage": "active",
+  "description": "Friends and contacts, direct message threads, idempotent command recovery on dropped replies, read acknowledgements, and match chat/notification integrity.",
+  "localOnly": true,
+  "unqualifiedReason": null,
+  "hostedCredentials": [],
+  "notes": "Fully testable locally against isolated Postgres 17, Bun social unit tests, and the standalone Playwright messaging E2E suite.",
+  "subdomains": [
+    {
+      "slug": "friends-and-contacts",
+      "label": "Friends & Contacts",
+      "description": "Contact listing, friend status, blocking/contact boundaries, and player profile reads.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/contact.rs",
+        "apps/play/src/data/social.test.ts"
+      ]
+    },
+    {
+      "slug": "direct-messages",
+      "label": "Direct Messages",
+      "description": "Conversation history reads, DM sending, and Check delivery recovery without duplicate sends when a reply is dropped.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/social.rs",
+        "apps/play/src/data/social-api.test.ts",
+        "apps/play/src/data/social-journal.test.ts",
+        "apps/play/scripts/qualify-social.ts"
+      ]
+    },
+    {
+      "slug": "read-receipts-and-notifications",
+      "label": "Read Receipts & Match Chat",
+      "description": "Unread message counts, idempotent conversation read acknowledgements, chat notifications, and match chat message invariants.",
+      "unqualifiedReason": null,
+      "relatedPaths": [
+        "services/application/src/notifications.rs",
+        "services/application/src/game_chat.rs"
+      ]
+    }
+  ],
+  "checks": {
+    "rust": [
+      {
+        "kind": "cargo",
+        "label": "application social and contact lib tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "services/application/Cargo.toml",
+          "--lib",
+          "social"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      },
+      {
+        "kind": "cargo",
+        "label": "application notifications lib tests",
+        "args": [
+          "cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "services/application/Cargo.toml",
+          "--lib",
+          "notifications"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "postgresDbFilters": [
+      "chat_notifications_api",
+      "game_chat_integrity",
+      "game_message_integrity",
+      "social",
+      "social_commands",
+      "social_read_ack",
+      "social_reads"
+    ],
+    "frontend": [
+      {
+        "kind": "bun",
+        "label": "play social, social API, and social journal unit tests",
+        "args": [
+          "bun",
+          "test",
+          "apps/play/src/data/social.test.ts",
+          "apps/play/src/data/social-api.test.ts",
+          "apps/play/src/data/social-journal.test.ts",
+          "apps/play/src/messaging/updates.test.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "browserE2e": [
+      {
+        "kind": "playwright",
+        "label": "playwright social messages, read-ack, and dropped-send recovery E2E suite",
+        "args": [
+          "node",
+          "apps/play/scripts/qualify-social.ts"
+        ],
+        "cwd": ".",
+        "envExtra": {}
+      }
+    ],
+    "python": []
+  },
+  "benchmarks": [],
+  "relatedPaths": [
+    "services/application/src/social.rs",
+    "services/application/src/contact.rs",
+    "services/application/src/notifications.rs",
+    "services/application/src/game_chat.rs",
+    "apps/play/scripts/qualify-social.ts"
+  ]
+}
