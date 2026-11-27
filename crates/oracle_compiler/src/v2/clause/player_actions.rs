@@ -644,3 +644,170 @@ pub(super) fn parse_keyword_action_verb(
     }
     Err(ts.err("not a keyword action verb"))
 }
+
+/// Parse a damage-redirection replacement sentence (`[All | The next <N>] [combat] damage that would be dealt ... is dealt to <dest> instead`
+/// or `Excess damage is dealt to <dest> instead`).
+pub(crate) fn parse_damage_redirect_replacement(
+    ts: &mut TokenStream<'_>,
+) -> PResult<(crate::v2::ir::Replacement, Duration)> {
+    let cp = ts.checkpoint();
+    // `Excess damage is dealt to <dest> instead` (`Flame Spill`, `Gandalf's Sanction`, `Ram Through`, `Ravenous Tyrannosaurus`)
+    if ts.eat_phrase(&["excess", "damage", "is", "dealt", "to"])
+        && let Ok(to) = try_parse(ts, parse_subject_ref)
+        && ts.eat_word("instead")
+    {
+        return Ok((
+            crate::v2::ir::Replacement::DamageRule(crate::v2::ir::DamageReplacement::RedirectAll {
+                from: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatDamage),
+                to,
+            }),
+            Duration::UntilEndOfTurn,
+        ));
+    }
+    ts.restore(cp);
+
+    // `[All | The next <val>] [combat] damage that would be dealt [this turn] [to <from>] [by <src>] [this turn] is dealt to <to> instead`
+    // (`Shimian Night Stalker`, `Mirror Strike`, `Gideon's Sacrifice`, `Hazduhr the Abbot`, `Kor Dirge`, `Saving Grace`, `Weathered Bodyguards`)
+    let next_amount = if ts.eat_phrase(&["the", "next"]) {
+        match try_parse(ts, parse_value_expr) {
+            Ok(v) => Some(v),
+            Err(_) => {
+                ts.restore(cp);
+                return Err(ts.err("expected amount after `the next`"));
+            }
+        }
+    } else {
+        let _ = ts.eat_word("all");
+        None
+    };
+    let _ = ts.eat_word("combat");
+    if ts.eat_phrase(&["damage", "that", "would", "be", "dealt"]) {
+        let mut duration = Duration::Permanent;
+        let mut from = SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::ThatDamage);
+        loop {
+            if let Some(d) = parse_trailing_duration(ts) {
+                duration = d;
+                continue;
+            }
+            if ts.eat_word("to") {
+                if let Ok(tgt) = try_parse(ts, parse_subject_ref) {
+                    // Optional compound `and <subj2>` (`to you and permanents you control`)
+                    let acp = ts.checkpoint();
+                    if ts.eat_word("and")
+                        && let Ok(tgt2) = try_parse(ts, parse_subject_ref)
+                    {
+                        from = SubjectRef::Compound(vec![tgt, tgt2]);
+                    } else {
+                        ts.restore(acp);
+                        from = tgt;
+                    }
+                    continue;
+                }
+                break;
+            }
+            if ts.eat_word("by") {
+                if ts.eat_phrase(&["a", "source", "of", "your", "choice"])
+                    || ts.eat_phrase(&["a", "source", "of", "their", "choice"])
+                    || try_parse(ts, parse_subject_ref).is_ok()
+                {
+                    continue;
+                }
+                break;
+            }
+            break;
+        }
+        if ts.eat_phrase(&["is", "dealt", "to"])
+            && let Ok(to) = try_parse(ts, parse_subject_ref)
+            && ts.eat_word("instead")
+        {
+            let rep = match next_amount {
+                Some(amount) => crate::v2::ir::Replacement::DamageRule(
+                    crate::v2::ir::DamageReplacement::RedirectNext { amount, from, to },
+                ),
+                None => crate::v2::ir::Replacement::DamageRule(
+                    crate::v2::ir::DamageReplacement::RedirectAll { from, to },
+                ),
+            };
+            return Ok((rep, duration));
+        }
+    }
+    ts.restore(cp);
+    Err(ts.err("not a damage redirect sentence"))
+}
+
+/// Parse auxiliary top-level effect sentences (`Its power is equal to ... and its toughness is equal to ...`,
+/// `The escape/replicate cost is equal to ...`, damage redirection) without bloating `clause/mod.rs`.
+pub(crate) fn parse_extra_sentence_effect(ts: &mut TokenStream<'_>) -> PResult<Vec<Effect>> {
+    // 1. Damage redirection (`Shimian Night Stalker`, `Gideon's Sacrifice`, `Flame Spill`, `Gandalf's Sanction`)
+    {
+        let rcp = ts.checkpoint();
+        if let Ok((replacement, duration)) = try_parse(ts, parse_damage_redirect_replacement) {
+            return Ok(vec![Effect::ApplyReplacement {
+                replacement: Box::new(replacement),
+                duration,
+            }]);
+        }
+        ts.restore(rcp);
+    }
+    // 2. `Its power is equal to <v1> and its toughness is equal to <v2>` (`Kalitas, Bloodchief of Ghet`, `Broken Visage`, `Ritual of the Returned`, `Gemini Engine`)
+    {
+        let pcp = ts.checkpoint();
+        if ts.eat_phrase(&["its", "power", "is", "equal", "to"])
+            && let Ok(power) = try_parse(ts, parse_value_expr)
+            && ts.eat_phrase(&["and", "its", "toughness", "is", "equal", "to"])
+            && let Ok(toughness) = try_parse(ts, parse_value_expr)
+        {
+            return Ok(vec![Effect::MutateObject {
+                subject: SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It),
+                mutation: ObjectMutation::SetDynamicBasePT {
+                    power,
+                    toughness,
+                    add_types: crate::ast::CardTypeMask::EMPTY,
+                    keep_existing_types: true,
+                },
+                duration: Duration::Permanent,
+            }]);
+        }
+        ts.restore(pcp);
+    }
+    // 3. `The escape/replicate cost is equal to [its | the card's] mana cost [plus <costs>]` (`Underworld Breach`, `Djinn Illuminatus`, `Confession Dial`)
+    {
+        let ecp = ts.checkpoint();
+        if ts.eat_phrase(&["the", "escape", "cost", "is", "equal", "to"])
+            && (ts.eat_phrase(&["its", "mana", "cost"])
+                || ts.eat_phrase(&["the", "card's", "mana", "cost"]))
+        {
+            let mut costs = vec![crate::v2::ir::Cost::PayAnyAmountMana];
+            if ts.eat_word("plus")
+                && let Ok(extra) = try_parse(ts, crate::v2::cost::parse_cost_list)
+            {
+                costs.extend(extra);
+            }
+            return Ok(vec![Effect::ApplyContinuous {
+                effect: Box::new(crate::v2::ir::StaticAbility::AlternativeCost(costs)),
+                duration: Duration::UntilEndOfTurn,
+            }]);
+        }
+        ts.restore(ecp);
+        if ts.eat_phrase(&[
+            "the",
+            "replicate",
+            "cost",
+            "is",
+            "equal",
+            "to",
+            "its",
+            "mana",
+            "cost",
+        ]) {
+            return Ok(vec![Effect::ApplyContinuous {
+                effect: Box::new(crate::v2::ir::StaticAbility::AlternativeCost(vec![
+                    crate::v2::ir::Cost::PayAnyAmountMana,
+                ])),
+                duration: Duration::Permanent,
+            }]);
+        }
+        ts.restore(ecp);
+    }
+    Err(ts.err("not an auxiliary effect sentence"))
+}

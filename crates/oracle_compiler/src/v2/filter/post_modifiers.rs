@@ -969,7 +969,15 @@ pub(super) fn parse_filter_post_modifiers(
                 "was", "put", "there", "from", "your", "library", "this", "turn",
             ]) || ts.eat_phrase(&[
                 "were", "put", "there", "from", "your", "library", "this", "turn",
-            ]) {
+            ]) || ts.eat_phrase(&[
+                "was", "put", "there", "from", "their", "library", "this", "turn",
+            ]) || ts.eat_phrase(&[
+                "were", "put", "there", "from", "their", "library", "this", "turn",
+            ]) || ts.eat_phrase(&[
+                "was", "put", "there", "from", "a", "library", "this", "turn",
+            ]) || ts.eat_phrase(&["was", "put", "there", "this", "turn"])
+                || ts.eat_phrase(&["were", "put", "there", "this", "turn"])
+            {
                 flt.predicates.push(FilterPredicate::AffectedByPriorAction(
                     PriorActionKind::MilledThisWay,
                 ));
@@ -1404,6 +1412,97 @@ pub(super) fn parse_filter_post_modifiers(
         if ts.eat_phrase(&["chosen", "at", "random"]) {
             flt.flags = flt.flags.union(FilterFlags::AT_RANDOM);
             continue;
+        }
+        if ts.eat_phrase(&["that", "convoked", "it"])
+            || (ts.eat_phrase(&["that", "convoked"]) && ts.eat_tilde())
+            || ts.eat_phrase(&["that", "crewed", "it", "this", "turn"])
+            || ts.eat_phrase(&["that", "saddled", "it", "this", "turn"])
+        {
+            flt.predicates.push(FilterPredicate::AffectedByPriorAction(
+                PriorActionKind::TappedThisWay,
+            ));
+            continue;
+        }
+        if ts.eat_phrase(&[
+            "that",
+            "were",
+            "put",
+            "into",
+            "graveyards",
+            "from",
+            "the",
+            "battlefield",
+            "this",
+            "turn",
+        ]) || ts.eat_phrase(&[
+            "that",
+            "was",
+            "put",
+            "into",
+            "a",
+            "graveyard",
+            "from",
+            "the",
+            "battlefield",
+            "this",
+            "turn",
+        ]) {
+            flt.flags = flt.flags.union(FilterFlags::DIED_THIS_TURN);
+            continue;
+        }
+        if ts.eat_phrase(&["a", "player", "discarded", "this", "way"]) {
+            flt.predicates.push(FilterPredicate::AffectedByPriorAction(
+                PriorActionKind::DiscardedThisWay,
+            ));
+            continue;
+        }
+        if ts.eat_phrase(&["its", "controller", "controls"])
+            || ts.eat_phrase(&["their", "controller", "controls"])
+        {
+            flt.controller = Some(crate::ast::ControllerRelation::ThatPlayer);
+            continue;
+        }
+        if ts.eat_phrase(&["that's", "attacking", "or", "blocking"])
+            || ts.eat_phrase(&["that", "are", "attacking", "or", "blocking"])
+        {
+            flt.combat = Some(crate::ast::CombatState::AttackingOrBlocking);
+            continue;
+        }
+        if ts.eat_phrase(&["that", "has", "an", "adventure"])
+            || ts.eat_phrase(&["that", "have", "an", "adventure"])
+        {
+            flt.flags = flt.flags.union(FilterFlags::HAS_ADVENTURE);
+            continue;
+        }
+        if ts.eat_phrase(&["with", "power", "greater", "than", "its", "base", "power"]) {
+            flt.stat_bounds.push(StatBound {
+                stat: StatKind::Power,
+                op: CompareOp::Gt,
+                value: Box::new(ValueExpr::ObjectStat {
+                    subject: Box::new(SubjectRef::Anaphora(crate::v2::ir::AnaphoraRef::It)),
+                    stat: StatKind::Power,
+                }),
+            });
+            continue;
+        }
+        // `[from] among cards you own [exiled with ~ | in exile [with <k> counters on them]]` (`Boiling Rock Rioter`, `Grolnok`, `Kaya the Inexorable`)
+        {
+            let acp = ts.checkpoint();
+            let _ = ts.eat_word("from");
+            if ts.eat_phrase(&["among", "cards", "you", "own"]) {
+                if ts.eat_phrase(&["exiled", "with"]) && ts.eat_tilde() {
+                    flt.flags = flt.flags.union(FilterFlags::EXILED_WITH_SELF);
+                    continue;
+                }
+                if ts.eat_phrase(&["in", "exile"]) {
+                    flt.zones.push(ZoneRef {
+                        zone: ZoneKind::Exile,
+                        owner: ZoneOwner::You,
+                    });
+                    continue;
+                }
+            }
+            ts.restore(acp);
         }
 
         // Zone source clauses (`from your graveyard`, `from exile and from your graveyard`,

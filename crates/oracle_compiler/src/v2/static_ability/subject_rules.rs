@@ -108,6 +108,25 @@ pub(super) fn parse_subject_static_ability(
                 continue;
             }
             ts.restore(rcp3);
+            let rcp3b = ts.checkpoint();
+            let _ = ts.eat_comma();
+            if ts.eat_phrase(&["and", "can", "block", "an", "additional"]) {
+                let extra = ts
+                    .next_number(false)
+                    .and_then(|n| u8::try_from(n).ok())
+                    .unwrap_or(1);
+                if (ts.eat_word("creature") || ts.eat_word("creatures"))
+                    && (ts.eat_phrase(&["each", "combat"]) || ts.is_eof())
+                {
+                    extra_parts.push(StaticAbility::SubjectRule {
+                        subject: subject.clone(),
+                        rule: SubjectStaticRule::CanBlockAdditional(extra),
+                        condition: condition.clone(),
+                    });
+                    continue;
+                }
+            }
+            ts.restore(rcp3b);
             let rcp4 = ts.checkpoint();
             let _ = ts.eat_comma();
             if (ts.eat_phrase(&["and", "doesn't", "untap", "during"])
@@ -432,6 +451,27 @@ pub(super) fn parse_subject_static_ability(
         });
     }
 
+    // `<subj> is/are every basic land type [in addition to its/their other types]` (`Dryad of the Ilysian Grove`, `Prismatic Omen`, `Nylea's Presence`)
+    if ts.eat_phrase(&["is", "every", "basic", "land", "type"])
+        || ts.eat_phrase(&["are", "every", "basic", "land", "type"])
+    {
+        let keep_existing = ts.eat_phrase(&["in", "addition", "to", "its", "other", "types"])
+            || ts.eat_phrase(&["in", "addition", "to", "their", "other", "types"])
+            || ts.eat_phrase(&["in", "addition", "to", "its", "other", "land", "types"])
+            || ts.eat_phrase(&["in", "addition", "to", "their", "other", "land", "types"]);
+        return Ok(StaticAbility::SetSubtypes {
+            subject,
+            subtypes: vec![
+                "Plains".to_string(),
+                "Island".to_string(),
+                "Swamp".to_string(),
+                "Mountain".to_string(),
+                "Forest".to_string(),
+            ],
+            keep_existing,
+        });
+    }
+
     // `<subj> is/are the chosen type in addition to its/their other types` (`Metallic Mimic`)
     {
         let mcp = ts.checkpoint();
@@ -685,6 +725,8 @@ pub(super) fn parse_subject_static_ability(
                         || ts.eat_phrase(&["and", "loses", "all", "other"])
                         || ts.eat_phrase(&["and", "they", "lose", "all", "other"])
                         || ts.eat_phrase(&["and", "lose", "all", "other"])
+                        || ts.eat_phrase(&["and", "loses", "all"])
+                        || ts.eat_phrase(&["and", "lose", "all"])
                     {
                         let mut ate_any = false;
                         while ts.eat_word("abilities")
@@ -1060,6 +1102,8 @@ pub(super) fn parse_subject_static_ability(
             if ts.eat_phrase(&["and", "loses", "all", "other", "abilities"])
                 || ts.eat_phrase(&["and", "lose", "all", "other", "abilities"])
                 || ts.eat_phrase(&["and", "it", "loses", "all", "other", "abilities"])
+                || ts.eat_phrase(&["and", "loses", "all", "abilities"])
+                || ts.eat_phrase(&["and", "lose", "all", "abilities"])
             {
                 parts.push(StaticAbility::RemoveAllAbilities {
                     subject: subject.clone(),
@@ -1067,6 +1111,17 @@ pub(super) fn parse_subject_static_ability(
                 continue;
             }
             ts.restore(lcp);
+            let lkw_cp = ts.checkpoint();
+            let _ = ts.eat_comma();
+            if (ts.eat_phrase(&["and", "loses"]) || ts.eat_phrase(&["and", "lose"]))
+                && let Ok(_kws) = try_parse(ts, parse_keyword_list)
+            {
+                parts.push(StaticAbility::RemoveAllAbilities {
+                    subject: subject.clone(),
+                });
+                continue;
+            }
+            ts.restore(lkw_cp);
             if ts.eat_phrase(&[
                 "and", "can", "attack", "as", "though", "it", "didn't", "have", "defender",
             ]) || ts.eat_phrase(&[
@@ -1207,6 +1262,24 @@ pub(super) fn parse_subject_static_ability(
         });
     }
 
+    // `<subj> can block creatures with <kw> as though they didn't have <kw> / as though it had <kw>` (`Aetherflame Wall`, `Heartwood Dryad`)
+    {
+        let bcp = ts.checkpoint();
+        if ts.eat_phrase(&["can", "block", "creatures", "with"])
+            && let Ok(kw) = try_parse(ts, crate::v2::filter::parse_keyword_kind)
+            && (ts.eat_phrase(&["as", "though", "they", "didn't", "have"])
+                || ts.eat_phrase(&["as", "though", "it", "had"]))
+            && try_parse(ts, crate::v2::filter::parse_keyword_kind).is_ok()
+        {
+            return Ok(StaticAbility::SubjectRule {
+                subject,
+                rule: SubjectStaticRule::IgnoreKeywordForBlocking(kw),
+                condition,
+            });
+        }
+        ts.restore(bcp);
+    }
+
     // `<subj> can block only <flt>`
     if ts.eat_phrase(&["can", "block", "only"]) {
         let flt = parse_object_filter(ts)?;
@@ -1226,21 +1299,40 @@ pub(super) fn parse_subject_static_ability(
         });
     }
 
-    // `<subj> can block an additional creature each combat`
-    if ts.eat_phrase(&[
-        "can",
-        "block",
-        "an",
-        "additional",
-        "creature",
-        "each",
-        "combat",
-    ]) {
-        return Ok(StaticAbility::SubjectRule {
-            subject,
-            rule: SubjectStaticRule::CanBlockAdditional(1),
-            condition,
-        });
+    // `<subj> can block an additional [<N>] creature(s) each combat` (`Watcher in the Web`, `Hundred-Handed One`)
+    {
+        let bcp = ts.checkpoint();
+        if ts.eat_phrase(&["can", "block", "an", "additional"]) {
+            let extra = ts
+                .next_number(false)
+                .and_then(|n| u8::try_from(n).ok())
+                .unwrap_or(1);
+            if (ts.eat_word("creature") || ts.eat_word("creatures"))
+                && ts.eat_phrase(&["each", "combat"])
+            {
+                return Ok(StaticAbility::SubjectRule {
+                    subject,
+                    rule: SubjectStaticRule::CanBlockAdditional(extra),
+                    condition,
+                });
+            }
+        }
+        ts.restore(bcp);
+    }
+
+    // `<subj> can be attached only to <flt>` (`Gate Smasher`, `O-Naginata`, `Konda's Banner`)
+    {
+        let acp = ts.checkpoint();
+        if ts.eat_phrase(&["can", "be", "attached", "only", "to"]) {
+            let _ = ts.eat_word("a") || ts.eat_word("an");
+            if let Ok(flt) = try_parse(ts, parse_object_filter) {
+                return Ok(StaticAbility::FilterRule {
+                    filter: flt,
+                    kind: crate::v2::ir::FilterStaticKind::AttachmentRestriction,
+                });
+            }
+        }
+        ts.restore(acp);
     }
 
     // `<subj> enter(s) tapped / untapped / under the control of an opponent`
@@ -1350,35 +1442,38 @@ pub(super) fn parse_subject_static_ability(
         });
     }
 
-    // `<subj> can't attack [or block] unless its/their controller pays {M} [for each <expr>]` (`Brainwash`, `Oppressive Rays`, `Whipgrass Entangler`, `Cowed by Wisdom`)
+    // `<subj> can't attack [or block] unless its/their controller pays <cost> | you <cost> [for each <expr>]`
+    // (`Brainwash`, `Oppressive Rays`, `Qal Sisma Behemoth`, `Phyrexian Marauder`, `Exalted Dragon`, `Floodtide Serpent`)
     {
         let ucp = ts.checkpoint();
         if (ts.eat_phrase(&["can't", "attack", "or", "block", "unless"])
             || ts.eat_phrase(&["can't", "attack", "unless"])
             || ts.eat_phrase(&["can't", "block", "unless"]))
             && (ts.eat_phrase(&["its", "controller", "pays"])
-                || ts.eat_phrase(&["their", "controller", "pays"]))
-            && let Some(mc) = ts.eat_mana_cost()
+                || ts.eat_phrase(&["their", "controller", "pays"])
+                || ts.eat_phrase(&["you", "pay"])
+                || ts.eat_word("you"))
+            && let Ok(cost) = try_parse(ts, crate::v2::cost::parse_cost_atom)
         {
             let per_creature = crate::v2::value::parse_for_each_expr(ts).is_ok();
             return Ok(StaticAbility::AttackTax {
                 target: subject,
-                cost: crate::v2::ir::Cost::Mana(mc),
+                cost,
                 per_creature,
             });
         }
         ts.restore(ucp);
     }
 
-    // `<subj> can't attack you [or planeswalkers you control] unless their controller pays {M} [for each of those creatures]` (Ghostly Prison / Archon of Absolution)
+    // `<subj> can't attack/block <tgt> unless their/its controller pays <cost> [for each <expr>]` (Ghostly Prison / Archon of Absolution / Heat Wave / Onakke Oathkeeper)
     {
         let acp = ts.checkpoint();
-        if ts.eat_phrase(&["can't", "attack"])
+        if (ts.eat_phrase(&["can't", "attack"]) || ts.eat_phrase(&["can't", "block"]))
             && let Ok(target) = try_parse(ts, parse_subject_ref)
             && ts.eat_word("unless")
             && (ts.eat_phrase(&["their", "controller", "pays"])
                 || ts.eat_phrase(&["its", "controller", "pays"]))
-            && let Some(mc) = ts.eat_mana_cost()
+            && let Ok(cost) = try_parse(ts, crate::v2::cost::parse_cost_atom)
         {
             let per_creature = ts.eat_phrase(&["for", "each", "of", "those", "creatures"])
                 || ts.eat_phrase(&[
@@ -1390,10 +1485,11 @@ pub(super) fn parse_subject_static_ability(
                     "that's",
                     "attacking",
                     "you",
-                ]);
+                ])
+                || opt(ts, parse_for_each_expr).is_some();
             return Ok(StaticAbility::AttackTax {
                 target,
-                cost: crate::v2::ir::Cost::Mana(mc),
+                cost,
                 per_creature,
             });
         }

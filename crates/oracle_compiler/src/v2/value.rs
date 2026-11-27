@@ -999,6 +999,22 @@ fn parse_value_atom(ts: &mut TokenStream<'_>) -> PResult<ValueExpr> {
         ts.restore(cp);
     }
 
+    // `its/their base power` / `its/their base toughness` (`Kutzil, Malamet Exemplar`, `Ms. Marvel, Elastic Ally`)
+    if ts.eat_phrase(&["its", "base", "power"]) || ts.eat_phrase(&["their", "base", "power"]) {
+        return Ok(ValueExpr::ObjectStat {
+            subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+            stat: StatKind::Power,
+        });
+    }
+    if ts.eat_phrase(&["its", "base", "toughness"])
+        || ts.eat_phrase(&["their", "base", "toughness"])
+    {
+        return Ok(ValueExpr::ObjectStat {
+            subject: Box::new(SubjectRef::Anaphora(AnaphoraRef::It)),
+            stat: StatKind::Toughness,
+        });
+    }
+
     // `~'s power` / `~'s toughness` / `that creature's power` / `that creature's toughness`
     {
         let cp = ts.checkpoint();
